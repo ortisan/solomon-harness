@@ -1,32 +1,46 @@
-# Plan - Workspace Rules Templates Language Update (Task 5)
+# Plan - Implement CI and Release Workflows (Task 6)
 
-This plan outlines the steps to translate the rule templates (`CLAUDE.md.template` and `AGENTS.md.template`) to English, regenerate the final rule files, and commit the changes.
+This plan outlines the steps to create, validate, and commit the GitHub Actions workflow files for CI/CD and Release automation.
 
 ## Requirements
-1. **Language**: Rewrite templates and rules in clean, direct, professional English.
-2. **No Emojis or Icons**: Ensure no emojis, icons, or visual ornaments are used.
-3. **Humanizer Principles**:
-   - Write instructions in a direct, clear, professional human-like English.
-   - Avoid typical AI clichés ("delve", "leverage", "testament to", "feel free to", "dive into", etc.).
-   - Explicitly instruct the agent that all output text (commit messages, PRs, wiki pages, comments) must be written in a natural, direct, professional human-like tone, without emojis or icons.
-4. **Specialist Competencies**:
-   - **Programming & Architecture**: Strict TDD, SOLID, modular design, design contracts as boundaries, preservation of docstrings/comments.
-   - **Quantitative Trading & DRL/ML Engineer**:
-     - Model Hypothesis: State target Sharpe ratio, Drawdown limit, Profit factor, latency/slippage constraints, dataset/features, model architecture.
-     - Validation: Overfitting checks, cross-validation, out-of-sample tests. Zero data leakage.
-     - Safety: Shape validation on tensors, division-by-zero checks, float overflow checks.
-   - **QA Specialist**: Mandatory unit/integration tests for code, mocking API calls, backtesting tests.
-   - **Scrum Master**: Instructions on using `scripts/scrum-master.sh` for issues/milestones.
-   - **Code Reviewer**: Check against spec compliance first, then code quality.
-5. **Workflow Lifecycle**:
-   - Conception (creating issue via scrum-master.sh) -> Planning (creating plan md) -> Execution (TDD) -> Verification -> Code Review -> Release & Wiki Sync (wiki-sync.sh).
-6. **Interpolation Variables**:
-   - Use `{{PROJECT_NAME}}`, `{{TECH_STACK}}`, and `{{GIT_REMOTE}}`.
+
+1. **CI/CD Workflow** (`.github/workflows/ci.yml`):
+   - Triggered on `push` and `pull_request` to the `main` branch.
+   - Sets up Python.
+   - Runs syntax validation on custom scripts (shell scripts and python scripts).
+   - Runs shellcheck to lint the shell scripts.
+   - Executes a basic dry-run or verification execution of the scripts.
+   - Verifies that all workspace configuration files are valid and synchronized by running the bootstrap script and checking for any uncommitted changes.
+   - Ensures no emojis or icons are present in the step names or logs.
+
+2. **Release Workflow** (`.github/workflows/release.yml`):
+   - Triggered on tag pushes matching `v*`.
+   - Uses GitHub Actions to draft a new release on GitHub.
+   - Automates release notes generation.
+   - Ensures no emojis or icons are present in the step names.
+
+3. **Verification and Git Commit**:
+   - Verify syntax correctness of the YAML files.
+   - Stage and commit files with the message: `feat: add CI and release automation GitHub workflows`.
+
+## TDD and Verification Steps
+
+Since GitHub workflow files cannot be directly executed as unit tests locally, we will adopt a local validation-based TDD cycle:
+1. **Red Stage**: Create a local validation script `scripts/validate-workflows.sh` that checks for:
+   - The existence of `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
+   - YAML syntax validity of these workflow files using python's `yaml` parser or standard tools.
+   - Strict absence of emojis or icons in the workflow files.
+   - Verification that workflow triggers and job steps match requirements.
+   Running this script initially will fail because the files do not exist.
+2. **Green Stage**: Write the `.github/workflows/ci.yml` and `.github/workflows/release.yml` files. Run the validation script to ensure all checks pass.
+3. **Refactor Stage**: Refactor the workflow files and the validation script for clarity and clean code, maintaining a green state.
 
 ## Execution Steps
-- [ ] Rewrite `templates/CLAUDE.md.template` in English.
-- [ ] Rewrite `templates/AGENTS.md.template` in English.
-- [ ] Run `./scripts/bootstrap-agent.sh` to update/overwrite the final `CLAUDE.md` and `.agents/AGENTS.md` files.
-- [ ] Verify that the generated files are correctly formatted and in English.
-- [ ] Stage and commit the updated files to the repository.
-- [ ] Notify the parent agent with the final status.
+
+- [ ] Write the TDD validation script (`scripts/validate-workflows.sh`) and run it to verify failure (Red).
+- [ ] Create `.github/workflows/ci.yml` conforming to all specifications.
+- [ ] Create `.github/workflows/release.yml` conforming to all specifications.
+- [ ] Run the validation script to verify success (Green).
+- [ ] Clean up any temporary files or scripts if not needed, or keep the validation script as part of the repository tests.
+- [ ] Stage and commit all changes using the required commit message.
+- [ ] Sync the project wiki using `./scripts/wiki-sync.sh`.

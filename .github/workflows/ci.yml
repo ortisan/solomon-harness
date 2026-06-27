@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    name: Validate Custom Scripts and Workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Check bash script syntax
+        run: |
+          bash -n scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh
+
+      - name: Check python script syntax
+        run: |
+          python3 -m py_compile scripts/git-hooks/commit-msg
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts with ShellCheck
+        run: |
+          shellcheck scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh
+
+      - name: Run script dry-runs and validation
+        run: |
+          ./scripts/scrum-master.sh --dry-run backlog-list
+          ./scripts/scrum-master.sh --dry-run milestone-list
+          ./scripts/scrum-master.sh --dry-run issue-create "Verification Test" "feature"
+
+      - name: Verify workspace configuration files
+        run: |
+          ./scripts/bootstrap-agent.sh
+          git diff --exit-code
