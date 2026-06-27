@@ -1,11 +1,11 @@
-# Regras do Workspace - solomon-harness
+# Regras do Workspace - {{PROJECT_NAME}}
 
-Este documento estabelece as regras de desenvolvimento e os padrões operacionais para o projeto solomon-harness. Todas as interações, desenvolvimento de código e geração de textos de saída devem seguir rigorosamente as diretrizes abaixo.
+Este documento estabelece as regras de desenvolvimento e os padrões operacionais para o projeto {{PROJECT_NAME}}. Todas as interações, desenvolvimento de código e geração de textos de saída devem seguir rigorosamente as diretrizes abaixo.
 
 ## Metadados do Workspace
-- **Nome do Projeto:** solomon-harness
-- **Tecnologias principais:** Generic/Shell
-- **Repositório Git:** none
+- **Nome do Projeto:** {{PROJECT_NAME}}
+- **Tecnologias principais:** {{TECH_STACK}}
+- **Repositório Git:** {{GIT_REMOTE}}
 
 ## Diretrizes de Comunicação e Tom de Voz (Humanizer)
 - Todo o conteúdo de saída gerado pelo agente, incluindo mensagens de commit, descrições de Pull Requests, páginas de documentação da wiki e comentários no código, deve ser escrito em um português natural, direto, conciso e profissional, simulando a escrita de um engenheiro humano sênior.

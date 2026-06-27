@@ -124,6 +124,7 @@ with open(template_path, 'r', encoding='utf-8') as f:
 content = content.replace('{{PROJECT_NAME}}', os.environ.get('PROJECT_NAME', ''))
 content = content.replace('{{GIT_REMOTE}}', os.environ.get('GIT_REMOTE', ''))
 content = content.replace('{{TECHNOLOGIES}}', os.environ.get('TECHNOLOGIES', ''))
+content = content.replace('{{TECH_STACK}}', os.environ.get('TECHNOLOGIES', ''))
 content = content.replace('{{GENERATION_DATE}}', os.environ.get('GENERATION_DATE', ''))
 
 dir_name = os.path.dirname(dest_path)

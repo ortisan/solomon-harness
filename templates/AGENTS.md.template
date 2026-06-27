@@ -1,11 +1,11 @@
-# Personalizações do Agente - solomon-harness
+# Personalizações do Agente - {{PROJECT_NAME}}
 
-Este arquivo define o perfil de execução e as regras comportamentais específicas do agente autônomo atuando no projeto solomon-harness.
+Este arquivo define o perfil de execução e as regras comportamentais específicas do agente autônomo atuando no projeto {{PROJECT_NAME}}.
 
 ## Perfil do Projeto
-- **Nome do Projeto:** solomon-harness
-- **Tecnologias:** Generic/Shell
-- **Repositório:** none
+- **Nome do Projeto:** {{PROJECT_NAME}}
+- **Tecnologias:** {{TECH_STACK}}
+- **Repositório:** {{GIT_REMOTE}}
 
 ## Diretrizes Comportamentais do Agente
 - Antes de iniciar qualquer alteração no código ou implementação de funcionalidades, é obrigatória a elaboração de um planejamento detalhado em PLAN.md.

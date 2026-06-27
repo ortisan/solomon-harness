@@ -28,11 +28,12 @@ Subcommands:
       Creates a GitHub milestone.
       <due-date> can be formatted as YYYY-MM-DD or ISO 8601.
 
-  issue-create <title> <type: feature|bug|quant> [description]
+  issue-create <title> <type: feature|bug|quant|future> [description]
       Creates a GitHub issue using the corresponding template:
-        - feature: 01_feature_conception.md
-        - bug:     02_bug_report.md
-        - quant:   03_quant_model_hypothesis.md
+        - feature: feature_conception.md
+        - bug:     bug_report.md
+        - quant:   quant_model_hypothesis.md
+        - future:  future_ideas.md
 
   backlog-list
       Lists open issues in the repository.
@@ -195,7 +196,7 @@ if [[ "$SUBCOMMAND" == "milestone-create" ]]; then
 
 elif [[ "$SUBCOMMAND" == "issue-create" ]]; then
   if [[ $# -lt 2 ]]; then
-    echo "Error: issue-create requires <title> and <type: feature|bug|quant>." >&2
+    echo "Error: issue-create requires <title> and <type: feature|bug|quant|future>." >&2
     exit 1
   fi
   TITLE="$1"
@@ -206,16 +207,19 @@ elif [[ "$SUBCOMMAND" == "issue-create" ]]; then
   TEMPLATE_PATH=""
   case "$TYPE" in
     feature)
-      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/01_feature_conception.md"
+      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/feature_conception.md"
       ;;
     bug)
-      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/02_bug_report.md"
+      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/bug_report.md"
       ;;
     quant)
-      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/03_quant_model_hypothesis.md"
+      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/quant_model_hypothesis.md"
+      ;;
+    future)
+      TEMPLATE_PATH=".github/ISSUE_TEMPLATE/future_ideas.md"
       ;;
     *)
-      echo "Error: Invalid type '$TYPE'. Must be one of: feature, bug, quant." >&2
+      echo "Error: Invalid type '$TYPE'. Must be one of: feature, bug, quant, future." >&2
       exit 1
       ;;
   esac
@@ -245,6 +249,8 @@ elif [[ "$SUBCOMMAND" == "issue-create" ]]; then
       TEMPLATE_BODY="${TEMPLATE_BODY/<!-- A clear and concise description of what the bug is. -->/$DESCRIPTION}"
     elif [[ "$TYPE" == "quant" ]]; then
       TEMPLATE_BODY="${TEMPLATE_BODY/<!-- State the underlying economic or statistical rationale for this model. What market inefficiency or pattern is being exploited? -->/$DESCRIPTION}"
+    elif [[ "$TYPE" == "future" ]]; then
+      TEMPLATE_BODY="${TEMPLATE_BODY/<!-- Provide a clear and concise description of the idea. -->/$DESCRIPTION}"
     fi
   fi
 
