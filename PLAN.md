@@ -43,10 +43,10 @@ This plan outlines the steps to create and validate two new contract templates (
 
 - [x] Create/Update `docs/templates/contracts/flutter_contract.md` and `frontend_contract.md`.
 - [x] Update `scripts/validate-templates.py` and run to verify templates.
-- [ ] Update `scripts/validate-agents.py` to check for SRE and SEO subagents.
-- [ ] Run `python3 scripts/validate-agents.py` to verify failure (Red Stage).
-- [ ] Create `.agents/agents/sre.md`.
-- [ ] Create `.agents/agents/seo.md`.
-- [ ] Run `python3 scripts/validate-agents.py` to verify success (Green Stage).
-- [ ] Stage and commit changes with the exact message: `feat: add artifact templates to represent deliverables as 10 subagent contracts`.
-- [ ] Run `./scripts/wiki-sync.sh` to sync the wiki.
+- [x] Update `scripts/validate-agents.py` to check for SRE and SEO subagents.
+- [x] Run `python3 scripts/validate-agents.py` to verify failure (Red Stage).
+- [x] Create `.agents/agents/sre.md`.
+- [x] Create `.agents/agents/seo.md`.
+- [x] Run `python3 scripts/validate-agents.py` to verify success (Green Stage).
+- [x] Stage and commit changes with the exact message: `feat: add artifact templates to represent deliverables as 10 subagent contracts`.
+- [x] Run `./scripts/wiki-sync.sh` to sync the wiki.

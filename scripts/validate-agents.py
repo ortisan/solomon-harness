@@ -28,7 +28,11 @@ REQUIRED_KEYWORDS = {
     "qa.md": ["QA Specialist", "UAT", "User Acceptance Testing", "verification", "QA Report", "feature/*", "develop", "release/*", "production"],
     "documenter.md": ["Documenter", "business value", "technical manuals", "design documentation", "user guides"],
     "observability.md": ["Observability Specialist", "log diagnostics", "metrics tracking", "performance profiling", "monitoring dashboards"],
-    "security.md": ["Security Specialist", "threat modeling", "SAST", "vulnerability checks", "dependencies"]
+    "security.md": ["Security Specialist", "threat modeling", "SAST", "vulnerability checks", "dependencies"],
+    "flutter.md": ["Flutter Specialist", "Dart", "clean architecture", "responsive layouts", "widget trees", "state management", "widget/integration testing", "Git Flow", "Conventional Commits"],
+    "frontend.md": ["Frontend React & Angular Specialist", "React", "Angular", "hooks", "components", "state management", "design tokens", "Git Flow", "Conventional Commits"],
+    "sre.md": ["SRE Specialist", "high availability", "infrastructure", "deployment pipelines", "load testing", "incident runbooks", "disaster recovery", "SLA/SLO", "Git Flow", "Conventional Commits"],
+    "seo.md": ["SEO Specialist", "semantic hierarchy", "metadata", "indexing/crawling", "page speed", "audits", "Git Flow", "Conventional Commits"]
 }
 
 def has_emoji(text):
