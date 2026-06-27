@@ -2,9 +2,8 @@ import unittest
 import os
 import tempfile
 import json
-
-# We will import scripts.compile_harnesses or run it.
-# Since compile-harnesses.py might not exist yet, we import it inside the test method or catch ImportError.
+import importlib
+import sys
 
 class TestCompileHarnesses(unittest.TestCase):
     def setUp(self):
@@ -15,9 +14,15 @@ class TestCompileHarnesses(unittest.TestCase):
         # Create directories
         self.agents_dir = os.path.join(self.workspace_root, "agents")
         self.templates_dir = os.path.join(self.workspace_root, "templates", "harness")
+        self.patterns_dir = os.path.join(self.workspace_root, "templates", "patterns")
+        
         os.makedirs(self.agents_dir)
         os.makedirs(os.path.join(self.templates_dir, ".agent"))
         os.makedirs(os.path.join(self.templates_dir, "skills"))
+        
+        os.makedirs(os.path.join(self.patterns_dir, "architecture"))
+        os.makedirs(os.path.join(self.patterns_dir, "observability"))
+        os.makedirs(os.path.join(self.patterns_dir, "security"))
 
         # Create global AGENTS.md
         self.global_agents_path = os.path.join(self.agents_dir, "AGENTS.md")
@@ -55,20 +60,46 @@ class TestCompileHarnesses(unittest.TestCase):
         with open(self.skill_template_path, "w", encoding="utf-8") as f:
             f.write("# Git Operations Instructions")
 
-    def tearDown(self):
-        self.temp_dir.cleanup()
+        # Create pattern template files
+        self.hexagonal_pattern_path = os.path.join(self.patterns_dir, "architecture", "hexagonal.md")
+        with open(self.hexagonal_pattern_path, "w", encoding="utf-8") as f:
+            f.write("# Hexagonal Architecture\nUse hexagonal patterns.")
 
-    def test_compilation_success(self):
-        # Dynamically import scripts/compile-harnesses.py
-        # To handle python file naming (with hyphen), we can import via runpy or sys.path
-        import sys
+        self.opentelemetry_pattern_path = os.path.join(self.patterns_dir, "observability", "opentelemetry.md")
+        with open(self.opentelemetry_pattern_path, "w", encoding="utf-8") as f:
+            f.write("# OpenTelemetry\nImplement OpenTelemetry tracing.")
+
+        self.secure_dev_pattern_path = os.path.join(self.patterns_dir, "security", "secure_dev.md")
+        with open(self.secure_dev_pattern_path, "w", encoding="utf-8") as f:
+            f.write("# Secure Dev\nFollow secure coding practices.")
+
+        # Create global config.json
+        self.global_config_dir = os.path.join(self.workspace_root, ".agent")
+        os.makedirs(self.global_config_dir, exist_ok=True)
+        self.global_config_path = os.path.join(self.global_config_dir, "config.json")
+        with open(self.global_config_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "architecture_pattern": "hexagonal",
+                "observability_pattern": "opentelemetry",
+                "security_pattern": "secure_dev"
+            }, f)
+
+        # Inject scripts path to sys.path
         scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
         if scripts_path not in sys.path:
             sys.path.insert(0, scripts_path)
-        
-        # This import should succeed now
-        import importlib
-        compile_harnesses = importlib.import_module("compile-harnesses")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _get_compiler_module(self):
+        # Always reload the compile-harnesses module to ensure we pick up fresh changes
+        if "compile-harnesses" in sys.modules:
+            del sys.modules["compile-harnesses"]
+        return importlib.import_module("compile-harnesses")
+
+    def test_compilation_success(self):
+        compile_harnesses = self._get_compiler_module()
         
         # Run compilation
         compile_harnesses.compile_harnesses(self.workspace_root)
@@ -108,7 +139,7 @@ class TestCompileHarnesses(unittest.TestCase):
             self.assertTrue(os.path.isfile(specific_agent_md), f"Specific markdown not copied to compiled subdirectory for {agent_name}")
             with open(specific_agent_md, "r", encoding="utf-8") as f:
                 expected_content = "# Product Owner Specialist" if agent_name == "product_owner" else "# Scrum Master Specialist"
-                self.assertEqual(f.read(), expected_content)
+                self.assertTrue(f.read().startswith(expected_content))
 
         # Verify that subdirectories (like subdir) were not treated as agents
         self.assertFalse(os.path.isdir(os.path.join(self.agents_dir, "subdir", "agents")))
@@ -125,14 +156,7 @@ class TestCompileHarnesses(unittest.TestCase):
         with open(nested_sm_md, "w", encoding="utf-8") as f:
             f.write("# Nested Scrum Master Specialist")
             
-        # Dynamically import compile-harnesses
-        import sys
-        scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
-        if scripts_path not in sys.path:
-            sys.path.insert(0, scripts_path)
-        
-        import importlib
-        compile_harnesses = importlib.import_module("compile-harnesses")
+        compile_harnesses = self._get_compiler_module()
         
         # Run compilation
         compile_harnesses.compile_harnesses(self.workspace_root)
@@ -155,7 +179,128 @@ class TestCompileHarnesses(unittest.TestCase):
         specific_agent_md = os.path.join(agent_root, "agents", "scrum_master.md")
         self.assertTrue(os.path.isfile(specific_agent_md))
         with open(specific_agent_md, "r", encoding="utf-8") as f:
-            self.assertEqual(f.read(), "# Nested Scrum Master Specialist")
+            self.assertTrue(f.read().startswith("# Nested Scrum Master Specialist"))
+
+    def test_pattern_injections(self):
+        # Create all subagents that should be compiled
+        agents_to_create = {
+            "software_architect": "# Software Architect",
+            "software_engineer": "# Software Engineer",
+            "qa": "# QA Specialist",
+            "sre": "# SRE Specialist",
+            "observability": "# Observability Specialist",
+            "security": "# Security Specialist",
+            "product_owner": "# Product Owner Specialist"
+        }
+        
+        for name, content in agents_to_create.items():
+            with open(os.path.join(self.agents_dir, f"{name}.md"), "w", encoding="utf-8") as f:
+                f.write(content)
+                
+        compile_harnesses = self._get_compiler_module()
+        compile_harnesses.compile_harnesses(self.workspace_root)
+        
+        # Verification dictionary of expected patterns
+        # Format: agent_name -> (has_arch, has_obs, has_sec)
+        expected = {
+            "software_architect": (True, False, False),
+            "software_engineer": (True, True, True),
+            "qa": (True, False, True),
+            "sre": (True, True, True),
+            "observability": (False, True, False),
+            "security": (False, False, True),
+            "product_owner": (False, False, False)
+        }
+        
+        for agent_name, (has_arch, has_obs, has_sec) in expected.items():
+            compiled_md_path = os.path.join(self.agents_dir, agent_name, "agents", f"{agent_name}.md")
+            self.assertTrue(os.path.isfile(compiled_md_path), f"Compiled markdown missing for {agent_name}")
+            
+            with open(compiled_md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            if has_arch:
+                self.assertIn("# Hexagonal Architecture", content)
+            else:
+                self.assertNotIn("# Hexagonal Architecture", content)
+                
+            if has_obs:
+                self.assertIn("# OpenTelemetry", content)
+            else:
+                self.assertNotIn("# OpenTelemetry", content)
+                
+            if has_sec:
+                self.assertIn("# Secure Dev", content)
+            else:
+                self.assertNotIn("# Secure Dev", content)
+
+    def test_double_append_prevention(self):
+        # Create software_engineer agent
+        se_path = os.path.join(self.agents_dir, "software_engineer.md")
+        with open(se_path, "w", encoding="utf-8") as f:
+            f.write("# Software Engineer\nOriginal content.")
+            
+        compile_harnesses = self._get_compiler_module()
+        
+        # Compile first time
+        compile_harnesses.compile_harnesses(self.workspace_root)
+        
+        compiled_md_path = os.path.join(self.agents_dir, "software_engineer", "agents", "software_engineer.md")
+        with open(compiled_md_path, "r", encoding="utf-8") as f:
+            content_v1 = f.read()
+            
+        # Count occurrences of Hexagonal Architecture pattern text
+        self.assertEqual(content_v1.count("# Hexagonal Architecture"), 1)
+        
+        # Compile second time, reading from nested compiled agent as the source
+        # But wait, to simulate nested-only source, we remove the flat source
+        os.remove(se_path)
+        compile_harnesses.compile_harnesses(self.workspace_root)
+        
+        with open(compiled_md_path, "r", encoding="utf-8") as f:
+            content_v2 = f.read()
+            
+        # Count occurrences of patterns after second compile
+        self.assertEqual(content_v2.count("# Hexagonal Architecture"), 1)
+        self.assertEqual(content_v2.count("# OpenTelemetry"), 1)
+        self.assertEqual(content_v2.count("# Secure Dev"), 1)
+        self.assertTrue(content_v2.startswith("# Software Engineer\nOriginal content."))
+
+    def test_pattern_removal_when_config_cleared(self):
+        # Create software_engineer agent
+        se_path = os.path.join(self.agents_dir, "software_engineer.md")
+        with open(se_path, "w", encoding="utf-8") as f:
+            f.write("# Software Engineer\nOriginal content.")
+            
+        compile_harnesses = self._get_compiler_module()
+        compile_harnesses.compile_harnesses(self.workspace_root)
+        
+        # Verify it has hexagonal architecture
+        compiled_md_path = os.path.join(self.agents_dir, "software_engineer", "agents", "software_engineer.md")
+        with open(compiled_md_path, "r", encoding="utf-8") as f:
+            content_v1 = f.read()
+        self.assertIn("# Hexagonal Architecture", content_v1)
+        
+        # Clear pattern from config
+        with open(self.global_config_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "architecture_pattern": "none",
+                "observability_pattern": "none",
+                "security_pattern": "none"
+            }, f)
+            
+        # Compile again
+        os.remove(se_path) # simulate nested source
+        compile_harnesses.compile_harnesses(self.workspace_root)
+        
+        with open(compiled_md_path, "r", encoding="utf-8") as f:
+            content_v2 = f.read()
+            
+        # Assert patterns are removed
+        self.assertNotIn("# Hexagonal Architecture", content_v2)
+        self.assertNotIn("# OpenTelemetry", content_v2)
+        self.assertNotIn("# Secure Dev", content_v2)
+        self.assertTrue(content_v2.startswith("# Software Engineer\nOriginal content."))
 
 if __name__ == "__main__":
     unittest.main()

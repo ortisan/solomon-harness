@@ -34,6 +34,23 @@ def compile_harnesses(workspace_root: str):
         logger.error(f"Global AGENTS.md rules file not found at: {global_agents_md}")
         sys.exit(1)
 
+    # Load dynamic pattern configurations from global config
+    global_config_path = os.path.join(workspace_root, ".agent", "config.json")
+    architecture_pattern = None
+    observability_pattern = None
+    security_pattern = None
+    if os.path.isfile(global_config_path):
+        try:
+            import json
+            with open(global_config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+            architecture_pattern = config_data.get("architecture_pattern")
+            observability_pattern = config_data.get("observability_pattern")
+            security_pattern = config_data.get("security_pattern")
+            logger.info("Loaded dynamic pattern settings from global configuration.")
+        except Exception as e:
+            logger.warning(f"Failed to read global configuration at {global_config_path}: {e}")
+
     # 1. Discover active agent specialists
     logger.info("Scanning for active agent specialists...")
     agent_names = set()
@@ -79,6 +96,107 @@ def compile_harnesses(workspace_root: str):
         else:
             logger.error(f"No source markdown found for agent: {agent_name}")
             sys.exit(1)
+
+        # Strip any previously appended best practices to prevent double appends
+        marker = "<!-- BEST_PRACTICES_APPENDED_START -->"
+        if marker in agent_md_content:
+            agent_md_content = agent_md_content.split(marker)[0]
+        agent_md_content = agent_md_content.rstrip()
+
+        # Build dynamic best practice blocks to append
+        blocks = []
+        
+        # Check architecture patterns
+        if agent_name in ["software_architect", "software_engineer", "qa", "sre"]:
+            if architecture_pattern and str(architecture_pattern).lower() != "none":
+                arch_path = os.path.join(
+                    workspace_root,
+                    "templates",
+                    "patterns",
+                    "architecture",
+                    f"{architecture_pattern}.md",
+                )
+                if os.path.isfile(arch_path):
+                    try:
+                        with open(arch_path, "r", encoding="utf-8") as f:
+                            blocks.append(f.read().strip())
+                        logger.info(
+                            f"Applying architecture pattern '{architecture_pattern}' to {agent_name}..."
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to read architecture pattern file {arch_path}: {e}"
+                        )
+                        sys.exit(1)
+                else:
+                    logger.error(
+                        f"Architecture pattern file not found at: {arch_path}"
+                    )
+                    sys.exit(1)
+
+        # Check observability patterns
+        if agent_name in ["observability", "software_engineer", "sre"]:
+            if observability_pattern == "opentelemetry":
+                obs_path = os.path.join(
+                    workspace_root,
+                    "templates",
+                    "patterns",
+                    "observability",
+                    "opentelemetry.md",
+                )
+                if os.path.isfile(obs_path):
+                    try:
+                        with open(obs_path, "r", encoding="utf-8") as f:
+                            blocks.append(f.read().strip())
+                        logger.info(
+                            f"Applying observability pattern 'opentelemetry' to {agent_name}..."
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to read observability pattern file {obs_path}: {e}"
+                        )
+                        sys.exit(1)
+                else:
+                    logger.error(
+                        f"Observability pattern file not found at: {obs_path}"
+                    )
+                    sys.exit(1)
+
+        # Check security patterns
+        if agent_name in ["security", "software_engineer", "qa", "sre"]:
+            if security_pattern == "secure_dev":
+                sec_path = os.path.join(
+                    workspace_root,
+                    "templates",
+                    "patterns",
+                    "security",
+                    "secure_dev.md",
+                )
+                if os.path.isfile(sec_path):
+                    try:
+                        with open(sec_path, "r", encoding="utf-8") as f:
+                            blocks.append(f.read().strip())
+                        logger.info(
+                            f"Applying security pattern 'secure_dev' to {agent_name}..."
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to read security pattern file {sec_path}: {e}"
+                        )
+                        sys.exit(1)
+                else:
+                    logger.error(f"Security pattern file not found at: {sec_path}")
+                    sys.exit(1)
+
+        if blocks:
+            agent_md_content = (
+                agent_md_content.rstrip()
+                + "\n\n"
+                + marker
+                + "\n\n"
+                + "\n\n".join(blocks)
+                + "\n"
+            )
             
         target_agent_dir = os.path.join(agents_dir, agent_name)
         
