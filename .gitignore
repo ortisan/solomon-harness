@@ -5,3 +5,7 @@ __pycache__/
 *.pyo
 *.pyd
 .ipynb_checkpoints/
+
+memory/long_term/harness.db
+memory/short_term/*.json
+.agent/secure_vault.enc

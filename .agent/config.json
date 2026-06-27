@@ -1,0 +1,9 @@
+{
+  "models": {
+    "default": "gemini-3.5-flash",
+    "reasoning": "gemini-3.5-pro",
+    "embedding": "text-embedding-004"
+  },
+  "timeout_seconds": 30,
+  "max_retries": 3
+}

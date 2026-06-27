@@ -1,51 +1,62 @@
-# Plan - Autonomous Subagents Setup (Task 3)
+# Plan - Initialize Agent Harness Directory Structure and Configuration
 
-This plan outlines the design, implementation, and verification steps for the spawn-agent wrapper script.
+This plan outlines the design, implementation, and verification steps for Task 1 of the Solomon Harness: Agent Harness Refactoring.
 
 ## Requirements
 
-1. **Script Path**: `scripts/spawn-agent.sh`.
-2. **Dynamic Scan**: Scan the `.agents/agents/` directory dynamically for subagents without hardcoding.
-3. **Subcommands**:
-   - `list`: Lists all available subagents in `.agents/agents/*.md`, showing their name (from filename) and description (first paragraph/non-empty line not starting with `#`).
-   - `show <agent_name>`: Displays the full contents of `.agents/agents/<agent_name>.md`.
-   - `help` / `-h` / `--help`: Displays detailed usage.
-4. **Style Constraints**:
-   - No emojis, icons, or visual ornaments.
-   - Professional, direct, senior-engineer style English (no AI clichés).
-5. **Script Safety**:
-   - Use `set -euo pipefail`.
-   - Double-quote all variables.
-   - Exit with code `0` on success and non-zero on failure with clear messages on `stderr`.
-6. **Execution Permission**: The script must be executable.
-7. **Commit & Wiki Sync**:
-   - Commit with message: `feat: add spawn-agent helper script to manage subagent configurations`.
-   - Run `./scripts/wiki-sync.sh` to sync the wiki.
+1. Create directories:
+   - `.agent/`
+   - `agents/`
+   - `skills/`
+   - `tools/`
+   - `memory/`
+   - `memory/short_term/`
+   - `memory/long_term/`
+   - `tests/`
+
+2. Create `.agent/config.json` containing:
+   - Default, reasoning, and embedding models.
+   - Timeout and max retries parameters.
+   - Clean JSON formatting, in English, without emojis.
+
+3. Create `.agent/secure_vault.enc` containing:
+   - Base64-encoded representation of a mock JSON vault (`eyJhbnRocm9waWNfYXBpX2tleSI6ICJtb2NrX2tleSJ9`).
+
+4. Update `.gitignore` to append rules for:
+   - `memory/long_term/harness.db`
+   - `memory/short_term/*.json`
+   - `.agent/secure_vault.enc`
+
+5. Stage and commit changes with the message:
+   - `chore: initialize agent harness directory structure and configuration files`
 
 ## TDD and Verification Steps
 
-We will implement a testing script `scripts/test-spawn-agent.sh` to drive our TDD cycle.
+A Python script `tests/test_harness_init.py` will be created using the standard library `unittest` to drive the test-driven development loop.
 
 1. **Red Stage**:
-   - Create `scripts/test-spawn-agent.sh` which executes tests against `scripts/spawn-agent.sh` (which doesn't exist yet or is empty).
-   - Run the tests to confirm failure.
+   - Create `tests/` directory if needed and write `tests/test_harness_init.py` before implementing any other directories or configurations.
+   - Run the test script using `python3 -m unittest tests/test_harness_init.py` and confirm it fails.
+
 2. **Green Stage**:
-   - Create `scripts/spawn-agent.sh` with the required subcommand logic.
-   - Make the script executable.
-   - Run `scripts/test-spawn-agent.sh` and ensure all tests pass.
+   - Create the required directories.
+   - Create `.agent/config.json` with the required parameters.
+   - Create `.agent/secure_vault.enc` with the specified base64 string.
+   - Update `.gitignore` with the rules.
+   - Run `python3 -m unittest tests/test_harness_init.py` and confirm it passes.
+
 3. **Refactor Stage**:
-   - Add the new script to `.github/workflows/ci.yml` validation steps (bash syntax check and shellcheck).
-   - Run `shellcheck` manually and fix any lint issues.
-   - Confirm all tests and validations pass cleanly.
+   - Ensure file formatting is correct and files are clean.
+   - Stage all changes, commit them, and execute `scripts/wiki-sync.sh` to sync the wiki.
 
 ## Execution Checklist
 
-- [x] Create `scripts/test-spawn-agent.sh` (TDD Red).
-- [x] Execute `scripts/test-spawn-agent.sh` to verify failure (Red).
-- [x] Create `scripts/spawn-agent.sh` with dynamic scanning and subcommands (list, show, help).
-- [x] Make `scripts/spawn-agent.sh` executable.
-- [x] Run `scripts/test-spawn-agent.sh` to verify success (Green).
-- [x] Update `.github/workflows/ci.yml` to include `scripts/spawn-agent.sh` and `scripts/test-spawn-agent.sh`.
-- [x] Run shellcheck on both scripts.
-- [x] Commit all changes with message: `feat: add spawn-agent helper script to manage subagent configurations`.
-- [x] Execute `./scripts/wiki-sync.sh`.
+- [ ] Create `tests/test_harness_init.py` (TDD Red).
+- [ ] Run the tests to verify failures (Red).
+- [ ] Create directories: `.agent/`, `agents/`, `skills/`, `tools/`, `memory/`, `memory/short_term/`, `memory/long_term/`.
+- [ ] Create `.agent/config.json`.
+- [ ] Create `.agent/secure_vault.enc`.
+- [ ] Update `.gitignore`.
+- [ ] Run the tests to verify success (Green).
+- [ ] Stage changes and commit with the specified message.
+- [ ] Execute `scripts/wiki-sync.sh` to sync the project wiki.
