@@ -1,37 +1,105 @@
 import os
+import json
 import sqlite3
 import logging
+import sys
 
 
 class DatabaseClient:
-    """A client to manage SQLite database operations for the agent harness."""
+    """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
     def __init__(self, db_path=None):
-        """Initializes the database client and automated table creations.
+        """Initializes the database client and selects the appropriate backend.
 
         Args:
-            db_path: Optional custom path to the SQLite database file.
+            db_path: Optional custom path to the SQLite database file (if using SQLite).
         """
-        if db_path is None:
-            # Dynamically locate the database directory relative to this file
-            tools_dir = os.path.dirname(os.path.abspath(__file__))
-            harness_dir = os.path.dirname(tools_dir)
-            db_dir = os.path.join(harness_dir, "memory", "long_term")
-            os.makedirs(db_dir, exist_ok=True)
-            self.db_path = os.path.join(db_dir, "harness.db")
-        else:
-            self.db_path = db_path
+        self.backend = "sqlite"
+        self.db = None
+        self.db_path = db_path
 
-        self._init_db()
+        # Locate the harness directory relative to this file
+        tools_dir = os.path.dirname(os.path.abspath(__file__))
+        harness_dir = os.path.dirname(tools_dir)
 
-    def _get_connection(self):
+        # Attempt to load configuration
+        config = {}
+        config_path = os.path.join(harness_dir, ".agent", "config.json")
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            except Exception:
+                pass
+
+        db_config = config.get("database", {})
+        provider = db_config.get("provider")
+
+        if provider == "surrealdb":
+            # Dynamically import surrealdb to support dynamic backend loading
+            try:
+                import surrealdb
+                Surreal = surrealdb.Surreal
+                has_surrealdb = True
+            except (ImportError, AttributeError):
+                has_surrealdb = False
+                Surreal = None
+
+            if has_surrealdb and Surreal is not None:
+                url = db_config.get("url", "ws://localhost:8000/rpc")
+                username = db_config.get("username", "root")
+                password = db_config.get("password", "root")
+                namespace = db_config.get("namespace", "solomon")
+                database = db_config.get("database", "harness")
+
+                try:
+                    self.db = Surreal(url)
+                    self.db.connect()
+                    self.db.signin({"user": username, "pass": password})
+                    self.db.use(namespace, database)
+
+                    # Initialize SurrealDB tables
+                    init_query = (
+                        "DEFINE TABLE decisions SCHEMALESS; "
+                        "DEFINE TABLE memory SCHEMALESS; "
+                        "DEFINE TABLE milestones SCHEMALESS; "
+                        "DEFINE TABLE issues SCHEMALESS; "
+                        "DEFINE TABLE backtest_runs SCHEMALESS; "
+                        "DEFINE TABLE sessions SCHEMALESS; "
+                        "DEFINE TABLE handoffs SCHEMALESS;"
+                    )
+                    self.db.query(init_query)
+                    self.backend = "surrealdb"
+                except Exception as e:
+                    sys.stderr.write(f"Warning: Connection to SurrealDB failed: {e}\n")
+                    sys.stderr.write("SurrealDB library or server unavailable. Falling back to SQLite backend.\n")
+                    if self.db:
+                        try:
+                            self.db.close()
+                        except Exception:
+                            pass
+                        self.db = None
+                    self.backend = "sqlite"
+            else:
+                sys.stderr.write("SurrealDB library or server unavailable. Falling back to SQLite backend.\n")
+                self.backend = "sqlite"
+
+        # Initialize SQLite if backend is sqlite
+        if self.backend == "sqlite":
+            if self.db_path is None:
+                db_dir = os.path.join(harness_dir, "memory", "long_term")
+                os.makedirs(db_dir, exist_ok=True)
+                self.db_path = os.path.join(db_dir, "harness.db")
+            self._init_sqlite_db()
+
+    def _get_sqlite_connection(self):
         """Establishes and returns a SQLite connection with Row factory configured."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _init_db(self):
-        """Creates the required tables if they do not already exist."""
+    def _init_sqlite_db(self):
+        """Creates the required SQLite tables if they do not already exist."""
         queries = [
             """
             CREATE TABLE IF NOT EXISTS decisions (
@@ -86,18 +154,101 @@ class DatabaseClient:
                 commit_sha TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                agent_name TEXT,
+                task TEXT,
+                messages TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS handoffs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender TEXT,
+                recipient TEXT,
+                contract_type TEXT,
+                contract_path TEXT,
+                status TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             """
         ]
 
         try:
-            with self._get_connection() as conn:
+            with self._get_sqlite_connection() as conn:
                 cursor = conn.cursor()
                 for query in queries:
                     cursor.execute(query)
                 conn.commit()
         except sqlite3.Error as e:
-            logging.error(f"Database initialization failed: {e}")
-            raise RuntimeError(f"Database initialization failed: {e}")
+            logging.error(f"SQLite database initialization failed: {e}")
+            raise RuntimeError(f"SQLite database initialization failed: {e}")
+
+    def _extract_id(self, res):
+        """Helper to extract record ID safely from SurrealDB query results."""
+        if not res:
+            return None
+        first = res[0]
+        if isinstance(first, list):
+            if first:
+                item = first[0]
+                return item.get("id") if isinstance(item, dict) else None
+        elif isinstance(first, dict):
+            if "result" in first and isinstance(first["result"], list):
+                if first["result"]:
+                    item = first["result"][0]
+                    return item.get("id") if isinstance(item, dict) else None
+            else:
+                return first.get("id")
+        return None
+
+    def _extract_field(self, res, field_name):
+        """Helper to extract a specific field value safely from SurrealDB query results."""
+        if not res:
+            return None
+        first = res[0]
+        if isinstance(first, list):
+            if first:
+                item = first[0]
+                return item.get(field_name) if isinstance(item, dict) else None
+        elif isinstance(first, dict):
+            if "result" in first and isinstance(first["result"], list):
+                if first["result"]:
+                    item = first["result"][0]
+                    return item.get(field_name) if isinstance(item, dict) else None
+            else:
+                return first.get(field_name)
+        return None
+
+    def _extract_record(self, res):
+        """Helper to extract a full record dictionary safely from SurrealDB query results."""
+        if not res:
+            return None
+        first = res[0]
+        if isinstance(first, list):
+            if first:
+                item = first[0]
+                return dict(item) if isinstance(item, dict) else None
+        elif isinstance(first, dict):
+            if "result" in first and isinstance(first["result"], list):
+                if first["result"]:
+                    item = first["result"][0]
+                    return dict(item) if isinstance(item, dict) else None
+            else:
+                return dict(first)
+        return None
+
+    def _format_id(self, table, record_id):
+        """Formats the ID parameter for SurrealDB queries."""
+        if record_id is None:
+            return None
+        s_id = str(record_id)
+        if s_id.startswith(f"{table}:"):
+            return s_id
+        return f"{table}:{s_id}"
 
     def log_decision(self, title, rationale, outcome, author, branch, commit_sha):
         """Logs an architectural or design decision to the database.
@@ -111,21 +262,48 @@ class DatabaseClient:
             commit_sha: Commit SHA representing the change.
 
         Returns:
-            The primary key ID of the inserted record.
+            The primary key ID or record ID of the inserted record.
         """
-        query = """
-        INSERT INTO decisions (title, rationale, outcome, author, branch, commit_sha)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (title, rationale, outcome, author, branch, commit_sha))
-                conn.commit()
-                return cursor.lastrowid
-        except sqlite3.Error as e:
-            logging.error(f"Failed to log decision: {e}")
-            raise RuntimeError(f"Failed to log decision: {e}")
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO decisions {
+                title: $title,
+                rationale: $rationale,
+                outcome: $outcome,
+                author: $author,
+                branch: $branch,
+                commit_sha: $commit_sha,
+                created_at: time::now()
+            }
+            """
+            params = {
+                "title": title,
+                "rationale": rationale,
+                "outcome": outcome,
+                "author": author,
+                "branch": branch,
+                "commit_sha": commit_sha
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to log decision in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to log decision in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO decisions (title, rationale, outcome, author, branch, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (title, rationale, outcome, author, branch, commit_sha))
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to log decision: {e}")
+                raise RuntimeError(f"Failed to log decision: {e}")
 
     def save_memory(self, key, value, category):
         """Upserts a key-value memory entry.
@@ -135,21 +313,43 @@ class DatabaseClient:
             value: Value of the memory entry.
             category: Categorical bucket for the memory.
         """
-        query = """
-        INSERT INTO memory (key, value, category, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(key) DO UPDATE SET
-            value=excluded.value,
-            category=excluded.category,
-            updated_at=CURRENT_TIMESTAMP
-        """
-        try:
-            with self._get_connection() as conn:
-                conn.execute(query, (key, value, category))
-                conn.commit()
-        except sqlite3.Error as e:
-            logging.error(f"Failed to save memory: {e}")
-            raise RuntimeError(f"Failed to save memory: {e}")
+        if self.backend == "surrealdb":
+            query = """
+            UPSERT INTO memory {
+                id: $id,
+                key: $key,
+                value: $value,
+                category: $category,
+                updated_at: time::now()
+            }
+            """
+            params = {
+                "id": f"memory:{key}",
+                "key": key,
+                "value": value,
+                "category": category
+            }
+            try:
+                self.db.query(query, params)
+            except Exception as e:
+                logging.error(f"Failed to save memory in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to save memory in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO memory (key, value, category, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value,
+                category=excluded.category,
+                updated_at=CURRENT_TIMESTAMP
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    conn.execute(query, (key, value, category))
+                    conn.commit()
+            except sqlite3.Error as e:
+                logging.error(f"Failed to save memory: {e}")
+                raise RuntimeError(f"Failed to save memory: {e}")
 
     def get_memory(self, key):
         """Retrieves a memory value by its key.
@@ -160,16 +360,25 @@ class DatabaseClient:
         Returns:
             The memory value string or None if not found.
         """
-        query = "SELECT value FROM memory WHERE key = ?"
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (key,))
-                row = cursor.fetchone()
-                return row["value"] if row else None
-        except sqlite3.Error as e:
-            logging.error(f"Failed to retrieve memory: {e}")
-            raise RuntimeError(f"Failed to retrieve memory: {e}")
+        if self.backend == "surrealdb":
+            query = "SELECT value FROM memory WHERE key = $key"
+            try:
+                res = self.db.query(query, {"key": key})
+                return self._extract_field(res, "value")
+            except Exception as e:
+                logging.error(f"Failed to retrieve memory from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve memory from SurrealDB: {e}")
+        else:
+            query = "SELECT value FROM memory WHERE key = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (key,))
+                    row = cursor.fetchone()
+                    return row["value"] if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve memory: {e}")
+                raise RuntimeError(f"Failed to retrieve memory: {e}")
 
     def create_milestone(self, title, description, due_date, state):
         """Creates a project milestone record.
@@ -181,21 +390,44 @@ class DatabaseClient:
             state: Active state (e.g., active, complete, pending).
 
         Returns:
-            The primary key ID of the created milestone.
+            The primary key ID or record ID of the created milestone.
         """
-        query = """
-        INSERT INTO milestones (title, description, due_date, state)
-        VALUES (?, ?, ?, ?)
-        """
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (title, description, due_date, state))
-                conn.commit()
-                return cursor.lastrowid
-        except sqlite3.Error as e:
-            logging.error(f"Failed to create milestone: {e}")
-            raise RuntimeError(f"Failed to create milestone: {e}")
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO milestones {
+                title: $title,
+                description: $description,
+                due_date: $due_date,
+                state: $state,
+                created_at: time::now()
+            }
+            """
+            params = {
+                "title": title,
+                "description": description,
+                "due_date": due_date,
+                "state": state
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to create milestone in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to create milestone in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO milestones (title, description, due_date, state)
+            VALUES (?, ?, ?, ?)
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (title, description, due_date, state))
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to create milestone: {e}")
+                raise RuntimeError(f"Failed to create milestone: {e}")
 
     def log_issue(self, github_id, title, type_, status, milestone_id):
         """Logs a GitHub issue.
@@ -207,22 +439,48 @@ class DatabaseClient:
             status: Status (e.g., open, closed).
             milestone_id: Associated milestone ID in the database.
         """
-        query = """
-        INSERT INTO issues (github_id, title, type_, status, milestone_id)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(github_id) DO UPDATE SET
-            title=excluded.title,
-            type_=excluded.type_,
-            status=excluded.status,
-            milestone_id=excluded.milestone_id
-        """
-        try:
-            with self._get_connection() as conn:
-                conn.execute(query, (github_id, title, type_, status, milestone_id))
-                conn.commit()
-        except sqlite3.Error as e:
-            logging.error(f"Failed to log issue: {e}")
-            raise RuntimeError(f"Failed to log issue: {e}")
+        if self.backend == "surrealdb":
+            query = """
+            UPSERT INTO issues {
+                id: $id,
+                github_id: $github_id,
+                title: $title,
+                type_: $type_,
+                status: $status,
+                milestone_id: $milestone_id,
+                created_at: time::now()
+            }
+            """
+            params = {
+                "id": f"issues:{github_id}",
+                "github_id": github_id,
+                "title": title,
+                "type_": type_,
+                "status": status,
+                "milestone_id": milestone_id
+            }
+            try:
+                self.db.query(query, params)
+            except Exception as e:
+                logging.error(f"Failed to log issue in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to log issue in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO issues (github_id, title, type_, status, milestone_id)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(github_id) DO UPDATE SET
+                title=excluded.title,
+                type_=excluded.type_,
+                status=excluded.status,
+                milestone_id=excluded.milestone_id
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    conn.execute(query, (github_id, title, type_, status, milestone_id))
+                    conn.commit()
+            except sqlite3.Error as e:
+                logging.error(f"Failed to log issue: {e}")
+                raise RuntimeError(f"Failed to log issue: {e}")
 
     def save_backtest(self, strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha):
         """Saves a backtest run log.
@@ -237,98 +495,339 @@ class DatabaseClient:
             commit_sha: Git commit hash of the code executed.
 
         Returns:
-            The primary key ID of the inserted record.
+            The primary key ID or record ID of the inserted record.
         """
-        query = """
-        INSERT INTO backtest_runs (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO backtest_runs {
+                strategy_name: $strategy_name,
+                sharpe_ratio: $sharpe_ratio,
+                max_drawdown: $max_drawdown,
+                profit_factor: $profit_factor,
+                parameters: $parameters,
+                dataset: $dataset,
+                commit_sha: $commit_sha,
+                created_at: time::now()
+            }
+            """
+            params = {
+                "strategy_name": strategy_name,
+                "sharpe_ratio": sharpe_ratio,
+                "max_drawdown": max_drawdown,
+                "profit_factor": profit_factor,
+                "parameters": parameters,
+                "dataset": dataset,
+                "commit_sha": commit_sha
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to save backtest run in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to save backtest run in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO backtest_runs (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha))
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to save backtest run: {e}")
+                raise RuntimeError(f"Failed to save backtest run: {e}")
+
+    def save_session(self, session_id, agent_name, task, messages):
+        """Upserts a short-term session state.
+
+        Args:
+            session_id: Unique identifier for the session.
+            agent_name: Name of the agent.
+            task: Task description.
+            messages: List of message dictionaries representing conversation history.
         """
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha))
-                conn.commit()
-                return cursor.lastrowid
-        except sqlite3.Error as e:
-            logging.error(f"Failed to save backtest run: {e}")
-            raise RuntimeError(f"Failed to save backtest run: {e}")
+        if self.backend == "surrealdb":
+            query = """
+            UPSERT INTO sessions {
+                id: $id,
+                session_id: $session_id,
+                agent_name: $agent_name,
+                task: $task,
+                messages: $messages,
+                timestamp: time::now()
+            }
+            """
+            params = {
+                "id": f"sessions:{session_id}",
+                "session_id": session_id,
+                "agent_name": agent_name,
+                "task": task,
+                "messages": messages
+            }
+            try:
+                self.db.query(query, params)
+            except Exception as e:
+                logging.error(f"Failed to save session in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to save session in SurrealDB: {e}")
+        else:
+            serialized_messages = json.dumps(messages) if not isinstance(messages, str) else messages
+            query = """
+            INSERT INTO sessions (session_id, agent_name, task, messages, timestamp)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(session_id) DO UPDATE SET
+                agent_name=excluded.agent_name,
+                task=excluded.task,
+                messages=excluded.messages,
+                timestamp=CURRENT_TIMESTAMP
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    conn.execute(query, (session_id, agent_name, task, serialized_messages))
+                    conn.commit()
+            except sqlite3.Error as e:
+                logging.error(f"Failed to save session: {e}")
+                raise RuntimeError(f"Failed to save session: {e}")
+
+    def get_session(self, session_id):
+        """Retrieves a session state by session_id.
+
+        Args:
+            session_id: Unique identifier for the session.
+
+        Returns:
+            A dictionary containing the session details or None.
+        """
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM sessions WHERE session_id = $session_id"
+            try:
+                res = self.db.query(query, {"session_id": session_id})
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve session from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve session from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM sessions WHERE session_id = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (session_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve session: {e}")
+                raise RuntimeError(f"Failed to retrieve session: {e}")
+
+    def log_handoff(self, sender, recipient, contract_type, contract_path, status):
+        """Creates a handoff log entry.
+
+        Args:
+            sender: The sender agent name.
+            recipient: The recipient agent name.
+            contract_type: Type of contract (e.g. plan, code).
+            contract_path: File path to contract documentation.
+            status: Initial status (e.g. pending, approved).
+
+        Returns:
+            The primary key ID or record ID of the created handoff.
+        """
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO handoffs {
+                sender: $sender,
+                recipient: $recipient,
+                contract_type: $contract_type,
+                contract_path: $contract_path,
+                status: $status,
+                timestamp: time::now()
+            }
+            """
+            params = {
+                "sender": sender,
+                "recipient": recipient,
+                "contract_type": contract_type,
+                "contract_path": contract_path,
+                "status": status
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to log handoff in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to log handoff in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO handoffs (sender, recipient, contract_type, contract_path, status)
+            VALUES (?, ?, ?, ?, ?)
+            """
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (sender, recipient, contract_type, contract_path, status))
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to log handoff: {e}")
+                raise RuntimeError(f"Failed to log handoff: {e}")
+
+    def get_handoff(self, handoff_id):
+        """Retrieves handoff log details by ID.
+
+        Args:
+            handoff_id: The primary key ID or record ID of the handoff.
+
+        Returns:
+            A dictionary containing the handoff details or None.
+        """
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM handoffs WHERE id = $id"
+            try:
+                res = self.db.query(query, {"id": self._format_id("handoffs", handoff_id)})
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve handoff from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve handoff from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM handoffs WHERE id = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (handoff_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve handoff: {e}")
+                raise RuntimeError(f"Failed to retrieve handoff: {e}")
 
     def get_decision(self, decision_id):
         """Retrieves a logged decision by ID.
 
         Args:
-            decision_id: The primary key ID of the decision.
+            decision_id: The primary key ID or record ID of the decision.
 
         Returns:
             A dictionary containing the record details or None.
         """
-        query = "SELECT * FROM decisions WHERE id = ?"
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (decision_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except sqlite3.Error as e:
-            logging.error(f"Failed to retrieve decision: {e}")
-            raise RuntimeError(f"Failed to retrieve decision: {e}")
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM decisions WHERE id = $id"
+            try:
+                res = self.db.query(query, {"id": self._format_id("decisions", decision_id)})
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve decision from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve decision from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM decisions WHERE id = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (decision_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve decision: {e}")
+                raise RuntimeError(f"Failed to retrieve decision: {e}")
 
     def get_milestone(self, milestone_id):
         """Retrieves a milestone by ID.
 
         Args:
-            milestone_id: The primary key ID of the milestone.
+            milestone_id: The primary key ID or record ID of the milestone.
 
         Returns:
             A dictionary containing the record details or None.
         """
-        query = "SELECT * FROM milestones WHERE id = ?"
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (milestone_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except sqlite3.Error as e:
-            logging.error(f"Failed to retrieve milestone: {e}")
-            raise RuntimeError(f"Failed to retrieve milestone: {e}")
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM milestones WHERE id = $id"
+            try:
+                res = self.db.query(query, {"id": self._format_id("milestones", milestone_id)})
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve milestone from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve milestone from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM milestones WHERE id = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (milestone_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve milestone: {e}")
+                raise RuntimeError(f"Failed to retrieve milestone: {e}")
 
     def get_issue(self, github_id):
         """Retrieves an issue by its GitHub ID.
 
         Args:
-            github_id: The primary key GitHub ID of the issue.
+            github_id: The primary key GitHub ID or record ID of the issue.
 
         Returns:
             A dictionary containing the record details or None.
         """
-        query = "SELECT * FROM issues WHERE github_id = ?"
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (github_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except sqlite3.Error as e:
-            logging.error(f"Failed to retrieve issue: {e}")
-            raise RuntimeError(f"Failed to retrieve issue: {e}")
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM issues WHERE id = $id"
+            try:
+                res = self.db.query(query, {"id": self._format_id("issues", github_id)})
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve issue from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve issue from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM issues WHERE github_id = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (github_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve issue: {e}")
+                raise RuntimeError(f"Failed to retrieve issue: {e}")
 
     def get_backtest(self, backtest_id):
         """Retrieves a backtest run by ID.
 
         Args:
-            backtest_id: The primary key ID of the backtest run.
+            backtest_id: The primary key ID or record ID of the backtest run.
 
         Returns:
             A dictionary containing the record details or None.
         """
-        query = "SELECT * FROM backtest_runs WHERE id = ?"
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, (backtest_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except sqlite3.Error as e:
-            logging.error(f"Failed to retrieve backtest run: {e}")
-            raise RuntimeError(f"Failed to retrieve backtest run: {e}")
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM backtest_runs WHERE id = $id"
+            try:
+                res = self.db.query(query, {"id": self._format_id("backtest_runs", backtest_id)})
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve backtest run from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve backtest run from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM backtest_runs WHERE id = ?"
+            try:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (backtest_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve backtest run: {e}")
+                raise RuntimeError(f"Failed to retrieve backtest run: {e}")
+
+    def close(self):
+        """Closes the database client and any open connections."""
+        if self.backend == "surrealdb" and self.db:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
