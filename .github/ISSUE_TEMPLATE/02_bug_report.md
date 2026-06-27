@@ -1,5 +1,5 @@
 ---
-name: "🐛 Bug Report"
+name: "Bug Report"
 about: Report a bug, including reproduction steps, expected/actual behavior, diagnostic logs, and impact analysis.
 title: "[Bug]: "
 labels: ["bug"]

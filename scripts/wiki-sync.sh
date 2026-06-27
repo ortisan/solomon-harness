@@ -55,7 +55,11 @@ fi
 # E.g., git@github.com:user/repo.git -> git@github.com:user/repo.wiki.git
 # E.g., https://github.com/user/repo -> https://github.com/user/repo.wiki.git
 REMOTE_URL="${REMOTE_URL%/}"
-if [[ "$REMOTE_URL" =~ \.git$ ]]; then
+if [[ "$REMOTE_URL" =~ \.wiki\.git$ ]]; then
+  WIKI_URL="$REMOTE_URL"
+elif [[ "$REMOTE_URL" =~ \.wiki$ ]]; then
+  WIKI_URL="${REMOTE_URL}.git"
+elif [[ "$REMOTE_URL" =~ \.git$ ]]; then
   WIKI_URL="${REMOTE_URL%.git}.wiki.git"
 else
   WIKI_URL="${REMOTE_URL}.wiki.git"

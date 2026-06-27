@@ -1,5 +1,5 @@
 ---
-name: "💡 Feature Conception"
+name: "Feature Conception"
 about: Propose and specify a new feature, including architectural design and verification plan.
 title: "[Conception]: "
 labels: ["conception", "enhancement"]

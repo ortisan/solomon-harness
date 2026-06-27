@@ -1,5 +1,5 @@
 ---
-name: "📈 Quant/ML Model Hypothesis"
+name: "Quant/ML Model Hypothesis"
 about: Formulate and document a new quantitative trading, machine learning, or deep reinforcement learning model hypothesis.
 title: "[Hypothesis]: "
 labels: ["hypothesis", "quant", "ml"]
