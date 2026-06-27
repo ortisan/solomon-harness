@@ -6,5 +6,13 @@
     "embedding": "text-embedding-004"
   },
   "timeout_seconds": 30,
-  "max_retries": 3
+  "max_retries": 3,
+  "database": {
+    "provider": "surrealdb",
+    "url": "ws://localhost:8000/rpc",
+    "namespace": "solomon",
+    "database": "harness",
+    "username": "root",
+    "password": "root"
+  }
 }

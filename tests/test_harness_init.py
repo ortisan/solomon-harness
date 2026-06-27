@@ -40,6 +40,22 @@ class TestHarnessInit(unittest.TestCase):
         self.assertEqual(models.get("reasoning"), "gemini-3.5-pro")
         self.assertEqual(models.get("embedding"), "text-embedding-004")
 
+    def test_template_config_json_database(self):
+        config_path = os.path.join(self.workspace_dir, "templates", "harness", ".agent", "config.json")
+        self.assertTrue(os.path.isfile(config_path), f"config.json template not found at {config_path}")
+        
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            
+        self.assertIn("database", config)
+        db_config = config["database"]
+        self.assertEqual(db_config.get("provider"), "surrealdb")
+        self.assertEqual(db_config.get("url"), "ws://localhost:8000/rpc")
+        self.assertEqual(db_config.get("namespace"), "solomon")
+        self.assertEqual(db_config.get("database"), "harness")
+        self.assertEqual(db_config.get("username"), "root")
+        self.assertEqual(db_config.get("password"), "root")
+
     def test_secure_vault_enc(self):
         vault_path = os.path.join(self.workspace_dir, ".agent", "secure_vault.enc")
         self.assertTrue(os.path.isfile(vault_path), f"secure_vault.enc not found at {vault_path}")

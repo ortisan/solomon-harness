@@ -1,53 +1,38 @@
-# Plan - Solomon Harness Task 4: Update CI Workflow and Verify Harness Structure Validation
+# Plan - Solomon Harness Task 1: SurrealDB Spectron Memory Integration Template Update
 
-This plan outlines the design, implementation, and verification steps for Task 4 of the Solomon Harness: Agent Harness Refactoring plan.
+This plan outlines the design, implementation, and verification steps for Task 1 of the Solomon Harness: SurrealDB Spectron Memory Integration plan.
 
 ## Requirements
 
-1. **Update `.github/workflows/ci.yml`**:
-   - Add a step to run python unit tests:
-     ```yaml
-     - name: Run python unit tests
-       run: |
-         python3 -m unittest discover -s tests
+1. **Modify `templates/harness/.agent/config.json`**:
+   - Add SurrealDB database connection parameters:
+     ```json
+     "database": {
+       "provider": "surrealdb",
+       "url": "ws://localhost:8000/rpc",
+       "namespace": "solomon",
+       "database": "harness",
+       "username": "root",
+       "password": "root"
+     }
      ```
-   - Add a step to run the individual agent harness evaluation suites dynamically:
-     ```yaml
-     - name: Run individual agent harness evaluations
-       run: |
-         for agent_dir in agents/*; do
-           if [ -d "$agent_dir" ] && [ -f "$agent_dir/main.py" ]; then
-             echo "Running evaluations for $(basename "$agent_dir")..."
-             python3 "$agent_dir/main.py" eval
-           fi
-         done
-     ```
-   - Update script syntax validation checks to include the new python scripts: `scripts/compile-harnesses.py`, `scripts/validate-agents.py`, `scripts/validate-templates.py`, and `scripts/validate-workflows.py`.
-
-2. **Run Validation and Verification Checks**:
-   - Ensure the modified CI workflow validates successfully against `scripts/validate-workflows.py`.
-   - Run the unit tests and dynamic agent evaluations locally to confirm they all pass.
-
-3. **Git Commit**:
-   - Stage all changes and commit with the exact message: `test: update CI workflow and verify harness structure validation`.
+2. **JSON and Language Quality**:
+   - Ensure the template remains valid JSON.
+   - Maintain clean English with no emojis or AI clichés in any comments, docs, or commit messages.
 
 ## TDD Development Cycle
 
 ### 1. Red Phase
-- Modify `scripts/validate-workflows.py` to include the new required substrings for the CI workflow:
-  - `"python3 -m unittest discover -s tests"`
-  - `"python3 \"$agent_dir/main.py\" eval"`
-- Run `python3 scripts/validate-workflows.py` and confirm that it fails because the CI workflow does not yet contain these steps.
+- Add a new unit test to `tests/test_harness_init.py` (e.g., `test_template_config_json_database`) that:
+  - Reads `templates/harness/.agent/config.json`.
+  - Asserts that it contains the `"database"` key, with all the correct nested keys and values (`provider`, `url`, `namespace`, `database`, `username`, `password`).
+- Run the test suite and confirm that the new test fails.
 
 ### 2. Green Phase
-- Edit `.github/workflows/ci.yml` to:
-  - Add the "Run python unit tests" step.
-  - Add the "Run individual agent harness evaluations" step.
-  - Update the "Check python script syntax" step to include all the new python scripts.
-- Run `python3 scripts/validate-workflows.py` and confirm that it passes successfully.
+- Edit `templates/harness/.agent/config.json` to add the SurrealDB connection parameters.
+- Run the test suite and confirm that the new test passes.
 
 ### 3. Refactor Phase
-- Review the formatting of the modified YAML file.
-- Verify that there are no style issues, trailing whitespaces, or tab character violations.
-- Run the python unit tests and evaluations locally one final time to verify correctness.
+- Check the JSON formatting of `templates/harness/.agent/config.json` to ensure it is clean and pretty-printed.
+- Verify that all unit tests pass successfully.
 - Sync the project wiki using the `scripts/wiki-sync.sh` script if applicable.
