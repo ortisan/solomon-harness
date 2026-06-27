@@ -14,47 +14,113 @@ CLICHES = [
     "moreover",
     "firstly",
     "secondly",
-    "lastly"
+    "lastly",
 ]
 
 # Required keywords per contract template
 REQUIRED_KEYWORDS = {
-    "prd_contract.md": ["Requirements", "User Stories", "Business Value", "Active Requirements", "Scope Boundaries", "High-Level Milestones", "Git Flow", "Conventional Commits"],
-    "design_contract.md": ["Component Design", "C4", "Mermaid", "Data Flow", "API Schemas", "ADR Mappings", "Git Flow", "Conventional Commits"],
-    "qa_report_contract.md": ["Test Coverage", "Test Logs", "Unit", "Integration", "E2E", "Backtesting Metrics", "UAT Validation Checklist", "Git Flow", "Conventional Commits"],
-    "docs_contract.md": ["User Manual", "API Developer Guide", "Business Process Mappings", "Git Flow", "Conventional Commits"],
-    "obs_contract.md": ["Application Metrics", "Logging Standards", "Tracing Endpoints", "Alert Triggers", "Git Flow", "Conventional Commits"],
+    "prd_contract.md": [
+        "Requirements",
+        "User Stories",
+        "Business Value",
+        "Active Requirements",
+        "Scope Boundaries",
+        "High-Level Milestones",
+        "Git Flow",
+        "Conventional Commits",
+    ],
+    "design_contract.md": [
+        "Component Design",
+        "C4",
+        "Mermaid",
+        "Data Flow",
+        "API Schemas",
+        "ADR Mappings",
+        "Git Flow",
+        "Conventional Commits",
+    ],
+    "qa_report_contract.md": [
+        "Test Coverage",
+        "Test Logs",
+        "Unit",
+        "Integration",
+        "E2E",
+        "Backtesting Metrics",
+        "UAT Validation Checklist",
+        "Git Flow",
+        "Conventional Commits",
+    ],
+    "docs_contract.md": [
+        "User Manual",
+        "API Developer Guide",
+        "Business Process Mappings",
+        "Git Flow",
+        "Conventional Commits",
+    ],
+    "obs_contract.md": [
+        "Application Metrics",
+        "Logging Standards",
+        "Tracing Endpoints",
+        "Alert Triggers",
+        "Git Flow",
+        "Conventional Commits",
+    ],
     "security_contract.md": [
-        "Threat Modeling", "STRIDE", "Dependencies Checking", 
-        "Vulnerability Mitigation", "Git Flow", "Conventional Commits"
+        "Threat Modeling",
+        "STRIDE",
+        "Dependencies Checking",
+        "Vulnerability Mitigation",
+        "Git Flow",
+        "Conventional Commits",
     ],
     "flutter_contract.md": [
-        "Dart dependencies", "state management model", "responsive widgets checklist", 
-        "integration tests", "Git Flow", "Conventional Commits"
+        "Dart dependencies",
+        "state management model",
+        "responsive widgets checklist",
+        "integration tests",
+        "Git Flow",
+        "Conventional Commits",
     ],
     "frontend_contract.md": [
-        "styles", "components", "state management store structure", 
-        "web test coverage", "Git Flow", "Conventional Commits"
+        "styles",
+        "components",
+        "state management store structure",
+        "web test coverage",
+        "Git Flow",
+        "Conventional Commits",
     ],
     "sre_contract.md": [
-        "uptime targets", "SLO metrics", "disaster recovery protocols", 
-        "resource configurations", "Git Flow", "Conventional Commits"
+        "uptime targets",
+        "SLO metrics",
+        "disaster recovery protocols",
+        "resource configurations",
+        "Git Flow",
+        "Conventional Commits",
     ],
     "seo_contract.md": [
-        "metadata definitions", "structured data schemas", "site speed indicators", 
-        "crawlability checklist", "Git Flow", "Conventional Commits"
-    ]
+        "metadata definitions",
+        "structured data schemas",
+        "site speed indicators",
+        "crawlability checklist",
+        "Git Flow",
+        "Conventional Commits",
+    ],
 }
+
 
 def has_emoji(text):
     for char in text:
         cp = ord(char)
         # Check standard emoji / symbol blocks
-        is_emoji = (0x1F000 <= cp <= 0x1FFFF) or (0x2600 <= cp <= 0x27BF) or (0x2300 <= cp <= 0x23FF)
+        is_emoji = (
+            (0x1F000 <= cp <= 0x1FFFF)
+            or (0x2600 <= cp <= 0x27BF)
+            or (0x2300 <= cp <= 0x23FF)
+        )
         if not is_emoji:
             try:
                 cat = unicodedata.category(char)
-                if cat == 'So':  # Symbol, other
+                if cat == "So":  # Symbol, other
                     is_emoji = True
                 else:
                     name = unicodedata.name(char, "").upper()
@@ -66,12 +132,13 @@ def has_emoji(text):
             return True, char
     return False, None
 
+
 def validate_template_file(filepath, required_keywords):
     if not os.path.exists(filepath):
         print(f"Error: Contract template file does not exist: {filepath}")
         return False
 
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
 
     if not content.strip():
@@ -81,7 +148,9 @@ def validate_template_file(filepath, required_keywords):
     # Check for emojis
     emoji_found, char = has_emoji(content)
     if emoji_found:
-        print(f"Error: Emoji or icon '{char}' found in {filepath}. Emojis are strictly prohibited.")
+        print(
+            f"Error: Emoji or icon '{char}' found in {filepath}. Emojis are strictly prohibited."
+        )
         return False
 
     # Check for AI cliches
@@ -94,10 +163,13 @@ def validate_template_file(filepath, required_keywords):
     # Check for required keywords
     for keyword in required_keywords:
         if keyword.lower() not in content_lower:
-            print(f"Error: Required keyword/phrase '{keyword}' not found in {filepath}.")
+            print(
+                f"Error: Required keyword/phrase '{keyword}' not found in {filepath}."
+            )
             return False
 
     return True
+
 
 def main():
     templates_dir = "docs/templates/contracts"
@@ -117,6 +189,7 @@ def main():
     else:
         print("\nContract template validation failed.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

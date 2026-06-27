@@ -17,3 +17,11 @@ Compile final files, execute unit tests, run project validations, synchronize th
 - [x] Verify that all steps pass successfully and cleanly.
 - [x] Stage all files and commit to Git with:
   `test: recompile and verify agents with custom pattern selections`
+
+## Code Quality Review Actions
+
+- [x] Run formatter (`ruff format`) on the templates, scripts, and tests.
+- [x] Recompile agent configurations to propagate formatted templates to all compiled agents.
+- [x] Run Ruff lint check, Ruff format check, Mypy type check, and Python unit tests to verify correctness.
+- [x] Verify that workspace is clean and commit any required formatting/linting fixes.
+

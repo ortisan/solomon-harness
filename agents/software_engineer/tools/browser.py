@@ -22,8 +22,7 @@ class BrowserClient:
 
         try:
             req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "SolomonHarness/1.0"}
+                url, headers={"User-Agent": "SolomonHarness/1.0"}
             )
             with urllib.request.urlopen(req, timeout=10) as response:
                 content = response.read().decode("utf-8", errors="ignore")
@@ -48,12 +47,12 @@ class BrowserClient:
             {
                 "title": f"Result for {query} - Reference Documentation",
                 "url": f"https://example.com/search?q={urllib.parse.quote(query)}",
-                "snippet": f"This is a simulated snippet showing search results for: {query}."
+                "snippet": f"This is a simulated snippet showing search results for: {query}.",
             },
             {
                 "title": f"Advanced guides on {query}",
                 "url": f"https://example.org/docs/{urllib.parse.quote(query)}",
-                "snippet": f"Find comprehensive tutorials, API references, and code examples for {query}."
-            }
+                "snippet": f"Find comprehensive tutorials, API references, and code examples for {query}.",
+            },
         ]
         return results
