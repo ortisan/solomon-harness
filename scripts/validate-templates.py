@@ -35,6 +35,14 @@ REQUIRED_KEYWORDS = {
     "frontend_contract.md": [
         "styles", "components", "state management store structure", 
         "web test coverage", "Git Flow", "Conventional Commits"
+    ],
+    "sre_contract.md": [
+        "uptime targets", "SLO metrics", "disaster recovery protocols", 
+        "resource configurations", "Git Flow", "Conventional Commits"
+    ],
+    "seo_contract.md": [
+        "metadata definitions", "structured data schemas", "site speed indicators", 
+        "crawlability checklist", "Git Flow", "Conventional Commits"
     ]
 }
 
