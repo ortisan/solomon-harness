@@ -165,7 +165,7 @@ AGENTS_FALLBACK="# $PROJECT_NAME - Agent Customizations
 - Sync the documentation/wiki using scripts/wiki-sync.sh upon releases."
 
 interpolate_and_write "templates/CLAUDE.md.template" "CLAUDE.md" "$CLAUDE_FALLBACK"
-interpolate_and_write "templates/AGENTS.md.template" ".agents/AGENTS.md" "$AGENTS_FALLBACK"
+interpolate_and_write "templates/AGENTS.md.template" "agents/AGENTS.md" "$AGENTS_FALLBACK"
 
 # 5. Install Git commit-msg hook
 echo "Installing Git commit-msg hook..."
@@ -179,5 +179,15 @@ else
     echo "  Warning: Git hooks directory could not be resolved. Commit hook was not installed."
 fi
 
+# 6. Sync agent configurations and rules
+echo "Syncing agent configurations and rules..."
+mkdir -p .agents/agents
+ln -sf ../agents/AGENTS.md .agents/AGENTS.md
+for f in agents/*.md; do
+    filename=$(basename "$f")
+    if [ "$filename" != "AGENTS.md" ]; then
+        ln -sf "../../agents/$filename" ".agents/agents/$filename"
+    fi
+done
 
 echo "=== Bootstrap Completed Successfully ==="

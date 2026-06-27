@@ -89,7 +89,7 @@ def validate_agent_file(filepath, required_keywords):
     return True
 
 def main():
-    agents_dir = ".agents/agents"
+    agents_dir = "agents"
     success = True
 
     print("Validating Agent Profile files...")

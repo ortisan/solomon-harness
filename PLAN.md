@@ -1,63 +1,61 @@
-# Plan - Initialize Agent Harness Directory Structure and Configuration
+# Plan - Move Subagent Prompts and Rules to agents/ Directory
 
-This plan outlines the design, implementation, and verification steps for Task 1 of the Solomon Harness: Agent Harness Refactoring.
+This plan outlines the design, implementation, and verification steps for Task 2 of the Solomon Harness: Agent Harness Refactoring.
 
 ## Requirements
 
-1. Create directories:
-   - `.agent/`
-   - `agents/`
-   - `skills/`
-   - `tools/`
-   - `memory/`
-   - `memory/short_term/`
-   - `memory/long_term/`
-   - `tests/`
+1. **Move global workspace rules**:
+   - Move `.agents/AGENTS.md` to `agents/AGENTS.md`.
 
-2. Create `.agent/config.json` containing:
-   - Default, reasoning, and embedding models.
-   - Timeout and max retries parameters.
-   - Clean JSON formatting, in English, without emojis.
+2. **Move subagent configurations**:
+   - Move all `.md` files in `.agents/agents/` to `agents/`.
 
-3. Create `.agent/secure_vault.enc` containing:
-   - Base64-encoded representation of a mock JSON vault (`eyJhbnRocm9waWNfYXBpX2tleSI6ICJtb2NrX2tleSJ9`).
+3. **Update bootstrap script (`scripts/bootstrap-agent.sh`)**:
+   - Modify the target of the `AGENTS.md` template interpolation to `agents/AGENTS.md`.
+   - Update the script to symlink/copy `agents/AGENTS.md` to `.agents/AGENTS.md` and all subagent `.md` files from `agents/` (excluding `AGENTS.md`) to `.agents/agents/`.
+   - Run the bootstrap script `./scripts/bootstrap-agent.sh` to generate/sync the files.
 
-4. Update `.gitignore` to append rules for:
-   - `memory/long_term/harness.db`
-   - `memory/short_term/*.json`
-   - `.agent/secure_vault.enc`
+4. **Update and run validation checks**:
+   - Modify `scripts/validate-agents.py` to validate source files in `agents/` instead of `.agents/agents/` directly.
+   - Run validation script `scripts/validate-agents.py` to ensure it passes.
+   - Check if other validation scripts run and pass.
 
-5. Stage and commit changes with the message:
-   - `chore: initialize agent harness directory structure and configuration files`
+5. **Version Control**:
+   - Stage all changes.
+   - Commit them with the message: `feat: move subagent prompts and rules to agents directory`.
 
 ## TDD and Verification Steps
 
-A Python script `tests/test_harness_init.py` will be created using the standard library `unittest` to drive the test-driven development loop.
+1. **Move the files**:
+   - Move the files from `.agents/` to `agents/` using git/shell commands.
 
-1. **Red Stage**:
-   - Create `tests/` directory if needed and write `tests/test_harness_init.py` before implementing any other directories or configurations.
-   - Run the test script using `python3 -m unittest tests/test_harness_init.py` and confirm it fails.
+2. **Update the Validation Script**:
+   - Modify `scripts/validate-agents.py` to use `agents/` instead of `.agents/agents/`.
+   - Run `python3 scripts/validate-agents.py` to verify it can scan the new directory (though files won't be in `.agents/agents/` yet until bootstrap runs, but running it should check `agents/` directly).
 
-2. **Green Stage**:
-   - Create the required directories.
-   - Create `.agent/config.json` with the required parameters.
-   - Create `.agent/secure_vault.enc` with the specified base64 string.
-   - Update `.gitignore` with the rules.
-   - Run `python3 -m unittest tests/test_harness_init.py` and confirm it passes.
+3. **Modify and Run the Bootstrap Script**:
+   - Update `scripts/bootstrap-agent.sh`.
+   - Run `scripts/bootstrap-agent.sh`.
+   - Verify that the symlinks or copies are correctly created in `.agents/AGENTS.md` and `.agents/agents/*.md`.
 
-3. **Refactor Stage**:
-   - Ensure file formatting is correct and files are clean.
-   - Stage all changes, commit them, and execute `scripts/wiki-sync.sh` to sync the wiki.
+4. **Verify All Validations**:
+   - Run `python3 scripts/validate-agents.py`.
+   - Run `python3 scripts/validate-templates.py`.
+   - Run any other validation checks.
+
+5. **Commit**:
+   - Commit with the message `feat: move subagent prompts and rules to agents directory`.
 
 ## Execution Checklist
 
-- [x] Create `tests/test_harness_init.py` (TDD Red).
-- [x] Run the tests to verify failures (Red).
-- [x] Create directories: `.agent/`, `agents/`, `skills/`, `tools/`, `memory/`, `memory/short_term/`, `memory/long_term/`.
-- [x] Create `.agent/config.json`.
-- [x] Create `.agent/secure_vault.enc`.
-- [x] Update `.gitignore`.
-- [x] Run the tests to verify success (Green).
-- [x] Stage changes and commit with the specified message.
-- [x] Execute `scripts/wiki-sync.sh` to sync the project wiki.
-
+- [x] Write this plan in PLAN.md.
+- [x] Move `.agents/AGENTS.md` to `agents/AGENTS.md`.
+- [x] Move `.agents/agents/*.md` to `agents/`.
+- [x] Modify `scripts/validate-agents.py` to target `agents/` instead of `.agents/agents/`.
+- [x] Modify `scripts/bootstrap-agent.sh` to:
+  - Interpolate `templates/AGENTS.md.template` into `agents/AGENTS.md`.
+  - Symlink `agents/AGENTS.md` to `.agents/AGENTS.md`.
+  - Symlink all `.md` files from `agents/` (except `AGENTS.md`) to `.agents/agents/`.
+- [x] Execute `./scripts/bootstrap-agent.sh` to generate/sync configurations.
+- [x] Run `python3 scripts/validate-agents.py` and other validation checks to confirm success.
+- [x] Stage and commit changes with the specified git commit message.
