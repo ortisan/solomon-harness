@@ -1,61 +1,65 @@
-# Plan - Implement CI and Release Workflows (Task 6)
+# Plan - Autonomous Subagents Setup (Task 1)
 
-This plan outlines the steps to create, validate, and commit the GitHub Actions workflow files for CI/CD and Release automation.
+This plan outlines the steps to create and validate the persistent markdown profiles for ten specialized autonomous subagents.
 
 ## Requirements
 
-1. **CI/CD Workflow** (`.github/workflows/ci.yml`):
-   - Triggered on `push` and `pull_request` to the `main` branch.
-   - Sets up Python.
-   - Runs syntax validation on custom scripts (shell scripts and python scripts).
-   - Runs shellcheck to lint the shell scripts.
-   - Executes a basic dry-run or verification execution of the scripts.
-   - Verifies that all workspace configuration files are valid and synchronized by running the bootstrap script and checking for any uncommitted changes.
-   - Ensures no emojis or icons are present in the step names or logs.
+1. Create the persistent markdown files in `.agents/agents/` folder:
+   - `product_owner.md`: Product Owner profile. Translates user requirements to structured specifications, writes/manages the PRD, coordinates deliverables. Outputs the PRD contract.
+   - `scrum_master.md`: Scrum Master profile. Project tracking, milestones, issue backlogs, orchestrates sprint planning/status meetings, coordinates reviews. Integrates with scrum-master script.
+   - `software_architect.md`: Software Architect profile. System design, C4 diagrams, design contracts, Architectural Decision Records (ADRs). Outputs the Design Contract.
+   - `software_engineer.md`: Software Engineer profile. Feature implementation, debugging, code quality, TDD cycle, clean/modular code.
+   - `ml_engineer.md`: ML Engineer profile. ML models, feature engineering pipelines, validation, tracking hyperparameters, metrics, and dataset versions.
+   - `quant_trader.md`: Quant Trader profile. Quantitative trading algorithms, backtest pipelines, validation of transaction costs, slippage, market regimes, risk parameters.
+   - `qa.md`: QA Specialist profile. Test automation (unit, integration, E2E, backtests), verification reviews, user acceptance testing (UAT). Outputs the QA Report.
+   - `documenter.md`: Technical & Business Documenter profile. Standardizes business value, writes technical manuals, design documentation, and user guides.
+   - `observability.md`: Observability Specialist profile. Sets up log diagnostics, metrics tracking, performance profiling, and system monitoring dashboards.
+   - `security.md`: Security Specialist profile. Threat modeling, security static analysis (SAST), vulnerability checks, and validates project dependencies.
 
-2. **Release Workflow** (`.github/workflows/release.yml`):
-   - Triggered on tag pushes matching `v*`.
-   - Uses GitHub Actions to draft a new release on GitHub.
-   - Automates release notes generation.
-   - Ensures no emojis or icons are present in the step names.
+2. Formatting and Style Constraints:
+   - Written in professional, concise, direct English.
+   - No emojis or icons in any profile or documentation.
+   - Follow humanizer guidelines (avoiding AI clichés like "delve", "leverage", "testament", etc.).
 
-3. **Verification and Git Commit**:
-   - Verify syntax correctness of the YAML files.
-   - Stage and commit files with the message: `feat: add CI and release automation GitHub workflows`.
+3. Git and Automation:
+   - Stage and commit files with the message: `feat: add persistent markdown profiles for 10 autonomous subagents`.
+   - Run the `./scripts/wiki-sync.sh` script to sync the project wiki.
 
 ## TDD and Verification Steps
 
-Since GitHub workflow files cannot be directly executed as unit tests locally, we will adopt a local validation-based TDD cycle:
-1. **Red Stage**: Create a local validation script `scripts/validate-workflows.sh` that checks for:
-   - The existence of `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
-   - YAML syntax validity of these workflow files using python's `yaml` parser or standard tools.
-   - Strict absence of emojis or icons in the workflow files.
-   - Verification that workflow triggers and job steps match requirements.
-   Running this script initially will fail because the files do not exist.
-2. **Green Stage**: Write the `.github/workflows/ci.yml` and `.github/workflows/release.yml` files. Run the validation script to ensure all checks pass.
-3. **Refactor Stage**: Refactor the workflow files and the validation script for clarity and clean code, maintaining a green state.
+1. **Red Stage**:
+   - Update/Create a local validation script `scripts/validate-agents.py`.
+   - This script checks:
+     - Existence of all 10 agent files under `.agents/agents/`.
+     - Absence of emojis or icons (using Unicode symbol category check).
+     - Absence of AI cliches.
+     - Presence of specific required keywords/duties per profile.
+   - Running the script before writing the profile files will fail.
+
+2. **Green Stage**:
+   - Create the 10 agent profile files with full descriptions aligned with their duties.
+   - Run the validation script `python3 scripts/validate-agents.py` to verify all checks pass.
+
+3. **Refactor Stage**:
+   - Review and improve the wording and structure of the profiles.
+   - Run the validation script to ensure checks remain green.
 
 ## Execution Steps
 
-- [ ] Write the TDD validation script (`scripts/validate-workflows.sh`) and run it to verify failure (Red).
-- [ ] Create `.github/workflows/ci.yml` conforming to all specifications.
-- [ ] Create `.github/workflows/release.yml` conforming to all specifications.
-- [ ] Run the validation script to verify success (Green).
-- [ ] Clean up any temporary files or scripts if not needed, or keep the validation script as part of the repository tests.
-- [ ] Stage and commit all changes using the required commit message.
-- [ ] Sync the project wiki using `./scripts/wiki-sync.sh`.
-
-## Code Quality Review and Hardening
-
-- [ ] Modify validation script (`scripts/validate-workflows.py`) to enforce security policies:
-  - Verify all `uses:` steps are pinned to a 40-character commit SHA (e.g. `@a1b2c3d...`).
-  - Verify explicit `permissions:` block is present.
-  - Refactor PEP8 formatting (e.g., incorrect spaces in `has_emoji`).
-- [ ] Run validation script to confirm failure (Red stage).
-- [ ] Harden `.github/workflows/ci.yml` and `.github/workflows/release.yml`:
-  - Pin actions to specific commit SHAs.
-  - Add explicit read/write content permissions.
-- [ ] Run validation script to confirm success (Green stage).
-- [ ] Commit security hardening changes.
-- [ ] Run wiki sync script.
-
+- [x] Write the initial TDD validation script (`scripts/validate-agents.py`).
+- [ ] Update the TDD validation script (`scripts/validate-agents.py`) for 10 subagents.
+- [ ] Execute `python3 scripts/validate-agents.py` and verify failure (Red Stage).
+- [x] Create `.agents/agents/product_owner.md` following the requirements.
+- [x] Create `.agents/agents/scrum_master.md` (correcting "status meetings").
+- [x] Create `.agents/agents/software_architect.md` following the requirements.
+- [x] Create `.agents/agents/software_engineer.md` following the requirements.
+- [x] Create `.agents/agents/ml_engineer.md` (correcting "validation" keyword).
+- [x] Create `.agents/agents/quant_trader.md` following the requirements.
+- [x] Create `.agents/agents/qa.md` following the requirements.
+- [ ] Create `.agents/agents/documenter.md` following the requirements.
+- [ ] Create `.agents/agents/observability.md` following the requirements.
+- [ ] Create `.agents/agents/security.md` following the requirements.
+- [ ] Execute `python3 scripts/validate-agents.py` and verify success (Green Stage).
+- [ ] Stage all modified and new files.
+- [ ] Commit with message: `feat: add persistent markdown profiles for 10 autonomous subagents`.
+- [ ] Run `./scripts/wiki-sync.sh` to sync the wiki.
