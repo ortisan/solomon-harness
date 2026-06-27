@@ -157,7 +157,13 @@ def main():
         "bash -n",
         "python3 -m py_compile",
         "shellcheck",
-        "bootstrap-agent.sh"
+        "bootstrap-agent.sh",
+        "python3 -m unittest discover -s tests",
+        "python3 \"$agent_dir/main.py\" eval",
+        "scripts/compile-harnesses.py",
+        "scripts/validate-agents.py",
+        "scripts/validate-templates.py",
+        "scripts/validate-workflows.py"
     ]
 
     print("Validating CI/CD Workflow...")
