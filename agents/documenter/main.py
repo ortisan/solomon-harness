@@ -4,25 +4,27 @@
 import argparse
 import os
 import sys
+from typing import Optional, List, Dict, Any
 
 
-def get_harness_dir():
+def get_harness_dir() -> str:
     """Returns the absolute path to the harness directory containing this script."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def handle_db_init():
+def handle_db_init() -> None:
     """Initializes the database client dynamically."""
     try:
         from tools.database_client import DatabaseClient
         db = DatabaseClient()
         print(f"Database initialized successfully at: {db.db_path}")
+        db.close()
     except Exception as e:
         print(f"Error: Failed to initialize database: {e}", file=sys.stderr)
         sys.exit(1)
 
 
-def handle_eval():
+def handle_eval() -> None:
     """Runs the agent_evals.py test suite."""
     import unittest
     harness_dir = get_harness_dir()
@@ -44,77 +46,190 @@ def handle_eval():
         sys.exit(0)
 
 
-def handle_run(task):
-    """Simulates executing a task using the agent persona and skills.
+def handle_run(task: Optional[str] = None) -> None:
+    """Simulates executing a task or starts the interactive execution loop.
 
     Args:
-        task: A string description of the task to run.
+        task: Optional task description to run immediately.
     """
     import uuid
     import json
-    from datetime import datetime, timezone
+    from tools.database_client import DatabaseClient
 
     harness_dir = get_harness_dir()
 
-    # 1. Load Persona
-    persona_path = os.path.join(harness_dir, "persona.md")
-    persona_content = ""
-    if os.path.isfile(persona_path):
-        try:
-            with open(persona_path, "r", encoding="utf-8") as f:
-                persona_content = f.read()
-        except Exception as e:
-            print(f"Warning: Failed to read persona file: {e}", file=sys.stderr)
-    else:
-        print(f"Warning: Persona file not found at {persona_path}", file=sys.stderr)
-
-    # 2. Load Skills
-    skills_dir = os.path.join(harness_dir, "skills")
-    skills = []
-    if os.path.isdir(skills_dir):
-        try:
-            for item in os.listdir(skills_dir):
-                if os.path.isfile(os.path.join(skills_dir, item)):
-                    skills.append(item)
-        except Exception as e:
-            print(f"Warning: Failed to list skills: {e}", file=sys.stderr)
-
-    # 3. Simulate Task Execution
-    session_id = str(uuid.uuid4())
-    print(f"Starting task session: {session_id}")
-    print(f"Task: {task}")
-    print(f"Loaded persona length: {len(persona_content)} characters")
-    print(f"Loaded skills: {', '.join(skills) if skills else 'None'}")
-
-    # 4. Log Execution to Short-Term Memory
-    short_term_dir = os.path.join(harness_dir, "memory", "short_term")
+    # Initialize DatabaseClient
     try:
-        os.makedirs(short_term_dir, exist_ok=True)
+        db = DatabaseClient()
     except Exception as e:
-        print(f"Error: Failed to create short term memory directory: {e}", file=sys.stderr)
+        print(f"Error: Failed to initialize database client: {e}", file=sys.stderr)
         sys.exit(1)
 
-    log_data = {
-        "session_id": session_id,
-        "task": task,
-        "status": "success",
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "persona_summary": persona_content[:150] + "..." if persona_content else "",
-        "skills_loaded": skills,
-        "output": f"Simulated success execution response for task: '{task}'"
-    }
+    # Welcome message in clean English (no emojis/clichés)
+    print("Welcome to the Solomon Harness Interactive Agent Loop.")
+    print("Database client initialized successfully.")
 
-    log_path = os.path.join(short_term_dir, f"{session_id}.json")
+    # Query where it stopped
     try:
-        with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(log_data, f, indent=2)
-        print(f"Task output logged to short term memory: {log_path}")
+        latest = db.get_latest_activity()
+        if latest:
+            print("Previous Active State:")
+            print(f"  Type: {latest['type']}")
+            print(f"  Agent: {latest['agent']}")
+            print(f"  Task: {latest['task']}")
+            print(f"  Status: {latest['status']}")
+            print(f"  Timestamp: {latest['timestamp']}")
+        else:
+            print("No previous active agent sessions or handoffs found.")
     except Exception as e:
-        print(f"Error: Failed to write task log: {e}", file=sys.stderr)
-        sys.exit(1)
+        print(f"Warning: Failed to retrieve previous active state: {e}", file=sys.stderr)
+
+    # Query what is open
+    def show_open_issues() -> List[Dict[str, Any]]:
+        try:
+            open_issues = db.get_open_issues()
+            if open_issues:
+                print("Current Open Issues:")
+                for issue in open_issues:
+                    print(f"  - [{issue['github_id']}] {issue['title']}")
+                return open_issues
+            else:
+                print("No open issues found.")
+                return []
+        except Exception as e:
+            print(f"Warning: Failed to retrieve open issues: {e}", file=sys.stderr)
+            return []
+
+    open_issues = show_open_issues()
+
+    # Load agent name from config if available
+    agent_name = "dev_agent"
+    config_path = os.path.join(harness_dir, ".agent", "config.json")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                agent_name = config.get("agent_name", "dev_agent")
+        except Exception:
+            pass
+
+    current_task = task
+    first_iteration = True
+
+    while True:
+        # Prompt selection if not passed as CLI argument or not the first iteration
+        if not current_task:
+            if first_iteration:
+                prompt_text = "Please select one of the open issues to run, or type a title to conceive/create a new issue: "
+            else:
+                prompt_text = "Task completed. Please select the next task from the open list, or type a new task name to create it: "
+            
+            try:
+                user_input = input(prompt_text).strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nExiting interactive loop.")
+                db.close()
+                sys.exit(0)
+
+            if not user_input:
+                continue
+
+            if user_input.lower() in ("exit", "quit"):
+                print("Exiting interactive loop.")
+                db.close()
+                sys.exit(0)
+
+            current_task = user_input
+
+        first_iteration = False
+
+        # Match input to open issues
+        matched_issue = None
+        for issue in open_issues:
+            if current_task.lower() == issue["github_id"].lower() or current_task.lower() == issue["title"].lower():
+                matched_issue = issue
+                break
+
+        if matched_issue:
+            issue_id = matched_issue["github_id"]
+            task_title = matched_issue["title"]
+            print(f"Selected existing issue: [{issue_id}] {task_title}")
+        else:
+            # Create a new issue
+            issue_id = f"gh-{str(uuid.uuid4())[:8]}"
+            task_title = current_task
+            print(f"Conceived new issue: [{issue_id}] {task_title}")
+            try:
+                db.log_issue(issue_id, task_title, "task", "open", None)
+            except Exception as e:
+                print(f"Warning: Failed to log new issue to database: {e}", file=sys.stderr)
+
+        # Simulate running the agent on this task
+        print("Executing task simulation...")
+        print("Step 1: Loading configuration...")
+        print("Step 2: Loading persona profile instructions...")
+        print("Step 3: Injecting skills...")
+
+        # Update/insert active session state
+        session_id = str(uuid.uuid4())
+        messages = [{"role": "user", "content": f"Execute task: {task_title}"}]
+        try:
+            db.save_session(session_id, agent_name, task_title, messages)
+            print(f"Active session state saved: {session_id}")
+        except Exception as e:
+            print(f"Warning: Failed to save active session state: {e}", file=sys.stderr)
+
+        # Simulate execution completion
+        print(f"Task execution simulation finished: {task_title}")
+
+        # Prompt for confirmation
+        try:
+            confirm = input("Confirm task completion? (yes/no): ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting interactive loop.")
+            db.close()
+            sys.exit(0)
+
+        if confirm in ("yes", "y"):
+            try:
+                # Log decision
+                db.log_decision(
+                    title=f"Completed task {issue_id}",
+                    rationale=f"Simulated execution of task: {task_title}",
+                    outcome="Approved",
+                    author=agent_name,
+                    branch="main",
+                    commit_sha=f"sha-{str(uuid.uuid4())[:7]}"
+                )
+                # Log memory
+                db.save_memory(
+                    key=f"memory-{session_id}",
+                    value=f"Successfully simulated and approved task: {task_title}",
+                    category="agent_loop_refinement"
+                )
+                # Log handoff
+                db.log_handoff(
+                    sender=agent_name,
+                    recipient="user",
+                    contract_type="task_handoff",
+                    contract_path="short_term",
+                    status="completed"
+                )
+                # Close issue
+                db.log_issue(issue_id, task_title, "task", "closed", None)
+                print(f"Task closed. Decisions, memory, and handoff successfully logged.")
+            except Exception as e:
+                print(f"Error: Failed to record task completion to database: {e}", file=sys.stderr)
+        else:
+            print("Task completion was not confirmed. Issue status remains open.")
+
+        # Clear current_task to prompt again on next loop iteration
+        current_task = None
+        # Refresh open issues list for printing
+        open_issues = show_open_issues()
 
 
-def main():
+def main() -> None:
     """Parser setup and command dispatching."""
     parser = argparse.ArgumentParser(description="Solomon Harness Agent Command Line Interface")
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
@@ -127,7 +242,7 @@ def main():
 
     # run parser
     run_parser = subparsers.add_parser("run", help="Simulate running a task")
-    run_parser.add_argument("task", type=str, help="The task description to execute")
+    run_parser.add_argument("task", type=str, nargs="?", default=None, help="The task description to execute (optional)")
 
     args = parser.parse_args()
 

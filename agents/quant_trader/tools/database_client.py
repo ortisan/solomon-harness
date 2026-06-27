@@ -9,6 +9,9 @@ from typing import Generator, Any, Dict, List, Optional, Union
 
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
+    backend: str
+    db: Any
+    db_path: Optional[str]
 
     def __init__(self, db_path: Optional[str] = None) -> None:
         """Initializes the database client and selects the appropriate backend.
@@ -40,7 +43,7 @@ class DatabaseClient:
         if provider == "surrealdb":
             # Dynamically import surrealdb to support dynamic backend loading
             try:
-                import surrealdb
+                import surrealdb  # type: ignore[import-not-found]
                 Surreal = surrealdb.Surreal
                 has_surrealdb = True
             except (ImportError, AttributeError):
@@ -97,6 +100,8 @@ class DatabaseClient:
     @contextmanager
     def _sqlite_conn(self) -> Generator[sqlite3.Connection, None, None]:
         """Establishes and returns a SQLite connection context and ensures it is closed on exit."""
+        if self.db_path is None:
+            raise ValueError("Database path must be set for SQLite backend")
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
@@ -867,6 +872,132 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
 
+    def _extract_list(self, res: Any) -> List[Dict[str, Any]]:
+        """Helper to extract a list of records safely from SurrealDB query results."""
+        if not res:
+            return []
+        first = res[0]
+        if isinstance(first, list):
+            return [dict(item) for item in first if isinstance(item, dict)]
+        elif isinstance(first, dict):
+            if "result" in first and isinstance(first["result"], list):
+                return [dict(item) for item in first["result"] if isinstance(item, dict)]
+            else:
+                return [dict(first)]
+        return []
+
+    def get_open_issues(self) -> List[Dict[str, Any]]:
+        """Retrieves all open issues.
+
+        Returns:
+            A list of dictionaries containing open issues.
+        """
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM issues WHERE status = 'open'"
+            try:
+                res = self.db.query(query)
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve open issues from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve open issues from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM issues WHERE status = 'open'"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query)
+                    rows = cursor.fetchall()
+                    return [dict(row) for row in rows]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve open issues: {e}")
+                raise RuntimeError(f"Failed to retrieve open issues: {e}")
+
+    def get_latest_activity(self) -> Optional[Dict[str, Any]]:
+        """Retrieves the most recent entry from the handoffs or sessions table.
+
+        Returns:
+            A dictionary containing keys: 'type', 'agent', 'task', 'status', 'timestamp',
+            or None if no activity exists.
+        """
+        latest_session = None
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1"
+            try:
+                res = self.db.query(query)
+                latest_session = self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to query latest session: {e}")
+        else:
+            query = "SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query)
+                    row = cursor.fetchone()
+                    if row:
+                        latest_session = dict(row)
+            except sqlite3.Error as e:
+                logging.error(f"Failed to query latest session: {e}")
+
+        latest_handoff = None
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT 1"
+            try:
+                res = self.db.query(query)
+                latest_handoff = self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to query latest handoff: {e}")
+        else:
+            query = "SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT 1"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query)
+                    row = cursor.fetchone()
+                    if row:
+                        latest_handoff = dict(row)
+            except sqlite3.Error as e:
+                logging.error(f"Failed to query latest handoff: {e}")
+
+        if not latest_session and not latest_handoff:
+            return None
+
+        def parse_time(ts: Any) -> float:
+            if not ts:
+                return 0.0
+            ts_str = str(ts).replace(" ", "T")
+            try:
+                import datetime
+                clean_ts = ts_str.rstrip("Z")
+                if "+" in clean_ts:
+                    clean_ts = clean_ts.split("+")[0]
+                dt = datetime.datetime.fromisoformat(clean_ts)
+                return dt.timestamp()
+            except Exception:
+                return 0.0
+
+        t_session = parse_time(latest_session.get("timestamp")) if latest_session else -1.0
+        t_handoff = parse_time(latest_handoff.get("timestamp")) if latest_handoff else -1.0
+
+        if t_session >= t_handoff:
+            assert latest_session is not None
+            return {
+                "type": "session",
+                "agent": latest_session.get("agent_name"),
+                "task": latest_session.get("task"),
+                "status": "active",
+                "timestamp": latest_session.get("timestamp")
+            }
+        else:
+            assert latest_handoff is not None
+            return {
+                "type": "handoff",
+                "agent": f"{latest_handoff.get('sender')} -> {latest_handoff.get('recipient')}",
+                "task": latest_handoff.get("contract_type"),
+                "status": latest_handoff.get("status"),
+                "timestamp": latest_handoff.get("timestamp")
+            }
+
     def close(self) -> None:
         """Closes the database client and any open connections."""
         if self.backend == "surrealdb" and self.db:
@@ -876,8 +1007,13 @@ class DatabaseClient:
                 pass
             self.db = None
 
-    def __enter__(self):
+    def __enter__(self) -> "DatabaseClient":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: Optional[Any],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[Any]
+    ) -> None:
         self.close()
