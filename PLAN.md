@@ -51,12 +51,13 @@ A Python script `tests/test_harness_init.py` will be created using the standard 
 
 ## Execution Checklist
 
-- [ ] Create `tests/test_harness_init.py` (TDD Red).
-- [ ] Run the tests to verify failures (Red).
-- [ ] Create directories: `.agent/`, `agents/`, `skills/`, `tools/`, `memory/`, `memory/short_term/`, `memory/long_term/`.
-- [ ] Create `.agent/config.json`.
-- [ ] Create `.agent/secure_vault.enc`.
-- [ ] Update `.gitignore`.
-- [ ] Run the tests to verify success (Green).
-- [ ] Stage changes and commit with the specified message.
-- [ ] Execute `scripts/wiki-sync.sh` to sync the project wiki.
+- [x] Create `tests/test_harness_init.py` (TDD Red).
+- [x] Run the tests to verify failures (Red).
+- [x] Create directories: `.agent/`, `agents/`, `skills/`, `tools/`, `memory/`, `memory/short_term/`, `memory/long_term/`.
+- [x] Create `.agent/config.json`.
+- [x] Create `.agent/secure_vault.enc`.
+- [x] Update `.gitignore`.
+- [x] Run the tests to verify success (Green).
+- [x] Stage changes and commit with the specified message.
+- [x] Execute `scripts/wiki-sync.sh` to sync the project wiki.
+
