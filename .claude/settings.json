@@ -1,16 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropic-cookbook/claude-code/main/schema/settings.schema.json",
-  "model": "claude-3-5-sonnet-latest",
   "watch": true,
   "permissions": {
     "allow": [
-      "git status",
-      "git diff",
-      "git log"
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
     ],
     "ask": [
-      "git commit",
-      "git push"
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }
