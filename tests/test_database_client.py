@@ -5,6 +5,7 @@ import tempfile
 import json
 import builtins
 import io
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 # Ensure the template harness path is in sys.path
@@ -402,6 +403,71 @@ class TestDatabaseClient(unittest.TestCase):
             client = DatabaseClient()
             self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
             client.close()
+
+    def test_reads_harness_local_config_not_repo_root(self):
+        """The client must read the harness-local .agent/config.json (which carries the
+        database block), not the repo-root config that lacks one."""
+        root = self.temp_dir.name
+        os.makedirs(os.path.join(root, ".git"))
+        os.makedirs(os.path.join(root, ".agent"))
+        with open(os.path.join(root, ".agent", "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"models": {"default": "x"}}, f)  # repo root: no database block
+
+        harness = os.path.join(root, "agents", "qa")
+        os.makedirs(os.path.join(harness, ".agent"))
+        os.makedirs(os.path.join(harness, "tools"))
+        with open(
+            os.path.join(harness, ".agent", "config.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {
+                    "agent_name": "qa",
+                    "database": {
+                        "provider": "surrealdb",
+                        "url": "ws://harness-local:8000/rpc",
+                        "namespace": "solomon",
+                        "database": "harness",
+                    },
+                },
+                f,
+            )
+
+        mock_instance = MagicMock()
+        mock_instance.query.return_value = []
+        mock_class = MagicMock(return_value=mock_instance)
+        mock_surrealdb = MagicMock()
+        mock_surrealdb.Surreal = mock_class
+
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "surrealdb":
+                return mock_surrealdb
+            return original_import(name, *args, **kwargs)
+
+        fake_file = os.path.join(harness, "tools", "database_client.py")
+        with (
+            patch("tools.database_client.__file__", fake_file),
+            patch("builtins.__import__", side_effect=mock_import),
+        ):
+            client = DatabaseClient()
+            self.assertEqual(client.backend, "surrealdb")
+            mock_class.assert_called_once_with("ws://harness-local:8000/rpc")
+            client.close()
+
+    def test_sqlite_uses_wal(self):
+        """SQLite connections must run in WAL journal mode so the shared store is safe
+        for concurrent agents."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.save_memory("k", "v", "c")
+        client.close()
+
+        conn = sqlite3.connect(self.sqlite_db_path)
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(mode.lower(), "wal")
 
 
 if __name__ == "__main__":

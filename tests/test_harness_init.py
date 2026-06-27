@@ -1,11 +1,15 @@
 import unittest
 import os
 import json
+import subprocess
 
 
 class TestHarnessInit(unittest.TestCase):
     def setUp(self):
-        self.workspace_dir = "/Users/marcelo/Documents/Projects/solomon-harness"
+        # Resolve the workspace root from this file so the suite runs on any checkout.
+        self.workspace_dir = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
 
     def test_directories_exist(self):
         expected_dirs = [
@@ -74,22 +78,28 @@ class TestHarnessInit(unittest.TestCase):
 
         self.assertEqual(content, "eyJhbnRocm9waWNfYXBpX2tleSI6ICJtb2NrX2tleSJ9")
 
-    def test_gitignore_entries(self):
-        gitignore_path = os.path.join(self.workspace_dir, ".gitignore")
-        self.assertTrue(
-            os.path.isfile(gitignore_path), f".gitignore not found at {gitignore_path}"
-        )
-
-        with open(gitignore_path, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f.readlines()]
-
-        expected_ignores = [
-            "memory/long_term/harness.db",
-            "memory/short_term/*.json",
-            ".agent/secure_vault.enc",
+    def test_gitignore_ignores_nested_secrets(self):
+        # Secret vaults and local DB stores must be ignored at any depth, not only at
+        # the repo root. Probe with paths that do not exist so the check evaluates the
+        # ignore rules alone, independent of whether a file is currently tracked.
+        probes = [
+            "agents/_audit_probe_/.agent/secure_vault.enc",
+            "templates/_audit_probe_/.agent/secure_vault.enc",
+            "agents/_audit_probe_/memory/long_term/harness.db",
+            "memory/short_term/_audit_probe_.json",
         ]
-        for rule in expected_ignores:
-            self.assertIn(rule, lines, f"Ignore rule '{rule}' not found in .gitignore")
+        for rel in probes:
+            result = subprocess.run(
+                ["git", "check-ignore", rel],
+                cwd=self.workspace_dir,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Path '{rel}' should be ignored by .gitignore but is not",
+            )
 
 
 if __name__ == "__main__":

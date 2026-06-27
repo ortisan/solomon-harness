@@ -13,6 +13,7 @@ class DatabaseClient:
     backend: str
     db: Any
     db_path: Optional[str]
+    busy_timeout_seconds: float
 
     def __init__(self, db_path: Optional[str] = None) -> None:
         """Initializes the database client and selects the appropriate backend.
@@ -45,18 +46,28 @@ class DatabaseClient:
             # Fallback gracefully to the parent of tools/ relative to this file
             project_root = os.path.dirname(current_dir)
 
-        # Attempt to load configuration
+        # Load configuration. Prefer the harness-local .agent/config.json, which carries
+        # the per-agent `database` block, and fall back to the project-root config for
+        # backward compatibility. Reading the project-root config alone misses the
+        # database block and silently forces the SQLite backend.
+        harness_dir: str = os.path.dirname(current_dir)
         config: Dict[str, Any] = {}
-        config_path: str = os.path.join(project_root, ".agent", "config.json")
-        if os.path.isfile(config_path):
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-            except Exception:
-                pass
+        candidate_config_paths = [
+            os.path.join(harness_dir, ".agent", "config.json"),
+            os.path.join(project_root, ".agent", "config.json"),
+        ]
+        for candidate in candidate_config_paths:
+            if os.path.isfile(candidate):
+                try:
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                    break
+                except (OSError, json.JSONDecodeError) as exc:
+                    logging.error(f"Failed to read configuration at {candidate}: {exc}")
 
         db_config = config.get("database", {})
         provider = db_config.get("provider")
+        self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
         if provider == "surrealdb":
             # Dynamically import surrealdb to support dynamic backend loading
@@ -70,9 +81,15 @@ class DatabaseClient:
                 Surreal = None
 
             if has_surrealdb and Surreal is not None:
-                url = db_config.get("url", "ws://localhost:8000/rpc")
-                username = db_config.get("username", "root")
-                password = db_config.get("password", "root")
+                url = os.environ.get(
+                    "SURREAL_URL", db_config.get("url", "ws://localhost:8000/rpc")
+                )
+                username = os.environ.get(
+                    "SURREAL_USER", db_config.get("username", "root")
+                )
+                password = os.environ.get(
+                    "SURREAL_PASS", db_config.get("password", "root")
+                )
                 namespace = db_config.get("namespace", "solomon")
                 database = db_config.get("database", "harness")
 
@@ -125,8 +142,12 @@ class DatabaseClient:
         """Establishes and returns a SQLite connection context and ensures it is closed on exit."""
         if self.db_path is None:
             raise ValueError("Database path must be set for SQLite backend")
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=self.busy_timeout_seconds)
         conn.row_factory = sqlite3.Row
+        # WAL plus a busy timeout keeps the shared store safe when several agents write
+        # concurrently instead of failing with "database is locked".
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_seconds * 1000)}")
         try:
             with conn:
                 yield conn
