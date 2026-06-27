@@ -17,34 +17,24 @@ CLICHES = [
     "lastly"
 ]
 
-# Required keywords per template contract
+# Required keywords per contract template
 REQUIRED_KEYWORDS = {
-    "prd_contract.md": [
-        "Requirements", "User Stories", "Business Value", 
-        "Active Requirements", "Scope Boundaries", "High-Level Milestones", 
-        "Git Flow", "Conventional Commits"
-    ],
-    "design_contract.md": [
-        "Component Design", "C4", "Mermaid", 
-        "Data Flow", "API Schemas", "ADR Mappings", 
-        "Git Flow", "Conventional Commits"
-    ],
-    "qa_report_contract.md": [
-        "Test Coverage", "Test Logs", "Unit", "Integration", "E2E", 
-        "Backtesting Metrics", "UAT Validation Checklist", 
-        "Git Flow", "Conventional Commits"
-    ],
-    "docs_contract.md": [
-        "User Manual", "API Developer Guide", "Business Process Mappings", 
-        "Git Flow", "Conventional Commits"
-    ],
-    "obs_contract.md": [
-        "Application Metrics", "Logging Standards", "Tracing Endpoints", 
-        "Alert Triggers", "Git Flow", "Conventional Commits"
-    ],
+    "prd_contract.md": ["Requirements", "User Stories", "Business Value", "Active Requirements", "Scope Boundaries", "High-Level Milestones", "Git Flow", "Conventional Commits"],
+    "design_contract.md": ["Component Design", "C4", "Mermaid", "Data Flow", "API Schemas", "ADR Mappings", "Git Flow", "Conventional Commits"],
+    "qa_report_contract.md": ["Test Coverage", "Test Logs", "Unit", "Integration", "E2E", "Backtesting Metrics", "UAT Validation Checklist", "Git Flow", "Conventional Commits"],
+    "docs_contract.md": ["User Manual", "API Developer Guide", "Business Process Mappings", "Git Flow", "Conventional Commits"],
+    "obs_contract.md": ["Application Metrics", "Logging Standards", "Tracing Endpoints", "Alert Triggers", "Git Flow", "Conventional Commits"],
     "security_contract.md": [
         "Threat Modeling", "STRIDE", "Dependencies Checking", 
         "Vulnerability Mitigation", "Git Flow", "Conventional Commits"
+    ],
+    "flutter_contract.md": [
+        "Dart dependencies", "state management model", "responsive widgets checklist", 
+        "integration tests", "Git Flow", "Conventional Commits"
+    ],
+    "frontend_contract.md": [
+        "styles", "components", "state management store structure", 
+        "web test coverage", "Git Flow", "Conventional Commits"
     ]
 }
 
@@ -70,14 +60,14 @@ def has_emoji(text):
 
 def validate_template_file(filepath, required_keywords):
     if not os.path.exists(filepath):
-        print(f"Error: Template file does not exist: {filepath}")
+        print(f"Error: Contract template file does not exist: {filepath}")
         return False
 
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
     if not content.strip():
-        print(f"Error: Template file is empty: {filepath}")
+        print(f"Error: Contract template file is empty: {filepath}")
         return False
 
     # Check for emojis
@@ -105,7 +95,7 @@ def main():
     templates_dir = "docs/templates/contracts"
     success = True
 
-    print("Validating Contract Template files...")
+    print("Validating Contract Templates...")
     for filename, keywords in REQUIRED_KEYWORDS.items():
         filepath = os.path.join(templates_dir, filename)
         if validate_template_file(filepath, keywords):
@@ -114,10 +104,10 @@ def main():
             success = False
 
     if success:
-        print("\nAll contract templates validation checks passed successfully.")
+        print("\nAll contract template validation checks passed successfully.")
         sys.exit(0)
     else:
-        print("\nContract templates validation failed.")
+        print("\nContract template validation failed.")
         sys.exit(1)
 
 if __name__ == "__main__":

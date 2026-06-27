@@ -1,16 +1,12 @@
-# Plan - Standardized Subagent Contract Templates (Task 2)
+# Plan - New Subagent Contract Templates (Task 2 Expansion)
 
-This plan outlines the steps to create and validate the standardized contract templates representing deliverables of the autonomous subagents.
+This plan outlines the steps to create and validate two new contract templates requested by the parent agent to represent deliverables for Flutter and Web Frontend subagents.
 
 ## Requirements
 
-1. Create six template files under `docs/templates/contracts/`:
-   - `prd_contract.md`: Deliverable of the Product Owner. Must structure the requirements, user stories, business value, active requirements, scope boundaries, and high-level milestones.
-   - `design_contract.md`: Deliverable of the Software Architect. Must structure component design, C4 architectural block diagrams (using Mermaid), data flow models, API schemas, and ADR mappings.
-   - `qa_report_contract.md`: Deliverable of the QA Specialist. Must detail test coverage, test logs (unit/integration/E2E), backtesting metrics (for quant models), and UAT validation checklists.
-   - `docs_contract.md`: Deliverable of the Technical & Business Documenter. Must structure user manuals, API developer guides, and business process mappings.
-   - `obs_contract.md`: Deliverable of the Observability Specialist. Must detail application metrics, logging standards, tracing endpoints, and alert triggers.
-   - `security_contract.md`: Deliverable of the Security Specialist. Must structure threat modeling (STRIDE), dependencies checking, and vulnerability mitigation reports.
+1. Create two new template files under `docs/templates/contracts/`:
+   - `flutter_contract.md`: Technical contract for Flutter deliverables. Must cover Dart dependencies, state management model, responsive widgets checklist, and integration tests.
+   - `frontend_contract.md`: Technical contract for React & Angular frontend deliverables. Must cover styles, components, state management store structure, and web test coverage.
 
 2. Formatting and Style Constraints:
    - Written in professional, direct, senior-engineer style English.
@@ -20,27 +16,22 @@ This plan outlines the steps to create and validate the standardized contract te
    - Follow humanizer guidelines.
 
 3. Git and Automation:
-   - Stage and commit files to Git with the exact message: `feat: add artifact templates to represent deliverables as 10 subagent contracts`.
+   - Stage and commit files to Git.
    - Run `./scripts/wiki-sync.sh` to sync the wiki.
 
 ## TDD and Verification Steps
 
 1. **Red Stage**:
-   - Write a python script `scripts/validate-templates.py` to validate:
-     - The presence of the 6 templates under `docs/templates/contracts/`.
+   - Update `scripts/validate-templates.py` to validate:
+     - The presence of `flutter_contract.md` and `frontend_contract.md` under `docs/templates/contracts/`.
      - Absence of emojis and AI clichés.
      - Presence of required sections/keywords per template:
-       - `prd_contract.md`: "Requirements", "User Stories", "Business Value", "Active Requirements", "Scope Boundaries", "High-Level Milestones", "Git Flow", "Conventional Commits".
-       - `design_contract.md`: "Component Design", "C4", "Mermaid", "Data Flow", "API Schemas", "ADR Mappings", "Git Flow", "Conventional Commits".
-       - `qa_report_contract.md`: "Test Coverage", "Test Logs", "Unit", "Integration", "E2E", "Backtesting Metrics", "UAT Validation Checklist", "Git Flow", "Conventional Commits".
-       - `docs_contract.md`: "User Manual", "API Developer Guide", "Business Process Mappings", "Git Flow", "Conventional Commits".
-       - `obs_contract.md`: "Application Metrics", "Logging Standards", "Tracing Endpoints", "Alert Triggers", "Git Flow", "Conventional Commits".
-       - `security_contract.md`: "Threat Modeling", "STRIDE", "Dependencies Checking", "Vulnerability Mitigation", "Git Flow", "Conventional Commits".
+       - `flutter_contract.md`: "Dart dependencies", "state management model", "responsive widgets checklist", "integration tests", "Git Flow", "Conventional Commits".
+       - `frontend_contract.md`: "styles", "components", "state management store structure", "web test coverage", "Git Flow", "Conventional Commits".
    - Run `python3 scripts/validate-templates.py` to confirm failure (Red Stage).
 
 2. **Green Stage**:
-   - Create `docs/templates/contracts/` directory.
-   - Write all 6 templates in `docs/templates/contracts/` satisfying all constraints and keywords.
+   - Write the two templates in `docs/templates/contracts/` satisfying all constraints and keywords.
    - Run `python3 scripts/validate-templates.py` to verify success (Green Stage).
 
 3. **Refactor Stage**:
@@ -49,14 +40,10 @@ This plan outlines the steps to create and validate the standardized contract te
 
 ## Execution Checklist
 
-- [ ] Write `scripts/validate-templates.py`.
+- [ ] Update `scripts/validate-templates.py` with required keys for the new templates.
 - [ ] Run `python3 scripts/validate-templates.py` to verify failure (Red Stage).
-- [ ] Write `docs/templates/contracts/prd_contract.md`.
-- [ ] Write `docs/templates/contracts/design_contract.md`.
-- [ ] Write `docs/templates/contracts/qa_report_contract.md`.
-- [ ] Write `docs/templates/contracts/docs_contract.md`.
-- [ ] Write `docs/templates/contracts/obs_contract.md`.
-- [ ] Write `docs/templates/contracts/security_contract.md`.
+- [ ] Write `docs/templates/contracts/flutter_contract.md`.
+- [ ] Write `docs/templates/contracts/frontend_contract.md`.
 - [ ] Run `python3 scripts/validate-templates.py` to verify success (Green Stage).
-- [ ] Stage and commit changes with message: `feat: add artifact templates to represent deliverables as 10 subagent contracts`.
+- [ ] Stage and commit changes.
 - [ ] Run `./scripts/wiki-sync.sh` to sync the wiki.
