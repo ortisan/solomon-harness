@@ -156,6 +156,27 @@ REQUIRED_KEYWORDS = {
         "MFA",
         "session",
     ],
+    "android.md": [
+        "Android Specialist",
+        "Kotlin",
+        "Jetpack Compose",
+        "Coroutines",
+        "MVVM",
+        "Gradle",
+        "instrumentation",
+        "Material Design",
+    ],
+    "apple.md": [
+        "Apple Specialist",
+        "Swift",
+        "SwiftUI",
+        "UIKit",
+        "Swift Concurrency",
+        "Combine",
+        "Xcode",
+        "XCTest",
+        "MVVM",
+    ],
 }
 
 

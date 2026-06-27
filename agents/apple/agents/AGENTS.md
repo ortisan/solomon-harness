@@ -135,8 +135,6 @@ directory.
 
 Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 
-- `android` — native Android apps: Kotlin, Jetpack Compose, MVVM, Coroutines/Flow, Room/Retrofit, Gradle, instrumentation and Compose testing.
-- `apple` — native Apple-platform apps: Swift, SwiftUI, UIKit, Swift Concurrency, Combine, SwiftData/Core Data, Xcode/SPM, XCTest.
 - `auth_engineer` — authentication and authorization: OAuth 2.0/OIDC, social and enterprise login, sessions and tokens, MFA, RBAC/ABAC, OPA/Rego policy-as-code, credential security.
 - `documenter` — technical and business documentation, user guides, design docs.
 - `flutter` — Flutter and Dart applications, clean architecture, widget and integration tests.
