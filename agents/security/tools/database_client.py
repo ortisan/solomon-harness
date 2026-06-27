@@ -3,12 +3,14 @@ import json
 import sqlite3
 import logging
 import sys
+from contextlib import contextmanager
+from typing import Generator, Any, Dict, List, Optional, Union
 
 
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
-    def __init__(self, db_path=None):
+    def __init__(self, db_path: Optional[str] = None) -> None:
         """Initializes the database client and selects the appropriate backend.
 
         Args:
@@ -92,13 +94,18 @@ class DatabaseClient:
                 self.db_path = os.path.join(db_dir, "harness.db")
             self._init_sqlite_db()
 
-    def _get_sqlite_connection(self):
-        """Establishes and returns a SQLite connection with Row factory configured."""
+    @contextmanager
+    def _sqlite_conn(self) -> Generator[sqlite3.Connection, None, None]:
+        """Establishes and returns a SQLite connection context and ensures it is closed on exit."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
-    def _init_sqlite_db(self):
+    def _init_sqlite_db(self) -> None:
         """Creates the required SQLite tables if they do not already exist."""
         queries = [
             """
@@ -178,7 +185,7 @@ class DatabaseClient:
         ]
 
         try:
-            with self._get_sqlite_connection() as conn:
+            with self._sqlite_conn() as conn:
                 cursor = conn.cursor()
                 for query in queries:
                     cursor.execute(query)
@@ -187,7 +194,7 @@ class DatabaseClient:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
 
-    def _extract_id(self, res):
+    def _extract_id(self, res: Any) -> Optional[str]:
         """Helper to extract record ID safely from SurrealDB query results."""
         if not res:
             return None
@@ -205,7 +212,7 @@ class DatabaseClient:
                 return first.get("id")
         return None
 
-    def _extract_field(self, res, field_name):
+    def _extract_field(self, res: Any, field_name: str) -> Any:
         """Helper to extract a specific field value safely from SurrealDB query results."""
         if not res:
             return None
@@ -223,7 +230,7 @@ class DatabaseClient:
                 return first.get(field_name)
         return None
 
-    def _extract_record(self, res):
+    def _extract_record(self, res: Any) -> Optional[Dict[str, Any]]:
         """Helper to extract a full record dictionary safely from SurrealDB query results."""
         if not res:
             return None
@@ -241,7 +248,7 @@ class DatabaseClient:
                 return dict(first)
         return None
 
-    def _format_id(self, table, record_id):
+    def _format_id(self, table: str, record_id: Union[str, int, None]) -> Optional[str]:
         """Formats the ID parameter for SurrealDB queries."""
         if record_id is None:
             return None
@@ -250,7 +257,15 @@ class DatabaseClient:
             return s_id
         return f"{table}:{s_id}"
 
-    def log_decision(self, title, rationale, outcome, author, branch, commit_sha):
+    def log_decision(
+        self,
+        title: str,
+        rationale: str,
+        outcome: str,
+        author: str,
+        branch: str,
+        commit_sha: str
+    ) -> Union[str, int, None]:
         """Logs an architectural or design decision to the database.
 
         Args:
@@ -296,7 +311,7 @@ class DatabaseClient:
             VALUES (?, ?, ?, ?, ?, ?)
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (title, rationale, outcome, author, branch, commit_sha))
                     conn.commit()
@@ -305,7 +320,7 @@ class DatabaseClient:
                 logging.error(f"Failed to log decision: {e}")
                 raise RuntimeError(f"Failed to log decision: {e}")
 
-    def save_memory(self, key, value, category):
+    def save_memory(self, key: str, value: str, category: str) -> None:
         """Upserts a key-value memory entry.
 
         Args:
@@ -344,14 +359,14 @@ class DatabaseClient:
                 updated_at=CURRENT_TIMESTAMP
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     conn.execute(query, (key, value, category))
                     conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"Failed to save memory: {e}")
                 raise RuntimeError(f"Failed to save memory: {e}")
 
-    def get_memory(self, key):
+    def get_memory(self, key: str) -> Optional[str]:
         """Retrieves a memory value by its key.
 
         Args:
@@ -371,7 +386,7 @@ class DatabaseClient:
         else:
             query = "SELECT value FROM memory WHERE key = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (key,))
                     row = cursor.fetchone()
@@ -380,7 +395,13 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve memory: {e}")
                 raise RuntimeError(f"Failed to retrieve memory: {e}")
 
-    def create_milestone(self, title, description, due_date, state):
+    def create_milestone(
+        self,
+        title: str,
+        description: str,
+        due_date: str,
+        state: str
+    ) -> Union[str, int, None]:
         """Creates a project milestone record.
 
         Args:
@@ -420,7 +441,7 @@ class DatabaseClient:
             VALUES (?, ?, ?, ?)
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (title, description, due_date, state))
                     conn.commit()
@@ -429,7 +450,14 @@ class DatabaseClient:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
 
-    def log_issue(self, github_id, title, type_, status, milestone_id):
+    def log_issue(
+        self,
+        github_id: str,
+        title: str,
+        type_: str,
+        status: str,
+        milestone_id: Union[str, int]
+    ) -> None:
         """Logs a GitHub issue.
 
         Args:
@@ -475,14 +503,23 @@ class DatabaseClient:
                 milestone_id=excluded.milestone_id
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     conn.execute(query, (github_id, title, type_, status, milestone_id))
                     conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"Failed to log issue: {e}")
                 raise RuntimeError(f"Failed to log issue: {e}")
 
-    def save_backtest(self, strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha):
+    def save_backtest(
+        self,
+        strategy_name: str,
+        sharpe_ratio: float,
+        max_drawdown: float,
+        profit_factor: float,
+        parameters: str,
+        dataset: str,
+        commit_sha: str
+    ) -> Union[str, int, None]:
         """Saves a backtest run log.
 
         Args:
@@ -531,7 +568,7 @@ class DatabaseClient:
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha))
                     conn.commit()
@@ -540,7 +577,13 @@ class DatabaseClient:
                 logging.error(f"Failed to save backtest run: {e}")
                 raise RuntimeError(f"Failed to save backtest run: {e}")
 
-    def save_session(self, session_id, agent_name, task, messages):
+    def save_session(
+        self,
+        session_id: str,
+        agent_name: str,
+        task: str,
+        messages: Union[List[Dict[str, Any]], str]
+    ) -> None:
         """Upserts a short-term session state.
 
         Args:
@@ -584,14 +627,14 @@ class DatabaseClient:
                 timestamp=CURRENT_TIMESTAMP
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     conn.execute(query, (session_id, agent_name, task, serialized_messages))
                     conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"Failed to save session: {e}")
                 raise RuntimeError(f"Failed to save session: {e}")
 
-    def get_session(self, session_id):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves a session state by session_id.
 
         Args:
@@ -611,7 +654,7 @@ class DatabaseClient:
         else:
             query = "SELECT * FROM sessions WHERE session_id = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (session_id,))
                     row = cursor.fetchone()
@@ -620,7 +663,14 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve session: {e}")
                 raise RuntimeError(f"Failed to retrieve session: {e}")
 
-    def log_handoff(self, sender, recipient, contract_type, contract_path, status):
+    def log_handoff(
+        self,
+        sender: str,
+        recipient: str,
+        contract_type: str,
+        contract_path: str,
+        status: str
+    ) -> Union[str, int, None]:
         """Creates a handoff log entry.
 
         Args:
@@ -663,7 +713,7 @@ class DatabaseClient:
             VALUES (?, ?, ?, ?, ?)
             """
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (sender, recipient, contract_type, contract_path, status))
                     conn.commit()
@@ -672,7 +722,7 @@ class DatabaseClient:
                 logging.error(f"Failed to log handoff: {e}")
                 raise RuntimeError(f"Failed to log handoff: {e}")
 
-    def get_handoff(self, handoff_id):
+    def get_handoff(self, handoff_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves handoff log details by ID.
 
         Args:
@@ -692,7 +742,7 @@ class DatabaseClient:
         else:
             query = "SELECT * FROM handoffs WHERE id = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (handoff_id,))
                     row = cursor.fetchone()
@@ -701,7 +751,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve handoff: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff: {e}")
 
-    def get_decision(self, decision_id):
+    def get_decision(self, decision_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a logged decision by ID.
 
         Args:
@@ -721,7 +771,7 @@ class DatabaseClient:
         else:
             query = "SELECT * FROM decisions WHERE id = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (decision_id,))
                     row = cursor.fetchone()
@@ -730,7 +780,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve decision: {e}")
                 raise RuntimeError(f"Failed to retrieve decision: {e}")
 
-    def get_milestone(self, milestone_id):
+    def get_milestone(self, milestone_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a milestone by ID.
 
         Args:
@@ -750,7 +800,7 @@ class DatabaseClient:
         else:
             query = "SELECT * FROM milestones WHERE id = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (milestone_id,))
                     row = cursor.fetchone()
@@ -759,7 +809,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve milestone: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone: {e}")
 
-    def get_issue(self, github_id):
+    def get_issue(self, github_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves an issue by its GitHub ID.
 
         Args:
@@ -779,7 +829,7 @@ class DatabaseClient:
         else:
             query = "SELECT * FROM issues WHERE github_id = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (github_id,))
                     row = cursor.fetchone()
@@ -788,7 +838,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve issue: {e}")
                 raise RuntimeError(f"Failed to retrieve issue: {e}")
 
-    def get_backtest(self, backtest_id):
+    def get_backtest(self, backtest_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a backtest run by ID.
 
         Args:
@@ -808,7 +858,7 @@ class DatabaseClient:
         else:
             query = "SELECT * FROM backtest_runs WHERE id = ?"
             try:
-                with self._get_sqlite_connection() as conn:
+                with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(query, (backtest_id,))
                     row = cursor.fetchone()
@@ -817,7 +867,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
 
-    def close(self):
+    def close(self) -> None:
         """Closes the database client and any open connections."""
         if self.backend == "surrealdb" and self.db:
             try:
