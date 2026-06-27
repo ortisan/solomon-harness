@@ -4,7 +4,8 @@ import sys
 import json
 import tempfile
 import unicodedata
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import patch
 
 # Dynamically locate the parent agent directory
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,9 +16,9 @@ if parent_dir not in sys.path:
 try:
     from tools.database_client import DatabaseClient
 except ImportError:
-    DatabaseClient = None
+    DatabaseClient = None  # type: ignore[assignment,misc]
 
-import main
+import main  # noqa: E402
 
 
 class TestAgentEvals(unittest.TestCase):
@@ -136,6 +137,7 @@ class TestAgentEvals(unittest.TestCase):
         db.save_session("session-abc", "dev_agent", "Implement features", [])
         latest = db.get_latest_activity()
         self.assertIsNotNone(latest)
+        assert latest is not None
         self.assertEqual(latest["type"], "session")
         self.assertEqual(latest["agent"], "dev_agent")
         self.assertEqual(latest["task"], "Implement features")
@@ -148,6 +150,7 @@ class TestAgentEvals(unittest.TestCase):
         
         latest = db.get_latest_activity()
         self.assertIsNotNone(latest)
+        assert latest is not None
         self.assertEqual(latest["type"], "handoff")
         self.assertEqual(latest["agent"], "dev_agent -> qa_agent")
         self.assertEqual(latest["task"], "plan")
@@ -172,7 +175,9 @@ class TestAgentEvals(unittest.TestCase):
     def test_main_interactive_loop(self) -> None:
         """Test the interactive run loop with simulated user inputs."""
         inputs = ["gh-1", "yes", "exit"]
-        input_mock = lambda *args: inputs.pop(0)
+        
+        def input_mock(*args: Any) -> str:
+            return inputs.pop(0)
 
         # Pre-seed the test database with open issues and a session/handoff
         db = DatabaseClient(db_path=self.sqlite_db_path)
@@ -196,6 +201,7 @@ class TestAgentEvals(unittest.TestCase):
             # Confirm database states updated
             issue = test_db.get_issue("gh-1")
             self.assertIsNotNone(issue)
+            assert issue is not None
             self.assertEqual(issue["status"], "closed")
             
             test_db.close()

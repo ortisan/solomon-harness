@@ -461,7 +461,7 @@ class DatabaseClient:
         title: str,
         type_: str,
         status: str,
-        milestone_id: Union[str, int]
+        milestone_id: Optional[Union[str, int]]
     ) -> None:
         """Logs a GitHub issue.
 

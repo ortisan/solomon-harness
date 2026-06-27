@@ -1,28 +1,27 @@
-# Plan - SurrealDB Spectron Memory Integration and Interactive Agent Loop
+# Plan - Compile, Validate, and Verify All Agents
 
-This plan details the implementation of Task 3, which integrates the interactive agent execution loop, updates the SQLite/SurrealDB database client query support, updates evaluation tests, and compiles the templates across all agents.
+This plan details the implementation of Task 4, which compiles the final templates, runs the full unit test suite, runs all local validators, verifies agent spawning, synchronizes documentation to the project wiki, and commits the finalized states.
 
 ## Objectives
-1. Update `templates/harness/tools/database_client.py` to support querying open issues and retrieving the latest session or handoff.
-2. Update `templates/harness/main.py` to:
-   - Initialize the database client on startup.
-   - Show startup logs: the last active session/handoff status and the list of currently open issues.
-   - Run an interactive execution loop enabling selection or creation of issues, simulation of agent execution steps, recording session state, updating issue status to closed, and repeating.
-   - Exclude emojis and use direct, professional human-like language.
-   - Use PEP 484 type annotations and robust error handling.
-3. Update `templates/harness/tests/agent_evals.py` to:
-   - Add unit tests for `sessions` and `handoffs` tables in `DatabaseClient`.
-   - Add unit tests for `main.py` entry points and command parser.
-   - Use isolated/mocked/temporary database configurations.
-4. Compile and distribute updated templates to all subagents using the compilation script.
-5. Verification of all tests.
+1. Run `./scripts/bootstrap-agent.sh` to compile the final templates to all 14 agents.
+2. Execute the entire unit test suite:
+   - Run `python3 -m unittest discover -s tests` to verify all 10+ unit tests across the codebase are fully green.
+3. Run all local validators:
+   - Run `python3 scripts/validate-agents.py`
+   - Run `python3 scripts/validate-templates.py`
+   - Run `python3 scripts/validate-workflows.py`
+   - Run `./scripts/test-spawn-agent.sh`
+4. Execute `scripts/wiki-sync.sh` to synchronize any final documentation updates.
+5. Stage all files and commit to Git with the exact message: `test: compile and verify all 14 agents with SurrealDB memory integration`.
 
 ## TDD Lifecycle (Red, Green, Refactor)
-1. **Red Phase**: Edit `templates/harness/tests/agent_evals.py` to define tests for the new database operations and interactive command runner inputs. Run tests to verify they fail as expected.
-2. **Green Phase**: Implement the database query methods in `templates/harness/tools/database_client.py` and the interactive CLI structure in `templates/harness/main.py`. Ensure all tests pass.
-3. **Refactor Phase**: Clean up any code redundancies, ensure type hints satisfy static analysis, and verify correct program execution.
+- **Red Phase**: Not applicable as there are no direct feature implementations or functional changes in this task.
+- **Green Phase**: Ensure compilation succeeds and all tests/validators pass cleanly.
+- **Refactor Phase**: Resolve any validation warnings, type check errors, or formatting anomalies that arise.
 
 ## Verification Criteria
-- All tests in `templates/harness/tests/agent_evals.py` and root project level tests must execute and pass.
-- No emojis are present in outputs, logs, or commit messages.
-- Clean exit code (0) on successful program runs.
+- All 14 agents are successfully compiled from the templates.
+- All unit tests pass cleanly.
+- All validators exit with code 0.
+- Documentation is synced with the wiki script.
+- Git status is clean post-commit.
