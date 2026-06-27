@@ -21,10 +21,12 @@ graph TD
 ### 2. Issue Creation (Scrum)
 - **Goal:** Formulate trackable work items and milestones.
 - **Process:** Issues are created using GitHub issue templates (`.github/ISSUE_TEMPLATE/`) to enforce structure.
-  - Features use `01_feature_conception.md`.
-  - Bugs use `02_bug_report.md`.
-  - Quant/ML tasks use `03_quant_model_hypothesis.md`.
+   - Features use `feature_conception.md`.
+   - Bugs use `bug_report.md`.
+   - Quant/ML tasks use `quant_model_hypothesis.md`.
+   - Future ideas use `future_ideas.md`.
 - Issue management is automated or simplified via `scripts/scrum-master.sh`.
+
 
 ### 3. Planning (Plan Write)
 - **Goal:** Create a step-by-step implementation plan.
