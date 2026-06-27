@@ -23,17 +23,22 @@ class DatabaseClient:
         self.db = None
         self.db_path = db_path
 
-        # Locate the repository root by traversing upwards to find '.git'
+        # Locate the repository root by traversing upwards to find '.git' or typical workspace directories
         current_dir: str = os.path.dirname(os.path.abspath(__file__))
         project_root: str = current_dir
-        has_git: bool = False
+        found_root: bool = False
         while project_root and project_root != os.path.dirname(project_root):
             if os.path.exists(os.path.join(project_root, ".git")):
-                has_git = True
+                found_root = True
+                break
+            if (os.path.exists(os.path.join(project_root, "agents")) and
+                os.path.exists(os.path.join(project_root, "memory")) and
+                os.path.exists(os.path.join(project_root, "templates"))):
+                found_root = True
                 break
             project_root = os.path.dirname(project_root)
 
-        if not has_git:
+        if not found_root:
             # Fallback gracefully to the parent of tools/ relative to this file
             project_root = os.path.dirname(current_dir)
 

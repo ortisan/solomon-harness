@@ -329,6 +329,27 @@ class TestDatabaseClient(unittest.TestCase):
             self.assertEqual(client.db_path, "/mock/repo/templates/harness/memory/long_term/harness.db")
             client.close()
 
+    def test_project_root_resolution_inside_agent_without_git(self):
+        """Test unified project root directory resolution when initialized inside an agent subdirectory without .git."""
+        with patch("tools.database_client.__file__", "/mock/repo/agents/documenter/tools/database_client.py"), \
+             patch("os.path.exists") as mock_exists, \
+             patch("os.path.isfile") as mock_isfile, \
+             patch("os.makedirs"), \
+             patch("sqlite3.connect"):
+            
+            def side_effect_exists(path):
+                # Simulate presence of root-level directories
+                if path in ["/mock/repo/agents", "/mock/repo/memory", "/mock/repo/templates"]:
+                    return True
+                return False
+                
+            mock_exists.side_effect = side_effect_exists
+            mock_isfile.return_value = False
+            
+            client = DatabaseClient()
+            self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
+            client.close()
+
 
 if __name__ == "__main__":
     unittest.main()
