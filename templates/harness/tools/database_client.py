@@ -9,6 +9,7 @@ from typing import Generator, Any, Dict, List, Optional, Union
 
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
+
     backend: str
     db: Any
     db_path: Optional[str]
@@ -31,9 +32,11 @@ class DatabaseClient:
             if os.path.exists(os.path.join(project_root, ".git")):
                 found_root = True
                 break
-            if (os.path.exists(os.path.join(project_root, "agents")) and
-                os.path.exists(os.path.join(project_root, "memory")) and
-                os.path.exists(os.path.join(project_root, "templates"))):
+            if (
+                os.path.exists(os.path.join(project_root, "agents"))
+                and os.path.exists(os.path.join(project_root, "memory"))
+                and os.path.exists(os.path.join(project_root, "templates"))
+            ):
                 found_root = True
                 break
             project_root = os.path.dirname(project_root)
@@ -59,6 +62,7 @@ class DatabaseClient:
             # Dynamically import surrealdb to support dynamic backend loading
             try:
                 import surrealdb  # type: ignore[import-not-found]
+
                 Surreal = surrealdb.Surreal
                 has_surrealdb = True
             except (ImportError, AttributeError):
@@ -92,7 +96,9 @@ class DatabaseClient:
                     self.backend = "surrealdb"
                 except Exception as e:
                     sys.stderr.write(f"Warning: Connection to SurrealDB failed: {e}\n")
-                    sys.stderr.write("SurrealDB library or server unavailable. Falling back to SQLite backend.\n")
+                    sys.stderr.write(
+                        "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
+                    )
                     if self.db:
                         try:
                             self.db.close()
@@ -101,7 +107,9 @@ class DatabaseClient:
                         self.db = None
                     self.backend = "sqlite"
             else:
-                sys.stderr.write("SurrealDB library or server unavailable. Falling back to SQLite backend.\n")
+                sys.stderr.write(
+                    "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
+                )
                 self.backend = "sqlite"
 
         # Initialize SQLite if backend is sqlite
@@ -201,7 +209,7 @@ class DatabaseClient:
                 status TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            """
+            """,
         ]
 
         try:
@@ -284,7 +292,7 @@ class DatabaseClient:
         outcome: str,
         author: str,
         branch: str,
-        commit_sha: str
+        commit_sha: str,
     ) -> Union[str, int, None]:
         """Logs an architectural or design decision to the database.
 
@@ -317,7 +325,7 @@ class DatabaseClient:
                 "outcome": outcome,
                 "author": author,
                 "branch": branch,
-                "commit_sha": commit_sha
+                "commit_sha": commit_sha,
             }
             try:
                 res = self.db.query(query, params)
@@ -333,7 +341,9 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (title, rationale, outcome, author, branch, commit_sha))
+                    cursor.execute(
+                        query, (title, rationale, outcome, author, branch, commit_sha)
+                    )
                     conn.commit()
                     return cursor.lastrowid
             except sqlite3.Error as e:
@@ -362,7 +372,7 @@ class DatabaseClient:
                 "id": f"memory:{key}",
                 "key": key,
                 "value": value,
-                "category": category
+                "category": category,
             }
             try:
                 self.db.query(query, params)
@@ -416,11 +426,7 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to retrieve memory: {e}")
 
     def create_milestone(
-        self,
-        title: str,
-        description: str,
-        due_date: str,
-        state: str
+        self, title: str, description: str, due_date: str, state: str
     ) -> Union[str, int, None]:
         """Creates a project milestone record.
 
@@ -447,7 +453,7 @@ class DatabaseClient:
                 "title": title,
                 "description": description,
                 "due_date": due_date,
-                "state": state
+                "state": state,
             }
             try:
                 res = self.db.query(query, params)
@@ -476,7 +482,7 @@ class DatabaseClient:
         title: str,
         type_: str,
         status: str,
-        milestone_id: Optional[Union[str, int]]
+        milestone_id: Optional[Union[str, int]],
     ) -> None:
         """Logs a GitHub issue.
 
@@ -505,7 +511,7 @@ class DatabaseClient:
                 "title": title,
                 "type_": type_,
                 "status": status,
-                "milestone_id": milestone_id
+                "milestone_id": milestone_id,
             }
             try:
                 self.db.query(query, params)
@@ -538,7 +544,7 @@ class DatabaseClient:
         profit_factor: float,
         parameters: str,
         dataset: str,
-        commit_sha: str
+        commit_sha: str,
     ) -> Union[str, int, None]:
         """Saves a backtest run log.
 
@@ -574,7 +580,7 @@ class DatabaseClient:
                 "profit_factor": profit_factor,
                 "parameters": parameters,
                 "dataset": dataset,
-                "commit_sha": commit_sha
+                "commit_sha": commit_sha,
             }
             try:
                 res = self.db.query(query, params)
@@ -590,7 +596,18 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha))
+                    cursor.execute(
+                        query,
+                        (
+                            strategy_name,
+                            sharpe_ratio,
+                            max_drawdown,
+                            profit_factor,
+                            parameters,
+                            dataset,
+                            commit_sha,
+                        ),
+                    )
                     conn.commit()
                     return cursor.lastrowid
             except sqlite3.Error as e:
@@ -602,7 +619,7 @@ class DatabaseClient:
         session_id: str,
         agent_name: str,
         task: str,
-        messages: Union[List[Dict[str, Any]], str]
+        messages: Union[List[Dict[str, Any]], str],
     ) -> None:
         """Upserts a short-term session state.
 
@@ -628,7 +645,7 @@ class DatabaseClient:
                 "session_id": session_id,
                 "agent_name": agent_name,
                 "task": task,
-                "messages": messages
+                "messages": messages,
             }
             try:
                 self.db.query(query, params)
@@ -636,7 +653,9 @@ class DatabaseClient:
                 logging.error(f"Failed to save session in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save session in SurrealDB: {e}")
         else:
-            serialized_messages = json.dumps(messages) if not isinstance(messages, str) else messages
+            serialized_messages = (
+                json.dumps(messages) if not isinstance(messages, str) else messages
+            )
             query = """
             INSERT INTO sessions (session_id, agent_name, task, messages, timestamp)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -648,7 +667,9 @@ class DatabaseClient:
             """
             try:
                 with self._sqlite_conn() as conn:
-                    conn.execute(query, (session_id, agent_name, task, serialized_messages))
+                    conn.execute(
+                        query, (session_id, agent_name, task, serialized_messages)
+                    )
                     conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"Failed to save session: {e}")
@@ -689,7 +710,7 @@ class DatabaseClient:
         recipient: str,
         contract_type: str,
         contract_path: str,
-        status: str
+        status: str,
     ) -> Union[str, int, None]:
         """Creates a handoff log entry.
 
@@ -719,7 +740,7 @@ class DatabaseClient:
                 "recipient": recipient,
                 "contract_type": contract_type,
                 "contract_path": contract_path,
-                "status": status
+                "status": status,
             }
             try:
                 res = self.db.query(query, params)
@@ -735,7 +756,9 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (sender, recipient, contract_type, contract_path, status))
+                    cursor.execute(
+                        query, (sender, recipient, contract_type, contract_path, status)
+                    )
                     conn.commit()
                     return cursor.lastrowid
             except sqlite3.Error as e:
@@ -754,7 +777,9 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM handoffs WHERE id = $id"
             try:
-                res = self.db.query(query, {"id": self._format_id("handoffs", handoff_id)})
+                res = self.db.query(
+                    query, {"id": self._format_id("handoffs", handoff_id)}
+                )
                 return self._extract_record(res)
             except Exception as e:
                 logging.error(f"Failed to retrieve handoff from SurrealDB: {e}")
@@ -783,7 +808,9 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM decisions WHERE id = $id"
             try:
-                res = self.db.query(query, {"id": self._format_id("decisions", decision_id)})
+                res = self.db.query(
+                    query, {"id": self._format_id("decisions", decision_id)}
+                )
                 return self._extract_record(res)
             except Exception as e:
                 logging.error(f"Failed to retrieve decision from SurrealDB: {e}")
@@ -812,7 +839,9 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM milestones WHERE id = $id"
             try:
-                res = self.db.query(query, {"id": self._format_id("milestones", milestone_id)})
+                res = self.db.query(
+                    query, {"id": self._format_id("milestones", milestone_id)}
+                )
                 return self._extract_record(res)
             except Exception as e:
                 logging.error(f"Failed to retrieve milestone from SurrealDB: {e}")
@@ -870,11 +899,15 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM backtest_runs WHERE id = $id"
             try:
-                res = self.db.query(query, {"id": self._format_id("backtest_runs", backtest_id)})
+                res = self.db.query(
+                    query, {"id": self._format_id("backtest_runs", backtest_id)}
+                )
                 return self._extract_record(res)
             except Exception as e:
                 logging.error(f"Failed to retrieve backtest run from SurrealDB: {e}")
-                raise RuntimeError(f"Failed to retrieve backtest run from SurrealDB: {e}")
+                raise RuntimeError(
+                    f"Failed to retrieve backtest run from SurrealDB: {e}"
+                )
         else:
             query = "SELECT * FROM backtest_runs WHERE id = ?"
             try:
@@ -896,7 +929,9 @@ class DatabaseClient:
             return [dict(item) for item in first if isinstance(item, dict)]
         elif isinstance(first, dict):
             if "result" in first and isinstance(first["result"], list):
-                return [dict(item) for item in first["result"] if isinstance(item, dict)]
+                return [
+                    dict(item) for item in first["result"] if isinstance(item, dict)
+                ]
             else:
                 return [dict(first)]
         return []
@@ -914,7 +949,9 @@ class DatabaseClient:
                 return self._extract_list(res)
             except Exception as e:
                 logging.error(f"Failed to retrieve open issues from SurrealDB: {e}")
-                raise RuntimeError(f"Failed to retrieve open issues from SurrealDB: {e}")
+                raise RuntimeError(
+                    f"Failed to retrieve open issues from SurrealDB: {e}"
+                )
         else:
             query = "SELECT * FROM issues WHERE status = 'open'"
             try:
@@ -983,6 +1020,7 @@ class DatabaseClient:
             ts_str = str(ts).replace(" ", "T")
             try:
                 import datetime
+
                 clean_ts = ts_str.rstrip("Z")
                 if "+" in clean_ts:
                     clean_ts = clean_ts.split("+")[0]
@@ -991,8 +1029,12 @@ class DatabaseClient:
             except Exception:
                 return 0.0
 
-        t_session = parse_time(latest_session.get("timestamp")) if latest_session else -1.0
-        t_handoff = parse_time(latest_handoff.get("timestamp")) if latest_handoff else -1.0
+        t_session = (
+            parse_time(latest_session.get("timestamp")) if latest_session else -1.0
+        )
+        t_handoff = (
+            parse_time(latest_handoff.get("timestamp")) if latest_handoff else -1.0
+        )
 
         if t_session >= t_handoff:
             assert latest_session is not None
@@ -1001,7 +1043,7 @@ class DatabaseClient:
                 "agent": latest_session.get("agent_name"),
                 "task": latest_session.get("task"),
                 "status": "active",
-                "timestamp": latest_session.get("timestamp")
+                "timestamp": latest_session.get("timestamp"),
             }
         else:
             assert latest_handoff is not None
@@ -1010,7 +1052,7 @@ class DatabaseClient:
                 "agent": f"{latest_handoff.get('sender')} -> {latest_handoff.get('recipient')}",
                 "task": latest_handoff.get("contract_type"),
                 "status": latest_handoff.get("status"),
-                "timestamp": latest_handoff.get("timestamp")
+                "timestamp": latest_handoff.get("timestamp"),
             }
 
     def close(self) -> None:
@@ -1029,6 +1071,6 @@ class DatabaseClient:
         self,
         exc_type: Optional[Any],
         exc_val: Optional[BaseException],
-        exc_tb: Optional[Any]
+        exc_tb: Optional[Any],
     ) -> None:
         self.close()

@@ -70,7 +70,95 @@ echo "  - Project Name: $PROJECT_NAME"
 echo "  - Git Remote:   $GIT_REMOTE"
 echo "  - Technologies: $TECHNOLOGIES"
 
-# 2. Generate .claude/settings.json
+# 2. Configure software patterns
+echo "Configuring software patterns..."
+
+NON_INTERACTIVE_MODE=false
+if [ "${NON_INTERACTIVE:-}" = "true" ]; then
+    NON_INTERACTIVE_MODE=true
+fi
+for arg in "$@"; do
+    if [ "$arg" = "--non-interactive" ]; then
+        NON_INTERACTIVE_MODE=true
+    fi
+done
+
+if [ "$NON_INTERACTIVE_MODE" = "true" ]; then
+    ARCH_PATTERN="hexagonal"
+    OBS_PATTERN="opentelemetry"
+    SEC_PATTERN="secure_dev"
+else
+    while true; do
+        echo "Selecione o padrão de Arquitetura de Software: [1] Clean Architecture, [2] Functional Architecture, [3] Hexagonal (Ports & Adapters)"
+        read -r arch_choice
+        if [ "$arch_choice" = "1" ]; then
+            ARCH_PATTERN="clean"
+            break
+        elif [ "$arch_choice" = "2" ]; then
+            ARCH_PATTERN="functional"
+            break
+        elif [ "$arch_choice" = "3" ]; then
+            ARCH_PATTERN="hexagonal"
+            break
+        else
+            echo "Opção inválida. Por favor, tente novamente."
+        fi
+    done
+
+    while true; do
+        echo "Selecione o nível de Observabilidade: [1] Basic Logs, [2] OpenTelemetry (traces, spans, métricas customizadas)"
+        read -r obs_choice
+        if [ "$obs_choice" = "1" ]; then
+            OBS_PATTERN="basic"
+            break
+        elif [ "$obs_choice" = "2" ]; then
+            OBS_PATTERN="opentelemetry"
+            break
+        else
+            echo "Opção inválida. Por favor, tente novamente."
+        fi
+    done
+
+    while true; do
+        echo "Selecione as práticas de Segurança: [1] Standard, [2] Desenvolvimento Seguro (SAST, STRIDE threat modeling)"
+        read -r sec_choice
+        if [ "$sec_choice" = "1" ]; then
+            SEC_PATTERN="standard"
+            break
+        elif [ "$sec_choice" = "2" ]; then
+            SEC_PATTERN="secure_dev"
+            break
+        else
+            echo "Opção inválida. Por favor, tente novamente."
+        fi
+    done
+fi
+
+echo "Writing pattern configuration to .agent/config.json..."
+mkdir -p .agent
+ARCH_PATTERN="$ARCH_PATTERN" OBS_PATTERN="$OBS_PATTERN" SEC_PATTERN="$SEC_PATTERN" python3 -c "
+import json, os, sys
+path = '.agent/config.json'
+config = {}
+if os.path.exists(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+    except Exception as e:
+        sys.stderr.write(f'Error reading config.json: {e}\n')
+        sys.exit(1)
+config['architecture_pattern'] = os.environ.get('ARCH_PATTERN')
+config['observability_pattern'] = os.environ.get('OBS_PATTERN')
+config['security_pattern'] = os.environ.get('SEC_PATTERN')
+try:
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2)
+except Exception as e:
+    sys.stderr.write(f'Error writing config.json: {e}\n')
+    sys.exit(1)
+"
+
+# 3. Generate .claude/settings.json
 echo "Generating .claude/settings.json..."
 mkdir -p .claude
 cat <<EOT > .claude/settings.json
@@ -92,7 +180,7 @@ cat <<EOT > .claude/settings.json
 }
 EOT
 
-# 3. Generate .agents/skills.json
+# 4. Generate .agents/skills.json
 echo "Generating .agents/skills.json..."
 mkdir -p .agents
 cat <<EOT > .agents/skills.json
@@ -105,7 +193,7 @@ cat <<EOT > .agents/skills.json
 }
 EOT
 
-# 4. Assemble core workspace rule files CLAUDE.md and .agents/AGENTS.md
+# 5. Assemble core workspace rule files CLAUDE.md and .agents/AGENTS.md
 interpolate_and_write() {
     local template_path="$1"
     local dest_path="$2"
@@ -167,7 +255,7 @@ AGENTS_FALLBACK="# $PROJECT_NAME - Agent Customizations
 interpolate_and_write "templates/CLAUDE.md.template" "CLAUDE.md" "$CLAUDE_FALLBACK"
 interpolate_and_write "templates/AGENTS.md.template" "agents/AGENTS.md" "$AGENTS_FALLBACK"
 
-# 5. Install Git commit-msg hook
+# 6. Install Git commit-msg hook
 echo "Installing Git commit-msg hook..."
 HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null || echo ".git/hooks")
 if [ -n "$HOOKS_DIR" ]; then
@@ -179,11 +267,11 @@ else
     echo "  Warning: Git hooks directory could not be resolved. Commit hook was not installed."
 fi
 
-# 6. Compile agent harnesses
+# 7. Compile agent harnesses
 echo "Compiling agent harnesses..."
 python3 scripts/compile-harnesses.py
 
-# 7. Sync agent configurations and rules
+# 8. Sync agent configurations and rules
 echo "Syncing agent configurations and rules..."
 mkdir -p .agents/agents
 ln -sf ../agents/AGENTS.md .agents/AGENTS.md
