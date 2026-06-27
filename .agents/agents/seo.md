@@ -1,1 +1,1 @@
-../../agents/seo.md
+../../agents/seo/agents/seo.md

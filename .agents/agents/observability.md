@@ -1,1 +1,1 @@
-../../agents/observability.md
+../../agents/observability/agents/observability.md

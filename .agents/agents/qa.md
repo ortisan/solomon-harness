@@ -1,1 +1,1 @@
-../../agents/qa.md
+../../agents/qa/agents/qa.md

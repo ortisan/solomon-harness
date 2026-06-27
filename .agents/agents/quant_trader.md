@@ -1,1 +1,1 @@
-../../agents/quant_trader.md
+../../agents/quant_trader/agents/quant_trader.md

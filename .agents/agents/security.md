@@ -1,1 +1,1 @@
-../../agents/security.md
+../../agents/security/agents/security.md

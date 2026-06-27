@@ -1,1 +1,1 @@
-../../agents/documenter.md
+../../agents/documenter/agents/documenter.md

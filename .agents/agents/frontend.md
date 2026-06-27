@@ -1,1 +1,1 @@
-../../agents/frontend.md
+../../agents/frontend/agents/frontend.md

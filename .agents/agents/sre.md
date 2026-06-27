@@ -1,1 +1,1 @@
-../../agents/sre.md
+../../agents/sre/agents/sre.md

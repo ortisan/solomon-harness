@@ -1,1 +1,1 @@
-../../agents/software_architect.md
+../../agents/software_architect/agents/software_architect.md

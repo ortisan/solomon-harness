@@ -1,1 +1,1 @@
-../../agents/flutter.md
+../../agents/flutter/agents/flutter.md

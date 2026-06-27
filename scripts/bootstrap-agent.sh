@@ -179,14 +179,24 @@ else
     echo "  Warning: Git hooks directory could not be resolved. Commit hook was not installed."
 fi
 
-# 6. Sync agent configurations and rules
+# 6. Compile agent harnesses
+echo "Compiling agent harnesses..."
+python3 scripts/compile-harnesses.py
+
+# 7. Sync agent configurations and rules
 echo "Syncing agent configurations and rules..."
 mkdir -p .agents/agents
 ln -sf ../agents/AGENTS.md .agents/AGENTS.md
-for f in agents/*.md; do
-    filename=$(basename "$f")
-    if [ "$filename" != "AGENTS.md" ]; then
-        ln -sf "../../agents/$filename" ".agents/agents/$filename"
+
+for dir in agents/*/; do
+    # Remove trailing slash
+    dir=${dir%/}
+    # Extract agent name
+    agent_name=$(basename "$dir")
+    
+    if [ -f "agents/$agent_name/agents/$agent_name.md" ]; then
+        echo "  Syncing agent: $agent_name"
+        ln -sf "../../agents/$agent_name/agents/$agent_name.md" ".agents/agents/$agent_name.md"
     fi
 done
 

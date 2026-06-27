@@ -1,68 +1,59 @@
-# Plan - Solomon Harness Task 1: Agent Harness Refactoring
+# Plan - Solomon Harness Task 2: Agent Harness Refactoring
 
-This plan outlines the design, implementation, and verification steps for Task 1 of the Solomon Harness refactoring.
+This plan outlines the design, implementation, and verification steps for Task 2 of the Solomon Harness refactoring.
 
 ## Requirements
 
-1. **LLM Configuration Template**:
-   - Write templates/harness/.agent/config.json.
-   
-2. **Encrypted Vault Mock**:
-   - Write templates/harness/.agent/secure_vault.enc containing base64 mock vault.
+1. **Compiler Script `scripts/compile-harnesses.py`**:
+   - Must be a Python 3 script.
+   - Scans the `agents/` root directory for all `.md` files, excluding `AGENTS.md` and any subdirectories.
+   - For each discovered agent `.md` file (e.g., `agents/product_owner.md`):
+     - Extracts the agent name (e.g., `product_owner`).
+     - Creates the target agent directory structure `agents/<agent_name>/`.
+     - Recursively copies all directories and files from `templates/harness/` to `agents/<agent_name>/`.
+     - Replaces the placeholder `{{AGENT_NAME}}` in `agents/<agent_name>/.agent/config.json` with the actual agent name.
+     - Creates `agents/<agent_name>/agents/` if it does not exist.
+     - Copies the global rules template `agents/AGENTS.md` to `agents/<agent_name>/agents/AGENTS.md`.
+     - Copies the specific agent markdown file to `agents/<agent_name>/agents/<agent_name>.md`.
+   - Must implement proper logging, error handling, clean code structure, and avoid emojis in output logs.
 
-3. **Git Operations Instructions**:
-   - Write templates/harness/skills/git_operations.md containing instructions for Conventional Commits and Git Flow. Clean English, no emojis/icons, no AI clichés.
+2. **Bootstrap Script Update `scripts/bootstrap-agent.sh`**:
+   - Update it to first run `python3 scripts/compile-harnesses.py` to compile the agent harnesses.
+   - Update it to link or copy the final generated files to the `.agents/` directory to stay in sync:
+     - Symlink/copy `agents/AGENTS.md` to `.agents/AGENTS.md`.
+     - Symlink/copy `agents/<agent_name>/agents/<agent_name>.md` to `.agents/agents/<agent_name>.md` for each compiled agent.
+   - Ensure the bootstrap script exits with `0` on success and non-zero on failure.
 
-4. **Test Runner Command Configuration**:
-   - Write templates/harness/skills/test_runner.yaml mapping test commands.
+3. **Git Commit**:
+   - Message: `feat: implement compiler script to distribute harness structure across specialists`
+   - Strictly follow conventional commits, direct professional English, and zero emojis/icons.
 
-5. **Documentation Formatting Rules**:
-   - Write templates/harness/skills/doc_generator.json specifying formatting rules.
-
-6. **Browser client**:
-   - Write templates/harness/tools/browser.py with BrowserClient, navigate and search methods.
-
-7. **Database Client**:
-   - Write templates/harness/tools/database_client.py. Connects to memory/long_term/harness.db.
-   - Detects database directory dynamically.
-   - Creates tables (decisions, memory, milestones, issues, backtest_runs) if they do not exist.
-   - Implements helper methods for insert/query.
-
-8. **Evaluation Test Suite**:
-   - Write templates/harness/tests/agent_evals.py, checking config, database, and persona.
-
-9. **Main Entry CLI**:
-   - Write templates/harness/main.py with db-init, eval, and run subcommands.
-
-10. **Git Ignore Configuration**:
-    - Update the root .gitignore to ignore the SQLite db and short-term memory files.
+4. **Wiki Synchronization**:
+   - Execute `scripts/wiki-sync.sh` on completion.
 
 ## TDD and Verification Steps
 
-1. Write templates/harness/tests/agent_evals.py first. It should fail to run or fail to find other files since they are not created yet (Red phase).
-2. Create config.json, secure_vault.enc, git_operations.md, test_runner.yaml, doc_generator.json, and the persona file if expected by tests.
-3. Implement tools/browser.py.
-4. Implement tools/database_client.py.
-5. Implement main.py.
-6. Verify all tests in templates/harness/tests/agent_evals.py pass successfully (Green phase).
-7. Refactor the code if needed, keeping tests green (Refactor phase).
-8. Sync the project wiki.
-9. Stage and commit changes.
+1. **Write failing unit tests (Red Phase)**:
+   - Create `tests/test_compile_harnesses.py` containing tests that verify the behavior of `scripts/compile-harnesses.py`.
+   - Verify that the tests fail when the script is missing or incomplete.
+2. **Implement compiler script (Green Phase)**:
+   - Implement `scripts/compile-harnesses.py` adhering to all requirements.
+   - Run unit tests and verify they pass.
+3. **Update and verify bootstrap script**:
+   - Modify `scripts/bootstrap-agent.sh` to run the compiler and perform the sync steps.
+   - Verify the bootstrap script runs successfully, creates the required files/links, and exits with 0.
+4. **Refactor (Refactor Phase)**:
+   - Refactor Python and Bash code to improve design, readability, and performance, ensuring tests remain green.
 
 ## Execution Checklist
 
 - [ ] Write the detailed plan in PLAN.md
-- [ ] Write templates/harness/tests/agent_evals.py
-- [ ] Run the tests and confirm failures (Red phase)
-- [ ] Create templates/harness/.agent/config.json
-- [ ] Create templates/harness/.agent/secure_vault.enc
-- [ ] Create templates/harness/skills/git_operations.md
-- [ ] Create templates/harness/skills/test_runner.yaml
-- [ ] Create templates/harness/skills/doc_generator.json
-- [ ] Create templates/harness/tools/browser.py
-- [ ] Create templates/harness/tools/database_client.py
-- [ ] Create templates/harness/main.py
-- [ ] Run templates/harness/tests/agent_evals.py and verify passes (Green phase)
-- [ ] Update root .gitignore
-- [ ] Run wiki-sync.sh script to sync project wiki
-- [ ] Stage and commit changes
+- [ ] Create failing unit tests in `tests/test_compile_harnesses.py`
+- [ ] Run tests and verify failure (Red Phase)
+- [ ] Create and implement `scripts/compile-harnesses.py`
+- [ ] Run unit tests and verify success (Green Phase)
+- [ ] Update `scripts/bootstrap-agent.sh`
+- [ ] Test the bootstrap script locally and verify outputs
+- [ ] Refactor scripts and tests if necessary (Refactor Phase)
+- [ ] Run `scripts/wiki-sync.sh` to synchronize the wiki
+- [ ] Stage and commit changes to Git

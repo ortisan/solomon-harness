@@ -1,1 +1,1 @@
-../../agents/software_engineer.md
+../../agents/software_engineer/agents/software_engineer.md

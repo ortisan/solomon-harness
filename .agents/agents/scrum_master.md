@@ -1,1 +1,1 @@
-../../agents/scrum_master.md
+../../agents/scrum_master/agents/scrum_master.md
