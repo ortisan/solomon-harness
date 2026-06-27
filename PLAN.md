@@ -1,18 +1,29 @@
-# Plan - Clean Up Duplicate SQLite Database Files from Subagent Directories
+# Plan
 
-This plan outlines the steps to remove duplicate SQLite database files and ensure only the unified root database is active.
+Create software pattern markdown templates under templates/patterns/ to guide code generation, ensuring compliance with clean, functional, hexagonal architecture patterns, observability standards, and secure development principles.
 
-## Objectives
-1. Scan all agent subdirectories under agents/ to ensure no duplicate SQLite database files (harness.db) exist under agents/*/memory/long_term/harness.db or agents/*/memory/.
-2. Remove any duplicate database files found in the subagent directories.
-3. Update templates/harness/tools/database_client.py to ensure that the project root is correctly resolved to the workspace root when database client is initialized inside subagent directories, preventing duplicate database creation.
-4. Add a unit test to tests/test_database_client.py verifying that the project root resolves to the repository root directory when initialized inside an agent subdirectory.
-5. Recompile all agent harnesses using compile-harnesses.py.
-6. Verify that all tests pass cleanly using python3 -m unittest discover -s tests.
-7. Sync the project wiki using scripts/wiki-sync.sh.
-8. Commit changes to Git with the exact message: chore: clean up duplicate SQLite database files from subagent directories.
+## Scope
 
-## Verification Steps
-- Verify no duplicate harness.db files remain in the agents/ directory.
-- Verify templates/harness/tools/database_client.py resolves the project root correctly when run within an agent subdirectory.
-- Run all python unit tests.
+- In:
+  - templates/patterns/architecture/clean.md
+  - templates/patterns/architecture/functional.md
+  - templates/patterns/architecture/hexagonal.md
+  - templates/patterns/observability/opentelemetry.md
+  - templates/patterns/security/secure_dev.md
+- Out:
+  - Modifying active Python code or tests.
+
+## Action Items
+
+[ ] Create templates/patterns/architecture/clean.md with detailed clean architecture guidelines.
+[ ] Create templates/patterns/architecture/functional.md with functional programming architecture guidelines.
+[ ] Create templates/patterns/architecture/hexagonal.md with hexagonal architecture guidelines.
+[ ] Create templates/patterns/observability/opentelemetry.md with telemetry and instrumentation rules.
+[ ] Create templates/patterns/security/secure_dev.md with secure coding practices and STRIDE threat modeling.
+[ ] Verify that none of the generated files contain emojis, icons, or AI clichés.
+[ ] Sync the project wiki using the scripts/wiki-sync.sh script.
+[ ] Stage and commit all new templates with the conventional commit message: chore: add software pattern templates for architecture, observability, and security
+
+## Open Questions
+
+None
