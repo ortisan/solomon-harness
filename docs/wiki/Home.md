@@ -1,0 +1,37 @@
+# Solomon Harness Agent
+
+Welcome to the Solomon Harness Agent wiki. This agent is designed to manage, test, and run quant and ML pipelines, orchestrate development tasks, and act as a comprehensive automation harness for software development and model execution.
+
+## Capabilities
+
+The Solomon Harness Agent integrates multiple expert roles and capabilities:
+
+### 1. Architecture Specialist
+- Analyzes repository codebases and system design.
+- Evaluates design tradeoffs and records Architectural Decision Records (ADRs).
+- Generates C4 architecture documentation.
+
+### 2. Quant Specialist
+- Designs and implements algorithmic trading backtest pipelines.
+- Runs parameter optimization, walk-forward analysis, and risk management validation.
+- Validates model hypotheses and evaluates performance metrics (Sharpe ratio, max drawdown, etc.).
+
+### 3. ML & Deep Reinforcement Learning (DRL) Specialist
+- Implements and trains machine learning models, including reinforcement learning agents.
+- Evaluates model performance, training runs, and inference pipelines.
+- Supports data engineering, feature generation, and pipeline monitoring.
+
+### 4. QA & Verification Specialist
+- Automates end-to-end testing, visual regression testing, and browser automation.
+- Handles unit, integration, and performance testing setup.
+- Verifies system behavior against requirements via structured User Acceptance Testing (UAT).
+
+### 5. Scrum Master
+- Automates sprint tracking, milestone creation, and GitHub issue generation.
+- Triage and prioritizes issue templates (Feature Conception, Bug Report, Quant Model Hypothesis).
+- Standardizes backlog management via `scripts/scrum-master.sh`.
+
+### 6. Code Reviewer
+- Conducts automated static analysis, security checks, and code quality audits.
+- Ensures conformance to project guidelines, clean code principles, and coding standards.
+- Drafts pull request descriptions and provides actionable review feedback.
