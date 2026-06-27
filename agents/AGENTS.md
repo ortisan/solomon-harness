@@ -114,9 +114,10 @@ Codex and other MCP clients register the same command in their own config. Tools
 
 ## Skills
 
-Each agent's `skills/` directory holds reusable, role-specific guidance: a
-`best_practices.md` overview plus one file per technology, language or tool
-(frameworks covered in sections). Agents read these before acting.
+Each agent's `skills/` directory holds reusable, role-specific guidance, one
+file per technology, language or tool, with frameworks covered in sections.
+Agents read these before acting. There is no shared boilerplate skill: every
+file is specific to its topic.
 
 You can also pull skills from external skill-server repositories instead of
 authoring everything here. Sources are listed in `skill-sources.json`; manage
