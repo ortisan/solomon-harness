@@ -13,11 +13,11 @@ def has_emoji(text):
             try:
                 cat = unicodedata.category(char)
                 if cat == 'So':  # Symbol, other
-                     is_emoji = True
+                    is_emoji = True
                 else:
-                     name = unicodedata.name(char, "").upper()
-                     if any(word in name for word in ("EMOJI", "SMILEY", "PICTOGRAPH")):
-                          is_emoji = True
+                    name = unicodedata.name(char, "").upper()
+                    if any(word in name for word in ("EMOJI", "SMILEY", "PICTOGRAPH")):
+                        is_emoji = True
             except Exception:
                 pass
         if is_emoji:
@@ -104,6 +104,33 @@ def validate_workflow_file(filepath, name_pattern, required_substrings):
 
     # Formatting Check
     if not validate_yaml_formatting(content, filepath):
+        return False
+
+    # Security Check: Explicit permissions and Pinned actions (SHAs)
+    has_permissions_block = False
+    lines = content.split('\n')
+    for idx, line in enumerate(lines, 1):
+        if 'permissions:' in line:
+            has_permissions_block = True
+        
+        # Match uses: actions/checkout@v4 or uses: actions/checkout@sha
+        uses_match = re.search(r'uses:\s*([^\s#]+)', line)
+        if uses_match:
+            action_ref = uses_match.group(1)
+            # Skip local actions (starting with ./)
+            if not action_ref.startswith('./'):
+                if '@' not in action_ref:
+                    print(f"Error [{filepath}:{idx}]: Action '{action_ref}' is not pinned to a version/SHA.")
+                    return False
+                parts = action_ref.split('@')
+                sha = parts[1]
+                # SHA must be a 40-character hex string
+                if not re.match(r'^[a-fA-F0-9]{40}$', sha):
+                    print(f"Error [{filepath}:{idx}]: Action '{action_ref}' must be pinned to a 40-character commit SHA for security.")
+                    return False
+
+    if not has_permissions_block:
+        print(f"Error [{filepath}]: Missing explicit 'permissions:' configuration.")
         return False
 
     # Content verification

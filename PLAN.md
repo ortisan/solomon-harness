@@ -44,3 +44,18 @@ Since GitHub workflow files cannot be directly executed as unit tests locally, w
 - [ ] Clean up any temporary files or scripts if not needed, or keep the validation script as part of the repository tests.
 - [ ] Stage and commit all changes using the required commit message.
 - [ ] Sync the project wiki using `./scripts/wiki-sync.sh`.
+
+## Code Quality Review and Hardening
+
+- [ ] Modify validation script (`scripts/validate-workflows.py`) to enforce security policies:
+  - Verify all `uses:` steps are pinned to a 40-character commit SHA (e.g. `@a1b2c3d...`).
+  - Verify explicit `permissions:` block is present.
+  - Refactor PEP8 formatting (e.g., incorrect spaces in `has_emoji`).
+- [ ] Run validation script to confirm failure (Red stage).
+- [ ] Harden `.github/workflows/ci.yml` and `.github/workflows/release.yml`:
+  - Pin actions to specific commit SHAs.
+  - Add explicit read/write content permissions.
+- [ ] Run validation script to confirm success (Green stage).
+- [ ] Commit security hardening changes.
+- [ ] Run wiki sync script.
+

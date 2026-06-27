@@ -4,7 +4,7 @@ This document defines the development rules and operational standards for the so
 
 ## Workspace Metadata
 - **Project Name:** solomon-harness
-- **Core Technologies:** Generic/Shell
+- **Core Technologies:** Python
 - **Git Remote:** none
 
 ## Communication and Tone Guidelines (Humanizer)

@@ -4,7 +4,7 @@ This file defines the execution profile and specific behavioral rules for the au
 
 ## Project Profile
 - **Project Name:** solomon-harness
-- **Technologies:** Generic/Shell
+- **Technologies:** Python
 - **Repository:** none
 
 ## Agent Behavioral Guidelines
