@@ -26,7 +26,7 @@ jobs:
 
       - name: Check bash script syntax
         run: |
-          bash -n scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh
+          bash -n scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh scripts/spawn-agent.sh scripts/test-spawn-agent.sh
 
       - name: Check python script syntax
         run: |
@@ -38,13 +38,14 @@ jobs:
 
       - name: Lint shell scripts with ShellCheck
         run: |
-          shellcheck scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh
+          shellcheck scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh scripts/spawn-agent.sh scripts/test-spawn-agent.sh
 
       - name: Run script dry-runs and validation
         run: |
           ./scripts/scrum-master.sh --dry-run backlog-list
           ./scripts/scrum-master.sh --dry-run milestone-list
           ./scripts/scrum-master.sh --dry-run issue-create "Verification Test" "feature"
+          ./scripts/test-spawn-agent.sh
 
       - name: Verify workspace configuration files
         run: |
