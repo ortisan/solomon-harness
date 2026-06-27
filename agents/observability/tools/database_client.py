@@ -23,13 +23,23 @@ class DatabaseClient:
         self.db = None
         self.db_path = db_path
 
-        # Locate the harness directory relative to this file
-        tools_dir = os.path.dirname(os.path.abspath(__file__))
-        harness_dir = os.path.dirname(tools_dir)
+        # Locate the repository root by traversing upwards to find '.git'
+        current_dir: str = os.path.dirname(os.path.abspath(__file__))
+        project_root: str = current_dir
+        has_git: bool = False
+        while project_root and project_root != os.path.dirname(project_root):
+            if os.path.exists(os.path.join(project_root, ".git")):
+                has_git = True
+                break
+            project_root = os.path.dirname(project_root)
+
+        if not has_git:
+            # Fallback gracefully to the parent of tools/ relative to this file
+            project_root = os.path.dirname(current_dir)
 
         # Attempt to load configuration
-        config = {}
-        config_path = os.path.join(harness_dir, ".agent", "config.json")
+        config: Dict[str, Any] = {}
+        config_path: str = os.path.join(project_root, ".agent", "config.json")
         if os.path.isfile(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -92,7 +102,7 @@ class DatabaseClient:
         # Initialize SQLite if backend is sqlite
         if self.backend == "sqlite":
             if self.db_path is None:
-                db_dir = os.path.join(harness_dir, "memory", "long_term")
+                db_dir: str = os.path.join(project_root, "memory", "long_term")
                 os.makedirs(db_dir, exist_ok=True)
                 self.db_path = os.path.join(db_dir, "harness.db")
             self._init_sqlite_db()

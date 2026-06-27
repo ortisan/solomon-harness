@@ -38,7 +38,8 @@ class TestAgentEvals(unittest.TestCase):
             "secondly",
             "lastly"
         ]
-        # Set up a temporary directory and database path for isolation
+        # Set up a temporary directory and database path for isolation.
+        # This prevents unit tests from writing test records to the unified project-level database memory/long_term/harness.db.
         self.temp_dir = tempfile.TemporaryDirectory()
         self.sqlite_db_path = os.path.join(self.temp_dir.name, "harness_test.db")
 

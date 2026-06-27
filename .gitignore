@@ -9,6 +9,4 @@ __pycache__/
 memory/long_term/harness.db
 memory/short_term/*.json
 .agent/secure_vault.enc
-agents/*/memory/long_term/harness.db
-agents/*/memory/short_term/*.json
 templates/harness/memory/long_term/harness.db
