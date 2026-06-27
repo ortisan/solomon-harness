@@ -19,3 +19,10 @@ This plan outlines the refactoring of templates/harness/tools/database_client.py
 - New unit tests successfully execute and verify project root resolution.
 - All unit tests pass cleanly.
 - Git status is ready for commit.
+
+## Code Quality Review & Cleanup
+1. Fix E402 lint (Module level import not at top of file) in tests/test_database_client.py by adding # noqa: E402.
+2. Fix F841 lints (Unused local variables mock_makedirs and mock_connect) in tests/test_database_client.py by removing the 'as' bindings in the patch calls.
+3. Validate type checking with mypy and linting with ruff.
+4. Execute tests to verify correctness.
+

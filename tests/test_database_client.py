@@ -12,7 +12,7 @@ harness_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "te
 if harness_path not in sys.path:
     sys.path.insert(0, harness_path)
 
-from tools.database_client import DatabaseClient
+from tools.database_client import DatabaseClient  # noqa: E402
 
 
 class TestDatabaseClient(unittest.TestCase):
@@ -299,8 +299,8 @@ class TestDatabaseClient(unittest.TestCase):
         with patch("tools.database_client.__file__", "/mock/repo/templates/harness/tools/database_client.py"), \
              patch("os.path.exists") as mock_exists, \
              patch("os.path.isfile") as mock_isfile, \
-             patch("os.makedirs") as mock_makedirs, \
-             patch("sqlite3.connect") as mock_connect:
+             patch("os.makedirs"), \
+             patch("sqlite3.connect"):
             
             def side_effect_exists(path):
                 if path == "/mock/repo/.git":
@@ -319,8 +319,8 @@ class TestDatabaseClient(unittest.TestCase):
         with patch("tools.database_client.__file__", "/mock/repo/templates/harness/tools/database_client.py"), \
              patch("os.path.exists") as mock_exists, \
              patch("os.path.isfile") as mock_isfile, \
-             patch("os.makedirs") as mock_makedirs, \
-             patch("sqlite3.connect") as mock_connect:
+             patch("os.makedirs"), \
+             patch("sqlite3.connect"):
             
             mock_exists.return_value = False
             mock_isfile.return_value = False
