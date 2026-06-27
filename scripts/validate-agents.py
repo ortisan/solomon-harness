@@ -20,12 +20,12 @@ CLICHES = [
 # Required keywords per profile
 REQUIRED_KEYWORDS = {
     "product_owner.md": ["Product Owner", "Product Requirements Document", "PRD", "specifications", "deliverables"],
-    "scrum_master.md": ["Scrum Master", "milestones", "backlog", "sprint", "sprint planning", "status meetings"],
+    "scrum_master.md": ["Scrum Master", "milestones", "backlog", "sprint", "sprint planning", "status meetings", "develop", "feature/*", "release/*", "conventional commit"],
     "software_architect.md": ["Software Architect", "C4", "Architectural Decision Record", "ADR", "Design Contract"],
-    "software_engineer.md": ["Software Engineer", "TDD", "Test-Driven Development", "clean code", "debugging"],
+    "software_engineer.md": ["Software Engineer", "TDD", "Test-Driven Development", "clean code", "debugging", "feature/*", "bugfix/*", "conventional commit"],
     "ml_engineer.md": ["ML Engineer", "hyperparameters", "validation", "dataset", "features"],
     "quant_trader.md": ["Quant Trader", "backtest", "slippage", "transaction costs", "risk parameters"],
-    "qa.md": ["QA Specialist", "UAT", "User Acceptance Testing", "verification", "QA Report"],
+    "qa.md": ["QA Specialist", "UAT", "User Acceptance Testing", "verification", "QA Report", "feature/*", "develop", "release/*", "production"],
     "documenter.md": ["Documenter", "business value", "technical manuals", "design documentation", "user guides"],
     "observability.md": ["Observability Specialist", "log diagnostics", "metrics tracking", "performance profiling", "monitoring dashboards"],
     "security.md": ["Security Specialist", "threat modeling", "SAST", "vulnerability checks", "dependencies"]
