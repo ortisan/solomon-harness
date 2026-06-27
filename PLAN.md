@@ -7,8 +7,9 @@ This plan outlines the steps to isolate evaluation tests, clean up `.gitignore`,
 2. Clean up old/obsolete database ignores in the root `.gitignore`.
 3. Recompile the updated database client and test configurations across all 14 agent harnesses using `./scripts/bootstrap-agent.sh`.
 4. Verify all tests pass cleanly using `python3 -m unittest discover -s tests`.
-5. Sync the project wiki using `./scripts/wiki-sync.sh`.
-6. Commit changes to Git with the exact message: `chore: isolate evaluation tests and recompile agent harnesses`.
+5. Fix lint error in `tests/test_compile_harnesses.py` by removing the unused `shutil` import.
+6. Sync the project wiki using `./scripts/wiki-sync.sh`.
+7. Commit changes to Git with the exact message: `chore: isolate evaluation tests and recompile agent harnesses`.
 
 ## Verification Steps
 - Verify `.gitignore` changes.

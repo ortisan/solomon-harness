@@ -1,7 +1,6 @@
 import unittest
 import os
 import tempfile
-import shutil
 import json
 
 # We will import scripts.compile_harnesses or run it.
