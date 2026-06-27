@@ -1,14 +1,14 @@
-# Personalizações do Agente - solomon-harness
+# Agent Customizations - solomon-harness
 
-Este arquivo define o perfil de execução e as regras comportamentais específicas do agente autônomo atuando no projeto solomon-harness.
+This file defines the execution profile and specific behavioral rules for the autonomous agent acting in the solomon-harness project.
 
-## Perfil do Projeto
-- **Nome do Projeto:** solomon-harness
-- **Tecnologias:** Generic/Shell
-- **Repositório:** none
+## Project Profile
+- **Project Name:** solomon-harness
+- **Technologies:** Generic/Shell
+- **Repository:** none
 
-## Diretrizes Comportamentais do Agente
-- Antes de iniciar qualquer alteração no código ou implementação de funcionalidades, é obrigatória a elaboração de um planejamento detalhado em PLAN.md.
-- Adote o ciclo de desenvolvimento TDD (Red, Green, Refactor) de forma contínua e rigorosa.
-- Ao concluir o desenvolvimento de uma tarefa ou realizar um lançamento, execute a sincronização da wiki do projeto por meio do script scripts/wiki-sync.sh.
-- Toda a comunicação gerada, incluindo mensagens de commit, descrições de Pull Requests e documentações internas, deve ser redigida em um português direto e profissional. Emojis, ícones ou ornamentos textuais decorativos não são permitidos.
+## Agent Behavioral Guidelines
+- Before starting any code changes or feature implementations, writing a detailed plan in PLAN.md is mandatory.
+- Adopt the TDD development cycle (Red, Green, Refactor) continuously and rigorously.
+- Upon completing a task or executing a release, sync the project wiki using the scripts/wiki-sync.sh script.
+- All generated communication, including commit messages, Pull Request descriptions, and internal documentation, must be written in a direct, professional, and natural human-like English. Emojis, icons, or decorative text ornaments are not allowed.

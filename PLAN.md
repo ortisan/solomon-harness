@@ -1,33 +1,32 @@
-# Plano - Criação dos Templates das Regras do Workspace (Task 5)
+# Plan - Workspace Rules Templates Language Update (Task 5)
 
-Este plano descreve as etapas para criar os templates de regras do workspace (`CLAUDE.md.template` e `AGENTS.md.template`), adaptar o script de bootstrap e gerar os arquivos finais.
+This plan outlines the steps to translate the rule templates (`CLAUDE.md.template` and `AGENTS.md.template`) to English, regenerate the final rule files, and commit the changes.
 
-## Requisitos
-1. **Sem Emojis ou Ícones**: Os templates e arquivos finais não devem conter nenhum emoji, ícone ou ornamento visual.
-2. **Princípios do Humanizer**:
-   - Escritos em Português claro, direto e profissional (tom humano).
-   - Sem clichês comuns de IA ("delve", "leverage", "testament to", "feel free to", etc.).
-   - Instrução explícita para que o agente escreva todas as saídas (commits, PRs, wiki, comentários) de forma natural, profissional e sem emojis/ícones.
-3. **Competências de Especialistas**:
-   - **Programming & Architecture**: TDD estrito, SOLID, design modular, contratos de design como limites, preservação de docstrings/comentários.
+## Requirements
+1. **Language**: Rewrite templates and rules in clean, direct, professional English.
+2. **No Emojis or Icons**: Ensure no emojis, icons, or visual ornaments are used.
+3. **Humanizer Principles**:
+   - Write instructions in a direct, clear, professional human-like English.
+   - Avoid typical AI clichés ("delve", "leverage", "testament to", "feel free to", "dive into", etc.).
+   - Explicitly instruct the agent that all output text (commit messages, PRs, wiki pages, comments) must be written in a natural, direct, professional human-like tone, without emojis or icons.
+4. **Specialist Competencies**:
+   - **Programming & Architecture**: Strict TDD, SOLID, modular design, design contracts as boundaries, preservation of docstrings/comments.
    - **Quantitative Trading & DRL/ML Engineer**:
-     - Hipótese de Modelo: Sharpe ratio alvo, limite de Drawdown, Profit factor, restrições de latência/slippage, features/dataset, arquitetura do modelo.
-     - Validação: Prevenção de overfitting, cross-validation, testes fora da amostra (out-of-sample). Zero vazamento de dados (data leakage).
-     - Segurança: Validação de shapes de tensores, divisões por zero, overflow de floats.
-   - **QA Specialist**: Testes unitários/integração mandatórios, mocks de chamadas de API, testes de backtesting.
-   - **Scrum Master**: Instruções de uso do `scripts/scrum-master.sh` para issues/milestones.
-   - **Code Reviewer**: Validação inicial de conformidade com a especificação, seguida pela qualidade do código.
-4. **Ciclo de Vida do Workflow**:
-   - Conception (criar issue via scrum-master.sh) -> Planning (criar PLAN.md) -> Execution (TDD) -> Verification -> Code Review -> Release & Wiki Sync (wiki-sync.sh).
-5. **Variáveis de Interpolação**:
-   - Uso de `{{PROJECT_NAME}}`, `{{TECH_STACK}}` e `{{GIT_REMOTE}}`.
+     - Model Hypothesis: State target Sharpe ratio, Drawdown limit, Profit factor, latency/slippage constraints, dataset/features, model architecture.
+     - Validation: Overfitting checks, cross-validation, out-of-sample tests. Zero data leakage.
+     - Safety: Shape validation on tensors, division-by-zero checks, float overflow checks.
+   - **QA Specialist**: Mandatory unit/integration tests for code, mocking API calls, backtesting tests.
+   - **Scrum Master**: Instructions on using `scripts/scrum-master.sh` for issues/milestones.
+   - **Code Reviewer**: Check against spec compliance first, then code quality.
+5. **Workflow Lifecycle**:
+   - Conception (creating issue via scrum-master.sh) -> Planning (creating plan md) -> Execution (TDD) -> Verification -> Code Review -> Release & Wiki Sync (wiki-sync.sh).
+6. **Interpolation Variables**:
+   - Use `{{PROJECT_NAME}}`, `{{TECH_STACK}}`, and `{{GIT_REMOTE}}`.
 
-## Etapas de Execução
-- [ ] Atualizar `scripts/bootstrap-agent.sh` para também realizar a interpolação de `{{TECH_STACK}}` substituindo-a pelo valor de `TECHNOLOGIES`.
-- [ ] Criar o diretório `templates/` no workspace se ainda não existir.
-- [ ] Criar o template `templates/CLAUDE.md.template` seguindo estritamente os requisitos (Sem emojis, Português natural/profissional, Especialistas, Ciclo de Vida, Variáveis).
-- [ ] Criar o template `templates/AGENTS.md.template` seguindo as mesmas diretrizes de formato, estilo e tom humano.
-- [ ] Executar `./scripts/bootstrap-agent.sh` para atualizar e gerar os arquivos `CLAUDE.md` e `.agents/AGENTS.md` finais.
-- [ ] Verificar o conteúdo gerado para garantir conformidade com os requisitos.
-- [ ] Adicionar os templates criados e os arquivos gerados no git staging area.
-- [ ] Realizar o commit com a mensagem: `feat: add core workspace rules templates and generate instructions`.
+## Execution Steps
+- [ ] Rewrite `templates/CLAUDE.md.template` in English.
+- [ ] Rewrite `templates/AGENTS.md.template` in English.
+- [ ] Run `./scripts/bootstrap-agent.sh` to update/overwrite the final `CLAUDE.md` and `.agents/AGENTS.md` files.
+- [ ] Verify that the generated files are correctly formatted and in English.
+- [ ] Stage and commit the updated files to the repository.
+- [ ] Notify the parent agent with the final status.
