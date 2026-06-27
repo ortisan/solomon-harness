@@ -1,0 +1,17 @@
+{
+  "description": "External skill-server repositories that scripts/fetch-skills.py can pull agent skills from. Each source is a git repository. A skill is either a folder containing SKILL.md (skill name = folder name) or a Markdown file under a 'skills' directory (skill name = file stem). Edit this list to add your own sources.",
+  "sources": [
+    {
+      "name": "anthropic-skills",
+      "type": "git",
+      "url": "https://github.com/anthropics/skills",
+      "note": "Anthropic's public Agent Skills. Adjust the URL if the repository moves."
+    },
+    {
+      "name": "example-internal",
+      "type": "git",
+      "url": "https://github.com/your-org/your-skills",
+      "note": "Placeholder. Replace with your own internal skill-server repository."
+    }
+  ]
+}

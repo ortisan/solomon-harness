@@ -112,6 +112,24 @@ Codex and other MCP clients register the same command in their own config. Tools
 `save_backtest`, `save_session` / `get_session`, `log_handoff`, and
 `get_latest_activity`. Requires the `mcp` package (`uv sync`).
 
+## Skills
+
+Each agent's `skills/` directory holds reusable, role-specific guidance: a
+`best_practices.md` overview plus one file per technology, language or tool
+(frameworks covered in sections). Agents read these before acting.
+
+You can also pull skills from external skill-server repositories instead of
+authoring everything here. Sources are listed in `skill-sources.json`; manage
+them with `scripts/fetch-skills.py`:
+
+- `python scripts/fetch-skills.py sources` lists the configured sources.
+- `python scripts/fetch-skills.py list <source>` lists the skills a source offers.
+- `python scripts/fetch-skills.py add <source> <skill> --agent <name>` installs
+  one into `agents/<name>/skills/`.
+
+A source skill is a folder with a `SKILL.md` or a Markdown file under a `skills/`
+directory.
+
 ## The specialist agents
 
 Each agent's full definition is in `agents/<name>/agents/<name>.md`.
