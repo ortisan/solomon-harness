@@ -294,6 +294,41 @@ class TestDatabaseClient(unittest.TestCase):
             client.close()
             mock_surreal_instance.close.assert_called_once()
 
+    def test_project_root_resolution_with_git(self):
+        """Test unified project root directory resolution when .git is found."""
+        with patch("tools.database_client.__file__", "/mock/repo/templates/harness/tools/database_client.py"), \
+             patch("os.path.exists") as mock_exists, \
+             patch("os.path.isfile") as mock_isfile, \
+             patch("os.makedirs") as mock_makedirs, \
+             patch("sqlite3.connect") as mock_connect:
+            
+            def side_effect_exists(path):
+                if path == "/mock/repo/.git":
+                    return True
+                return False
+                
+            mock_exists.side_effect = side_effect_exists
+            mock_isfile.return_value = False
+            
+            client = DatabaseClient()
+            self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
+            client.close()
+
+    def test_project_root_resolution_fallback(self):
+        """Test unified project root directory fallback when no .git is found."""
+        with patch("tools.database_client.__file__", "/mock/repo/templates/harness/tools/database_client.py"), \
+             patch("os.path.exists") as mock_exists, \
+             patch("os.path.isfile") as mock_isfile, \
+             patch("os.makedirs") as mock_makedirs, \
+             patch("sqlite3.connect") as mock_connect:
+            
+            mock_exists.return_value = False
+            mock_isfile.return_value = False
+            
+            client = DatabaseClient()
+            self.assertEqual(client.db_path, "/mock/repo/templates/harness/memory/long_term/harness.db")
+            client.close()
+
 
 if __name__ == "__main__":
     unittest.main()

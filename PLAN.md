@@ -1,27 +1,21 @@
-# Plan - Compile, Validate, and Verify All Agents
+# Plan - Refactor Unified Agent Memory Database Client Path Resolution
 
-This plan details the implementation of Task 4, which compiles the final templates, runs the full unit test suite, runs all local validators, verifies agent spawning, synchronizes documentation to the project wiki, and commits the finalized states.
+This plan outlines the refactoring of templates/harness/tools/database_client.py to resolve the unified project root directory and update tests to cover this behavior.
 
 ## Objectives
-1. Run `./scripts/bootstrap-agent.sh` to compile the final templates to all 14 agents.
-2. Execute the entire unit test suite:
-   - Run `python3 -m unittest discover -s tests` to verify all 10+ unit tests across the codebase are fully green.
-3. Run all local validators:
-   - Run `python3 scripts/validate-agents.py`
-   - Run `python3 scripts/validate-templates.py`
-   - Run `python3 scripts/validate-workflows.py`
-   - Run `./scripts/test-spawn-agent.sh`
-4. Execute `scripts/wiki-sync.sh` to synchronize any final documentation updates.
-5. Stage all files and commit to Git with the exact message: `test: compile and verify all 14 agents with SurrealDB memory integration`.
+1. Implement directory traversal in DatabaseClient.__init__ to locate the repository root by finding the '.git' directory.
+2. Load configuration from project_root/.agent/config.json.
+3. Default SQLite database path to project_root/memory/long_term/harness.db.
+4. Fall back to templates/harness parent directory if no '.git' directory is found.
+5. Follow the TDD development cycle: write tests validating the resolution and fallback (Red phase), modify the source code (Green phase), and clean up code/types (Refactor phase).
+6. Commit changes with the exact commit message: "refactor: resolve unified project root database path in client template"
 
 ## TDD Lifecycle (Red, Green, Refactor)
-- **Red Phase**: Not applicable as there are no direct feature implementations or functional changes in this task.
-- **Green Phase**: Ensure compilation succeeds and all tests/validators pass cleanly.
-- **Refactor Phase**: Resolve any validation warnings, type check errors, or formatting anomalies that arise.
+- Red Phase: Add test cases to tests/test_database_client.py that mock/simulate finding or not finding the '.git' directory, verifying that config path and db path are correctly computed. Verify that these new tests fail.
+- Green Phase: Implement the directory traversal and fallback logic in templates/harness/tools/database_client.py. Run the tests to verify that they pass.
+- Refactor Phase: Ensure full PEP 484 type annotations are preserved and run static analysis checks.
 
 ## Verification Criteria
-- All 14 agents are successfully compiled from the templates.
+- New unit tests successfully execute and verify project root resolution.
 - All unit tests pass cleanly.
-- All validators exit with code 0.
-- Documentation is synced with the wiki script.
-- Git status is clean post-commit.
+- Git status is ready for commit.
