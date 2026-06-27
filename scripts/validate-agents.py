@@ -145,6 +145,17 @@ REQUIRED_KEYWORDS = {
         "Git Flow",
         "Conventional Commits",
     ],
+    "auth_engineer.md": [
+        "Auth Engineer",
+        "Authentication",
+        "Authorization",
+        "OAuth",
+        "OpenID Connect",
+        "social login",
+        "RBAC",
+        "MFA",
+        "session",
+    ],
 }
 
 

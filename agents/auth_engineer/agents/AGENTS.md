@@ -134,7 +134,6 @@ directory.
 
 Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 
-- `auth_engineer` — authentication and authorization: OAuth 2.0/OIDC, social and enterprise login, sessions and tokens, MFA, RBAC/ABAC, OPA/Rego policy-as-code, credential security.
 - `documenter` — technical and business documentation, user guides, design docs.
 - `flutter` — Flutter and Dart applications, clean architecture, widget and integration tests.
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
