@@ -114,5 +114,49 @@ class TestCompileHarnesses(unittest.TestCase):
         # Verify that subdirectories (like subdir) were not treated as agents
         self.assertFalse(os.path.isdir(os.path.join(self.agents_dir, "subdir", "agents")))
 
+    def test_compilation_with_nested_source_only(self):
+        # Remove flat scrum_master.md to simulate cleanup
+        if os.path.exists(self.sm_md_path):
+            os.remove(self.sm_md_path)
+            
+        # Manually create the nested structure and write a nested agent file
+        nested_sm_dir = os.path.join(self.agents_dir, "scrum_master", "agents")
+        os.makedirs(nested_sm_dir, exist_ok=True)
+        nested_sm_md = os.path.join(nested_sm_dir, "scrum_master.md")
+        with open(nested_sm_md, "w", encoding="utf-8") as f:
+            f.write("# Nested Scrum Master Specialist")
+            
+        # Dynamically import compile-harnesses
+        import sys
+        scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        if scripts_path not in sys.path:
+            sys.path.insert(0, scripts_path)
+        
+        import importlib
+        compile_harnesses = importlib.import_module("compile-harnesses")
+        
+        # Run compilation
+        compile_harnesses.compile_harnesses(self.workspace_root)
+        
+        # Verify compiled agent directory structure and files for scrum_master
+        agent_root = os.path.join(self.agents_dir, "scrum_master")
+        self.assertTrue(os.path.isdir(agent_root))
+        
+        # Check config.json exists and is updated
+        config_path = os.path.join(agent_root, ".agent", "config.json")
+        self.assertTrue(os.path.isfile(config_path))
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+        self.assertEqual(config_data.get("agent_name"), "scrum_master")
+        
+        # Check main.py exists
+        self.assertTrue(os.path.isfile(os.path.join(agent_root, "main.py")))
+        
+        # Check specific agent md was preserved/restored in agents/scrum_master/agents/scrum_master.md
+        specific_agent_md = os.path.join(agent_root, "agents", "scrum_master.md")
+        self.assertTrue(os.path.isfile(specific_agent_md))
+        with open(specific_agent_md, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "# Nested Scrum Master Specialist")
+
 if __name__ == "__main__":
     unittest.main()

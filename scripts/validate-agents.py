@@ -94,7 +94,8 @@ def main():
 
     print("Validating Agent Profile files...")
     for filename, keywords in REQUIRED_KEYWORDS.items():
-        filepath = os.path.join(agents_dir, filename)
+        agent_name = filename[:-3]
+        filepath = os.path.join(agents_dir, agent_name, "agents", filename)
         if validate_agent_file(filepath, keywords):
             print(f"  {filename} is valid.")
         else:

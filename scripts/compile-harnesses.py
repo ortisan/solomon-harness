@@ -36,22 +36,50 @@ def compile_harnesses(workspace_root: str):
 
     # 1. Discover active agent specialists
     logger.info("Scanning for active agent specialists...")
-    agent_names = []
+    agent_names = set()
     
     # Iterate over immediate children of the agents directory
     for item in os.listdir(agents_dir):
         item_path = os.path.join(agents_dir, item)
-        # We only process files (no subdirectories) ending with .md, excluding AGENTS.md
+        # Discover from flat markdown files
         if os.path.isfile(item_path) and item.endswith(".md") and item != "AGENTS.md":
-            agent_name = item[:-3]  # Strip the .md suffix
-            agent_names.append(agent_name)
+            agent_names.add(item[:-3])
+        # Discover from nested compiled subdirectories
+        elif os.path.isdir(item_path):
+            nested_md = os.path.join(item_path, "agents", f"{item}.md")
+            if os.path.isfile(nested_md):
+                agent_names.add(item)
 
-    logger.info(f"Discovered {len(agent_names)} agents: {', '.join(agent_names)}")
+    sorted_agent_names = sorted(list(agent_names))
+    logger.info(f"Discovered {len(sorted_agent_names)} agents: {', '.join(sorted_agent_names)}")
 
     # 2. Compile each agent's harness
-    for agent_name in agent_names:
+    for agent_name in sorted_agent_names:
         logger.info(f"Compiling harness for agent: {agent_name}")
         
+        # Determine the source of truth for the agent prompt markdown
+        source_agent_md = os.path.join(agents_dir, f"{agent_name}.md")
+        nested_agent_md = os.path.join(agents_dir, agent_name, "agents", f"{agent_name}.md")
+        
+        agent_md_content = None
+        if os.path.isfile(source_agent_md):
+            try:
+                with open(source_agent_md, "r", encoding="utf-8") as f:
+                    agent_md_content = f.read()
+            except Exception as e:
+                logger.error(f"Failed to read source agent file {source_agent_md}: {e}")
+                sys.exit(1)
+        elif os.path.isfile(nested_agent_md):
+            try:
+                with open(nested_agent_md, "r", encoding="utf-8") as f:
+                    agent_md_content = f.read()
+            except Exception as e:
+                logger.error(f"Failed to read nested agent file {nested_agent_md}: {e}")
+                sys.exit(1)
+        else:
+            logger.error(f"No source markdown found for agent: {agent_name}")
+            sys.exit(1)
+            
         target_agent_dir = os.path.join(agents_dir, agent_name)
         
         # Clean target directory if it already exists to ensure a fresh compilation
@@ -110,13 +138,13 @@ def compile_harnesses(workspace_root: str):
             sys.exit(1)
 
         # Copy specific agent markdown to agents/<agent_name>/agents/<agent_name>.md
-        source_agent_md = os.path.join(agents_dir, f"{agent_name}.md")
         dest_agent_md = os.path.join(target_sub_agents_dir, f"{agent_name}.md")
         logger.info(f"Copying specialist prompt definition for {agent_name}...")
         try:
-            shutil.copy2(source_agent_md, dest_agent_md)
+            with open(dest_agent_md, "w", encoding="utf-8") as f:
+                f.write(agent_md_content)
         except Exception as e:
-            logger.error(f"Failed to copy agent prompt file for {agent_name}: {e}")
+            logger.error(f"Failed to write agent prompt file for {agent_name}: {e}")
             sys.exit(1)
 
     logger.info("Compilation completed successfully.")

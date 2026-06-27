@@ -1,59 +1,53 @@
-# Plan - Solomon Harness Task 2: Agent Harness Refactoring
+# Plan - Solomon Harness Task 3: Reorganize and Clean Up Agent Files
 
-This plan outlines the design, implementation, and verification steps for Task 2 of the Solomon Harness refactoring.
+This plan outlines the design, implementation, and verification steps for Task 3: Reorganizing the agent files into their compiled directories and cleaning up duplicates.
 
 ## Requirements
 
-1. **Compiler Script `scripts/compile-harnesses.py`**:
-   - Must be a Python 3 script.
-   - Scans the `agents/` root directory for all `.md` files, excluding `AGENTS.md` and any subdirectories.
-   - For each discovered agent `.md` file (e.g., `agents/product_owner.md`):
-     - Extracts the agent name (e.g., `product_owner`).
-     - Creates the target agent directory structure `agents/<agent_name>/`.
-     - Recursively copies all directories and files from `templates/harness/` to `agents/<agent_name>/`.
-     - Replaces the placeholder `{{AGENT_NAME}}` in `agents/<agent_name>/.agent/config.json` with the actual agent name.
-     - Creates `agents/<agent_name>/agents/` if it does not exist.
-     - Copies the global rules template `agents/AGENTS.md` to `agents/<agent_name>/agents/AGENTS.md`.
-     - Copies the specific agent markdown file to `agents/<agent_name>/agents/<agent_name>.md`.
-   - Must implement proper logging, error handling, clean code structure, and avoid emojis in output logs.
+1. **Reorganize files via Compiler**:
+   - Update `scripts/compile-harnesses.py` to support agent discovery from both flat markdown files (e.g., `agents/<agent_name>.md`) and already nested/compiled files (e.g., `agents/<agent_name>/agents/<agent_name>.md`).
+   - If the flat markdown file is missing but the nested markdown file exists, the compiler must treat the nested file as the source of truth, preserve its content, copy the updated harness template, and restore the nested markdown file.
+   - Maintain proper logging without emojis.
 
-2. **Bootstrap Script Update `scripts/bootstrap-agent.sh`**:
-   - Update it to first run `python3 scripts/compile-harnesses.py` to compile the agent harnesses.
-   - Update it to link or copy the final generated files to the `.agents/` directory to stay in sync:
-     - Symlink/copy `agents/AGENTS.md` to `.agents/AGENTS.md`.
-     - Symlink/copy `agents/<agent_name>/agents/<agent_name>.md` to `.agents/agents/<agent_name>.md` for each compiled agent.
-   - Ensure the bootstrap script exits with `0` on success and non-zero on failure.
+2. **Clean up Duplicate files**:
+   - Remove the 14 flat markdown files from `agents/` in Git:
+     - `product_owner.md`
+     - `scrum_master.md`
+     - `software_architect.md`
+     - `software_engineer.md`
+     - `ml_engineer.md`
+     - `quant_trader.md`
+     - `qa.md`
+     - `documenter.md`
+     - `observability.md`
+     - `security.md`
+     - `flutter.md`
+     - `frontend.md`
+     - `sre.md`
+     - `seo.md`
+   - Keep `agents/AGENTS.md` and the compiled directories.
 
-3. **Git Commit**:
-   - Message: `feat: implement compiler script to distribute harness structure across specialists`
-   - Strictly follow conventional commits, direct professional English, and zero emojis/icons.
+3. **Validation and Tests**:
+   - Update `scripts/validate-agents.py` to validate the files in their new nested directories (`agents/<agent_name>/agents/<agent_name>.md`).
+   - Update `tests/test_compile_harnesses.py` with unit tests for compiling from nested locations when flat files are missing.
+   - Verify that all unit tests and script validations pass successfully.
 
-4. **Wiki Synchronization**:
-   - Execute `scripts/wiki-sync.sh` on completion.
+4. **Re-run Bootstrap and Sync**:
+   - Run `./scripts/bootstrap-agent.sh` to ensure all 14 directories are cleanly compiled/recompiled and symlinked into `.agents/`.
+   - Run `./scripts/test-spawn-agent.sh` and `python3 scripts/validate-agents.py` to verify the setup.
+
+5. **Wiki Sync and Git Commit**:
+   - Run `./scripts/wiki-sync.sh` to synchronize the wiki.
+   - Stage all changes and commit with the exact message: `feat: compile self-contained harnesses for all 14 specialized agents`.
 
 ## TDD and Verification Steps
 
-1. **Write failing unit tests (Red Phase)**:
-   - Create `tests/test_compile_harnesses.py` containing tests that verify the behavior of `scripts/compile-harnesses.py`.
-   - Verify that the tests fail when the script is missing or incomplete.
-2. **Implement compiler script (Green Phase)**:
-   - Implement `scripts/compile-harnesses.py` adhering to all requirements.
-   - Run unit tests and verify they pass.
-3. **Update and verify bootstrap script**:
-   - Modify `scripts/bootstrap-agent.sh` to run the compiler and perform the sync steps.
-   - Verify the bootstrap script runs successfully, creates the required files/links, and exits with 0.
-4. **Refactor (Refactor Phase)**:
-   - Refactor Python and Bash code to improve design, readability, and performance, ensuring tests remain green.
-
-## Execution Checklist
-
-- [ ] Write the detailed plan in PLAN.md
-- [ ] Create failing unit tests in `tests/test_compile_harnesses.py`
-- [ ] Run tests and verify failure (Red Phase)
-- [ ] Create and implement `scripts/compile-harnesses.py`
-- [ ] Run unit tests and verify success (Green Phase)
-- [ ] Update `scripts/bootstrap-agent.sh`
-- [ ] Test the bootstrap script locally and verify outputs
-- [ ] Refactor scripts and tests if necessary (Refactor Phase)
-- [ ] Run `scripts/wiki-sync.sh` to synchronize the wiki
-- [ ] Stage and commit changes to Git
+1. **Red Phase**:
+   - Update `tests/test_compile_harnesses.py` to add a test case where a flat file is absent but a nested agent markdown file exists.
+   - Run the unit tests to confirm the new test fails.
+2. **Green Phase**:
+   - Implement the new discovery and compilation logic in `scripts/compile-harnesses.py`.
+   - Update `scripts/validate-agents.py` to point to the nested locations.
+   - Run unit tests to confirm they pass.
+3. **Refactor Phase**:
+   - Clean up code structure, ensuring no emojis, cliches, or styling violations.
