@@ -10,7 +10,7 @@ assignees: []
 <!-- State the underlying economic or statistical rationale for this model. What market inefficiency or pattern is being exploited? -->
 
 ## Dataset/Features
-<!-- Define the target dataset, timeframe, resolution, and features/features engineering pipelines required. -->
+<!-- Define the target dataset, timeframe, resolution, and features/feature engineering pipelines required. -->
 
 ## Model Architecture
 <!-- Describe the model type (e.g., XGBoost, LSTM, PPO, Transformer), hyperparameters, loss functions, and action/state space if DRL. -->
