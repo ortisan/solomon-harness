@@ -1,48 +1,53 @@
 # Plan
 
-Workstream 1 from the audit: kill the copy-based duplication. Today the entire templates/harness tree is copytree'd into each agent, so database_client.py (~1090 lines), browser.py, the harness loop and the eval suite exist as 15 byte-identical copies. Extract the shared code into one importable package and reduce each agent to only what genuinely differs.
-
-## Target structure
-
-- solomon_harness/ (single source of truth, importable)
-  - __init__.py
-  - cli.py (the harness loop: handle_run / handle_eval / handle_db_init / main, parameterized by harness_dir)
-  - evals.py (build_agent_suite(harness_dir) -> the shared eval TestSuite)
-  - tools/__init__.py, tools/database_client.py, tools/browser.py
-- Each agents/<name>/ keeps only its real differences:
-  - main.py (thin entrypoint: put repo root on sys.path, call solomon_harness.cli.main(harness_dir=its own dir))
-  - .agent/config.json, persona.md, agents/<name>.md, agents/AGENTS.md, skills/
-  - no tools/, no tests/ (shared code now lives in the package)
-- templates/harness/ becomes the thin template the compiler copies.
+Expose the project memory as an MCP server so the host tools (Claude Code,
+Codex, Copilot) can read and write decisions, memory, issues, sessions and
+handoffs directly. The agent loop lives in those tools; this gives them the
+memory the harness already implements.
 
 ## Scope
 
 - In:
-  - new solomon_harness/ package (moved database_client.py + browser.py, new cli.py + evals.py)
-  - DatabaseClient gains an explicit harness_dir parameter (the client no longer lives inside the agent dir, so it cannot infer the agent from __file__)
-  - templates/harness/: thin main.py; remove tools/ and tests/
-  - agents/*/: thin main.py; remove tools/ and tests/
-  - tests/test_database_client.py: import from the package; rewrite the resolution tests around the explicit harness_dir
+  - solomon_harness/memory_service.py: a JSON-serializable wrapper over
+    DatabaseClient (the testable core), reusing a single client per service
+  - solomon_harness/mcp_server.py: a thin MCP server (FastMCP) that registers the
+    MemoryService methods as tools; the mcp SDK is imported lazily so the module
+    imports without it
+  - .mcp.json: project-scoped Claude Code registration of the server
+  - pyproject.toml: declare mcp; regenerate the lock
+  - agents/AGENTS.md: update the memory section to document the server and tools
+  - tests/test_memory_service.py: round-trip tests against a temp DB (no mcp)
 - Out:
-  - compile-harnesses.py logic (copytree of the now-thin template already yields thin agents; no rewrite needed) and its pattern-injection behavior
-  - the real LLM loop, SurrealDB statement correctness, CI install wiring
+  - SurrealDB statement correctness, auth/permissions on the server, writing
+    global Codex/Copilot configs (documented instead)
+
+## Design
+
+- MemoryService(harness_dir=None, db_path=None) holds one DatabaseClient and
+  exposes save_decision/get_decision, save_memory/get_memory, log_issue/
+  get_open_issues/get_issue, create_milestone, save_backtest, save_session/
+  get_session, log_handoff, get_latest_activity. Each returns a plain dict.
+- resolve_harness_dir walks up to the solomon_harness package so the server uses
+  the project-root memory store regardless of cwd.
+- mcp_server.build_server() imports FastMCP lazily and registers each tool;
+  `python -m solomon_harness.mcp_server` runs it over stdio.
+- The mcp dependency is declared but need not be installed for the tests, which
+  exercise MemoryService directly.
 
 ## Action Items
 
-- [ ] Create the solomon_harness package: __init__ files, move database_client.py and browser.py in.
-- [ ] Add the explicit harness_dir parameter to DatabaseClient and resolve config/project-root from it.
-- [ ] Write solomon_harness/cli.py (loop parameterized by harness_dir) and solomon_harness/evals.py (suite builder).
-- [ ] Replace templates/harness/main.py with a thin entrypoint and delete templates/harness/tools and templates/harness/tests.
-- [ ] Thin all 14 agents/*: remove tools/ and tests/, drop in the thin main.py.
-- [ ] Repoint tests/test_database_client.py at the package and rewrite the resolution tests to pass harness_dir.
+- [ ] Red: tests for the decision/memory/issue/session/handoff round-trips and
+      get_latest_activity against a temp DB, plus resolve_harness_dir.
+- [ ] Green: implement memory_service.py.
+- [ ] Add mcp_server.py (FastMCP wiring, lazy import).
+- [ ] Create .mcp.json and declare mcp in pyproject; regenerate the lock.
+- [ ] Update the memory section of agents/AGENTS.md.
 
 ## Verification
 
-- python3 -m unittest discover -s tests passes.
-- python3 agents/<name>/main.py eval passes for all 14 agents (each runs the shared suite against its own persona/config).
-- python3 scripts/compile-harnesses.py regenerates thin agents in a temp tree under the existing test_compile_harnesses.py without error.
-- grep shows database_client.py exists once (in the package), not per agent.
-- ruff check passes.
+- python3 -m unittest discover -s tests passes (no mcp required).
+- python3 -c "import solomon_harness.mcp_server" imports cleanly without mcp installed.
+- ruff check passes; the 14 agent eval suites still pass.
 
 ## Open Questions
 

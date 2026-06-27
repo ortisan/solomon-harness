@@ -1,8 +1,12 @@
 import importlib.util
+import json
 import os
+import sys
 import unittest
 
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if WORKSPACE not in sys.path:
+    sys.path.insert(0, WORKSPACE)
 
 
 def _read(rel_path):
@@ -46,6 +50,31 @@ class TestThinPointers(unittest.TestCase):
             "agents/AGENTS.md",
             _read(os.path.join(".github", "copilot-instructions.md")),
         )
+
+    def test_gemini_md_imports_central_source(self):
+        self.assertIn("@agents/AGENTS.md", _read("GEMINI.md"))
+
+
+class TestMcpRegistration(unittest.TestCase):
+    def _registers_memory_server(self, rel_path):
+        config = json.loads(_read(rel_path))
+        servers = config.get("mcpServers", {})
+        self.assertIn("solomon-memory", servers)
+        args = servers["solomon-memory"].get("args", [])
+        self.assertIn("solomon_harness.mcp_server", args)
+
+    def test_claude_mcp_json_registers_server(self):
+        self._registers_memory_server(".mcp.json")
+
+    def test_gemini_settings_register_server(self):
+        self._registers_memory_server(os.path.join(".gemini", "settings.json"))
+
+    def test_mcp_server_module_imports_without_sdk(self):
+        # build_server imports the mcp SDK lazily, so the module must import
+        # cleanly even when mcp is not installed.
+        import solomon_harness.mcp_server as server_module
+
+        self.assertTrue(hasattr(server_module, "build_server"))
 
 
 class TestGeneratedSubagents(unittest.TestCase):

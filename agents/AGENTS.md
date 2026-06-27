@@ -6,6 +6,7 @@ in one place:
 
 - `CLAUDE.md` (Claude Code) imports this file.
 - `AGENTS.md` at the repository root (Codex and other AGENTS.md-based agents) points here.
+- `GEMINI.md` (Gemini CLI) imports this file.
 - `.github/copilot-instructions.md` (GitHub Copilot) points here.
 - `.claude/agents/<name>.md` (Claude Code subagents) are generated from this folder by `scripts/generate-integrations.py`.
 
@@ -101,8 +102,15 @@ context and persist what it did. Reach it through the harness:
 - Backend and credentials come from the agent's `.agent/config.json`; SurrealDB
   credentials can be overridden with `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS`.
 
-An MCP server that exposes this memory to Claude Code, Codex, and Copilot is
-planned, so the host tool can read and write project memory directly.
+The memory is also exposed as the `solomon-memory` MCP server
+(`solomon_harness/mcp_server.py`, run with `python -m solomon_harness.mcp_server`),
+so the host tool can read and write project memory directly. It is registered
+for Claude Code in `.mcp.json` and for the Gemini CLI in `.gemini/settings.json`;
+Codex and other MCP clients register the same command in their own config. Tools:
+`save_decision` / `get_decision`, `save_memory` / `get_memory`,
+`log_issue` / `get_open_issues` / `get_issue`, `create_milestone`,
+`save_backtest`, `save_session` / `get_session`, `log_handoff`, and
+`get_latest_activity`. Requires the `mcp` package (`uv sync`).
 
 ## The specialist agents
 
