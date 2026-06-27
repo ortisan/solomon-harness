@@ -201,10 +201,10 @@ interpolate_and_write() {
 
     if [ -f "$template_path" ]; then
         echo "Interpolating $template_path into $dest_path..."
-        PROJECT_NAME="$PROJECT_NAME" GIT_REMOTE="$GIT_REMOTE" TECHNOLOGIES="$TECHNOLOGIES" GENERATION_DATE="$GENERATION_DATE" python3 -c "
+        TEMPLATE_PATH="$template_path" DEST_PATH="$dest_path" PROJECT_NAME="$PROJECT_NAME" GIT_REMOTE="$GIT_REMOTE" TECHNOLOGIES="$TECHNOLOGIES" GENERATION_DATE="$GENERATION_DATE" python3 -c "
 import os
-template_path = '$template_path'
-dest_path = '$dest_path'
+template_path = os.environ.get('TEMPLATE_PATH', '')
+dest_path = os.environ.get('DEST_PATH', '')
 
 with open(template_path, 'r', encoding='utf-8') as f:
     content = f.read()

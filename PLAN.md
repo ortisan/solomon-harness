@@ -1,37 +1,32 @@
-# Plan - Implement Interactive Configuration Selection in Bootstrap Script
+# Plan - Code Quality Review and Refactoring for Task 2
 
-Update scripts/bootstrap-agent.sh to support interactive and non-interactive choice selection for architecture, observability, and security patterns, saving the choices to .agent/config.json.
+Review and improve the robustness, portability, and safety of `scripts/bootstrap-agent.sh` and `tests/test_bootstrap.py`.
 
 ## Scope
 
 - In:
-  - scripts/bootstrap-agent.sh
-  - tests/test_bootstrap.py (new test file for TDD)
+  - `scripts/bootstrap-agent.sh`
+  - `tests/test_bootstrap.py`
 - Out:
-  - Modifying files unrelated to agent bootstrapping or configuration.
+  - Any other scripts or test files.
 
 ## Action Items
 
-- [ ] Write a new test suite tests/test_bootstrap.py to test the bootstrap configuration functionality (TDD - Red Phase).
-  - Verify that running bootstrap-agent.sh in non-interactive mode correctly writes default configuration patterns.
-  - Verify that existing keys in .agent/config.json (e.g., models, timeout_seconds, max_retries, database) are preserved.
-- [ ] Run the test suite and verify that the tests fail.
-- [ ] Update scripts/bootstrap-agent.sh:
-  - Add logic to parse --non-interactive command line flag or detect NON_INTERACTIVE=true environment variable.
-  - If in non-interactive mode:
-    - Automatically select default patterns: architecture_pattern = hexagonal, observability_pattern = opentelemetry, security_pattern = secure_dev.
-  - If in interactive mode:
-    - Prompt the developer in Portuguese using bash read prompts for selecting architecture, observability, and security.
-    - Map the choice selections to clean/functional/hexagonal, opentelemetry/basic, secure_dev/standard.
-  - Save the mapped configuration choices to .agent/config.json, merging them into any existing JSON content to preserve existing keys.
-  - Ensure the script exits with 0 on success and a non-zero exit code on failure.
-  - Do not use emojis in output messages.
-- [ ] Run the test suite to ensure the new logic passes the tests (TDD - Green Phase).
-- [ ] Refactor scripts/bootstrap-agent.sh if needed to optimize readability and robustness (TDD - Refactor Phase).
-- [ ] Test the script manually in both interactive (via simulated inputs) and non-interactive modes.
-- [ ] Run scripts/wiki-sync.sh to sync the project wiki.
-- [ ] Stage and commit the changes to Git.
+### 1. Identify Code Quality Issues
+- [x] Hardcoded workspace directory `/Users/marcelo/Documents/Projects/solomon-harness` in `tests/test_bootstrap.py`.
+- [x] Shell scripting safety: Inline Python string expansions `$template_path` and `$dest_path` inside `scripts/bootstrap-agent.sh` are not environment-variable-safe and can cause escaping issues.
+- [x] Test side effects: Running the test suite currently overwrites workspace files (`CLAUDE.md`, `agents/AGENTS.md`, Git hooks, `.claude/settings.json`, and `.agents/skills.json`).
 
-## Open Questions
+### 2. Refactor `scripts/bootstrap-agent.sh`
+- [ ] Pass `template_path` and `dest_path` to the Python interpreter via environment variables (`TEMPLATE_PATH` and `DEST_PATH`) rather than direct inline bash expansion inside the Python string.
 
-None
+### 3. Refactor `tests/test_bootstrap.py`
+- [ ] Replace hardcoded workspace directory with dynamic path resolution based on `__file__`.
+- [ ] Use Python's `tempfile.TemporaryDirectory` to run the bootstrap script in a completely isolated sandboxed environment, preventing any side effects on the actual workspace files.
+- [ ] Copy the necessary templates, scripts, and agent files to the temporary directory.
+- [ ] Initialize a dummy git repository in the temporary directory to satisfy the git commands in `bootstrap-agent.sh`.
+- [ ] Assert the outcomes against the files in the sandboxed directory.
+
+### 4. Verification
+- [ ] Run the test suite and verify all tests pass.
+- [ ] Run `ruff check` and `ruff format` to ensure coding standard compliance.
