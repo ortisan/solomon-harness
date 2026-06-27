@@ -42,6 +42,7 @@ def compile_harnesses(workspace_root: str):
     if os.path.isfile(global_config_path):
         try:
             import json
+
             with open(global_config_path, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
             architecture_pattern = config_data.get("architecture_pattern")
@@ -49,12 +50,14 @@ def compile_harnesses(workspace_root: str):
             security_pattern = config_data.get("security_pattern")
             logger.info("Loaded dynamic pattern settings from global configuration.")
         except Exception as e:
-            logger.warning(f"Failed to read global configuration at {global_config_path}: {e}")
+            logger.warning(
+                f"Failed to read global configuration at {global_config_path}: {e}"
+            )
 
     # 1. Discover active agent specialists
     logger.info("Scanning for active agent specialists...")
     agent_names = set()
-    
+
     # Iterate over immediate children of the agents directory
     for item in os.listdir(agents_dir):
         item_path = os.path.join(agents_dir, item)
@@ -68,16 +71,20 @@ def compile_harnesses(workspace_root: str):
                 agent_names.add(item)
 
     sorted_agent_names = sorted(list(agent_names))
-    logger.info(f"Discovered {len(sorted_agent_names)} agents: {', '.join(sorted_agent_names)}")
+    logger.info(
+        f"Discovered {len(sorted_agent_names)} agents: {', '.join(sorted_agent_names)}"
+    )
 
     # 2. Compile each agent's harness
     for agent_name in sorted_agent_names:
         logger.info(f"Compiling harness for agent: {agent_name}")
-        
+
         # Determine the source of truth for the agent prompt markdown
         source_agent_md = os.path.join(agents_dir, f"{agent_name}.md")
-        nested_agent_md = os.path.join(agents_dir, agent_name, "agents", f"{agent_name}.md")
-        
+        nested_agent_md = os.path.join(
+            agents_dir, agent_name, "agents", f"{agent_name}.md"
+        )
+
         agent_md_content = None
         if os.path.isfile(source_agent_md):
             try:
@@ -105,10 +112,18 @@ def compile_harnesses(workspace_root: str):
 
         # Build dynamic best practice blocks to append
         blocks = []
-        
+
         # Check architecture patterns
         if agent_name in ["software_architect", "software_engineer", "qa", "sre"]:
             if architecture_pattern and str(architecture_pattern).lower() != "none":
+                # Prevent path traversal
+                clean_pattern = os.path.basename(str(architecture_pattern))
+                if clean_pattern != architecture_pattern:
+                    logger.error(
+                        f"Invalid architecture pattern name: {architecture_pattern}"
+                    )
+                    sys.exit(1)
+
                 arch_path = os.path.join(
                     workspace_root,
                     "templates",
@@ -129,9 +144,7 @@ def compile_harnesses(workspace_root: str):
                         )
                         sys.exit(1)
                 else:
-                    logger.error(
-                        f"Architecture pattern file not found at: {arch_path}"
-                    )
+                    logger.error(f"Architecture pattern file not found at: {arch_path}")
                     sys.exit(1)
 
         # Check observability patterns
@@ -157,9 +170,7 @@ def compile_harnesses(workspace_root: str):
                         )
                         sys.exit(1)
                 else:
-                    logger.error(
-                        f"Observability pattern file not found at: {obs_path}"
-                    )
+                    logger.error(f"Observability pattern file not found at: {obs_path}")
                     sys.exit(1)
 
         # Check security patterns
@@ -197,9 +208,9 @@ def compile_harnesses(workspace_root: str):
                 + "\n\n".join(blocks)
                 + "\n"
             )
-            
+
         target_agent_dir = os.path.join(agents_dir, agent_name)
-        
+
         # Clean target directory if it already exists to ensure a fresh compilation
         if os.path.exists(target_agent_dir):
             logger.info(f"Cleaning existing directory for {agent_name}...")
@@ -209,7 +220,9 @@ def compile_harnesses(workspace_root: str):
                 else:
                     os.remove(target_agent_dir)
             except Exception as e:
-                logger.error(f"Failed to clean target directory {target_agent_dir}: {e}")
+                logger.error(
+                    f"Failed to clean target directory {target_agent_dir}: {e}"
+                )
                 sys.exit(1)
 
         # Copy all directories and files from templates/harness/ to agents/<agent_name>/
@@ -227,16 +240,18 @@ def compile_harnesses(workspace_root: str):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     content = f.read()
-                
+
                 content = content.replace("{{AGENT_NAME}}", agent_name)
-                
+
                 with open(config_path, "w", encoding="utf-8") as f:
                     f.write(content)
             except Exception as e:
                 logger.error(f"Failed to update config.json for {agent_name}: {e}")
                 sys.exit(1)
         else:
-            logger.warning(f"config.json not found at {config_path} for agent: {agent_name}")
+            logger.warning(
+                f"config.json not found at {config_path} for agent: {agent_name}"
+            )
 
         # Create target agent's internal agents/ subdirectory
         target_sub_agents_dir = os.path.join(target_agent_dir, "agents")
@@ -250,7 +265,9 @@ def compile_harnesses(workspace_root: str):
         # Copy global rules to agents/<agent_name>/agents/AGENTS.md
         logger.info(f"Copying global rules to {agent_name} harness...")
         try:
-            shutil.copy2(global_agents_md, os.path.join(target_sub_agents_dir, "AGENTS.md"))
+            shutil.copy2(
+                global_agents_md, os.path.join(target_sub_agents_dir, "AGENTS.md")
+            )
         except Exception as e:
             logger.error(f"Failed to copy AGENTS.md for {agent_name}: {e}")
             sys.exit(1)
@@ -272,5 +289,5 @@ if __name__ == "__main__":
     # Get workspace root relative to script execution context, defaulting to current working directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     default_workspace_root = os.path.abspath(os.path.join(script_dir, ".."))
-    
+
     compile_harnesses(default_workspace_root)
