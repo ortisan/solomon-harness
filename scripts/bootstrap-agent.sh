@@ -168,13 +168,15 @@ interpolate_and_write "templates/AGENTS.md.template" ".agents/AGENTS.md" "$AGENT
 
 # 5. Install Git commit-msg hook
 echo "Installing Git commit-msg hook..."
-if [ -d ".git" ]; then
-    mkdir -p .git/hooks
-    cp scripts/git-hooks/commit-msg .git/hooks/commit-msg
-    chmod +x .git/hooks/commit-msg
-    echo "  Hook installed to .git/hooks/commit-msg"
+HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null || echo ".git/hooks")
+if [ -n "$HOOKS_DIR" ]; then
+    mkdir -p "$HOOKS_DIR"
+    cp scripts/git-hooks/commit-msg "$HOOKS_DIR/commit-msg"
+    chmod +x "$HOOKS_DIR/commit-msg"
+    echo "  Hook installed to $HOOKS_DIR/commit-msg"
 else
-    echo "  Warning: .git directory not found. Commit hook was not installed into .git/hooks/."
+    echo "  Warning: Git hooks directory could not be resolved. Commit hook was not installed."
 fi
+
 
 echo "=== Bootstrap Completed Successfully ==="

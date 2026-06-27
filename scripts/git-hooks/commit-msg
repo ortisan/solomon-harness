@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import re
+import unicodedata
 
 def main():
     if len(sys.argv) < 2:
@@ -15,8 +16,8 @@ def main():
         print(f"Error reading commit message file: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Filter out comments
-    non_comment_lines = [line for line in lines if not line.strip().startswith('#')]
+    # Filter out comments strictly starting with Git's default # prefix
+    non_comment_lines = [line for line in lines if not line.startswith('#')]
     commit_msg = "".join(non_comment_lines).strip()
 
     if not commit_msg:
@@ -26,7 +27,21 @@ def main():
     # Check for emojis or icons in the entire commit message
     for char in commit_msg:
         cp = ord(char)
-        if (0x1F000 <= cp <= 0x1FFFF) or (0x2600 <= cp <= 0x27BF):
+        # Check standard emoji / symbol blocks
+        is_emoji = (0x1F000 <= cp <= 0x1FFFF) or (0x2600 <= cp <= 0x27BF) or (0x2300 <= cp <= 0x23FF)
+        if not is_emoji:
+            try:
+                cat = unicodedata.category(char)
+                if cat == 'So':  # Symbol, other
+                     is_emoji = True
+                else:
+                     name = unicodedata.name(char, "").upper()
+                     if any(word in name for word in ("EMOJI", "SMILEY", "PICTOGRAPH")):
+                         is_emoji = True
+            except Exception:
+                pass
+        
+        if is_emoji:
             print("Error: Commit message contains emojis or icons, which are not allowed.", file=sys.stderr)
             print("Please remove any emojis or symbols and try again.", file=sys.stderr)
             sys.exit(1)
@@ -35,8 +50,8 @@ def main():
     msg_lines = commit_msg.split('\n')
     subject = msg_lines[0].strip()
 
-    # Validate against conventional commits pattern
-    pattern_str = r'^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|hypothesis)(\(.+\))?: .{1,100}$'
+    # Validate against conventional commits pattern with non-greedy scope matching
+    pattern_str = r'^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|hypothesis)(\([^)]+\))?: .{1,100}$'
     if not re.match(pattern_str, subject):
         print("Error: Commit message subject line does not conform to Conventional Commits.", file=sys.stderr)
         print("", file=sys.stderr)
@@ -58,3 +73,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
