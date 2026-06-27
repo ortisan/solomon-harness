@@ -14,20 +14,32 @@ class DatabaseClient:
     db: Any
     db_path: Optional[str]
     busy_timeout_seconds: float
+    harness_dir: str
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(
+        self, db_path: Optional[str] = None, harness_dir: Optional[str] = None
+    ) -> None:
         """Initializes the database client and selects the appropriate backend.
 
         Args:
             db_path: Optional custom path to the SQLite database file (if using SQLite).
+            harness_dir: The agent (or template) directory that owns .agent/config.json
+                and the memory store. Passed explicitly by the thin agent entrypoint;
+                when omitted it falls back to this file's package location.
         """
         self.backend = "sqlite"
         self.db = None
         self.db_path = db_path
 
-        # Locate the repository root by traversing upwards to find '.git' or typical workspace directories
-        current_dir: str = os.path.dirname(os.path.abspath(__file__))
-        project_root: str = current_dir
+        # The shared client no longer lives inside the agent directory, so the caller
+        # passes the owning harness directory explicitly; fall back to this file's
+        # package location for standalone or test use.
+        if harness_dir is None:
+            harness_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.harness_dir = harness_dir
+
+        # Locate the repository root by walking up from the harness directory.
+        project_root: str = harness_dir
         found_root: bool = False
         while project_root and project_root != os.path.dirname(project_root):
             if os.path.exists(os.path.join(project_root, ".git")):
@@ -43,14 +55,10 @@ class DatabaseClient:
             project_root = os.path.dirname(project_root)
 
         if not found_root:
-            # Fallback gracefully to the parent of tools/ relative to this file
-            project_root = os.path.dirname(current_dir)
+            project_root = harness_dir
 
         # Load configuration. Prefer the harness-local .agent/config.json, which carries
-        # the per-agent `database` block, and fall back to the project-root config for
-        # backward compatibility. Reading the project-root config alone misses the
-        # database block and silently forces the SQLite backend.
-        harness_dir: str = os.path.dirname(current_dir)
+        # the per-agent `database` block, and fall back to the project-root config.
         config: Dict[str, Any] = {}
         candidate_config_paths = [
             os.path.join(harness_dir, ".agent", "config.json"),

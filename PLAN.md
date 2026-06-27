@@ -1,44 +1,48 @@
 # Plan
 
-Foundation and hygiene slice from the harness audit. Four contained, test-driven changes that fix a live memory-layer defect, stop secret leakage, make the dependency surface reproducible, and unblock CI on a clean runner. The two root-cause rewrites (package extraction and a real LLM loop) are deliberately out of scope here.
+Workstream 1 from the audit: kill the copy-based duplication. Today the entire templates/harness tree is copytree'd into each agent, so database_client.py (~1090 lines), browser.py, the harness loop and the eval suite exist as 15 byte-identical copies. Extract the shared code into one importable package and reduce each agent to only what genuinely differs.
+
+## Target structure
+
+- solomon_harness/ (single source of truth, importable)
+  - __init__.py
+  - cli.py (the harness loop: handle_run / handle_eval / handle_db_init / main, parameterized by harness_dir)
+  - evals.py (build_agent_suite(harness_dir) -> the shared eval TestSuite)
+  - tools/__init__.py, tools/database_client.py, tools/browser.py
+- Each agents/<name>/ keeps only its real differences:
+  - main.py (thin entrypoint: put repo root on sys.path, call solomon_harness.cli.main(harness_dir=its own dir))
+  - .agent/config.json, persona.md, agents/<name>.md, agents/AGENTS.md, skills/
+  - no tools/, no tests/ (shared code now lives in the package)
+- templates/harness/ becomes the thin template the compiler copies.
 
 ## Scope
 
 - In:
-  - templates/harness/tools/database_client.py (config resolution + credential env overrides + SQLite WAL/busy_timeout)
-  - agents/*/tools/database_client.py (propagate the identical fix; duplication removal is a later slice)
-  - .gitignore (recursive rules for vaults and local DB files)
-  - Untrack the 15 committed secure_vault.enc files (git rm --cached, working copies kept)
-  - pyproject.toml (PEP 621 manifest declaring surrealdb and dev tooling)
-  - tests/test_harness_init.py (derive workspace from __file__; behavioral gitignore assertion)
-  - tests/test_database_client.py (new tests for the resolution fix and WAL)
+  - new solomon_harness/ package (moved database_client.py + browser.py, new cli.py + evals.py)
+  - DatabaseClient gains an explicit harness_dir parameter (the client no longer lives inside the agent dir, so it cannot infer the agent from __file__)
+  - templates/harness/: thin main.py; remove tools/ and tests/
+  - agents/*/: thin main.py; remove tools/ and tests/
+  - tests/test_database_client.py: import from the package; rewrite the resolution tests around the explicit harness_dir
 - Out:
-  - compile-harnesses.py and its pattern-injection behavior
-  - .github/workflows/ci.yml (CI install/validator wiring belongs to the CI roadmap item)
-  - SurrealDB statement-form correctness and the real agent loop
-
-## Problem
-
-DatabaseClient walks up to the first .git (repo root) and reads repo-root/.agent/config.json, which has no `database` block. So `provider` resolves to None, the SurrealDB branch is never taken, and every agent silently writes to one shared SQLite file. The intended "SurrealDB primary with SQLite fallback" is never selected. Separately, the .gitignore rules for secure_vault.enc and harness.db are anchored to the repo root, so the 15 nested vault files are tracked and a real key would be committed; there is no dependency manifest; and test_harness_init.py hardcodes an absolute path so the suite errors on any clean checkout.
+  - compile-harnesses.py logic (copytree of the now-thin template already yields thin agents; no rewrite needed) and its pattern-injection behavior
+  - the real LLM loop, SurrealDB statement correctness, CI install wiring
 
 ## Action Items
 
-- [ ] Red: add test_reads_harness_local_config_not_repo_root and test_sqlite_uses_wal to tests/test_database_client.py.
-- [ ] Red: fix the hardcoded workspace path in tests/test_harness_init.py and replace the literal gitignore-line assertion with a git check-ignore behavioral test on nested paths.
-- [ ] Green: resolve the agent-local .agent/config.json in DatabaseClient (fall back to repo-root config for compatibility); keep the existing project-root walk for the shared SQLite path.
-- [ ] Green: honor SURREAL_URL / SURREAL_USER / SURREAL_PASS env overrides so credentials need not live in committed config.
-- [ ] Green: enable PRAGMA journal_mode=WAL and a busy_timeout on the SQLite connection for safe concurrent access to the shared store.
-- [ ] Rewrite .gitignore with recursive rules (**/.agent/secure_vault.enc, **/memory/long_term/*.db, **/memory/short_term/*.json, *.db-wal, *.db-shm).
-- [ ] git rm --cached the 15 tracked secure_vault.enc files; confirm git check-ignore now reports them ignored.
-- [ ] Propagate the fixed database_client.py to all 14 agents/*/tools/.
-- [ ] Create pyproject.toml declaring surrealdb and a dev extra (ruff, mypy); generate a lock if the environment allows.
+- [ ] Create the solomon_harness package: __init__ files, move database_client.py and browser.py in.
+- [ ] Add the explicit harness_dir parameter to DatabaseClient and resolve config/project-root from it.
+- [ ] Write solomon_harness/cli.py (loop parameterized by harness_dir) and solomon_harness/evals.py (suite builder).
+- [ ] Replace templates/harness/main.py with a thin entrypoint and delete templates/harness/tools and templates/harness/tests.
+- [ ] Thin all 14 agents/*: remove tools/ and tests/, drop in the thin main.py.
+- [ ] Repoint tests/test_database_client.py at the package and rewrite the resolution tests to pass harness_dir.
 
 ## Verification
 
-- python3 -m unittest discover -s tests passes on a clean checkout (no absolute paths).
-- New tests prove the agent-local config is read and SurrealDB is selected when configured, and that the SQLite store runs in WAL mode.
-- git check-ignore returns 0 for nested vault and DB paths; git ls-files lists no secure_vault.enc.
-- ruff check passes on changed Python files.
+- python3 -m unittest discover -s tests passes.
+- python3 agents/<name>/main.py eval passes for all 14 agents (each runs the shared suite against its own persona/config).
+- python3 scripts/compile-harnesses.py regenerates thin agents in a temp tree under the existing test_compile_harnesses.py without error.
+- grep shows database_client.py exists once (in the package), not per agent.
+- ruff check passes.
 
 ## Open Questions
 

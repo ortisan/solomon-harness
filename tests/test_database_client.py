@@ -8,14 +8,12 @@ import io
 import sqlite3
 from unittest.mock import MagicMock, patch
 
-# Ensure the template harness path is in sys.path
-harness_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "templates", "harness")
-)
-if harness_path not in sys.path:
-    sys.path.insert(0, harness_path)
+# Ensure the repository root is on sys.path so the package imports cleanly.
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
-from tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
 
 
 class TestDatabaseClient(unittest.TestCase):
@@ -328,12 +326,8 @@ class TestDatabaseClient(unittest.TestCase):
             mock_surreal_instance.close.assert_called_once()
 
     def test_project_root_resolution_with_git(self):
-        """Test unified project root directory resolution when .git is found."""
+        """Project root resolves to the nearest ancestor containing .git."""
         with (
-            patch(
-                "tools.database_client.__file__",
-                "/mock/repo/templates/harness/tools/database_client.py",
-            ),
             patch("os.path.exists") as mock_exists,
             patch("os.path.isfile") as mock_isfile,
             patch("os.makedirs"),
@@ -348,17 +342,13 @@ class TestDatabaseClient(unittest.TestCase):
             mock_exists.side_effect = side_effect_exists
             mock_isfile.return_value = False
 
-            client = DatabaseClient()
+            client = DatabaseClient(harness_dir="/mock/repo/templates/harness")
             self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
             client.close()
 
     def test_project_root_resolution_fallback(self):
-        """Test unified project root directory fallback when no .git is found."""
+        """Project root falls back to the harness directory when no root is found."""
         with (
-            patch(
-                "tools.database_client.__file__",
-                "/mock/repo/templates/harness/tools/database_client.py",
-            ),
             patch("os.path.exists") as mock_exists,
             patch("os.path.isfile") as mock_isfile,
             patch("os.makedirs"),
@@ -367,7 +357,7 @@ class TestDatabaseClient(unittest.TestCase):
             mock_exists.return_value = False
             mock_isfile.return_value = False
 
-            client = DatabaseClient()
+            client = DatabaseClient(harness_dir="/mock/repo/templates/harness")
             self.assertEqual(
                 client.db_path,
                 "/mock/repo/templates/harness/memory/long_term/harness.db",
@@ -375,12 +365,8 @@ class TestDatabaseClient(unittest.TestCase):
             client.close()
 
     def test_project_root_resolution_inside_agent_without_git(self):
-        """Test unified project root directory resolution when initialized inside an agent subdirectory without .git."""
+        """Project root resolves via workspace markers when run from an agent dir."""
         with (
-            patch(
-                "tools.database_client.__file__",
-                "/mock/repo/agents/documenter/tools/database_client.py",
-            ),
             patch("os.path.exists") as mock_exists,
             patch("os.path.isfile") as mock_isfile,
             patch("os.makedirs"),
@@ -400,7 +386,7 @@ class TestDatabaseClient(unittest.TestCase):
             mock_exists.side_effect = side_effect_exists
             mock_isfile.return_value = False
 
-            client = DatabaseClient()
+            client = DatabaseClient(harness_dir="/mock/repo/agents/documenter")
             self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
             client.close()
 
@@ -415,7 +401,6 @@ class TestDatabaseClient(unittest.TestCase):
 
         harness = os.path.join(root, "agents", "qa")
         os.makedirs(os.path.join(harness, ".agent"))
-        os.makedirs(os.path.join(harness, "tools"))
         with open(
             os.path.join(harness, ".agent", "config.json"), "w", encoding="utf-8"
         ) as f:
@@ -445,12 +430,8 @@ class TestDatabaseClient(unittest.TestCase):
                 return mock_surrealdb
             return original_import(name, *args, **kwargs)
 
-        fake_file = os.path.join(harness, "tools", "database_client.py")
-        with (
-            patch("tools.database_client.__file__", fake_file),
-            patch("builtins.__import__", side_effect=mock_import),
-        ):
-            client = DatabaseClient()
+        with patch("builtins.__import__", side_effect=mock_import):
+            client = DatabaseClient(harness_dir=harness)
             self.assertEqual(client.backend, "surrealdb")
             mock_class.assert_called_once_with("ws://harness-local:8000/rpc")
             client.close()
