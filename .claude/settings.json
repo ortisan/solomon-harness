@@ -11,5 +11,17 @@
       "Bash(git commit:*)",
       "Bash(git push:*)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
   }
 }

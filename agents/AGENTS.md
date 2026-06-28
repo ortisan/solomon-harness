@@ -101,6 +101,14 @@ These are the project defaults; deviating from one requires an ADR.
 6. Release and Documentation: publish releases and sync the wiki using
    `scripts/wiki-sync.sh`.
 
+This lifecycle is driven by the `/solomon-*` workflows, orchestrated by
+`/solomon-loop`: it scans the project memory and the GitHub board for where work
+stopped and proposes the next step (development, review, release, or — when nothing
+is in flight — creating a feature, bug, or refinement). At the start of every
+Claude Code or Gemini CLI session a SessionStart hook runs `solomon-harness run`
+to surface the resume point, so a session always continues where the last one
+stopped; run `/solomon-loop` to proceed. See `docs/solomon-workflow.md`.
+
 ## Memory layer
 
 The project memory is a SurrealDB-primary store with a SQLite fallback,

@@ -14,6 +14,7 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 
 | Stage | Workflow | Driving agents | Board move |
 | --- | --- | --- | --- |
+| Orchestrate (scan + next) | `/solomon-loop` | scrum_master | proposes the next step |
 | Capture an idea | `/solomon-idea` | product_owner | → `Ideas` |
 | Create a feature/story | `/solomon-issue` | product_owner | → `Backlog` |
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
@@ -24,6 +25,19 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
 with `ensure_project_board`; move cards with `set_issue_status`.
+
+## The loop and session resumption
+
+`/solomon-loop` is the orchestrator. It scans the project memory and the board to
+find where work stopped, then proposes the single best next step — one of the
+workflows above — and runs it on confirmation. It advances one stage per
+invocation: when work is in flight it proposes development, review, or release;
+when nothing is in progress it proposes creating a feature, bug, or refinement.
+
+At the start of every Claude Code or Gemini CLI session, the harness surfaces the
+project status (latest activity and open issues) through a SessionStart hook that
+runs `solomon-harness run`, so a session always resumes where the previous one
+stopped. Run `/solomon-loop` to continue from there.
 
 ## GitHub conventions
 

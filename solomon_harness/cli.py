@@ -135,6 +135,7 @@ def handle_run(harness_dir: str, task=None) -> None:
 
         print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
         workflows = [
+            ("/solomon-loop", "scan where work stopped and propose the next step"),
             ("/solomon-idea", "capture a product idea"),
             ("/solomon-issue", "create a feature or story issue"),
             ("/solomon-bug", "create a bug report"),
@@ -176,7 +177,7 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     doctor_parser = subparsers.add_parser("doctor", help="Check (and install) prerequisites")
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
 
-    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (idea, issue, bug, refine, start, review, release)")
+    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
 

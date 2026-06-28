@@ -10,7 +10,7 @@ import subprocess
 import sys
 from typing import List, Optional
 
-STAGES = ["idea", "issue", "bug", "refine", "start", "review", "release"]
+STAGES = ["loop", "idea", "issue", "bug", "refine", "start", "review", "release"]
 
 
 def build_prompt(workspace_root: str, stage: str, args: List[str]) -> str:
