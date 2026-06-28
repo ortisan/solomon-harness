@@ -26,6 +26,8 @@ LATER (directional, not estimated)
   Theme: Self-serve team plans       -> expansion revenue (baseline TBD)
 ```
 
+Read the horizons as confidence bands, not a queue you promise to clear. The "now" theme has a hard baseline and target because it is funded and in build; the "later" theme deliberately carries "baseline TBD" because committing a number to it would be precision you do not have. When a "next" theme's riskiest assumption is validated and an epic is sliced and Ready, it earns promotion to "now"; nothing moves left on opinion.
+
 ## Prioritization: MoSCoW and where it fits
 
 MoSCoW (Must / Should / Could / Won't) scopes a single release; it answers "what is in this train" once you already know relative value. Use a scoring method to rank the backlog, then MoSCoW to draw the line for a specific delivery.
@@ -44,6 +46,31 @@ A release is a sequence of the smallest changes that each deliver observable use
 - Target a slice that fits inside one sprint with margin; if it cannot be demoed at the review, it is too big. Vertical slices keep `acceptance_criteria_given_when_then` testable and let QA verify behavior each iteration instead of at the end.
 - Sequence slices to retire the biggest risk or unlock the biggest learning first (walking-skeleton first), not the easiest work first. The earliest slices should validate the theme's hypothesis cheaply.
 - The team owns story-level decomposition during refinement; you own that each slice maps to a roadmap epic and carries its outcome. Hand the sliced, Ready set to `scrum_master` for sprint planning and milestone creation.
+
+Worked slicing example, the "One-tap social sign-in" epic above:
+
+```text
+Epic: One-tap social sign-in  (serves: reduce onboarding friction)
+  Slice 1  Google sign-in, happy path only, account auto-created
+           -> demoable, retires the OAuth integration risk first (walking skeleton)
+  Slice 2  Link social identity to an existing email account (account-merge rule)
+  Slice 3  Apple sign-in + error/edge handling (revoked token, declined scope)
+  Deferred Enterprise SSO  -> not in this train; recorded as "Won't this time"
+```
+
+Slice 1 ships value and kills the integration risk on day one; slices 2 and 3 add data variation and business rules; the enterprise case is an explicit MoSCoW "Won't this time" fed to `scope_boundaries`, not a silent omission.
+
+## Flowing roadmap items through the /solomon-* board
+
+Roadmap items do not live only in a planning document; they move through the project board columns **Ideas -> Backlog -> Ready -> In Progress -> Code Review -> QA -> Done**, and each column maps to a horizon and a workflow step. Follow the project lifecycle and use the project tooling rather than ad hoc notes, so the next agent inherits the context and the rationale.
+
+- **Ideas** holds discovery items and "later" themes: a JTBD, an opportunity, and a riskiest assumption (captured with `solomon-idea`). These are not commitments and carry no baseline yet; they correspond to the directional right edge of the roadmap.
+- **Backlog** holds validated opportunities promoted from Ideas once their riskiest assumption passed (see product_discovery_and_jtbd). This is roadmap "next": create the structured issue with `solomon-issue` (INVEST + Given/When/Then), carrying the target outcome and baseline, not just a feature title. Open release boundaries as milestones with `create_milestone` so epics group under a shippable result.
+- **Ready** is the refined, sliced set (`solomon-refine`): each item is a thin vertical slice with sharp acceptance criteria, an estimate, and a Definition of Ready. A "next" epic only crosses into roadmap "now" once at least its first slice is Ready.
+- **In Progress** is roadmap "now" in build (`solomon-start`): the PLAN.md for any change references the PRD's in-scope list, target files, edge cases, and the verification criteria you defined, so delivery traces back to the validated bet.
+- **Code Review -> QA** are the verification gates (`solomon-review`): quality, specification compliance, and acceptance-criteria checks before a slice is callable done.
+- **Done** is a slice merged and, under continuous delivery, generally available with its outcome metric observed (`solomon-release`). "Done" is the outcome moving, not the merge.
+- Persist the decisions that shape this flow in project memory: `save_decision` for scope and prioritization calls (which Must/Should/Could, which theme funded), `log_issue` for gaps and risks that surface mid-flow, and `log_handoff` when an item crosses a column so the receiving specialist inherits the evidence. This is the same memory trail the roadmap forecasts depend on.
 
 ## Release trains versus continuous delivery
 
@@ -89,6 +116,7 @@ def weeks_to_finish(backlog, history, trials=10000):
 - Communicating the P50 as the deadline, then treating the inevitable slip as a failure. Commit at P85 and flex scope.
 - Confusing deploy with release under continuous delivery: calling a feature "done" at merge when it is dark behind a flag and the outcome metric has not moved.
 - A "Won't this time" item that quietly reappears in scope without a recorded decision, eroding the scope boundary.
+- A roadmap item that lives only in a slide and never enters the board, so its state is invisible to delivery. Every funded theme must have epics and stories tracked through Ideas -> Backlog -> ... -> Done, with decisions in project memory.
 - Slices sequenced easiest-first, leaving the theme's core hypothesis untested until late. Sequence by risk and learning.
 
 ## Definition of done
@@ -98,6 +126,7 @@ def weeks_to_finish(backlog, history, trials=10000):
 - [ ] Release scope is set with MoSCoW, Musts are capped near 60% of capacity, and "Won't this time" items are recorded in the scope boundary.
 - [ ] Backlog ranking uses a quantified method (RICE/WSJF) with the numbers shown; MoSCoW is applied per release, not once.
 - [ ] Every increment is a thin vertical slice that crosses the full stack, fits in one sprint, and is demoable with testable acceptance criteria.
+- [ ] Each roadmap item is tracked on the board through Ideas -> Backlog -> Ready -> In Progress -> Code Review -> QA -> Done using the matching `/solomon-*` step, with milestones created at release boundaries and decisions/handoffs persisted in project memory.
 - [ ] The cadence model (release train vs continuous delivery) is stated, and feature-complete is distinguished from generally available.
 - [ ] Dates are expressed as probabilistic forecasts from measured throughput (Monte Carlo), quoted at named confidence levels, with internal commitments at P85.
 - [ ] Forecasts are re-run each iteration; the strategic bet, forecast snapshots, and re-scope decisions are persisted via `save_decision` / `save_memory`, and milestone-threatening slips raised via `log_issue` and `log_handoff`.
