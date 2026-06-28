@@ -1,0 +1,61 @@
+---
+description: Review a pull request through QA, security, and architecture gates, then approve or request changes
+argument-hint: [pr-number]
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
+---
+
+You are running the Review stage of the solomon-dev lifecycle for PR #$ARGUMENTS.
+
+First, read `docs/solomon-dev-workflow.md` and `docs/adr/README.md` so the board
+columns, labels, the ADR trigger, and the memory handoff contract are exact. This
+stage is driven by three specialist agents — qa, security, and software_architect.
+Delegate the heavy analysis to each via the Task tool (the `.claude/agents`
+subagents); do not review with a single generic pass.
+
+## 1. Establish context
+- `gh pr view $ARGUMENTS` and `gh pr diff $ARGUMENTS` to read the change and its
+  linked issue. Identify the issue number from the `Closes #<issue>` line.
+- Check the board card is `In Review`; if not, `uv run python -m solomon_harness.github ensure-board`
+  then `uv run python -m solomon_harness.github set-status --issue <issue> --status "In Review"`.
+- Pull prior context: `mcp__solomon-memory__get_latest_activity` and
+  `mcp__solomon-memory__get_open_issues` for known debt and the design this change
+  claims to implement (link any ADR referenced in the PR body).
+
+## 2. Run the three lenses (delegate, in parallel where possible)
+- qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
+  `ci_quality_gates` skill, then actually run the suite —
+  `uv run pytest --cov --cov-branch --cov-report=term-missing`. Confirm new and
+  changed behavior has covering tests and the full suite is green.
+- security agent: STRIDE pass per `threat_modeling_with_stride` plus an SAST sweep
+  (`sast` skill) over the diff. Flag any secret, injection, or unmitigated boundary.
+- software_architect agent: apply the `architecture_review_gate` checklist against
+  the design contracts, the fitness functions, and any ADR the change touches.
+  If the change is architecturally significant but no ADR exists, that is a blocker.
+
+Each lens returns findings tagged blocker, major, or minor.
+
+## 3. Decide the verdict
+- Block approval (request changes) on: missing tests for changed behavior, a failing
+  test run, a failing fitness function or quality gate, an unmitigated high-value
+  STRIDE threat, or a missing required ADR — any blocker.
+- Approve only when there are zero blockers and zero open majors.
+
+## 4. Post the outcome (confirm with the user before submitting the review)
+- Inline, specific findings: `gh pr comment $ARGUMENTS --body "<finding + file:line>"`
+  for each concrete issue, one comment per finding.
+- Summary verdict: `gh pr review $ARGUMENTS --approve` or
+  `gh pr review $ARGUMENTS --request-changes --body "<blocking findings>"`.
+- File each blocker/major as a tracked issue with `mcp__solomon-memory__log_issue`.
+
+## 5. Persist to memory
+- `mcp__solomon-memory__save_decision` with the review outcome (title, rationale,
+  outcome go/no-go, author, branch, commit_sha) in ADR shape.
+- On approval only: `mcp__solomon-memory__log_handoff(sender="qa", recipient="sre",
+  contract_type="release-candidate", contract_path="PR #$ARGUMENTS", status="approved")`
+  so the Release stage can resume.
+- `mcp__solomon-memory__save_session` capturing what was reviewed, the verdict, and
+  the linked decision and issue IDs.
+
+State explicitly whether an ADR was required and whether one exists. Do not push,
+merge, or change the board to `Done` here — Review stays in `In Review`; release is
+a separate stage. Output direct, professional English, no emojis.

@@ -369,6 +369,37 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         except Exception as exc:
             print(f"  Warning: failed to generate integrations: {exc}")
 
+    # 8b. Select the agents this project's stack needs and record them, and create
+    # the GitHub delivery board when the project lives on GitHub.
+    try:
+        from solomon_harness.agent_selection import select_agents
+
+        enabled = select_agents(workspace_root)
+        if enabled:
+            print(f"Selected agents for this stack: {', '.join(enabled)}")
+            cfg_path = os.path.join(workspace_root, ".agent", "config.json")
+            if os.path.isfile(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                cfg["enabled_agents"] = enabled
+                with open(cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2)
+    except Exception as exc:
+        print(f"  Warning: agent selection failed: {exc}")
+
+    if "github.com" in git_remote:
+        try:
+            from solomon_harness.github import ensure_project_board
+
+            board = ensure_project_board()
+            if board.get("ok"):
+                action = "Created" if board.get("created") else "Found"
+                print(f"  {action} GitHub delivery board 'solomon-dev'.")
+            else:
+                print(f"  Note: could not set up the GitHub board: {board.get('error')}")
+        except Exception as exc:
+            print(f"  Note: GitHub board setup skipped: {exc}")
+
     # 9. Create fallback Kanban board and Wiki template if not present on GitHub
     if not has_github_project_and_wiki(workspace_root, git_remote):
         print("GitHub project/wiki not detected. Initializing local Kanban and Wiki templates...")
