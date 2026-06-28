@@ -69,9 +69,10 @@ auditable record are guaranteed.
   release and board-Done permanently human-gated; an unknown level fails closed; a
   denylist; the maker/checker model split surfaced; and a kill-switch
   (`solomon-harness loop-stop`, `loop-policy`). See below.
-- **Phase 3 — Maintenance loops + budget.** `/solomon-scan-arch` and
-  `/solomon-scan-dedup` opening draft PRs only; outbound notification egress; a
-  post-hoc cost ceiling that degrades L3 to L2.
+- **Phase 3 — Maintenance loops + budget (shipped).** `/solomon-scan-arch` and
+  `/solomon-scan-dedup` (gated `dev` stages) that open draft PRs only; outbound
+  notification egress (`notify.py`); a post-hoc cost ceiling (`loop_budget.py`)
+  that degrades the automation path to report-only. See below.
 - **Phase 4 — Ownership and hygiene.** A dedicated `loop_engineer` agent (deferred
   until the Phase 0-2 modules exist for it to own), worktree hygiene, state GC.
 
@@ -111,6 +112,20 @@ Claude Code, a numbered list in Gemini).
 
 Set the level in the project's `.agent/config.json` `loop` block (or
 `SOLOMON_LOOP_AUTONOMY`); see `docs/solomon-workflow.md`.
+
+## Phase 3, as shipped
+
+| Piece | Where |
+| --- | --- |
+| Standing maintenance loops (one lens each, draft-PR-only) | `/solomon-scan-arch`, `/solomon-scan-dedup` (gated `dev` stages) |
+| Their guardrail skills (one-open-PR budget, denylist, run note) | `agents/software_architect/skills/architecture_scan_loop.md`, `agents/software_engineer/skills/duplication_scan_loop.md` |
+| Outbound-only notification (console / webhook, env URL) | `solomon_harness/notify.py`, `solomon-harness notify` |
+| Post-hoc cost ceiling -> report-only | `solomon_harness/loop_budget.py`, `solomon-harness loop-budget` |
+
+The scan loops are generative — their input is the repo state, not a queued issue
+— and they terminate at a draft PR routed to the unchanged `/solomon-review` gate,
+under the autonomy ladder (L2/L3), the single-driver lock, and the denylist. This
+is Cherny's always-on-maintenance practice, bounded.
 
 ## Sources
 

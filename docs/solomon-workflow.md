@@ -197,6 +197,31 @@ The maker/checker split (a verifier on a *different* model than the maker) is
 declared in the same block and surfaced by `loop-policy`; it complements, and does
 not replace, the human `/solomon-review` gate.
 
+## Maintenance loops, notifications and budget
+
+Two standing maintenance loops give the harness a generative source of work — their
+input is the repository's current state, not a queued issue — bounded by the
+autonomy ladder, the single-driver lock, and the denylist:
+
+- `/solomon-scan-arch` (software_architect) — one architectural-drift finding per
+  run.
+- `/solomon-scan-dedup` (software_engineer) — one duplicated abstraction per run.
+
+Each acts on at most one finding and terminates at a **draft PR** routed to the
+unchanged `/solomon-review` gate (low-confidence findings go to `Ideas`/`Backlog`
+instead). They are `dev` stages, so a host scheduler can run them on a cadence and
+the autonomy policy gates them (allowed at L2/L3, denied at L1). Their contracts
+live in the agents' `architecture_scan_loop` / `duplication_scan_loop` skills.
+
+- **Notifications** (`solomon-harness notify`, `solomon_harness/notify.py`) are
+  outbound-only: status flows out to the console or a webhook
+  (`SOLOMON_NOTIFY_WEBHOOK`, never committed), but the only state-changing approval
+  path stays the human gh review. No inbound listener.
+- **Budget** (`solomon-harness loop-budget`, `solomon_harness/loop_budget.py`)
+  records each run's reported cost; when the daily ceiling
+  (`loop.daily_cost_ceiling_usd`) is reached, the automation path degrades to
+  report-only.
+
 ## ADR trigger
 
 `/solomon-start` and `/solomon-release` must evaluate whether the change is

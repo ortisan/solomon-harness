@@ -10,13 +10,17 @@ import subprocess
 import sys
 from typing import List, Optional
 
-STAGES = ["loop", "idea", "issue", "bug", "refine", "start", "review", "release"]
+STAGES = [
+    "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
+    # Standing maintenance loops (Phase 3): generative, open draft PRs only.
+    "scan-arch", "scan-dedup",
+]
 
 # Stages that drive git/board state (branch, push, merge, release) and must run
 # under a single driver. The lock is a portable Python gate run on both hosts —
 # the documented concurrent-driver race produced premature merges that bypassed
 # the review gate, so honoring an advisory markdown "Step 0" was not enough.
-LOCKED_STAGES = {"loop", "start", "review", "release"}
+LOCKED_STAGES = {"loop", "start", "review", "release", "scan-arch", "scan-dedup"}
 
 
 def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, session_id: str) -> None:
@@ -85,6 +89,19 @@ def run_stage(
         )
         return 3
 
+    # Budget governor: at L2/L3, an exhausted daily cost ceiling degrades the
+    # automation path to report-only (it stops drafting/merging), never a human.
+    if policy.level in ("L2", "L3") and stage != "loop":
+        from solomon_harness import loop_budget
+
+        if loop_budget.over_ceiling(workspace_root, policy.daily_cost_ceiling):
+            print(
+                f"Blocked by loop budget: daily cost ceiling reached "
+                f"(${policy.daily_cost_ceiling}); degraded to report-only.",
+                file=sys.stderr,
+            )
+            return 3
+
     lock = None
     if stage in LOCKED_STAGES:
         from solomon_harness.loop_lock import LoopLock, LoopLockHeld
@@ -101,16 +118,37 @@ def run_stage(
             )
             return 1
 
+    capture_cost = policy.level in ("L2", "L3")
     print(f"Running /solomon-{stage} headless via {engine}...")
     try:
         try:
-            proc = subprocess.run([engine, "-p"], input=prompt, text=True, check=False)
+            if capture_cost:
+                # Capture the engine's reported cost into the budget ledger.
+                proc = subprocess.run(
+                    [engine, "-p", "--output-format", "json"],
+                    input=prompt, text=True, capture_output=True, check=False,
+                )
+                out = getattr(proc, "stdout", None)
+                if out:
+                    print(out)
+                from solomon_harness import loop_budget
+
+                cost = loop_budget.parse_engine_cost(out or "")
+                if cost is not None:
+                    loop_budget.record(workspace_root, cost, stage=stage)
+            else:
+                proc = subprocess.run([engine, "-p"], input=prompt, text=True, check=False)
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
             return 1
+        rc = proc.returncode
         if lock is not None:
-            _record_loop_run(workspace_root, stage, args, proc.returncode, lock.session_id)
-        return proc.returncode
+            _record_loop_run(workspace_root, stage, args, rc, lock.session_id)
+        if rc == 0 and stage in LOCKED_STAGES:
+            from solomon_harness import notify
+
+            notify.send(workspace_root, f"stage:{stage}", f"/solomon-{stage} {' '.join(args)} -> ok")
+        return rc
     finally:
         if lock is not None:
             lock.release()
