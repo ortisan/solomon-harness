@@ -172,12 +172,11 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `apple` — native Apple-platform apps: Swift, SwiftUI, UIKit, Swift Concurrency, Combine, SwiftData/Core Data, Xcode/SPM, XCTest.
 - `auth_engineer` — authentication and authorization: OAuth 2.0/OIDC, social and enterprise login, sessions and tokens, MFA, RBAC/ABAC, OPA/Rego policy-as-code, credential security.
 - `data_analyst` — querying, wrangling, processing big data (Spark, ClickHouse), visual storytelling, reporting and SQL analytics.
-- `data_science` — predictive modeling, statistical validation, didactic explanations, report structuring.
 - `dba` — data modeling, performance tuning, indexing, migrations, replication and backups.
 - `documenter` — technical and business documentation, user guides, design docs.
 - `flutter` — Flutter and Dart applications, clean architecture, widget and integration tests.
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
-- `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks.
+- `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, and didactic reporting (absorbs data science).
 - `observability` — logging, metrics, tracing, monitoring dashboards, OpenTelemetry.
 - `product_owner` — PRDs, requirements, user stories, scope and deliverables.
 - `qa` — unit, integration and E2E tests, mocking external services, UAT, QA reports.
