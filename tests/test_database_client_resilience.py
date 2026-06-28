@@ -150,5 +150,85 @@ class TestUnreachableFallsBackToSqlite(ResilienceTestBase):
         self.assertEqual(persisted["title"], "t")
 
 
+class TestGetLatestActivityNeverSilentNull(ResilienceTestBase):
+    def test_reconnects_and_returns_real_activity(self):
+        # The read fires on a dropped connection; the reconnect succeeds and the
+        # real recorded activity is returned -- never a masked None (the dangerous
+        # fault that drove /solomon-loop to the wrong resume point).
+        broken = FakeSurreal()
+        broken.always_fail = True
+        client = self._surreal_client(broken)
+
+        def healthy_query(query, params=None):
+            if "sessions" in query:
+                return [
+                    [
+                        {
+                            "session_id": "s1",
+                            "agent_name": "agent_x",
+                            "task": "task_x",
+                            "timestamp": "2026-06-28T22:00:00",
+                        }
+                    ]
+                ]
+            return []  # no handoffs
+
+        reconnect_calls = []
+
+        def fake_reconnect():
+            reconnect_calls.append(1)
+            client.db = FakeSurreal(result=healthy_query)
+            return True
+
+        client._connect_surreal = fake_reconnect
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity, "a broken connection must not mask as None")
+        self.assertEqual(activity["type"], "session")
+        self.assertEqual(activity["agent"], "agent_x")
+        self.assertEqual(len(reconnect_calls), 1)
+        self.assertEqual(client.backend, "surrealdb")
+
+    def test_falls_back_and_returns_real_activity(self):
+        # Activity recorded before the drop is still served via the SQLite fallback
+        # when the reconnect fails -- still a non-null result, not a masked None.
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.save_session("s1", "agent_x", "task_x", [])
+
+        client.backend = "surrealdb"
+        broken = FakeSurreal()
+        broken.always_fail = True
+        client.db = broken
+        client._connect_surreal = lambda: False
+
+        with redirect_stderr(io.StringIO()):
+            activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity, "a broken connection must not mask as None")
+        self.assertEqual(activity["agent"], "agent_x")
+        self.assertEqual(client.backend, "sqlite")
+
+    def test_true_empty_store_still_returns_none(self):
+        # A healthy but genuinely empty store returns None and must not be confused
+        # for a broken connection: no reconnect, no fallback.
+        healthy = FakeSurreal(result=[])
+        client = self._surreal_client(healthy)
+
+        reconnect_calls = []
+
+        def fake_reconnect():
+            reconnect_calls.append(1)
+            return True
+
+        client._connect_surreal = fake_reconnect
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNone(activity, "a genuinely empty store still returns None")
+        self.assertEqual(len(reconnect_calls), 0, "a true empty must not reconnect")
+        self.assertEqual(client.backend, "surrealdb", "a true empty must not fall back")
+
+
 if __name__ == "__main__":
     unittest.main()

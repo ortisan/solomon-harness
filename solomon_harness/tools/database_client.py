@@ -1522,8 +1522,13 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")
 
+    @_resilient
     def get_latest_activity(self) -> Optional[Dict[str, Any]]:
         """Retrieves the most recent entry from the handoffs or sessions table.
+
+        A broken connection must never masquerade as "no activity": a connection
+        loss propagates as ``_ConnectionLost`` so the resilient decorator reconnects
+        or falls back, and a genuinely empty store still returns None (issue #37).
 
         Returns:
             A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
@@ -1534,8 +1539,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1"
             try:
-                res = self.db.query(query)
+                res = self._run_surreal(query)
                 latest_session = self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to query latest session: {e}")
         else:
@@ -1554,8 +1561,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT 1"
             try:
-                res = self.db.query(query)
+                res = self._run_surreal(query)
                 latest_handoff = self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to query latest handoff: {e}")
         else:
