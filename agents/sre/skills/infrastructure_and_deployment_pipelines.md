@@ -43,9 +43,11 @@ Encode guardrails as code so a reviewer is not the only thing standing between a
 ```rego
 package main
 
-deny[msg] {
+import rego.v1
+
+deny contains msg if {
   input.kind == "Deployment"
-  c := input.spec.template.spec.containers[_]
+  some c in input.spec.template.spec.containers
   endswith(c.image, ":latest")
   msg := sprintf("container %q uses :latest; pin a digest", [c.name])
 }

@@ -4,7 +4,7 @@ Treat non-functional requirements as part of the architecture and write each one
 
 ## Use ISO/IEC 25010 as the coverage checklist
 
-Run the in-scope work against the ISO/IEC 25010:2023 product-quality model so no attribute is forgotten. The 2023 revision defines eight characteristics:
+Run the in-scope work against the ISO/IEC 25010:2023 product-quality model so no attribute is forgotten. The 2023 revision defines nine characteristics:
 
 - Functional suitability — completeness, correctness, appropriateness.
 - Performance efficiency — time behavior, resource use, capacity.
@@ -14,6 +14,7 @@ Run the in-scope work against the ISO/IEC 25010:2023 product-quality model so no
 - Security — confidentiality, integrity, non-repudiation, accountability, authenticity.
 - Maintainability — modularity, reusability, analysability, modifiability, testability.
 - Flexibility (formerly portability) — adaptability, scalability, installability, replaceability.
+- Safety (added in 2023) — operational constraint, risk identification, fail-safe, hazard warning, safe integration.
 
 The model is a checklist, not a specification. For each characteristic that constrains this system, write a concrete scenario; for the rest, record "not architecturally significant" so the omission is a decision, not an oversight.
 

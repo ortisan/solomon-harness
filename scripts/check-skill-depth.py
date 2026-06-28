@@ -26,6 +26,9 @@ SHARED_EXEMPT = {
 }
 REQUIRED_SECTIONS = ("## Common pitfalls", "## Definition of done")
 DEFAULT_AGENTS = ("software_architect", "sre")
+# An agent name maps to a directory under agents/; constrain it so a stray `..`
+# or absolute-path argument cannot redirect the scan outside the repo.
+VALID_AGENT = re.compile(r"^[a-z0-9_]+$")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -52,6 +55,10 @@ def main(argv: list[str]) -> int:
     failures = 0
     checked = 0
     for agent in agents:
+        if not VALID_AGENT.match(agent):
+            print(f"FAIL  {agent}: invalid agent name")
+            failures += 1
+            continue
         skills_dir = REPO_ROOT / "agents" / agent / "skills"
         if not skills_dir.is_dir():
             print(f"FAIL  {agent}: no skills dir at {skills_dir}")

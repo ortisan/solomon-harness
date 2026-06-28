@@ -25,7 +25,7 @@ Availability of components **in series** multiplies, so a chain is always less a
 ```
 compute(99.95%) x db(99.95%) x cache(99.9%) x auth(99.99%)
 = 0.9995 * 0.9995 * 0.999 * 0.9999
-= 0.99790  ->  99.79%  ->  ~1.3 h/month down
+= 0.99790  ->  99.79%  ->  ~1.5 h/month down
 ```
 
 Four healthy-looking dependencies compose to below 99.8%. The ceiling on your availability is the product of everything on the critical path, which is why you remove dependencies from that path (cache-aside, async, graceful degradation) rather than only hardening each one.
