@@ -3,6 +3,8 @@ import json
 import sqlite3
 import logging
 import sys
+import functools
+import threading
 from contextlib import contextmanager
 from typing import Generator, Any, Dict, List, Optional, Union
 
@@ -70,6 +72,37 @@ def _resolve_database(configured: Optional[str], project_root: str) -> str:
     return database
 
 
+class _ConnectionLost(Exception):
+    """Raised when a SurrealDB call fails because the transport/connection dropped.
+
+    This is deliberately distinct from a query or data error: only a connection
+    loss may trigger a reconnect or a fallback to SQLite (issue #37). A malformed
+    query or a data error must surface unchanged.
+    """
+
+
+def _resilient(method):
+    """Make a public DatabaseClient method survive a mid-session connection drop.
+
+    On ``_ConnectionLost`` the wrapper attempts exactly one bounded reconnect. If
+    that succeeds it re-runs the method once and returns its result.
+
+    A method that is already on the SQLite backend never raises ``_ConnectionLost``,
+    so the wrapper is a transparent pass-through for SQLite-only clients.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except _ConnectionLost:
+            if self._connect_surreal():
+                return method(self, *args, **kwargs)
+            raise
+
+    return wrapper
+
+
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
@@ -94,6 +127,16 @@ class DatabaseClient:
         self.db = None
         self.spectron = None
         self.db_path = db_path
+
+        # SurrealDB connection params captured so the connection can be rebuilt
+        # mid-session after a drop, not only at construction (issue #37).
+        self._surreal_class: Any = None
+        self._surreal_url: Optional[str] = None
+        self._surreal_username: Optional[str] = None
+        self._surreal_password: Optional[str] = None
+        self._surreal_namespace: Optional[str] = None
+        self._surreal_database: Optional[str] = None
+        self._connect_deadline: float = 5.0
 
         # The shared client no longer lives inside the agent directory, so the caller
         # passes the owning harness directory explicitly; fall back to this file's
@@ -120,6 +163,10 @@ class DatabaseClient:
 
         if not found_root:
             project_root = harness_dir
+
+        # Retained so the mid-session SQLite fallback can resolve the same store
+        # path the constructor would have used (issue #37).
+        self._project_root = project_root
 
         # Load configuration. Prefer the harness-local .agent/config.json, which carries
         # the per-agent `database` block, and fall back to the project-root config.
@@ -172,68 +219,80 @@ class DatabaseClient:
                 namespace = db_config.get("namespace", "solomon")
                 database = _resolve_database(db_config.get("database"), project_root)
 
-                try:
-                    self.db = Surreal(url)
-                    if hasattr(self.db, "connect"):
-                        self.db.connect()
-                    # SDK 2.x uses username/password keys (1.x used user/pass).
-                    self.db.signin({"username": username, "password": password})
-                    self.db.use(namespace, database)
+                # Capture the params so _connect_surreal can rebuild the handle
+                # after a mid-session drop, not only here at construction (#37).
+                self._surreal_class = Surreal
+                self._surreal_url = url
+                self._surreal_username = username
+                self._surreal_password = password
+                self._surreal_namespace = namespace
+                self._surreal_database = database
+                self._connect_deadline = float(
+                    db_config.get("connect_timeout_seconds", 5.0)
+                )
 
-                    # Initialize SurrealDB tables. IF NOT EXISTS makes this
-                    # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
-                    init_query = (
-                        "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;"
-                    )
-                    self.db.query(init_query)
-                    self.backend = "surrealdb"
+                if self._connect_surreal():
+                    try:
+                        # Initialize SurrealDB tables. IF NOT EXISTS makes this
+                        # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
+                        init_query = (
+                            "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;"
+                        )
+                        self.db.query(init_query)
+                        self.backend = "surrealdb"
 
-                    # Initialize Spectron if URL and API Key are configured
-                    spectron_url = os.environ.get(
-                        "SPECTRON_URL", db_config.get("spectron_url")
-                    )
-                    spectron_api_key = os.environ.get(
-                        "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-                    )
-                    spectron_context = os.environ.get(
-                        "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-                    )
-                    if spectron_url and spectron_api_key:
-                        try:
+                        # Initialize Spectron if URL and API Key are configured
+                        spectron_url = os.environ.get(
+                            "SPECTRON_URL", db_config.get("spectron_url")
+                        )
+                        spectron_api_key = os.environ.get(
+                            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
+                        )
+                        spectron_context = os.environ.get(
+                            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
+                        )
+                        if spectron_url and spectron_api_key:
                             try:
-                                from surrealdb import Spectron
-                                self.spectron = Spectron(
-                                    context=spectron_context,
-                                    endpoint=spectron_url,
-                                    api_key=spectron_api_key
-                                )
-                            except (ImportError, AttributeError):
-                                self.spectron = SpectronFallbackClient(
-                                    context=spectron_context,
-                                    endpoint=spectron_url,
-                                    api_key=spectron_api_key
-                                )
-                        except Exception as e:
-                            sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                            self.spectron = None
-                except Exception as e:
-                    sys.stderr.write(f"Warning: Connection to SurrealDB failed: {e}\n")
+                                try:
+                                    from surrealdb import Spectron
+                                    self.spectron = Spectron(
+                                        context=spectron_context,
+                                        endpoint=spectron_url,
+                                        api_key=spectron_api_key
+                                    )
+                                except (ImportError, AttributeError):
+                                    self.spectron = SpectronFallbackClient(
+                                        context=spectron_context,
+                                        endpoint=spectron_url,
+                                        api_key=spectron_api_key
+                                    )
+                            except Exception as e:
+                                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
+                                self.spectron = None
+                    except Exception as e:
+                        sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
+                        sys.stderr.write(
+                            "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
+                        )
+                        if self.db:
+                            try:
+                                self.db.close()
+                            except Exception:
+                                pass
+                            self.db = None
+                        self.backend = "sqlite"
+                else:
+                    sys.stderr.write("Warning: Connection to SurrealDB failed.\n")
                     sys.stderr.write(
                         "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
                     )
-                    if self.db:
-                        try:
-                            self.db.close()
-                        except Exception:
-                            pass
-                        self.db = None
                     self.backend = "sqlite"
             else:
                 if not creds_ok:
@@ -250,17 +309,7 @@ class DatabaseClient:
         # Initialize SQLite if backend is sqlite
         if self.backend == "sqlite":
             if self.db_path is None:
-                # HARNESS_DB_PATH lets tests (and ad-hoc runs) redirect the SQLite
-                # store to a temp file so the real project memory is never touched
-                # (issue #24). Falls back to the per-project memory dir.
-                env_db = os.environ.get("HARNESS_DB_PATH")
-                if env_db:
-                    os.makedirs(os.path.dirname(os.path.abspath(env_db)), exist_ok=True)
-                    self.db_path = env_db
-                else:
-                    db_dir: str = os.path.join(project_root, "memory", "long_term")
-                    os.makedirs(db_dir, exist_ok=True)
-                    self.db_path = os.path.join(db_dir, "harness.db")
+                self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
 
     @contextmanager
@@ -381,6 +430,107 @@ class DatabaseClient:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
 
+    def _resolve_sqlite_path(self) -> str:
+        """Resolve the SQLite store path.
+
+        HARNESS_DB_PATH redirects the store to a temp file for tests and ad-hoc
+        runs so the real project memory is never touched (issue #24); otherwise it
+        lands in the per-project memory dir. Shared by the constructor and the
+        mid-session SQLite fallback so both resolve to the same file (issue #37).
+        """
+        env_db = os.environ.get("HARNESS_DB_PATH")
+        if env_db:
+            os.makedirs(os.path.dirname(os.path.abspath(env_db)), exist_ok=True)
+            return env_db
+        db_dir = os.path.join(self._project_root, "memory", "long_term")
+        os.makedirs(db_dir, exist_ok=True)
+        return os.path.join(db_dir, "harness.db")
+
+    def _connect_surreal(self) -> bool:
+        """(Re)build ``self.db`` and sign in, returning True on success.
+
+        Used both at construction and to recover from a mid-session drop (#37).
+        The attempt runs in a worker thread joined with ``self._connect_deadline``
+        so a half-open socket can never block past the deadline -- the exact
+        indefinite hang ("no close frame") that motivated this fix. A late-
+        completing attempt only mutates a local dict, never ``self.db``.
+        """
+        Surreal = self._surreal_class
+        if Surreal is None or not self._surreal_url:
+            return False
+
+        outcome: Dict[str, Any] = {}
+
+        def _attempt() -> None:
+            try:
+                db = Surreal(self._surreal_url)
+                if hasattr(db, "connect"):
+                    db.connect()
+                # SDK 2.x uses username/password keys (1.x used user/pass).
+                db.signin(
+                    {
+                        "username": self._surreal_username,
+                        "password": self._surreal_password,
+                    }
+                )
+                db.use(self._surreal_namespace, self._surreal_database)
+                outcome["db"] = db
+            except Exception as exc:  # noqa: BLE001 - report, never raise from the worker
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=_attempt, name="surreal-connect", daemon=True)
+        worker.start()
+        worker.join(self._connect_deadline)
+        if worker.is_alive():
+            sys.stderr.write(
+                f"SurrealDB reconnect exceeded {self._connect_deadline}s deadline; "
+                "abandoning the attempt.\n"
+            )
+            return False
+        db = outcome.get("db")
+        if db is None:
+            return False
+        self.db = db
+        return True
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """True only for a transport/connection fault, never a query or data error.
+
+        Scoping the reconnect trigger this narrowly is the contract: a malformed
+        query or a data error must surface unchanged and must not reconnect or
+        fall back (issue #37).
+        """
+        if isinstance(exc, (ConnectionError, OSError)):
+            return True
+        message = str(exc).lower()
+        markers = (
+            "no close frame",
+            "websocket",
+            "connection",
+            "closed",
+            "broken pipe",
+            "connection reset",
+            "not connected",
+            "transport",
+        )
+        return any(marker in message for marker in markers)
+
+    def _run_surreal(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """Run a SurrealDB query, raising ``_ConnectionLost`` only on a transport
+        fault so the resilient decorator can reconnect or fall back. A query or
+        data error is re-raised unchanged for the caller's own handling (#37)."""
+        if self.db is None:
+            raise _ConnectionLost("no active SurrealDB connection")
+        try:
+            if params is None:
+                return self.db.query(query)
+            return self.db.query(query, params)
+        except Exception as exc:  # noqa: BLE001 - classified, then re-raised
+            if self._is_connection_error(exc):
+                raise _ConnectionLost(str(exc)) from exc
+            raise
+
     @staticmethod
     def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
         """Make a SurrealDB record JSON-serializable.
@@ -455,6 +605,7 @@ class DatabaseClient:
             return RecordID(table, rid)
         return s
 
+    @_resilient
     def log_decision(
         self,
         title: str,
@@ -498,8 +649,10 @@ class DatabaseClient:
                 "commit_sha": commit_sha,
             }
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to log decision in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to log decision in SurrealDB: {e}")
@@ -520,6 +673,7 @@ class DatabaseClient:
                 logging.error(f"Failed to log decision: {e}")
                 raise RuntimeError(f"Failed to log decision: {e}")
 
+    @_resilient
     def save_memory(self, key: str, value: str, category: str) -> None:
         """Upserts a key-value memory entry.
 
@@ -552,7 +706,9 @@ class DatabaseClient:
                 "category": category,
             }
             try:
-                self.db.query(query, params)
+                self._run_surreal(query, params)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save memory in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save memory in SurrealDB: {e}")
@@ -573,11 +729,14 @@ class DatabaseClient:
                 logging.error(f"Failed to save memory: {e}")
                 raise RuntimeError(f"Failed to save memory: {e}")
 
+    @_resilient
     def delete_memory(self, key: str) -> None:
         """Deletes a memory entry by key (no-op if it does not exist)."""
         if self.backend == "surrealdb":
             try:
-                self.db.query("DELETE memory WHERE key = $key;", {"key": key})
+                self._run_surreal("DELETE memory WHERE key = $key;", {"key": key})
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to delete memory in SurrealDB: {e}")
         else:
@@ -588,6 +747,7 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to delete memory: {e}")
 
+    @_resilient
     def get_memory(self, key: str) -> Optional[str]:
         """Retrieves a memory value by its key.
 
@@ -608,8 +768,10 @@ class DatabaseClient:
 
             query = "SELECT `value` FROM memory WHERE key = $key"
             try:
-                res = self.db.query(query, {"key": key})
+                res = self._run_surreal(query, {"key": key})
                 return self._extract_field(res, "value")
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve memory from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve memory from SurrealDB: {e}")
@@ -625,6 +787,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve memory: {e}")
                 raise RuntimeError(f"Failed to retrieve memory: {e}")
 
+    @_resilient
     def create_milestone(
         self, title: str, description: str, due_date: str, state: str
     ) -> Union[str, int, None]:
@@ -656,8 +819,10 @@ class DatabaseClient:
                 "state": state,
             }
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to create milestone in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to create milestone in SurrealDB: {e}")
@@ -676,12 +841,15 @@ class DatabaseClient:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
 
+    @_resilient
     def list_milestones(self) -> List[Dict[str, Any]]:
         """List milestones, most recent first."""
         if self.backend == "surrealdb":
             try:
-                res = self.db.query("SELECT * FROM milestones ORDER BY created_at DESC")
+                res = self._run_surreal("SELECT * FROM milestones ORDER BY created_at DESC")
                 return self._extract_list(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to list milestones from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to list milestones from SurrealDB: {e}")
@@ -697,6 +865,7 @@ class DatabaseClient:
                 logging.error(f"Failed to list milestones: {e}")
                 raise RuntimeError(f"Failed to list milestones: {e}")
 
+    @_resilient
     def save_release(
         self,
         version: str,
@@ -741,8 +910,10 @@ class DatabaseClient:
                 "commit_sha": commit_sha,
             }
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save release in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save release in SurrealDB: {e}")
@@ -764,14 +935,17 @@ class DatabaseClient:
                 logging.error(f"Failed to save release: {e}")
                 raise RuntimeError(f"Failed to save release: {e}")
 
+    @_resilient
     def get_release(self, release_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieve a release by id."""
         if self.backend == "surrealdb":
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     "SELECT * FROM $id", {"id": self._parse_rid(release_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve release from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve release from SurrealDB: {e}")
@@ -786,14 +960,17 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve release: {e}")
                 raise RuntimeError(f"Failed to retrieve release: {e}")
 
+    @_resilient
     def list_releases(self, limit: int = 20) -> List[Dict[str, Any]]:
         """List delivered releases, most recent first."""
         if self.backend == "surrealdb":
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     f"SELECT * FROM releases ORDER BY released_at DESC LIMIT {int(limit)}"
                 )
                 return self._extract_list(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to list releases from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to list releases from SurrealDB: {e}")
@@ -810,6 +987,7 @@ class DatabaseClient:
                 logging.error(f"Failed to list releases: {e}")
                 raise RuntimeError(f"Failed to list releases: {e}")
 
+    @_resilient
     def log_issue(
         self,
         github_id: str,
@@ -847,7 +1025,9 @@ class DatabaseClient:
                 "milestone_id": milestone_id,
             }
             try:
-                self.db.query(query, params)
+                self._run_surreal(query, params)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to log issue in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to log issue in SurrealDB: {e}")
@@ -869,6 +1049,7 @@ class DatabaseClient:
                 logging.error(f"Failed to log issue: {e}")
                 raise RuntimeError(f"Failed to log issue: {e}")
 
+    @_resilient
     def save_backtest(
         self,
         strategy_name: str,
@@ -916,8 +1097,10 @@ class DatabaseClient:
                 "commit_sha": commit_sha,
             }
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save backtest run in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save backtest run in SurrealDB: {e}")
@@ -947,6 +1130,7 @@ class DatabaseClient:
                 logging.error(f"Failed to save backtest run: {e}")
                 raise RuntimeError(f"Failed to save backtest run: {e}")
 
+    @_resilient
     def save_session(
         self,
         session_id: str,
@@ -980,7 +1164,9 @@ class DatabaseClient:
                 "messages": messages,
             }
             try:
-                self.db.query(query, params)
+                self._run_surreal(query, params)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save session in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save session in SurrealDB: {e}")
@@ -1007,6 +1193,7 @@ class DatabaseClient:
                 logging.error(f"Failed to save session: {e}")
                 raise RuntimeError(f"Failed to save session: {e}")
 
+    @_resilient
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves a session state by session_id.
 
@@ -1019,8 +1206,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM sessions WHERE session_id = $session_id"
             try:
-                res = self.db.query(query, {"session_id": session_id})
+                res = self._run_surreal(query, {"session_id": session_id})
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve session from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve session from SurrealDB: {e}")
@@ -1036,6 +1225,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve session: {e}")
                 raise RuntimeError(f"Failed to retrieve session: {e}")
 
+    @_resilient
     def log_handoff(
         self,
         sender: str,
@@ -1075,8 +1265,10 @@ class DatabaseClient:
                 "status": status,
             }
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to log handoff in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to log handoff in SurrealDB: {e}")
@@ -1097,6 +1289,7 @@ class DatabaseClient:
                 logging.error(f"Failed to log handoff: {e}")
                 raise RuntimeError(f"Failed to log handoff: {e}")
 
+    @_resilient
     def get_handoff(self, handoff_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves handoff log details by ID.
 
@@ -1109,10 +1302,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(handoff_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve handoff from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff from SurrealDB: {e}")
@@ -1128,6 +1323,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve handoff: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff: {e}")
 
+    @_resilient
     def get_decision(self, decision_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a logged decision by ID.
 
@@ -1140,10 +1336,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(decision_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve decision from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve decision from SurrealDB: {e}")
@@ -1159,6 +1357,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve decision: {e}")
                 raise RuntimeError(f"Failed to retrieve decision: {e}")
 
+    @_resilient
     def get_milestone(self, milestone_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a milestone by ID.
 
@@ -1171,10 +1370,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(milestone_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve milestone from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone from SurrealDB: {e}")
@@ -1190,6 +1391,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve milestone: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone: {e}")
 
+    @_resilient
     def get_issue(self, github_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves an issue by its GitHub ID.
 
@@ -1202,8 +1404,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues WHERE github_id = $github_id"
             try:
-                res = self.db.query(query, {"github_id": github_id})
+                res = self._run_surreal(query, {"github_id": github_id})
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve issue from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve issue from SurrealDB: {e}")
@@ -1219,6 +1423,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve issue: {e}")
                 raise RuntimeError(f"Failed to retrieve issue: {e}")
 
+    @_resilient
     def get_backtest(self, backtest_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a backtest run by ID.
 
@@ -1231,10 +1436,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(backtest_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve backtest run from SurrealDB: {e}")
                 raise RuntimeError(
@@ -1252,6 +1459,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
 
+    @_resilient
     def get_open_issues(self) -> List[Dict[str, Any]]:
         """Retrieves all open issues.
 
@@ -1261,8 +1469,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues WHERE status = 'open'"
             try:
-                res = self.db.query(query)
+                res = self._run_surreal(query)
                 return self._extract_list(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve open issues from SurrealDB: {e}")
                 raise RuntimeError(
