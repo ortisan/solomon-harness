@@ -29,6 +29,18 @@ EXPECTED_SKILLS = [
 REQUIRED_SECTIONS = ["## Common pitfalls", "## Definition of done"]
 MIN_WORDS = 600
 
+# A versioned/dated standard reference: "1.2", "2.x", a 19xx/20xx year, or an RFC number.
+VERSION_RE = re.compile(r"\b\d+\.\d+|\b\d+\.x\b|\b(?:19|20)\d{2}\b|\bRFC\s?\d+", re.IGNORECASE)
+
+
+def _has_emoji(text):
+    """Mirror scripts/validate-agents.py emoji ranges; em dash/ellipsis are not flagged."""
+    for ch in text:
+        cp = ord(ch)
+        if (0x1F000 <= cp <= 0x1FFFF) or (0x2600 <= cp <= 0x27BF) or (0x2300 <= cp <= 0x23FF):
+            return True
+    return False
+
 # Same banned list as scripts/validate-agents.py, kept local so this test fails
 # independently if a cliche slips into the new agent's files.
 CLICHES = [
@@ -80,6 +92,14 @@ class TestDepth(unittest.TestCase):
                     section, text, f"{os.path.basename(path)} missing section '{section}'"
                 )
 
+    def test_each_skill_names_a_versioned_standard(self):
+        for path in self._skill_files():
+            self.assertRegex(
+                _read(path),
+                VERSION_RE,
+                f"{os.path.basename(path)} names no standard/library/framework with a version",
+            )
+
     def test_no_cliches_in_agent_files(self):
         files = [PERSONA, PROFILE] + self._skill_files()
         for path in files:
@@ -115,13 +135,36 @@ class TestSafetyGuidance(unittest.TestCase):
     def test_sourcing_skill_requires_two_dated_sources(self):
         lower = _read(os.path.join(SKILLS_DIR, "sourcing_the_state_of_the_art.md")).lower()
         self.assertIn("at least two", lower)
+        self.assertIn("dated", lower)
         self.assertIn("sources", lower)
         self.assertIn("credib", lower)
+
+    def test_audit_defines_three_output_states(self):
+        lower = _read(os.path.join(SKILLS_DIR, "auditing_delivered_work.md")).lower()
+        self.assertIn("no gap found", lower)
+        self.assertIn("insufficient evidence", lower)
 
     def test_scope_skill_bounds_one_agent_per_change(self):
         lower = _read(os.path.join(SKILLS_DIR, "scope_and_non_negotiables.md")).lower()
         self.assertIn("one agent", lower)
         self.assertIn("human approval", lower)
+
+
+class TestNoEmoji(unittest.TestCase):
+    def test_persona_bans_emojis(self):
+        self.assertIn("no emojis", _read(PERSONA).lower())
+
+    def test_no_emoji_chars_in_agent_files(self):
+        files = [PERSONA, PROFILE] + [
+            os.path.join(SKILLS_DIR, n)
+            for n in sorted(os.listdir(SKILLS_DIR))
+            if n.endswith(".md")
+        ]
+        for path in files:
+            self.assertFalse(
+                _has_emoji(_read(path)),
+                f"emoji codepoint found in {os.path.basename(path)}",
+            )
 
 
 if __name__ == "__main__":

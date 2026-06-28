@@ -26,7 +26,7 @@ This three-way split is the integrity boundary of the audit: a suspicion with no
 
 ## Recording the result
 
-Persist the audit as a decision in project memory with `save_decision`: the PR identifier, the domain tags, each finding with its severity, its output state, the sources cited, and the single candidate target agent per gap. Recording it lets the later slices (proposal, review, merge) resume exactly where the audit stopped, and lets a human read the reasoning without re-running the work. Keep the language direct and emoji-free, matching the senior-engineer tone the project requires.
+Persist the audit as a decision in project memory with `save_decision`: the PR identifier, the domain tags, each finding with its severity, its output state, the sources cited, and the single candidate target agent per gap. Recording it lets the later slices (proposal, review, merge) resume exactly where the audit stopped, and lets a human read the reasoning without re-running the work. Keep the record direct and follow the shared humanizer rules in agents/AGENTS.md.
 
 ## Common pitfalls
 
