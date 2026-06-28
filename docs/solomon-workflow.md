@@ -10,7 +10,7 @@ and the memory layer.
 
 Work flows through a GitHub Project (v2) board with these Status columns:
 
-`Ideas` → `Backlog` → `Ready` → `In Progress` → `In Review` → `Done`
+`Ideas` → `Backlog` → `Ready` → `In Progress` → `Code Review` → `QA` → `Done`
 
 | Stage | Workflow | Driving agents | Board move |
 | --- | --- | --- | --- |
@@ -19,9 +19,9 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 | Create a feature/story | `/solomon-issue` | product_owner | → `Backlog` |
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
 | Refine for readiness | `/solomon-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
-| Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `In Review` |
-| Review | `/solomon-review` | qa, security, software_architect | stays `In Review` (approve or request changes) |
-| Deliver and release | `/solomon-release` | sre, software_engineer | `In Review` → `Done` |
+| Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `Code Review` |
+| Review | `/solomon-review` | software_architect (code), then qa, security | `Code Review` → `QA` (then approved) |
+| Deliver and release | `/solomon-release` | sre, software_engineer | `QA` → `Done` |
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
 with `ensure_project_board`; move cards with `set_issue_status`.

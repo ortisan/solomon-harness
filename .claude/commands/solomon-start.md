@@ -24,8 +24,14 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 
 ## 2. Branch and move to In Progress (scrum_master)
-- Confirm the branch name with the user, then:
+- The branch follows Git Flow and reflects the task: `feature/$ARGUMENTS-<slug>` (or
+  `bugfix/$ARGUMENTS-<slug>` for `type:bug`), where `<slug>` is the kebab-cased issue title
+  (trim to ~6 words). The issue number is embedded so the branch maps back to the task.
+  Confirm the name with the user, then:
   `git fetch origin && git switch develop && git pull && git switch -c feature/$ARGUMENTS-<slug>`.
+- Bidirectional link: comment the branch onto the issue —
+  `gh issue comment $ARGUMENTS --body "Started on branch \`feature/$ARGUMENTS-<slug>\`."` —
+  so the issue points to the branch and the branch name points back to the issue.
 - `uv run python -m solomon_harness.github ensure-board` (idempotent), then
   `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "In Progress"`.
 - `mcp__solomon-memory__log_issue(github_id=$ARGUMENTS, title=..., type_=..., status="in_progress", milestone_id=...)`.
@@ -49,16 +55,17 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 
 ## 5. TDD implementation (software_engineer, tdd_red_green_refactor)
 - Run the loop per PLAN.md step: write the failing test (Red), minimal code to pass (Green),
-  refactor on green. Commit each step with a Conventional Commits message; the commit-msg hook
+  refactor on green. Commit each step with a Conventional Commits message that references the
+  issue (end the body with `Refs #$ARGUMENTS`) for bidirectional tracking; the commit-msg hook
   enforces format and bans emojis.
 - Keep the diff inside the PLAN.md target-files fence; re-plan if it strays.
 
-## 6. Draft PR, In Review, handoff
+## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/$ARGUMENTS-<slug>`.
 - Open a draft PR: `gh pr create --draft --base develop --title "<conventional title>" --body "..."`.
   The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
   (`docs/adr/NNNN-<slug>.md`) or state that no ADR was warranted and why.
-- `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "In Review"`.
+- `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "Code Review"`.
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.

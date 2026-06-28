@@ -283,7 +283,26 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                     "Bash(git commit:*)",
                     "Bash(git push:*)",
                 ],
-            }
+            },
+            # On session start, bring the memory backend up (docker compose) and
+            # then resume the project status. Both degrade gracefully, so a
+            # missing Docker daemon never blocks the session.
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true",
+                            },
+                            {
+                                "type": "command",
+                                "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true",
+                            },
+                        ]
+                    }
+                ]
+            },
         }
         with open(claude_settings_path, "w", encoding="utf-8") as f:
             json.dump(claude_settings, f, indent=2)
@@ -418,7 +437,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
 
     if "github.com" in git_remote:
         try:
-            from solomon_harness.github import ensure_project_board
+            from solomon_harness.github import ensure_labels, ensure_project_board
 
             board = ensure_project_board()
             if board.get("ok"):
@@ -426,8 +445,14 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                 print(f"  {action} GitHub delivery board 'solomon'.")
             else:
                 print(f"  Note: could not set up the GitHub board: {board.get('error')}")
+
+            labels = ensure_labels()
+            if labels.get("ok"):
+                print(f"  Ensured {len(labels['labels'])} standard issue labels.")
+            else:
+                print("  Note: could not create all standard labels (check gh auth).")
         except Exception as exc:
-            print(f"  Note: GitHub board setup skipped: {exc}")
+            print(f"  Note: GitHub setup skipped: {exc}")
 
     # 9. Create fallback Kanban board and Wiki template if not present on GitHub
     if not has_github_project_and_wiki(workspace_root, git_remote):
@@ -461,11 +486,13 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                 )
             print(f"  Created local Wiki templates inside {wiki_dir}")
 
-    # 10. Index project codebase into database memory
+    # 10. Index project codebase into database memory, then refresh the wiki overview.
     try:
         from solomon_harness.tools.database_client import DatabaseClient
         with DatabaseClient(harness_dir=workspace_root) as db:
             index_codebase(workspace_root, db)
+            overview_path = write_code_overview(workspace_root, db)
+            print(f"  Wrote code overview to {os.path.relpath(overview_path, workspace_root)}")
     except Exception as e:
         print(f"  Warning: Codebase indexing failed: {e}")
 
@@ -473,50 +500,138 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
 
 
 def index_codebase(workspace_root: str, db) -> None:
-    """Walks the workspace root and indexes text files into the database memory."""
+    """Index the codebase into the memory incrementally.
+
+    Only new or changed files (by modification time and size) are read and stored;
+    deleted files are removed. A manifest of path -> signature is kept in the memory
+    under "__code_index_manifest__", so re-indexing does not re-scan everything every
+    time -- it only touches what changed.
+    """
+    import json as _json
+
     print("Indexing project codebase into database...")
-    count = 0
-    # Exclude common binaries, lockfiles, and hidden/build folders to save space
     exclude_dirs = {
-        ".git", "node_modules", ".venv", "venv", "build", "dist",
-        ".claude", ".agents", "__pycache__", "docs", "planning",
-        ".idea", ".vscode"
+        ".git", "node_modules", ".venv", "venv", "build", "dist", ".solomon",
+        ".claude", ".gemini", "docs", "planning", "__pycache__", ".idea",
+        ".vscode", "memory",
     }
     exclude_exts = {
         ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".tar",
         ".gz", ".exe", ".bin", ".woff", ".woff2", ".eot", ".ttf", ".mp4",
-        ".mp3", ".wav", ".svg", ".lock", "pyc", "pyo"
+        ".mp3", ".wav", ".svg", ".lock", ".pyc", ".pyo", ".db",
     }
+    manifest_key = "__code_index_manifest__"
 
+    old_manifest = {}
+    raw = db.get_memory(manifest_key)
+    if raw:
+        try:
+            old_manifest = _json.loads(raw)
+        except Exception:
+            old_manifest = {}
+
+    new_manifest = {}
+    indexed = 0
     for root, dirs, files in os.walk(workspace_root):
-        # In-place modify dirs to avoid descending into excluded directories
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
-
         for file in files:
-            ext = os.path.splitext(file)[1].lower()
-            if ext in exclude_exts:
+            if os.path.splitext(file)[1].lower() in exclude_exts:
                 continue
-
             file_path = os.path.join(root, file)
             rel_path = os.path.relpath(file_path, workspace_root)
-
-            # Skip large files > 250KB to preserve token limits
             try:
-                size = os.path.getsize(file_path)
-                if size > 250000:
-                    continue
+                st = os.stat(file_path)
             except OSError:
                 continue
-
+            if st.st_size > 250000:
+                continue
+            signature = f"{int(st.st_mtime)}:{st.st_size}"
+            new_manifest[rel_path] = signature
+            if old_manifest.get(rel_path) == signature:
+                continue  # unchanged: skip the read and the write
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
-
-                # Use relative path as key, content as value, category "codebase_indexing"
-                db.save_memory(key=rel_path, value=content, category="codebase_indexing")
-                count += 1
+                db.save_memory(key=rel_path, value=content, category="codebase_index")
+                indexed += 1
             except Exception:
-                pass
+                new_manifest.pop(rel_path, None)  # re-try this file next run
 
-    print(f"Successfully indexed {count} files in the database.")
+    removed = 0
+    for rel_path in old_manifest:
+        if rel_path not in new_manifest:
+            db.delete_memory(rel_path)
+            removed += 1
 
+    db.save_memory(key=manifest_key, value=_json.dumps(new_manifest), category="index")
+    unchanged = len(new_manifest) - indexed
+    print(
+        f"Indexed {indexed} new/changed file(s), skipped {unchanged} unchanged, "
+        f"removed {removed} deleted."
+    )
+
+
+def generate_code_overview(workspace_root: str, db) -> str:
+    """Build a Markdown overview of the scanned codebase from the index manifest."""
+    import json as _json
+
+    project_name, git_remote, technologies = get_project_metadata(workspace_root)
+
+    paths = []
+    raw = db.get_memory("__code_index_manifest__")
+    if raw:
+        try:
+            paths = sorted(_json.loads(raw).keys())
+        except Exception:
+            paths = []
+
+    ext_counts: Dict[str, int] = {}
+    top_dirs: Dict[str, int] = {}
+    for p in paths:
+        ext = os.path.splitext(p)[1].lower() or "(none)"
+        ext_counts[ext] = ext_counts.get(ext, 0) + 1
+        head = p.split(os.sep)[0] if os.sep in p else "(root)"
+        top_dirs[head] = top_dirs.get(head, 0) + 1
+
+    agents = []
+    agents_dir = os.path.join(workspace_root, "agents")
+    if os.path.isdir(agents_dir):
+        agents = sorted(
+            n for n in os.listdir(agents_dir)
+            if os.path.isfile(os.path.join(agents_dir, n, "agents", f"{n}.md"))
+        )
+
+    lines = [
+        f"# {project_name} - Code Overview",
+        "",
+        "Auto-generated from the indexed codebase. It is refreshed on `solomon-harness init`",
+        "and on each delivery (`/solomon-release`), so it stays a living view of the code.",
+        "",
+        "## Project",
+        f"- Name: {project_name}",
+        f"- Technologies: {technologies}",
+        f"- Repository: {git_remote}",
+        f"- Files indexed: {len(paths)}",
+        "",
+        "## Top-level structure",
+    ]
+    for name, n in sorted(top_dirs.items(), key=lambda x: (-x[1], x[0])):
+        lines.append(f"- `{name}` - {n} file(s)")
+    lines += ["", "## File types"]
+    for ext, n in sorted(ext_counts.items(), key=lambda x: (-x[1], x[0]))[:15]:
+        lines.append(f"- `{ext}` - {n}")
+    if agents:
+        lines += ["", f"## Agents ({len(agents)})", "", ", ".join(agents)]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_code_overview(workspace_root: str, db) -> str:
+    """Write the code overview to the project wiki (docs/wiki/Code-Overview.md)."""
+    overview = generate_code_overview(workspace_root, db)
+    wiki_dir = os.path.join(workspace_root, "docs", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    path = os.path.join(wiki_dir, "Code-Overview.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(overview)
+    return path

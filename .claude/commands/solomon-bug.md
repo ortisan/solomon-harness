@@ -39,8 +39,10 @@ Steps:
    and an `area:<domain>` label if one fits), and the body. Creating an issue is
    an outward-facing action: get explicit confirmation before proceeding.
 5. On approval, create the issue:
-   `gh issue create --title "<title>" --label "type:bug" --label "priority:<pN>" --body "<body>"`
-   (add `--label "area:<domain>"` when applicable). Capture the issue number and URL.
+   - Ensure the standard labels exist first: `uv run python -m solomon_harness.github ensure-labels`
+     (create a new `area:<domain>` with `gh label create "area:<domain>" --color BFD4F2 --force`).
+   - `gh issue create --title "<title>" --label "type:bug" --label "priority:<pN>" --body "<body>"`
+     (add `--label "area:<domain>"` when applicable). Capture the issue number and URL.
 6. Move the card to Backlog:
    `uv run python -m solomon_harness.github set-status --issue <n> --status "Backlog"`.
 7. Persist to memory per the handoff contract:

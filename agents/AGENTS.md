@@ -116,6 +116,11 @@ implemented in `solomon_harness/tools/database_client.py`. It records decisions,
 sessions, handoffs, issues, milestones, and backtests, so an agent can see prior
 context and persist what it did. Reach it through the harness:
 
+- The SurrealDB backend runs from `docker-compose.yml`. On session start the
+  Claude Code hook runs `solomon-harness memory-up`, which brings the stack up
+  with `docker compose up -d` only when the configured local backend is not
+  already reachable. It is best-effort: with no Docker daemon the client falls
+  back to SQLite, so work is never blocked. Stop it with `solomon-harness memory-down`.
 - `python agents/<name>/main.py db-init` initializes the store.
 - `DatabaseClient(harness_dir=...)` reads and writes memory from code.
 - Backend and credentials come from the agent's `.agent/config.json`; SurrealDB

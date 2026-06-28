@@ -34,7 +34,8 @@ If `$ARGUMENTS` is empty, ask the user for the idea in one line and stop.
    Creating a GitHub issue is outward-facing; get an explicit go-ahead. On request,
    refine and re-show.
 
-3. **Create the issue** using the Idea body template from the workflow doc:
+3. **Create the issue** using the Idea body template from the workflow doc. Ensure the
+   standard labels exist first with `uv run python -m solomon_harness.github ensure-labels`:
    ```bash
    gh issue create --title "Idea: <concise title>" --label "type:idea" \
      --body "<JTBD / Opportunity / Riskiest assumption / Evidence to promote>"

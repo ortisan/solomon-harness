@@ -15,8 +15,8 @@ subagents); do not review with a single generic pass.
 ## 1. Establish context
 - `gh pr view $ARGUMENTS` and `gh pr diff $ARGUMENTS` to read the change and its
   linked issue. Identify the issue number from the `Closes #<issue>` line.
-- Check the board card is `In Review`; if not, `uv run python -m solomon_harness.github ensure-board`
-  then `uv run python -m solomon_harness.github set-status --issue <issue> --status "In Review"`.
+- Check the board card is `Code Review`; if not, `uv run python -m solomon_harness.github ensure-board`
+  then `uv run python -m solomon_harness.github set-status --issue <issue> --status "Code Review"`.
 - Pull prior context: `mcp__solomon-memory__get_latest_activity` first — read the
   latest incoming handoff contract at its `contract_path` (the start -> review
   contract) and treat it as the bounded input, reviewing the diff through the
@@ -35,6 +35,12 @@ subagents); do not review with a single generic pass.
 - software_architect agent: apply the `architecture_review_gate` checklist against
   the design contracts, the fitness functions, and any ADR the change touches.
   If the change is architecturally significant but no ADR exists, that is a blocker.
+
+Board: the software_architect's code review is the `Code Review` gate. Once it
+passes with no blockers, move the card to `QA`
+(`uv run python -m solomon_harness.github set-status --issue <issue> --status "QA"`)
+and run the qa and security lenses there. A blocker at either gate keeps the card
+in its current column and requests changes.
 
 Each lens returns findings tagged blocker, major, or minor.
 
@@ -65,5 +71,6 @@ Each lens returns findings tagged blocker, major, or minor.
   the linked decision and issue IDs.
 
 State explicitly whether an ADR was required and whether one exists. Do not push,
-merge, or change the board to `Done` here — Review stays in `In Review`; release is
-a separate stage. Output direct, professional English, no emojis.
+merge, or change the board to `Done` here — Review moves the card `Code Review` →
+`QA` and ends in `QA`; release is a separate stage. Output direct, professional
+English, no emojis.

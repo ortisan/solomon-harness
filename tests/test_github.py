@@ -59,13 +59,69 @@ class TestEnsureBoard(unittest.TestCase):
                 return _Proc(0, json.dumps({"projects": []}))
             if cmd[:3] == ["gh", "project", "create"]:
                 return _Proc(0, json.dumps({"number": 9, "title": "solomon"}))
+            if cmd[:3] == ["gh", "project", "field-list"]:
+                return _Proc(0, json.dumps({"fields": [{"name": "Status", "id": "F1", "options": [{"name": "Todo", "id": "o1"}]}]}))
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                self._graphql_calls.append(cmd)
+                return _Proc(0, "{}")
             raise AssertionError(f"unexpected gh call: {cmd}")
 
+        self._graphql_calls = []
         with patch("subprocess.run", side_effect=fake_run):
             res = github.ensure_project_board()
         self.assertTrue(res["ok"])
         self.assertTrue(res["created"])
         self.assertEqual(res["project"]["number"], 9)
+        self.assertTrue(res["columns_configured"])
+        # The create path must push every lifecycle column as a single-select option.
+        self.assertEqual(len(self._graphql_calls), 1)
+        mutation = self._graphql_calls[0][-1]
+        for col in github.BOARD_COLUMNS:
+            self.assertIn(f'name: "{col}"', mutation)
+
+
+class TestConfigureBoardColumns(unittest.TestCase):
+    def test_missing_project_number_is_handled(self):
+        res = github._configure_board_columns("acme", None)
+        self.assertFalse(res["ok"])
+
+    def test_builds_mutation_with_all_columns(self):
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "project", "field-list"]:
+                return _Proc(0, json.dumps({"fields": [{"name": "Status", "id": "F1", "options": [{"name": "Todo", "id": "o1"}]}]}))
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                return _Proc(0, "{}")
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github._configure_board_columns("acme", 9)
+        self.assertTrue(res["ok"])
+
+
+class TestEnsureLabels(unittest.TestCase):
+    def test_creates_every_standard_label(self):
+        created = []
+
+        def fake_run(cmd, **kwargs):
+            self.assertEqual(cmd[:3], ["gh", "label", "create"])
+            created.append(cmd[3])
+            return _Proc(0, "")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_labels()
+        self.assertTrue(res["ok"])
+        self.assertEqual(created, [name for name, _c, _d in github.STANDARD_LABELS])
+
+    def test_partial_failure_is_not_ok(self):
+        def fake_run(cmd, **kwargs):
+            if cmd[3] == "type:bug":
+                return _Proc(1, "", "boom")
+            return _Proc(0, "")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_labels()
+        self.assertFalse(res["ok"])
+        self.assertNotIn("type:bug", res["labels"])
 
 
 class TestSetStatus(unittest.TestCase):
@@ -75,7 +131,30 @@ class TestSetStatus(unittest.TestCase):
         self.assertIn("unknown status", res["error"])
 
     def test_known_status_is_allowed(self):
-        self.assertIn("In Review", github.BOARD_COLUMNS)
+        self.assertIn("Code Review", github.BOARD_COLUMNS)
+        self.assertIn("QA", github.BOARD_COLUMNS)
+
+
+class TestRecordTransition(unittest.TestCase):
+    def test_appends_timeline_entry(self):
+        import tempfile
+
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("os.getcwd", return_value=tmp):
+                github.record_transition(7, "In Progress")
+                github.record_transition(7, "Code Review")
+                with DatabaseClient(harness_dir=tmp) as db:
+                    raw = db.get_memory("board_history:7")
+            history = json.loads(raw)
+        self.assertEqual([h["column"] for h in history], ["In Progress", "Code Review"])
+        self.assertTrue(all("entered_at" in h for h in history))
+
+    def test_never_raises_on_failure(self):
+        with patch("solomon_harness.tools.database_client.DatabaseClient", side_effect=RuntimeError):
+            # Best-effort: a DB failure must not propagate.
+            github.record_transition(1, "Done")
 
 
 if __name__ == "__main__":
