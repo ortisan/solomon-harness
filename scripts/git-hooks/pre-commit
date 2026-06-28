@@ -7,9 +7,9 @@ echo "=== Running pre-commit validation loop ==="
 echo "Auto-documenting specialist skills..."
 uv run python scripts/document-skills.py || { echo "Error: Skill auto-documentation failed."; exit 1; }
 
-# 2. Compile agent harnesses
+# 2. Compile: scaffold agents and regenerate host-tool integrations
 echo "Compiling specialist agent harnesses..."
-uv run python -m solomon_harness.compiler || { echo "Error: Harness compilation failed."; exit 1; }
+uv run python -m solomon_harness.cli compile || { echo "Error: Harness compilation failed."; exit 1; }
 
 # 3. Run full project test suite
 echo "Running project test suite..."

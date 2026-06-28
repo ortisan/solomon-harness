@@ -31,9 +31,10 @@ Each specialist agent is modularly defined under `agents/<name>/`:
    ```
 
 4. **Compile the Harness:**
-   Recompile to inject dynamic architectural, observability, or security patterns:
+   Scaffold any missing agent files and regenerate the host-tool integrations
+   (`.claude/agents/`, `.gemini/commands/`):
    ```bash
-   uv run python -m solomon_harness.compiler
+   uv run python -m solomon_harness.cli compile
    ```
 
 ## Non-Negotiable Standards

@@ -109,9 +109,6 @@ class TestBootstrapAgent(unittest.TestCase):
         with open(self.config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
 
-        self.assertEqual(config.get("architecture_pattern"), "hexagonal")
-        self.assertEqual(config.get("observability_pattern"), "opentelemetry")
-        self.assertEqual(config.get("security_pattern"), "secure_dev")
 
         # Check preserved initial configuration
         self.assertEqual(config.get("timeout_seconds"), 99)
@@ -131,51 +128,7 @@ class TestBootstrapAgent(unittest.TestCase):
 
         with open(self.config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-
-        self.assertEqual(config.get("architecture_pattern"), "hexagonal")
-        self.assertEqual(config.get("observability_pattern"), "opentelemetry")
-        self.assertEqual(config.get("security_pattern"), "secure_dev")
-
-    def test_interactive_choices_first_option(self):
-        inputs = "1\n1\n1\n"
-
-        result = subprocess.run(
-            ["bash", self.script_path],
-            cwd=self.workspace_dir,
-            input=inputs,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(result.returncode, 0, f"Script failed with: {result.stderr}")
-
-        with open(self.config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-
-        self.assertEqual(config.get("architecture_pattern"), "clean")
-        self.assertEqual(config.get("observability_pattern"), "basic")
-        self.assertEqual(config.get("security_pattern"), "standard")
-        self.assertEqual(config.get("timeout_seconds"), 99)
-
-    def test_interactive_choices_alternative_option(self):
-        inputs = "2\n2\n2\n"
-
-        result = subprocess.run(
-            ["bash", self.script_path],
-            cwd=self.workspace_dir,
-            input=inputs,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(result.returncode, 0, f"Script failed with: {result.stderr}")
-
-        with open(self.config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-
-        self.assertEqual(config.get("architecture_pattern"), "functional")
-        self.assertEqual(config.get("observability_pattern"), "opentelemetry")
-        self.assertEqual(config.get("security_pattern"), "secure_dev")
+        self.assertIn("database", config)
 
     def test_bootstrap_creates_fallback_kanban_and_wiki_when_no_github(self):
         # Remove git repository settings to simulate no git / no github remote

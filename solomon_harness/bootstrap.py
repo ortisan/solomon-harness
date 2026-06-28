@@ -102,54 +102,9 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
     return project_name, git_remote, technologies
 
 
-def configure_patterns(workspace_root: str, non_interactive: bool = False) -> tuple[str, str, str]:
-    """Prompts or uses defaults for software architecture/observability/security patterns."""
-    arch_pattern = "hexagonal"
-    obs_pattern = "opentelemetry"
-    sec_pattern = "secure_dev"
-
-    if not non_interactive:
-        print("Software patterns configuration:")
-        while True:
-            print("Select Software Architecture Pattern: [1] Clean Architecture, [2] Functional Architecture, [3] Hexagonal (Ports & Adapters)")
-            choice = input("Choice: ").strip()
-            if choice == "1":
-                arch_pattern = "clean"
-                break
-            elif choice == "2":
-                arch_pattern = "functional"
-                break
-            elif choice == "3":
-                arch_pattern = "hexagonal"
-                break
-            else:
-                print("Invalid option. Please try again.")
-
-        while True:
-            print("Select Observability level: [1] Basic Logs, [2] OpenTelemetry (traces, spans, custom metrics)")
-            choice = input("Choice: ").strip()
-            if choice == "1":
-                obs_pattern = "basic"
-                break
-            elif choice == "2":
-                obs_pattern = "opentelemetry"
-                break
-            else:
-                print("Invalid option. Please try again.")
-
-        while True:
-            print("Select Security practices: [1] Standard, [2] Secure Development (SAST, STRIDE threat modeling)")
-            choice = input("Choice: ").strip()
-            if choice == "1":
-                sec_pattern = "standard"
-                break
-            elif choice == "2":
-                sec_pattern = "secure_dev"
-                break
-            else:
-                print("Invalid option. Please try again.")
-
-    # Save to config.json
+def ensure_database_config(workspace_root: str) -> None:
+    """Ensure .agent/config.json carries a database block. No credentials are
+    written here; they come from SURREAL_USER / SURREAL_PASS at runtime."""
     config_dir = os.path.join(workspace_root, ".agent")
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config.json")
@@ -162,24 +117,16 @@ def configure_patterns(workspace_root: str, non_interactive: bool = False) -> tu
         except Exception:
             pass
 
-    config_data["architecture_pattern"] = arch_pattern
-    config_data["observability_pattern"] = obs_pattern
-    config_data["security_pattern"] = sec_pattern
-
     if "database" not in config_data:
-        # No credentials are written here; they are supplied at runtime via the
-        # SURREAL_USER / SURREAL_PASS environment variables.
         config_data["database"] = {
             "provider": "surrealdb",
             "url": "ws://localhost:8000/rpc",
             "namespace": "solomon",
-            "database": "harness"
+            "database": "harness",
         }
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=2)
-
-    return arch_pattern, obs_pattern, sec_pattern
 
 
 def interpolate_and_write(template_path: str, dest_path: str, replacements: Dict[str, str], fallback_content: str) -> None:
@@ -258,10 +205,44 @@ def _install_harness_files(workspace_root: str) -> None:
     print("  Harness files installed.")
 
 
+def scaffold_agents(workspace_root: str) -> None:
+    """Ensure each agent has main.py and .agent/config.json (create-only).
+
+    Non-destructive: a hand-authored entrypoint or config is never overwritten;
+    only genuinely missing scaffolding is filled in from the bundled template.
+    """
+    agents_dir = os.path.join(workspace_root, "agents")
+    if not os.path.isdir(agents_dir):
+        return
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    template_dir = os.path.join(package_dir, "templates", "harness")
+    main_src = os.path.join(template_dir, "main.py")
+    config_src = os.path.join(template_dir, ".agent", "config.json")
+
+    for name in sorted(os.listdir(agents_dir)):
+        agent_dir = os.path.join(agents_dir, name)
+        if not os.path.isfile(os.path.join(agent_dir, "agents", f"{name}.md")):
+            continue  # not an agent directory
+
+        main_dst = os.path.join(agent_dir, "main.py")
+        if os.path.isfile(main_src) and not os.path.isfile(main_dst):
+            shutil.copy2(main_src, main_dst)
+
+        config_dst = os.path.join(agent_dir, ".agent", "config.json")
+        if os.path.isfile(config_src) and not os.path.isfile(config_dst):
+            os.makedirs(os.path.dirname(config_dst), exist_ok=True)
+            with open(config_src, "r", encoding="utf-8") as f:
+                content = f.read().replace("{{AGENT_NAME}}", name)
+            with open(config_dst, "w", encoding="utf-8") as f:
+                f.write(content)
+
+
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:
-    """Initializes the agent harness workspace in workspace_root."""
-    if os.environ.get("NON_INTERACTIVE") == "true":
-        non_interactive = True
+    """Initializes the agent harness workspace in workspace_root.
+
+    init is non-interactive; the ``non_interactive`` parameter is kept for CLI
+    compatibility and has no effect now that pattern prompting was retired.
+    """
     print("=== Solomon Agent Bootstrap ===")
 
     # Check prerequisites and install the safe ones (uv) before doing any work.
@@ -281,7 +262,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
 
-    arch, obs, sec = configure_patterns(workspace_root, non_interactive)
+    ensure_database_config(workspace_root)
 
     # 3. Generate .claude/settings.json only when it does not already exist, so
     # re-running init never clobbers a hand-maintained settings file. No model is
@@ -398,10 +379,9 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     else:
         print("  Warning: Git commit-msg hook template not found. Hook was not installed.")
 
-    # 7. Compile agent harnesses
-    print("Compiling agent harnesses...")
-    from solomon_harness.compiler import compile_harnesses
-    compile_harnesses(workspace_root)
+    # 7. Scaffold any missing agent entrypoints/config.
+    print("Scaffolding agent entrypoints...")
+    scaffold_agents(workspace_root)
 
     # 8. Generate the host-tool subagent definitions from the central agents/ source.
     gi_path = os.path.join(workspace_root, "scripts", "generate-integrations.py")

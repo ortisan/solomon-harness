@@ -29,9 +29,10 @@ When introducing a new agent to the harness, adhere to the following sequence:
    ```
 
 4. **Compile the Harness:**
-   Compile the agent to copy templates and inject custom architectural patterns (e.g. Hexagonal, OpenTelemetry, Secure Development) based on `.agent/config.json`:
+   Scaffold any missing agent files and regenerate the host-tool integrations
+   (`.claude/agents/`, `.gemini/commands/`):
    ```bash
-   uv run python -m solomon_harness.compiler
+   uv run python -m solomon_harness.cli compile
    ```
 
 ## Development and Testing Standards

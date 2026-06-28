@@ -1,1 +1,1 @@
-"""Harness tools: memory client and browser client."""
+"""Harness tools: the SurrealDB/SQLite memory client."""

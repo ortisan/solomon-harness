@@ -125,11 +125,11 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
         from solomon_harness import cli
 
         with (
-            patch("solomon_harness.compiler.compile_harnesses") as mock_compile,
+            patch("solomon_harness.bootstrap.scaffold_agents") as mock_scaffold,
             patch.object(cli, "_generate_integrations") as mock_gen,
         ):
             cli.main(harness_dir=WORKSPACE, argv=["compile"])
-        mock_compile.assert_called_once()
+        mock_scaffold.assert_called_once()
         mock_gen.assert_called_once()
 
 

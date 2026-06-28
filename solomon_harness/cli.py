@@ -227,8 +227,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         from solomon_harness.workflows import run_stage
         sys.exit(run_stage(workspace_root, args.stage, args.dev_args))
     elif args.command == "compile":
-        from solomon_harness.compiler import compile_harnesses
-        compile_harnesses(workspace_root)
+        from solomon_harness.bootstrap import scaffold_agents
+        scaffold_agents(workspace_root)
         # Keep the host-tool integrations in sync so they never drift from source.
         _generate_integrations(workspace_root)
     elif args.command == "index":

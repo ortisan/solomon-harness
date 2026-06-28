@@ -53,6 +53,16 @@ own model loop.
 - Preserve existing docstrings and comments unrelated to the current change,
   unless explicitly instructed otherwise.
 
+### Project engineering conventions
+
+These are the project defaults; deviating from one requires an ADR.
+
+- Architecture: Hexagonal (ports and adapters) by default, per the
+  `software_architect` agent's `architecture_styles` skill.
+- Observability: OpenTelemetry, per the `observability` agent's skills.
+- Security: secure-by-default (STRIDE, input validation, parameterized queries,
+  secrets out of code), per the `security` agent's skills.
+
 ### Quantitative Trading and DRL/ML Engineer
 
 - When formulating a Model Hypothesis, state: target Sharpe ratio, drawdown limit,

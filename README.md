@@ -7,7 +7,7 @@ use — Claude Code or the Gemini CLI. The harness supplies the agents and the
 memory; the host tool supplies the model loop.
 
 It ships a dual-backend memory layer (SurrealDB primary, SQLite fallback), a
-non-destructive compiler, and a set of `/solomon-dev-*` workflows that take a
+non-destructive scaffolder, and a set of `/solomon-dev-*` workflows that take a
 piece of work from idea to release while persisting every decision and handoff.
 
 ---
@@ -197,26 +197,28 @@ large files) and stores each file in the memory so agents can query the codebase
 from `.claude/commands/`. `solomon-harness compile` runs it automatically so the
 integrations never drift from their sources.
 
-### Non-destructive compiler
+### Non-destructive scaffolding
 
-`solomon-harness compile` treats `agents/<name>/` as source — it never overwrites a
-hand-authored persona or config — and writes the composed instruction (rules +
-persona + profile + the configured dynamic patterns) to a gitignored
-`build/agents/<name>/`. A test guards that compiling never mutates tracked source.
+`solomon-harness compile` only scaffolds genuinely-missing agent entrypoints and
+config — it never overwrites a hand-authored persona or config — and regenerates
+the host-tool integrations. A test guards that scaffolding never mutates tracked
+source.
 
-### Dynamic patterns
+### Engineering conventions
 
-Architecture (Clean/Functional/Hexagonal), observability (OpenTelemetry), and
-security (Secure Development) patterns are injected into the relevant agents'
-compiled output based on `.agent/config.json`.
+The project-wide architecture, observability, and security defaults (Hexagonal,
+OpenTelemetry, secure-by-default) live in the owning agents' skills (for example
+`software_architect/skills/architecture_styles`) and in `agents/AGENTS.md`;
+deviating from one requires an ADR.
 
 ### Quality and invariants
 
 Strict TDD is the standard; the suite (run with the command below) covers the
-compiler, memory client, MCP server, agent selection, the board helpers, the host
-integrations, and the Gemini mirror, plus invariant guards (compile is
-non-destructive, the MCP server builds, the SurrealDB path works against a live
-server). The humanizer rules forbid emojis and AI cliches in all generated output.
+scaffolder, memory client, MCP server, agent selection, the board helpers, the
+host integrations, the Gemini mirror, and the prerequisite/workflow CLI, plus
+invariant guards (scaffolding is non-destructive, the MCP server builds, the
+SurrealDB path works against a live server). The humanizer rules forbid emojis and
+AI cliches in all generated output.
 
 ---
 
@@ -253,8 +255,7 @@ solomon-harness/
 ├── .gemini/                 # Gemini CLI: commands/ (generated) and settings.json (MCP)
 ├── docs/                    # adr/ (ADRs) and solomon-dev-workflow.md (conventions)
 ├── solomon_harness/         # Core package
-│   ├── compiler.py          #   non-destructive compile -> build/
-│   ├── bootstrap.py         #   init / codebase indexing
+│   ├── bootstrap.py         #   init / install / scaffold / codebase indexing
 │   ├── cli.py               #   the solomon-harness CLI (init, doctor, dev, compile, ...)
 │   ├── agent_selection.py   #   stack -> agents
 │   ├── prereqs.py           #   prerequisite check / uv install (doctor)
@@ -264,10 +265,9 @@ solomon-harness/
 │   ├── memory_service.py    #   memory service layer
 │   ├── skills.py            #   external skill fetching
 │   ├── evals.py             #   per-agent evaluation suite
-│   ├── templates/           #   bundled harness/pattern templates
+│   ├── templates/           #   bundled harness scaffold template
 │   └── tools/               #   database_client.py
 ├── scripts/                 # generate-integrations, document-skills, scrum-master, validators
-├── build/                   # Compiled agent output (gitignored)
 └── tests/                   # Verification suite
 ```
 

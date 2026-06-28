@@ -31,16 +31,16 @@ def _hash_tree(root: str) -> dict:
     return digests
 
 
-class TestCompileDoesNotMutateSource(unittest.TestCase):
-    """The compiler must treat agents/ as read-only source and write only to build/."""
+class TestScaffoldDoesNotMutateSource(unittest.TestCase):
+    """Scaffolding must treat agents/ as source and only add missing files."""
 
-    def test_compile_leaves_agents_tree_byte_identical(self):
-        from solomon_harness.compiler import compile_harnesses
+    def test_scaffold_leaves_existing_source_unchanged(self):
+        from solomon_harness.bootstrap import scaffold_agents
 
         agents_dir = os.path.join(WORKSPACE, "agents")
         before = _hash_tree(agents_dir)
 
-        compile_harnesses(WORKSPACE)
+        scaffold_agents(WORKSPACE)
 
         after = _hash_tree(agents_dir)
 
@@ -48,28 +48,15 @@ class TestCompileDoesNotMutateSource(unittest.TestCase):
         created = sorted(p for p in after if p not in before)
         removed = sorted(p for p in before if p not in after)
 
-        # The core invariant: compile must never modify or delete a tracked source
-        # file (persona.md, .agent/config.json, the role profile, or any skill).
-        self.assertEqual(changed, [], f"compile mutated existing source files: {changed}")
-        self.assertEqual(removed, [], f"compile removed files under agents/: {removed}")
+        # The core invariant: scaffolding must never modify or delete a tracked
+        # source file (persona.md, the role profile, .agent/config.json, any skill).
+        self.assertEqual(changed, [], f"scaffold mutated existing source files: {changed}")
+        self.assertEqual(removed, [], f"scaffold removed files under agents/: {removed}")
 
-        # Compile may scaffold genuinely-missing entrypoint/config files; nothing else.
+        # It may create genuinely-missing entrypoint/config files; nothing else.
         allowed = {"main.py", "config.json"}
         unexpected = [p for p in created if os.path.basename(p) not in allowed]
-        self.assertEqual(unexpected, [], f"compile created unexpected files: {unexpected}")
-
-    def test_compile_writes_to_gitignored_build_dir(self):
-        from solomon_harness.compiler import compile_harnesses
-
-        compile_harnesses(WORKSPACE)
-        build_dir = os.path.join(WORKSPACE, "build", "agents")
-        self.assertTrue(os.path.isdir(build_dir), "compile did not produce build/agents/")
-        # Every discovered agent should have a compiled instruction file.
-        agents_dir = os.path.join(WORKSPACE, "agents")
-        for name in os.listdir(agents_dir):
-            if os.path.isfile(os.path.join(agents_dir, name, "agents", f"{name}.md")):
-                compiled = os.path.join(build_dir, name, f"{name}.md")
-                self.assertTrue(os.path.isfile(compiled), f"missing compiled output for {name}")
+        self.assertEqual(unexpected, [], f"scaffold created unexpected files: {unexpected}")
 
 
 class TestMcpServerBuilds(unittest.TestCase):
