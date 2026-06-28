@@ -242,6 +242,12 @@ def stop_memory(workspace_root: Optional[str] = None) -> dict:
 
 def _describe(result: dict) -> str:
     """One-line human summary of an ensure_memory_up/stop_memory result."""
+    from solomon_harness.voice import say
+
+    return say(_describe_body(result))
+
+
+def _describe_body(result: dict) -> str:
     if result.get("already_running"):
         return "Memory backend already running."
     if result.get("started"):

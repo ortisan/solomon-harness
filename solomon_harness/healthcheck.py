@@ -152,7 +152,9 @@ _SYMBOL = {OK: "ok  ", WARN: "warn", FAIL: "fail"}
 
 
 def format_report(checks: List[Dict]) -> str:
-    lines = ["Harness healthcheck:"]
+    from solomon_harness.voice import say
+
+    lines = [say("healthcheck:")]
     for c in checks:
         lines.append(f"  {_SYMBOL.get(c['status'], '?   ')}  {c['name']}: {c['detail']}")
         if c["status"] != OK and c.get("fix"):

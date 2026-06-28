@@ -100,8 +100,10 @@ def handle_run(harness_dir: str, task=None) -> None:
         print(f"Error: Failed to initialize database client: {e}", file=sys.stderr)
         sys.exit(1)
 
+    from solomon_harness.voice import say
+
     with db_client as db:
-        print("Solomon Harness - project status")
+        print(say("project status"))
 
         try:
             latest = db.get_latest_activity()
@@ -134,7 +136,7 @@ def handle_run(harness_dir: str, task=None) -> None:
 
             pending = pending_summary(run_checks(harness_dir))
             if pending:
-                print("\nPending initialization (run 'solomon-harness healthcheck' for detail):")
+                print(say("\nPending initialization (run 'solomon-harness healthcheck' for detail):"))
                 for item in pending:
                     print(f"  - {item}")
         except Exception as e:
