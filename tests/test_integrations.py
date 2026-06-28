@@ -118,5 +118,20 @@ class TestGeminiCommands(unittest.TestCase):
             self.assertNotIn("mcp__solomon-memory__", body)
 
 
+class TestCompileSyncsIntegrations(unittest.TestCase):
+    def test_compile_command_regenerates_integrations(self):
+        from unittest.mock import patch
+
+        from solomon_harness import cli
+
+        with (
+            patch("solomon_harness.compiler.compile_harnesses") as mock_compile,
+            patch.object(cli, "_generate_integrations") as mock_gen,
+        ):
+            cli.main(harness_dir=WORKSPACE, argv=["compile"])
+        mock_compile.assert_called_once()
+        mock_gen.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

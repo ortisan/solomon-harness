@@ -38,6 +38,25 @@ def _subagent_description(filepath: str) -> str:
     return ""
 
 
+def _generate_integrations(workspace_root: str) -> None:
+    """Regenerate the host-tool integrations (.claude/agents, .gemini/commands).
+
+    Loaded from scripts/generate-integrations.py so the compile step keeps the
+    Claude subagents and Gemini commands in sync with the agents/ and
+    .claude/commands/ sources. A no-op when the script is absent.
+    """
+    import importlib.util
+
+    gi_path = os.path.join(workspace_root, "scripts", "generate-integrations.py")
+    if not os.path.isfile(gi_path):
+        return
+    spec = importlib.util.spec_from_file_location("generate_integrations", gi_path)
+    if spec and spec.loader:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.generate(workspace_root)
+
+
 def handle_db_init(harness_dir: str) -> None:
     """Initializes the database client for the given harness directory."""
     from solomon_harness.tools.database_client import DatabaseClient
@@ -148,7 +167,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     init_parser = subparsers.add_parser("init", help="Initialize workspace configuration and rules")
     init_parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode using default configurations")
 
-    subparsers.add_parser("compile", help="Compile agent harnesses from templates")
+    subparsers.add_parser(
+        "compile",
+        help="Compile agent harnesses and regenerate host-tool integrations",
+    )
     subparsers.add_parser("index", help="Index project codebase into the database memory")
 
     skills_parser = subparsers.add_parser("skills", help="Manage agent skills")
@@ -194,6 +216,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     elif args.command == "compile":
         from solomon_harness.compiler import compile_harnesses
         compile_harnesses(workspace_root)
+        # Keep the host-tool integrations in sync so they never drift from source.
+        _generate_integrations(workspace_root)
     elif args.command == "index":
         from solomon_harness.bootstrap import index_codebase
         from solomon_harness.tools.database_client import DatabaseClient
