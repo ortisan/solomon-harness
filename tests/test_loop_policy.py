@@ -42,6 +42,12 @@ class TestLadder(unittest.TestCase):
         self.assertFalse(p.requires_lock("loop"))
         self.assertFalse(_policy("L2").requires_lock("start"))
 
+    def test_scan_loops_are_l2_l3_automation(self):
+        self.assertTrue(_policy("L2").decide_stage("scan-arch").allowed)
+        self.assertTrue(_policy("L3").decide_stage("scan-dedup").allowed)
+        self.assertFalse(_policy("L1").decide_stage("scan-arch").allowed)  # not report-only
+        self.assertTrue(_policy("human").decide_stage("scan-arch").allowed)
+
     def test_invalid_level_fails_closed(self):
         # A typo must never silently become unrestricted.
         p = _policy("l2")

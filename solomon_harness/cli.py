@@ -218,6 +218,33 @@ def handle_loop_policy(workspace_root: str) -> None:
         print(f"  {stage:<8} {verdict} {d.reason}")
 
 
+def handle_notify(workspace_root: str, message: str, event: str) -> None:
+    """Send one outbound status notification (console or webhook)."""
+    from solomon_harness import notify
+
+    if notify.send(workspace_root, event, message):
+        print("Notification sent.")
+    else:
+        print("No notifier configured (set SOLOMON_NOTIFY_WEBHOOK or a notify.mode in .agent/config.json).")
+
+
+def handle_loop_budget(workspace_root: str) -> None:
+    """Show today's autonomous-loop cost spend versus the configured ceiling."""
+    from solomon_harness import loop_budget
+    from solomon_harness.loop_policy import LoopPolicy
+
+    p = LoopPolicy.from_config(workspace_root)
+    spend = loop_budget.daily_spend(workspace_root)
+    ceiling = p.daily_cost_ceiling
+    print(f"Daily spend: ${spend:.4f}")
+    if ceiling:
+        status = "OVER -> report-only" if loop_budget.over_ceiling(workspace_root, ceiling) else "within budget"
+        print(f"Ceiling:     ${ceiling}  ({status})")
+    else:
+        print("Ceiling:     none configured (set loop.daily_cost_ceiling_usd)")
+    print(f"Ledger:      {loop_budget.ledger_path(workspace_root)}")
+
+
 def handle_loop_guard(workspace_root: str) -> None:
     """PreToolUse hook: block git push / gh pr merge under a live foreign lock.
 
@@ -332,6 +359,16 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         help="Show the autonomy level, kill-switch state, denylist and per-stage gates",
     )
 
+    notify_parser = subparsers.add_parser(
+        "notify", help="Send an outbound status notification (console or webhook)"
+    )
+    notify_parser.add_argument("message", type=str, help="The message to send")
+    notify_parser.add_argument("--event", type=str, default="manual", help="Event label")
+
+    subparsers.add_parser(
+        "loop-budget", help="Show today's autonomous-loop cost spend versus the ceiling"
+    )
+
     dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
@@ -392,6 +429,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_loop_stop(workspace_root, args.clear)
     elif args.command == "loop-policy":
         handle_loop_policy(workspace_root)
+    elif args.command == "notify":
+        handle_notify(workspace_root, args.message, args.event)
+    elif args.command == "loop-budget":
+        handle_loop_budget(workspace_root)
     elif args.command == "log":
         handle_log(workspace_root, args.last)
     elif args.command == "dev":

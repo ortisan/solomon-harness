@@ -29,7 +29,10 @@ HUMAN_GATED_STAGES = {"release"}
 # L1 is report-only: it may scan and propose, never mutate.
 L1_ALLOWED_STAGES = {"loop"}
 # L2/L3 may create work and draft PRs, but never the human-gated stages above.
-AUTOMATION_ALLOWED_STAGES = {"loop", "idea", "issue", "bug", "refine", "start", "review"}
+# The scan loops are generative maintenance: they draft PRs, so they belong here.
+AUTOMATION_ALLOWED_STAGES = {
+    "loop", "idea", "issue", "bug", "refine", "start", "review", "scan-arch", "scan-dedup",
+}
 
 DEFAULT_DENYLIST = [
     ".git/*",
@@ -61,6 +64,7 @@ class LoopPolicy:
         denylist: Optional[List[str]] = None,
         maker_model: Optional[str] = None,
         checker_model: Optional[str] = None,
+        daily_cost_ceiling: Optional[float] = None,
     ) -> None:
         self.workspace_root = workspace_root
         # Keep an invalid/typo'd level verbatim so decide_stage fails CLOSED on it
@@ -69,6 +73,7 @@ class LoopPolicy:
         self.denylist = list(denylist) if denylist is not None else list(DEFAULT_DENYLIST)
         self.maker_model = maker_model
         self.checker_model = checker_model
+        self.daily_cost_ceiling = daily_cost_ceiling
 
     # -- construction -------------------------------------------------------
     @classmethod
@@ -82,6 +87,7 @@ class LoopPolicy:
             denylist=cfg.get("denylist"),
             maker_model=cfg.get("maker_model"),
             checker_model=cfg.get("checker_model"),
+            daily_cost_ceiling=cfg.get("daily_cost_ceiling_usd"),
         )
 
     # -- kill-switch --------------------------------------------------------
