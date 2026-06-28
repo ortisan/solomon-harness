@@ -127,6 +127,19 @@ def handle_run(harness_dir: str, task=None) -> None:
         except Exception as e:
             print(f"Warning: could not read open issues: {e}", file=sys.stderr)
 
+        # Surface any pending initialization items (Docker down, memory on the
+        # SQLite fallback, missing board scope, global install not run).
+        try:
+            from solomon_harness.healthcheck import pending_summary, run_checks
+
+            pending = pending_summary(run_checks(harness_dir))
+            if pending:
+                print("\nPending initialization (run 'solomon-harness healthcheck' for detail):")
+                for item in pending:
+                    print(f"  - {item}")
+        except Exception as e:
+            print(f"Warning: could not run healthcheck: {e}", file=sys.stderr)
+
         if task:
             print(
                 "\nTasks are not auto-run here. Start this one with a workflow, "
@@ -188,6 +201,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     doctor_parser = subparsers.add_parser("doctor", help="Check (and install) prerequisites")
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
 
+    subparsers.add_parser("healthcheck", help="Report runtime readiness and pending init items (Docker, memory, board, global install)")
+
     dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
@@ -235,6 +250,11 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     elif args.command == "doctor":
         from solomon_harness.prereqs import check_prerequisites
         sys.exit(0 if check_prerequisites(auto_install=not args.no_install) else 1)
+    elif args.command == "healthcheck":
+        from solomon_harness.healthcheck import format_report, run_checks
+        checks = run_checks(workspace_root)
+        print(format_report(checks))
+        sys.exit(1 if any(c["status"] == "fail" for c in checks) else 0)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
         sys.exit(run_stage(workspace_root, args.stage, args.dev_args))
