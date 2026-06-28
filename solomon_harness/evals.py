@@ -158,6 +158,8 @@ def build_agent_suite(harness_dir: str) -> unittest.TestSuite:
             self.assertEqual(latest["agent"], "dev_agent -> qa_agent")
             self.assertEqual(latest["task"], "plan")
             self.assertEqual(latest["status"], "pending")
+            # The contract artifact path must round-trip so the next stage can read it.
+            self.assertEqual(latest["contract_path"], "/path/to/contract.md")
 
             db.close()
 

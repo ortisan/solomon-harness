@@ -1099,8 +1099,9 @@ class DatabaseClient:
         """Retrieves the most recent entry from the handoffs or sessions table.
 
         Returns:
-            A dictionary containing keys: 'type', 'agent', 'task', 'status', 'timestamp',
-            or None if no activity exists.
+            A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
+            (and 'contract_path' for handoffs, pointing to the handoff contract
+            artifact), or None if no activity exists.
         """
         latest_session = None
         if self.backend == "surrealdb":
@@ -1183,6 +1184,7 @@ class DatabaseClient:
                 "agent": f"{latest_handoff.get('sender')} -> {latest_handoff.get('recipient')}",
                 "task": latest_handoff.get("contract_type"),
                 "status": latest_handoff.get("status"),
+                "contract_path": latest_handoff.get("contract_path"),
                 "timestamp": latest_handoff.get("timestamp"),
             }
 
