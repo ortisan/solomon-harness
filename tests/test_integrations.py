@@ -148,6 +148,20 @@ class TestStartWorktree(unittest.TestCase):
         self.assertIn("solomon_harness.cli worktree", toml)
 
 
+class TestStartAdr(unittest.TestCase):
+    def test_adr_0001_records_the_start_stage_decision(self):
+        adr = _read(
+            os.path.join(
+                "docs", "adr", "0001-isolated-worktree-and-implementation-mode-on-start.md"
+            )
+        )
+        low = adr.lower()
+        self.assertIn("worktree", low)
+        self.assertIn("manual", low)
+        self.assertIn("#8", adr)
+        self.assertIn("#23", adr)
+
+
 class TestStartImplementationMode(unittest.TestCase):
     def test_start_command_asks_mode_before_coding(self):
         body = _read(os.path.join(".claude", "commands", "solomon-start.md"))
