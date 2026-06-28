@@ -19,7 +19,9 @@ The following specific skills are actively configured for this agent:
 - [definition_of_done](skills/definition_of_done.md) — A failing test existed first for every behavior, was observed red, and now passes.
 - [error_handling_and_problem_details](skills/error_handling_and_problem_details.md) — Centralize error handling so the domain defines each failure once, a single handler per transport renders it, and the wire format is…
 - [git_flow_and_conventional_commits](skills/git_flow_and_conventional_commits.md) — Branch from `develop`: `feature/<short-slug>` for new capability, `bugfix/<short-slug>` for defects.
+- [harness_memory_and_handoff](skills/harness_memory_and_handoff.md) — Persist the reasoning and state of your work to the project memory so the next agent resumes from a record, not from re-reading the diff.
 - [hexagonal_architecture_ports_and_adapters](skills/hexagonal_architecture_ports_and_adapters.md) — This role's design boundary.
+- [plan_authoring](skills/plan_authoring.md) — Write the PLAN.md the workflow mandates between Planning and Execution so a reviewer can approve the approach before a line of code exists.
 - [resilience_patterns_in_code](skills/resilience_patterns_in_code.md) — Wrap every outbound call (HTTP, gRPC, DB, queue, third-party SDK) in an explicit resilience stack so a slow or failing dependency degrades…
 - [rest_api_implementation](skills/rest_api_implementation.md) — Make the HTTP layer carry the contract: the status code states the outcome, the method's safety and idempotency promises are actually…
 - [robust_defensive_code](skills/robust_defensive_code.md) — Validate inputs at the boundary against a strict schema before the domain sees them.

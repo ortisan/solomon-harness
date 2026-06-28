@@ -18,7 +18,10 @@ The following specific skills are actively configured for this agent:
 - [common_pitfalls](skills/common_pitfalls.md) — Committing to more than measured velocity, then carrying spillover every sprint.
 - [conventional_commits](skills/conventional_commits.md) — Every commit is validated by the installed `commit-msg` hook (`scripts/git-hooks/commit-msg`, wired in by `scripts/bootstrap-agent.sh`).
 - [definition_of_done](skills/definition_of_done.md) — Work item exists as a templated issue with acceptance criteria and an estimate, linked to a milestone.
+- [dependency_and_risk_management](skills/dependency_and_risk_management.md) — Keep a live RAID log so that cross-team dependencies and risks are named, scored, owned, and escalated before they become spillover.
+- [flow_metrics_and_forecasting](skills/flow_metrics_and_forecasting.md) — Run the team's delivery system as a flow system: measure how long work takes and how reliably it moves, find where it stalls, and forecast…
 - [git_flow_branches](skills/git_flow_branches.md) — `main`: released, production code only.
+- [handoff_and_memory_orchestration](skills/handoff_and_memory_orchestration.md) — Drive a feature through the lifecycle as an explicit, auditable state machine in project memory, so that `product_owner ->…
 - [mandatory_role_competencies](skills/mandatory_role_competencies.md) — Run the backlog, sprints, ceremonies, and Git Flow for solomon-harness so work moves from conception to release without drift, and enforce…
 - [milestones](skills/milestones.md) — One milestone equals one release scope with a hard due date.
 - [quality_gates_you_enforce_across_specialists](skills/quality_gates_you_enforce_across_specialists.md) — You close the loop on other roles' Definition of Done before a milestone ships.
