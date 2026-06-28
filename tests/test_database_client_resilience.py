@@ -8,10 +8,13 @@ genuine query/data error, so the reconnect/fallback policy is verified without a
 live backend or Docker (coordinating with the hermeticity guard from #36).
 """
 
+import io
 import os
 import sys
 import tempfile
+import time
 import unittest
+from contextlib import redirect_stderr
 
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
@@ -105,6 +108,46 @@ class TestReconnectOnce(ResilienceTestBase):
         self.assertEqual(decision_id, "decisions:1")
         self.assertEqual(len(reconnect_calls), 1, "must reconnect exactly once")
         self.assertEqual(client.backend, "surrealdb", "a reachable server must not fall back")
+
+
+class TestUnreachableFallsBackToSqlite(ResilienceTestBase):
+    def test_write_unreachable_falls_back_to_sqlite_bounded(self):
+        # The connection is dropped and the server stays unreachable.
+        broken = FakeSurreal()
+        broken.always_fail = True
+        client = self._surreal_client(broken)
+
+        reconnect_calls = []
+
+        def fake_reconnect():
+            reconnect_calls.append(1)
+            return False  # the single reconnect attempt fails
+
+        client._connect_surreal = fake_reconnect
+
+        stderr = io.StringIO()
+        start = time.monotonic()
+        with redirect_stderr(stderr):
+            decision_id = client.log_decision(
+                title="t",
+                rationale="r",
+                outcome="o",
+                author="po",
+                branch="b",
+                commit_sha="sha",
+            )
+        elapsed = time.monotonic() - start
+
+        self.assertIsNotNone(decision_id, "the fallback write must persist and return an id")
+        self.assertEqual(client.backend, "sqlite", "a failed reconnect must fall back to SQLite")
+        self.assertEqual(len(reconnect_calls), 1, "exactly one reconnect attempt before fallback")
+        self.assertLess(elapsed, 5.0, "the dropped+unreachable path must be bounded, never hang")
+        # The SurrealDB/SQLite divergence must be announced loudly, not silently.
+        self.assertIn("sqlite", stderr.getvalue().lower())
+        # The write is durable: it is readable back from the SQLite fallback.
+        persisted = client.get_decision(decision_id)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted["title"], "t")
 
 
 if __name__ == "__main__":

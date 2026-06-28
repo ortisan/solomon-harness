@@ -85,7 +85,10 @@ def _resilient(method):
     """Make a public DatabaseClient method survive a mid-session connection drop.
 
     On ``_ConnectionLost`` the wrapper attempts exactly one bounded reconnect. If
-    that succeeds it re-runs the method once and returns its result.
+    that succeeds it re-runs the method once and returns its result. If the
+    reconnect fails (or the single retry still loses the connection) it activates
+    the SQLite fallback and re-runs the method, which then takes its own SQLite
+    branch -- so a transient drop never propagates as a raised error.
 
     A method that is already on the SQLite backend never raises ``_ConnectionLost``,
     so the wrapper is a transparent pass-through for SQLite-only clients.
@@ -97,8 +100,12 @@ def _resilient(method):
             return method(self, *args, **kwargs)
         except _ConnectionLost:
             if self._connect_surreal():
-                return method(self, *args, **kwargs)
-            raise
+                try:
+                    return method(self, *args, **kwargs)
+                except _ConnectionLost:
+                    pass
+            self._activate_sqlite_fallback()
+            return method(self, *args, **kwargs)
 
     return wrapper
 
@@ -530,6 +537,31 @@ class DatabaseClient:
             if self._is_connection_error(exc):
                 raise _ConnectionLost(str(exc)) from exc
             raise
+
+    def _activate_sqlite_fallback(self) -> None:
+        """Switch to the SQLite backend after a reconnect could not be made.
+
+        This is the last resort so a mid-session drop never loses a write: the
+        client keeps serving from the local SQLite store. The switch is announced
+        loudly on stderr because it creates a SurrealDB/SQLite divergence that
+        must be reconciled on recovery (the durable cure is issue #35). Idempotent:
+        re-initializing SQLite uses CREATE TABLE IF NOT EXISTS.
+        """
+        sys.stderr.write(
+            "WARNING: SurrealDB connection lost and the single reconnect failed; "
+            "falling back to the local SQLite store. Memory written from now on will "
+            "diverge from SurrealDB until reconcile runs.\n"
+        )
+        if self.db is not None:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
+        self.backend = "sqlite"
+        if self.db_path is None:
+            self.db_path = self._resolve_sqlite_path()
+        self._init_sqlite_db()
 
     @staticmethod
     def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
