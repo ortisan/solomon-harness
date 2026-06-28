@@ -56,6 +56,56 @@ def subagent_markdown(agent_name: str, description: str) -> str:
     )
 
 
+def _parse_command_file(path: str):
+    """Return (description, body) for a Claude Code command markdown file."""
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    description = ""
+    body = text
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            front, body = parts[1], parts[2]
+            for line in front.splitlines():
+                if line.strip().lower().startswith("description:"):
+                    description = line.split(":", 1)[1].strip()
+                    break
+    return description, body.strip()
+
+
+def gemini_command_toml(description: str, body: str) -> str:
+    """Render a Gemini CLI custom command (TOML) from a Claude command body.
+
+    Claude's $ARGUMENTS becomes Gemini's {{args}}, and the Claude-specific
+    mcp__solomon-memory__ tool prefix is dropped so the prompt is portable.
+    """
+    prompt = body.replace("$ARGUMENTS", "{{args}}").replace("mcp__solomon-memory__", "")
+    desc = description.replace("\\", "\\\\").replace('"', '\\"')
+    # Use a TOML multi-line literal string so the prompt needs no escaping.
+    return f'description = "{desc}"\n\nprompt = \'\'\'\n{prompt}\n\'\'\'\n'
+
+
+def generate_gemini_commands(workspace_root: str) -> int:
+    """Mirror the .claude/commands/*.md commands into .gemini/commands/*.toml."""
+    src_dir = os.path.join(workspace_root, ".claude", "commands")
+    if not os.path.isdir(src_dir):
+        return 0
+    out_dir = os.path.join(workspace_root, ".gemini", "commands")
+    os.makedirs(out_dir, exist_ok=True)
+    count = 0
+    for name in sorted(os.listdir(src_dir)):
+        if not name.endswith(".md"):
+            continue
+        description, body = _parse_command_file(os.path.join(src_dir, name))
+        toml = gemini_command_toml(description, body)
+        with open(os.path.join(out_dir, name[:-3] + ".toml"), "w", encoding="utf-8") as f:
+            f.write(toml)
+        count += 1
+    if count:
+        print(f"Generated {count} Gemini commands in {out_dir}")
+    return count
+
+
 def generate(workspace_root: str) -> int:
     agents_dir = os.path.join(workspace_root, "agents")
     if not os.path.isdir(agents_dir):
@@ -73,6 +123,9 @@ def generate(workspace_root: str) -> int:
             f.write(subagent_markdown(name, description))
 
     print(f"Generated {len(names)} Claude Code subagents in {out_dir}: {', '.join(names)}")
+
+    # Mirror the slash commands into Gemini CLI custom commands.
+    generate_gemini_commands(workspace_root)
     return 0
 
 

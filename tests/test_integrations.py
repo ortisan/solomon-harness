@@ -99,5 +99,24 @@ class TestGeneratedSubagents(unittest.TestCase):
         self.assertEqual(sorted(discovered), sorted(_agent_names()))
 
 
+class TestGeminiCommands(unittest.TestCase):
+    def test_every_slash_command_has_a_gemini_mirror(self):
+        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+        for name in sorted(os.listdir(cmd_dir)):
+            if not name.endswith(".md"):
+                continue
+            toml_rel = os.path.join(".gemini", "commands", name[:-3] + ".toml")
+            self.assertTrue(
+                os.path.isfile(os.path.join(WORKSPACE, toml_rel)),
+                f"missing Gemini mirror for {name}",
+            )
+            body = _read(toml_rel)
+            self.assertIn("description =", body)
+            self.assertIn("prompt =", body)
+            # Claude-isms must be translated, not leaked.
+            self.assertNotIn("$ARGUMENTS", body)
+            self.assertNotIn("mcp__solomon-memory__", body)
+
+
 if __name__ == "__main__":
     unittest.main()

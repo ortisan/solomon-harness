@@ -8,7 +8,7 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
 
 def _subagent_description(filepath: str) -> str:
@@ -65,18 +65,16 @@ def handle_eval(harness_dir: str) -> None:
         sys.exit(0)
 
 
-def handle_run(harness_dir: str, task: Optional[str] = None) -> None:
-    """Simulates executing a task or starts the interactive execution loop.
+def handle_run(harness_dir: str, task=None) -> None:
+    """Show where the team stopped and point to the delivery workflows.
 
-    Args:
-        harness_dir: The agent directory owning the config, persona and memory.
-        task: Optional task description to run immediately.
+    The harness does not run a model itself; the host tool (Claude Code or the
+    Gemini CLI) provides the execution loop and the /solomon-dev-* workflows.
+    This command resumes context from the project memory and lists those
+    workflows. It no longer simulates task execution.
     """
-    import uuid
-    import json
     from solomon_harness.tools.database_client import DatabaseClient
 
-    # Initialize DatabaseClient
     try:
         db_client = DatabaseClient(harness_dir=harness_dir)
     except Exception as e:
@@ -84,165 +82,51 @@ def handle_run(harness_dir: str, task: Optional[str] = None) -> None:
         sys.exit(1)
 
     with db_client as db:
-        # Welcome message in clean English (no emojis/cliches)
-        print("Welcome to the Solomon Harness Interactive Agent Loop.")
-        print("Database client initialized successfully.")
+        print("Solomon Harness - project status")
 
-        # Query where it stopped
         try:
             latest = db.get_latest_activity()
             if latest:
-                print("Previous Active State:")
-                print(f"  Type: {latest['type']}")
-                print(f"  Agent: {latest['agent']}")
-                print(f"  Task: {latest['task']}")
-                print(f"  Status: {latest['status']}")
-                print(f"  Timestamp: {latest['timestamp']}")
+                print("\nResume point (latest activity):")
+                print(
+                    f"  {latest['type']} | {latest['agent']} | {latest['task']} | "
+                    f"{latest['status']} | {latest['timestamp']}"
+                )
             else:
-                print("No previous active agent sessions or handoffs found.")
+                print("\nNo previous sessions or handoffs recorded yet.")
         except Exception as e:
-            print(f"Warning: Failed to retrieve previous active state: {e}", file=sys.stderr)
+            print(f"Warning: could not read latest activity: {e}", file=sys.stderr)
 
-        # Query what is open
-        def show_open_issues() -> List[Dict[str, Any]]:
-            try:
-                open_issues = db.get_open_issues()
-                if open_issues:
-                    print("Current Open Issues:")
-                    for issue in open_issues:
-                        print(f"  - [{issue['github_id']}] {issue['title']}")
-                    return open_issues
-                else:
-                    print("No open issues found.")
-                    return []
-            except Exception as e:
-                print(f"Warning: Failed to retrieve open issues: {e}", file=sys.stderr)
-                return []
-
-        open_issues = show_open_issues()
-
-        # Load agent name from config if available
-        agent_name = "dev_agent"
-        config_path = os.path.join(harness_dir, ".agent", "config.json")
-        if os.path.isfile(config_path):
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                    agent_name = config.get("agent_name", "dev_agent")
-            except Exception:
-                pass
-
-        current_task = task
-        first_iteration = True
-
-        while True:
-            # Prompt selection if not passed as CLI argument or not the first iteration
-            if not current_task:
-                if first_iteration:
-                    prompt_text = "Please select one of the open issues to run, or type a title to conceive/create a new issue: "
-                else:
-                    prompt_text = "Task completed. Please select the next task from the open list, or type a new task name to create it: "
-
-                try:
-                    user_input = input(prompt_text).strip()
-                except (KeyboardInterrupt, EOFError):
-                    print("\nExiting interactive loop.")
-                    sys.exit(0)
-
-                if not user_input:
-                    continue
-
-                if user_input.lower() in ("exit", "quit"):
-                    print("Exiting interactive loop.")
-                    sys.exit(0)
-
-                current_task = user_input
-
-            first_iteration = False
-
-            # Match input to open issues
-            matched_issue = None
-            for issue in open_issues:
-                if current_task.lower() == issue["github_id"].lower() or current_task.lower() == issue["title"].lower():
-                    matched_issue = issue
-                    break
-
-            if matched_issue:
-                issue_id = matched_issue["github_id"]
-                task_title = matched_issue["title"]
-                print(f"Selected existing issue: [{issue_id}] {task_title}")
+        try:
+            open_issues = db.get_open_issues()
+            if open_issues:
+                print("\nOpen issues:")
+                for issue in open_issues:
+                    print(f"  - [{issue['github_id']}] {issue['title']}")
             else:
-                # Create a new issue
-                issue_id = f"gh-{str(uuid.uuid4())[:8]}"
-                task_title = current_task
-                print(f"Conceived new issue: [{issue_id}] {task_title}")
-                try:
-                    db.log_issue(issue_id, task_title, "task", "open", None)
-                except Exception as e:
-                    print(f"Warning: Failed to log new issue to database: {e}", file=sys.stderr)
+                print("\nNo open issues.")
+        except Exception as e:
+            print(f"Warning: could not read open issues: {e}", file=sys.stderr)
 
-            # This loop records task lifecycle to the project memory; it does not
-            # itself run a model. The host tool (Claude Code, Codex, Gemini CLI)
-            # provides the execution loop and reads the compiled agent definition.
-            print("Recording task lifecycle to project memory...")
+        if task:
+            print(
+                "\nTasks are not auto-run here. Start this one with a workflow, "
+                f'e.g.  /solomon-dev-issue "{task}"'
+            )
 
-            # Update/insert active session state
-            session_id = str(uuid.uuid4())
-            messages = [{"role": "user", "content": f"Execute task: {task_title}"}]
-            try:
-                db.save_session(session_id, agent_name, task_title, messages)
-                print(f"Active session state saved: {session_id}")
-            except Exception as e:
-                print(f"Warning: Failed to save active session state: {e}", file=sys.stderr)
-
-            # Simulate execution completion
-            print(f"Task execution simulation finished: {task_title}")
-
-            # Prompt for confirmation
-            try:
-                confirm = input("Confirm task completion? (yes/no): ").strip().lower()
-            except (KeyboardInterrupt, EOFError):
-                print("\nExiting interactive loop.")
-                sys.exit(0)
-
-            if confirm in ("yes", "y"):
-                try:
-                    # Log decision
-                    db.log_decision(
-                        title=f"Completed task {issue_id}",
-                        rationale=f"Simulated execution of task: {task_title}",
-                        outcome="Approved",
-                        author=agent_name,
-                        branch="main",
-                        commit_sha=f"sha-{str(uuid.uuid4())[:7]}"
-                    )
-                    # Log memory
-                    db.save_memory(
-                        key=f"memory-{session_id}",
-                        value=f"Successfully simulated and approved task: {task_title}",
-                        category="agent_loop_refinement"
-                    )
-                    # Log handoff
-                    db.log_handoff(
-                        sender=agent_name,
-                        recipient="user",
-                        contract_type="task_handoff",
-                        contract_path="short_term",
-                        status="completed"
-                    )
-                    # Close issue
-                    db.log_issue(issue_id, task_title, "task", "closed", None)
-                    print("Task closed. Decisions, memory, and handoff successfully logged.")
-                except Exception as e:
-                    print(f"Error: Failed to record task completion to database: {e}", file=sys.stderr)
-            else:
-                print("Task completion was not confirmed. Issue status remains open.")
-
-            # Clear current_task to prompt again on next loop iteration
-            current_task = None
-            # Refresh open issues list for printing
-            open_issues = show_open_issues()
-
+        print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
+        workflows = [
+            ("/solomon-dev-idea", "capture a product idea"),
+            ("/solomon-dev-issue", "create a feature or story issue"),
+            ("/solomon-dev-bug", "create a bug report"),
+            ("/solomon-dev-refine", "refine an issue to Ready"),
+            ("/solomon-dev-start", "start development: branch, plan, TDD, draft PR"),
+            ("/solomon-dev-review", "review a pull request"),
+            ("/solomon-dev-release", "deliver and release"),
+        ]
+        for name, desc in workflows:
+            print(f"  {name:<21} {desc}")
+        print("\nHeadless (CI/automation):  solomon-dev <stage> [args]")
 
 def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
     """Parser setup and command dispatching.

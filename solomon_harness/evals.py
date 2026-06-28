@@ -11,7 +11,7 @@ import os
 import tempfile
 import unicodedata
 import unittest
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 from unittest.mock import patch
 
 from solomon_harness import cli
@@ -171,34 +171,26 @@ def build_agent_suite(harness_dir: str) -> unittest.TestSuite:
                 cli.main(harness_dir=harness_dir, argv=["db-init"])
                 mock_db_init.assert_called_once()
 
-        def test_main_interactive_loop(self) -> None:
-            """Test the interactive run loop with simulated user inputs."""
-            inputs = ["gh-1", "yes", "exit"]
-
-            def input_mock(*args: Any) -> str:
-                return inputs.pop(0)
-
+        def test_main_run_reports_status(self) -> None:
+            """`run` reports status and the workflows without a simulation loop."""
             db = DatabaseClient(db_path=self.sqlite_db_path)
             db.log_issue("gh-1", "Task 1", "feature", "open", None)
             db.close()
 
-            with (
-                patch("builtins.input", side_effect=input_mock),
-                patch(
-                    "solomon_harness.tools.database_client.DatabaseClient"
-                ) as mock_db_class,
-            ):
+            with patch(
+                "solomon_harness.tools.database_client.DatabaseClient"
+            ) as mock_db_class:
                 test_db = DatabaseClient(db_path=self.sqlite_db_path)
                 mock_db_class.return_value = test_db
 
-                with self.assertRaises(SystemExit) as cm:
-                    cli.main(harness_dir=harness_dir, argv=["run"])
-                self.assertEqual(cm.exception.code, 0)
+                # run returns normally; it must not loop on input or raise.
+                cli.main(harness_dir=harness_dir, argv=["run"])
 
+                # The open issue is left untouched (no simulated close).
                 issue = test_db.get_issue("gh-1")
                 self.assertIsNotNone(issue)
                 assert issue is not None
-                self.assertEqual(issue["status"], "closed")
+                self.assertEqual(issue["status"], "open")
 
                 test_db.close()
 
