@@ -119,9 +119,9 @@ context and persist what it did. Reach it through the harness:
 - The SurrealDB backend is a single shared instance per machine, defined in
   `~/.solomon-harness/docker-compose.yml`. On session start the Claude Code hook
   runs `solomon-harness memory-up`, which starts it with `docker compose up -d`
-  only when it is not already serving. The host port is auto-assigned (8000 when
+  only when it is not already serving. The host port is auto-assigned (8099 when
   free, else the next free port, recorded in `~/.solomon-harness/memory.json`), so
-  it never collides with another process on 8000. Best-effort: if the port is held
+  it never collides with another process on the host. Best-effort: if the port is held
   by a non-SurrealDB process or there is no Docker daemon, the client falls back to
   SQLite, so work is never blocked. Stop it with `solomon-harness memory-down`.
 - Each project is a tenant: its memory is its own SurrealDB database (named from

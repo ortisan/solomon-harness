@@ -18,7 +18,9 @@ import subprocess
 from typing import Optional
 
 DEFAULT_HOME = "~/.solomon-harness"
-DEFAULT_MEMORY_PORT = 8000
+# 8000 (SurrealDB's own default) is heavily contended on developer machines, so
+# the shared backend prefers 8099 and falls back to the next free port.
+DEFAULT_MEMORY_PORT = 8099
 MEMORY_CONFIG = "memory.json"
 
 

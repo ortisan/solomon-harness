@@ -75,10 +75,10 @@ solomon-harness memory-down     # stop it
 - **Per-project tenant.** Each project gets its own SurrealDB *database* (the
   tenant), derived from the git remote (e.g. `ortisan-solomon-harness`), inside
   the shared `solomon` namespace. Memory never leaks between projects.
-- **Auto-assigned port.** The backend prefers host port 8000 but, if 8000 is
-  already taken, claims the next free port and records it in
+- **Auto-assigned port.** The backend prefers host port 8099 (8000 is too
+  contended) but, if it is taken, claims the next free port and records it in
   `~/.solomon-harness/memory.json`. The chosen port is written into the compose
-  mapping and each project's config URL, so a busy 8000 never blocks startup.
+  mapping and each project's config URL, so a busy port never blocks startup.
 - **Conflict is safe.** If a non-SurrealDB process already holds the configured
   port, `memory-up` detects it, does *not* run `docker compose up` (which would
   fail to bind), and the client transparently uses SQLite under
@@ -202,7 +202,7 @@ The SurrealDB backend is a single shared instance per machine, defined in
 `~/.solomon-harness/docker-compose.yml` and managed by `solomon_harness/memory.py`.
 Each project is isolated as its own SurrealDB database (the tenant, derived from
 the git remote by `solomon_harness/home.py`), and the host port is auto-assigned to
-avoid clashing with whatever already holds 8000. See *Shared memory and tenancy*.
+avoid clashing with whatever already holds the preferred port. See *Shared memory and tenancy*.
 
 ### Architecture Decision Records
 

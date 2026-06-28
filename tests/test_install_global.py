@@ -59,6 +59,17 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.claude, "agents", "sre.md")))
         self.assertTrue(os.path.isfile(os.path.join(self.gemini, "commands", "solomon-loop.toml")))
 
+    def test_home_compose_templates_assigned_port(self):
+        # The bundled compose has the default 8000 mapping; the install must
+        # rewrite it to the assigned host port for this shared home.
+        with open(os.path.join(self.src.name, "docker-compose.yml"), "w") as f:
+            f.write('    ports:\n      - "8000:8000"\n')
+        res = self._install()
+        with open(os.path.join(self.home, "docker-compose.yml")) as f:
+            content = f.read()
+        self.assertIn("memory_port", res)
+        self.assertIn(f'"{res["memory_port"]}:8000"', content)
+
     def test_session_hook_is_added_then_idempotent(self):
         res1 = self._install()
         self.assertTrue(res1["hook_installed"])

@@ -5,7 +5,9 @@ services:
     image: surrealdb/surrealdb:latest
     container_name: solomon_surrealdb
     ports:
-      - "8000:8000"
+      # Host port 8099 (8000 is too contended); the harness re-templates this to
+      # the auto-assigned port. The container always listens on 8000 internally.
+      - "8099:8000"
     volumes:
       - ./memory/surrealdb:/memory/surrealdb
     command: start --user root --pass root --log debug file:/memory/surrealdb
