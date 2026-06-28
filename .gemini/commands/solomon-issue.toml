@@ -35,7 +35,9 @@ Steps:
    an outward-facing action.
 
 5. Create the issue:
-   `gh issue create --title "<title>" --body "<body>" --label type:feature --label priority:pN --label area:<domain>`.
+   - Ensure the standard labels exist first: `uv run python -m solomon_harness.github ensure-labels`.
+     If you use a new `area:<domain>`, create it: `gh label create "area:<domain>" --color BFD4F2 --force`.
+   - `gh issue create --title "<title>" --body "<body>" --label type:feature --label priority:pN --label area:<domain>`.
    Capture the returned issue number and URL.
 
 6. Place it on the board Backlog:

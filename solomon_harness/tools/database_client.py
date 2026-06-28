@@ -519,6 +519,21 @@ class DatabaseClient:
                 logging.error(f"Failed to save memory: {e}")
                 raise RuntimeError(f"Failed to save memory: {e}")
 
+    def delete_memory(self, key: str) -> None:
+        """Deletes a memory entry by key (no-op if it does not exist)."""
+        if self.backend == "surrealdb":
+            try:
+                self.db.query("DELETE FROM memory WHERE key = $key", {"key": key})
+            except Exception as e:
+                logging.error(f"Failed to delete memory in SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    conn.execute("DELETE FROM memory WHERE key = ?", (key,))
+                    conn.commit()
+            except sqlite3.Error as e:
+                logging.error(f"Failed to delete memory: {e}")
+
     def get_memory(self, key: str) -> Optional[str]:
         """Retrieves a memory value by its key.
 

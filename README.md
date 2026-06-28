@@ -87,7 +87,7 @@ Work flows across a GitHub Project (v2) board, each column owned by a workflow a
 the specialists that drive it:
 
 ```
-Ideas → Backlog → Ready → In Progress → In Review → Done
+Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 ```
 
 | Workflow | Stage | Driving agents |

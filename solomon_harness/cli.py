@@ -173,6 +173,11 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         help="Compile agent harnesses and regenerate host-tool integrations",
     )
     subparsers.add_parser("index", help="Index project codebase into the database memory")
+    subparsers.add_parser("wiki", help="Refresh the living code-overview wiki page from the index")
+
+    mem_up = subparsers.add_parser("memory-up", help="Start the memory backend (docker compose) if it is not already running")
+    mem_up.add_argument("--wait", type=int, default=25, help="Seconds to wait for the backend port after starting")
+    subparsers.add_parser("memory-down", help="Stop the memory backend (docker compose down)")
 
     doctor_parser = subparsers.add_parser("doctor", help="Check (and install) prerequisites")
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
@@ -240,6 +245,28 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
                 index_codebase(workspace_root, db)
         except Exception as e:
             print(f"Error: Codebase indexing failed: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif args.command == "memory-up":
+        from solomon_harness.memory import _describe, ensure_memory_up
+        result = ensure_memory_up(workspace_root, wait_seconds=args.wait)
+        print(_describe(result))
+        # Never fail the session-start hook: a missing Docker daemon must not
+        # block work, because the client falls back to SQLite.
+    elif args.command == "memory-down":
+        from solomon_harness.memory import _describe, stop_memory
+        result = stop_memory(workspace_root)
+        print(_describe(result))
+        sys.exit(0 if result.get("ok") else 1)
+    elif args.command == "wiki":
+        from solomon_harness.bootstrap import index_codebase, write_code_overview
+        from solomon_harness.tools.database_client import DatabaseClient
+        try:
+            with DatabaseClient(harness_dir=workspace_root) as db:
+                index_codebase(workspace_root, db)
+                path = write_code_overview(workspace_root, db)
+            print(f"Updated code-overview wiki page: {os.path.relpath(path, workspace_root)}")
+        except Exception as e:
+            print(f"Error: Failed to refresh the wiki: {e}", file=sys.stderr)
             sys.exit(1)
     elif args.command == "skills":
         from solomon_harness.skills import main as skills_main

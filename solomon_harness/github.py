@@ -8,18 +8,19 @@ authenticated with the ``project`` scope.
 
 CLI:
     python -m solomon_harness.github ensure-board [--title T] [--owner O]
-    python -m solomon_harness.github set-status --issue N --status "In Review"
+    python -m solomon_harness.github set-status --issue N --status "Code Review"
     python -m solomon_harness.github add-issue --issue N
 """
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
 DEFAULT_BOARD_TITLE = "solomon"
-BOARD_COLUMNS = ["Ideas", "Backlog", "Ready", "In Progress", "In Review", "Done"]
+BOARD_COLUMNS = ["Ideas", "Backlog", "Ready", "In Progress", "Code Review", "QA", "Done"]
 
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
@@ -76,7 +77,39 @@ def ensure_project_board(
     )
     if not res["ok"]:
         return {"ok": False, "error": res["error"]}
-    return {"ok": True, "created": True, "owner": owner, "project": res.get("data")}
+    project = res.get("data") or {}
+    # Configure the lifecycle columns on the new board so issues can be placed on it.
+    cols = _configure_board_columns(owner, project.get("number"))
+    return {
+        "ok": True,
+        "created": True,
+        "owner": owner,
+        "project": project,
+        "columns_configured": bool(cols.get("ok")),
+    }
+
+
+def _configure_board_columns(owner: str, project_number) -> Dict[str, Any]:
+    """Set the board's Status field options to the lifecycle columns.
+
+    Uses the GraphQL updateProjectV2Field mutation, since gh has no command to set
+    single-select options. Degrades gracefully (e.g. when the token lacks the
+    project scope).
+    """
+    if not project_number:
+        return {"ok": False, "error": "missing project number"}
+    field = _status_field(owner, project_number)
+    if not field or not field.get("id"):
+        return {"ok": False, "error": "could not resolve the Status field"}
+    options = ", ".join(
+        f'{{name: "{col}", color: GRAY, description: ""}}' for col in BOARD_COLUMNS
+    )
+    mutation = (
+        "mutation { updateProjectV2Field(input: {"
+        f'fieldId: "{field["id"]}", singleSelectOptions: [{options}]'
+        "}) { projectV2Field { ... on ProjectV2SingleSelectField { id name } } } }"
+    )
+    return _gh(["api", "graphql", "-f", f"query={mutation}"])
 
 
 def add_issue_to_board(
@@ -160,6 +193,55 @@ def set_issue_status(
     return {"ok": True, "issue": issue_number, "status": status}
 
 
+STANDARD_LABELS = [
+    ("type:feature", "0E8A16", "A new capability or user story"),
+    ("type:bug", "D73A4A", "A defect to fix"),
+    ("type:idea", "FBCA04", "An idea under discovery"),
+    ("type:chore", "C5DEF5", "Maintenance, tooling, or follow-up"),
+    ("priority:p0", "B60205", "Critical"),
+    ("priority:p1", "D93F0B", "High"),
+    ("priority:p2", "0E8A16", "Normal"),
+]
+
+
+def ensure_labels() -> Dict[str, Any]:
+    """Create or update the standard issue labels so issue creation can apply them."""
+    done = []
+    for name, color, desc in STANDARD_LABELS:
+        res = _gh(["label", "create", name, "--color", color, "--description", desc, "--force"])
+        if res.get("ok"):
+            done.append(name)
+    return {"ok": len(done) == len(STANDARD_LABELS), "labels": done}
+
+
+def record_transition(issue_number, column) -> None:
+    """Append a board transition (column + timestamp) to the project memory.
+
+    Builds a per-card timeline of when it entered each column, so the start and
+    finish dates per stage (and cycle time) can be derived. Best-effort.
+    """
+    try:
+        import datetime
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        with DatabaseClient(harness_dir=os.getcwd()) as db:
+            key = f"board_history:{issue_number}"
+            history = []
+            raw = db.get_memory(key)
+            if raw:
+                try:
+                    history = json.loads(raw)
+                except Exception:
+                    history = []
+            history.append({
+                "column": column,
+                "entered_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            })
+            db.save_memory(key=key, value=json.dumps(history), category="board_history")
+    except Exception:
+        pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="solomon GitHub board helper")
     sub = parser.add_subparsers(dest="command")
@@ -167,6 +249,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_board = sub.add_parser("ensure-board", help="Create the delivery board if missing")
     p_board.add_argument("--title", default=DEFAULT_BOARD_TITLE)
     p_board.add_argument("--owner", default=None)
+
+    sub.add_parser("ensure-labels", help="Create the standard issue labels")
 
     p_status = sub.add_parser("set-status", help="Move an issue card to a column")
     p_status.add_argument("--issue", type=int, required=True)
@@ -181,8 +265,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "ensure-board":
         result = ensure_project_board(title=args.title, owner=args.owner)
+    elif args.command == "ensure-labels":
+        result = ensure_labels()
     elif args.command == "set-status":
         result = set_issue_status(args.issue, args.status, title=args.title)
+        if result.get("ok"):
+            record_transition(args.issue, args.status)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
     else:

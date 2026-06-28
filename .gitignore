@@ -18,6 +18,7 @@ build/
 **/memory/long_term/*.db
 **/memory/short_term/*.json
 **/memory/surrealdb/
+**/memory/spectron/
 *.db-wal
 *.db-shm
 

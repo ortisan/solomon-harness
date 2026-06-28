@@ -521,6 +521,17 @@ class TestDatabaseClient(unittest.TestCase):
             mock_class.assert_called_once_with("ws://harness-local:8000/rpc")
             client.close()
 
+    def test_delete_memory_sqlite(self):
+        """delete_memory removes a key so get_memory returns None afterwards."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.save_memory("doomed", "value", "test")
+        self.assertEqual(client.get_memory("doomed"), "value")
+        client.delete_memory("doomed")
+        self.assertIsNone(client.get_memory("doomed"))
+        # Deleting a missing key must be a no-op, not an error.
+        client.delete_memory("never_existed")
+        client.close()
+
     def test_sqlite_uses_wal(self):
         """SQLite connections must run in WAL journal mode so the shared store is safe
         for concurrent agents."""
