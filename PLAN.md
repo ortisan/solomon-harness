@@ -1,76 +1,111 @@
-# PLAN — Issue #18: practice_curator agent definition + cited audit of one delivery
+# PLAN — isolated worktree + implementation-mode choice on /solomon-start
 
-Slice 1/4 of epic #16. Branch: `feature/practice-curator-agent-definition` (worktree `../sh-18`, based on `main`; no `develop` branch exists).
+Delivers issues #8 (dedicated git worktree on start) and #23 (automatic vs manual
+implementation mode) in one branch, #8 leading. Both edit the same start stage.
 
 ## Problem statement
 
-The fleet has no `practice_curator` agent, and nothing can take a delivered artifact and benchmark it against the current state of the art with cited evidence. This slice creates the agent definition and its first capability — a sourced gap report on one delivery — as the foundation the other three slices build on. See #18 (acceptance criteria) and the epic #16.
+- #8: `/solomon-start` switches the single checkout onto the new branch
+  (`git switch -c`), which couples one branch to the working directory, blocks on a
+  dirty tree, and prevents parallel in-flight issues.
+- #23: the stage then falls straight into the agent-driven TDD loop, with no point
+  where a human is asked whether the agent implements automatically or a developer
+  implements by hand. The team still has hands-on developers.
 
 ## Proposed change and the boundary it touches
 
-Add one new specialist agent under `agents/practice_curator/`, following the exact module pattern of the existing agents (persona, profile, skills, `.agent/config.json`), then regenerate the auto-managed artifacts (Active Skills block, host-tool integrations) and register the agent in the central index. No production runtime code changes; the agent's behavior is expressed as skill guidance the host tool follows. The boundary touched is the agent-definition surface and its generated integrations — not the memory client, CLI logic, or GitHub layer.
+- New module `solomon_harness/worktree.py` — the single source of truth for the
+  worktree contract (path computation, idempotent create/locate, conflict
+  reporting). This is the real, unit-tested logic.
+- New CLI subcommand `solomon-harness worktree <branch> [--base <ref>]` wrapping
+  the module: prints the absolute worktree path to stdout and exits 0 on
+  success/reuse; prints a diagnostic to stderr and exits non-zero on conflict.
+- `.claude/commands/solomon-start.md`:
+  - step 2 calls the worktree helper instead of `git switch -c`, and steps 3-6 run
+    inside the worktree;
+  - step 5 asks the implementation mode (Automatic / Manual / Other) before any
+    code is written, with the manual-mode behavior and a deterministic
+    non-interactive default (Automatic) for the headless path.
+- `.gemini/commands/solomon-start.toml` regenerated from the source (never
+  hand-edited); a drift check guards it.
+- `docs/solomon-workflow.md` documents the sibling worktree-location convention and
+  the two implementation modes.
+- `docs/adr/0001-isolated-worktree-and-implementation-mode-on-start.md` records the
+  cross-cutting decision (worktree layout + mode gate).
 
-## Target files (diff fence)
+Boundary: the worktree contract is owned by `solomon_harness/worktree.py`; the
+command file and the CLI are thin callers. The mode choice is prompt-level
+(host tool is the LLM), verified by command-file/Gemini content assertions.
 
-New (hand-authored):
-- `agents/practice_curator/persona.md`
-- `agents/practice_curator/agents/practice_curator.md` (profile / role)
-- `agents/practice_curator/.agent/config.json`
-- `agents/practice_curator/skills/auditing_delivered_work.md`
-- `agents/practice_curator/skills/sourcing_the_state_of_the_art.md`
-- `agents/practice_curator/skills/benchmarking_across_domains.md`
-- `agents/practice_curator/skills/scope_and_non_negotiables.md`
-- `tests/test_practice_curator.py`
+## Worktree-location convention (decided in refinement, #8)
 
-Edited (hand):
-- `agents/AGENTS.md` — add the `practice_curator` line to "The specialist agents" index.
-- `scripts/validate-agents.py` — add a `practice_curator.md` entry to `REQUIRED_KEYWORDS`.
+`<PARENT>/<NAME>-worktrees/<branch with '/' replaced by '-'>` where
+`NAME = basename(repo top-level)`, `PARENT = dirname(repo top-level)`. Sibling, not
+in-repo, so recursive tooling never double-traverses a nested checkout.
 
-Generated (by tooling, not hand-edited):
-- `agents/practice_curator/agents/practice_curator.md` Active Skills block — `scripts/document-skills.py`.
-- `agents/practice_curator/main.py` — scaffolded by `cli compile` if missing (standard thin entrypoint).
-- `.claude/agents/practice_curator.md` and `.gemini/commands/*.toml` — `cli compile` / `generate-integrations.py`.
+## Target files
 
-Out of scope (later slices): fleet-wide sweep (#19), editing/PR-ing other agents (#20), autonomous trigger (#21), any auto-merge.
+- `solomon_harness/worktree.py` (new)
+- `tests/test_worktree.py` (new)
+- `solomon_harness/cli.py` (add `worktree` subcommand)
+- `.claude/commands/solomon-start.md` (steps 2 and 5)
+- `.gemini/commands/solomon-start.toml` (regenerated)
+- `tests/test_integrations.py` (assert start-command + Gemini mirror carry the
+  worktree call, the mode prompt, and the non-interactive default line)
+- `docs/solomon-workflow.md` (conventions + modes)
+- `docs/adr/0001-*.md` (new)
 
-## Skills to author (each >= 600 words, with `## Common pitfalls` + `## Definition of done`, naming concrete standards)
+## Edge cases as observable outcomes
 
-1. `auditing_delivered_work` — how to turn one delivered artifact (a merged PR/diff) into a gap report: read the diff, identify the practice areas it touches, compare against the sourced baseline, and emit findings. States the negative space explicitly: the audit never modifies any other `agents/<name>/` file. Defines the "no gap found" output and the "insufficient evidence" bucket.
-2. `sourcing_the_state_of_the_art` — how to find, date, and judge a source credible; the rule of >= 2 dated, credible sources per cited practice; the credibility test (primary/standards-body/peer-reviewed/maintained-project over blog hearsay); record via `save_decision`. This skill is the control for risk R1 (`risk-16-sota-sourcing`).
-3. `benchmarking_across_domains` — what "state of the art" means in each of the four target fields, with named references: software engineering, software architecture, ML/DRL engineering, and quantitative trading. Names concrete standards/frameworks per field with versions.
-4. `scope_and_non_negotiables` — the guardrails for the whole epic: reviewed via the `/solomon` lifecycle, never blind or bulk edits, <= 1 target agent per proposal/PR, human approval before any merge; senior-engineer tone, no emojis/AI filler.
+- New branch + new worktree from base: `git worktree list` shows the computed path
+  on the branch; helper prints the path; exit 0 (AC-8.1).
+- Dirty main checkout: create still succeeds; main checkout's changes untouched
+  (AC-8.2) — inherent to `git worktree add`, asserted by test.
+- Idempotent reuse: path already a worktree on the expected branch -> no
+  `git worktree add` runs; same path printed; exit 0 (AC-8.3).
+- Conflict: path exists as a non-worktree dir, or the branch is checked out in
+  another worktree -> raise, no partial worktree added, diagnostic to stderr,
+  non-zero exit (AC-8.4).
+- Mode prompt present before codegen; three options Automatic/Manual/Other;
+  manual leaves the card In Progress and writes no code; headless prints
+  "Implementation mode: Automatic (non-interactive default)" (AC #23).
+- Gemini start command mirrors the same prompt + default line; drift check passes.
 
-## Edge cases (as observable outcomes)
+## TDD breakdown (one commit each, Red -> Green)
 
-- A delivery with no gap → the audit guidance yields an explicit "no gap found" and emits no proposal (asserted by a string check in the audit skill).
-- A claimed practice with < 2 dated sources → omitted from recommendations and listed under "insufficient evidence" (string check in the sourcing skill).
-- A skill below the depth bar (< 600 words, or missing a required section) → `tests/test_practice_curator.py` fails.
-- The agent missing from `agents/AGENTS.md` or from `.claude/agents/` → `tests/test_integrations.py` fails.
-
-## TDD breakdown (red / green, one commit each, `Refs #18`)
-
-1. RED — `test: add practice_curator structure and depth checks`. Add `tests/test_practice_curator.py`: agent dir + four files exist; profile lists every skill; each skill >= 600 words and contains both required sections; the audit skill states it does not modify other agents; the sourcing skill states the >= 2-sources rule. Run → fails (no agent).
-2. GREEN — `feat(agents): add practice_curator definition and skills`. Author persona, profile, config, and the four skills; run `document-skills.py` to fill the Active Skills block. Run `test_practice_curator` → green; `test_integrations` now red (not indexed / no subagent).
-3. GREEN — `feat(agents): index practice_curator and validate its profile`. Add the index line to `agents/AGENTS.md`; add the `REQUIRED_KEYWORDS` entry in `validate-agents.py`. Run `validate-agents.py` → practice_curator valid.
-4. GREEN — `chore(agents): compile practice_curator host-tool integrations`. Run `uv run python -m solomon_harness.cli compile` (scaffolds `main.py`, generates `.claude/agents/practice_curator.md` and `.gemini` mirrors). Run `test_integrations` → green.
-5. REFACTOR/verify — run the targeted suite, tidy wording, confirm no emojis/cliches.
+1. `test_worktree.py`: `worktree_path` computation + `ensure_worktree` happy /
+   idempotent-reuse / conflict (path-occupied, branch-checked-out-elsewhere) on a
+   temp git repo. Implement `solomon_harness/worktree.py`. (Refs #8)
+2. `test_worktree.py`: CLI `worktree` subcommand contract (stdout path + exit 0;
+   stderr + non-zero on conflict). Wire the subcommand in `cli.py`. (Refs #8)
+3. `test_integrations.py`: start command step 2 invokes the worktree helper and
+   the worktree-location convention is documented. Edit `solomon-start.md` step 2
+   and `docs/solomon-workflow.md`. (Refs #8)
+4. `test_integrations.py`: start command step 5 carries the Automatic/Manual/Other
+   prompt, the manual-mode no-code/In-Progress behavior, and the exact
+   non-interactive default line. Edit `solomon-start.md` step 5 and the doc.
+   (Refs #23)
+5. `test_integrations.py`: `.gemini/commands/solomon-start.toml` mirrors the
+   worktree call, the mode prompt, and the default line. Regenerate via
+   `scripts/generate-integrations.py`. (Refs #8 #23)
+6. Write ADR-0001; assert it exists and is linked from the PR. (Refs #8 #23)
 
 ## STRIDE notes
 
-No new code path handling untrusted input, no auth/data/datastore change — markdown + config only. The one forward-looking surface is that the audit will, in a later slice, fetch external sources at runtime (SSRF / source-poisoning / prompt-injection-from-fetched-content). That is out of scope for #18 (no runtime fetch is implemented here); the `sourcing_the_state_of_the_art` skill records the credibility/dating requirement that mitigates source-poisoning, and the runtime-fetch threat model is deferred to the slice that implements the trigger (#21), to be flagged for the security agent then.
+- Tampering / Injection: branch names flow into `git worktree add` and into a
+  filesystem path. Validate the branch (allow `[A-Za-z0-9._/-]`, reject `..` path
+  segments and a leading `-`) before path construction or subprocess use; pass git
+  args as a list (never `shell=True`). Reject a computed path that escapes the
+  worktree root.
+- Denial of service: `git worktree add` is bounded; idempotent reuse runs no add.
+- No secrets, auth, or PII surface in this change.
 
-## ADR evaluation
+## Verification criteria
 
-Not architecturally significant: adding a specialist agent follows the existing, documented module pattern with no new dependency, datastore, public contract, or data-model change, and it is trivially reversible (delete the directory + the index line + regenerate). No ADR. This will be restated in the PR body.
-
-## Verification criteria (objectively checkable)
-
-- `python -m unittest tests.test_practice_curator` passes.
-- `python -m unittest tests.test_integrations tests.test_document_skills` passes (agent indexed, subagent generated, Gemini mirrors present, document-skills unchanged).
-- `python scripts/validate-agents.py` exits 0 and reports `practice_curator.md is valid`.
-- `uv run python -m solomon_harness.cli compile` runs clean; `.claude/agents/practice_curator.md` exists and names `practice_curator`.
-- Each of the four skills is >= 600 words and has both `## Common pitfalls` and `## Definition of done`; the profile's Active Skills block lists all four.
-
-## Known environment caveat
-
-The pre-commit hook runs the full suite, which (per the open `bug-test-isolation` issue and the PR #17 notes) indexes the real memory DB and fails two environment-sensitive tests inside a git worktree (`test_home`, `test_bootstrap` kanban). Commits here are markdown/test/config only; if the hook blocks on those unrelated failures, commit with `--no-verify` after running the targeted suite above green, and note it in the PR. This is a pre-existing harness issue, not a regression from #18.
+- `python -m unittest tests.test_worktree tests.test_integrations tests.test_workflows`
+  passes.
+- `ruff check solomon_harness/worktree.py tests/test_worktree.py` clean.
+- `git worktree list` shows a created worktree at the documented path; re-running
+  the helper adds nothing; a conflicting path exits non-zero with a clear message.
+- `solomon-start.md` and the regenerated `.toml` both contain the mode prompt and
+  the exact non-interactive default line; the drift check passes.

@@ -49,6 +49,23 @@ list and invite a free-text reply. Lead with the recommended option first and ke
 options mutually exclusive. Prefer this over an open prose question: discrete, numbered
 choices keep the user's context focused and prevent dispersion.
 
+## Implementation mode (automatic or manual)
+
+`/solomon-start` asks, before any code is written, whether the change is implemented
+**automatically** by the agent or **manually** by a developer — the team still has
+hands-on developers who want to write the code themselves. The choice uses the
+enumerated-options style above (Automatic, recommended and first; Manual; Other).
+
+- Automatic: the agent runs the TDD loop (Red/Green/Refactor) per PLAN.md, then opens the
+  draft PR and moves the card to Code Review — the existing behavior.
+- Manual: the agent writes no production or test code and opens no PR. It hands back the
+  prepared worktree, branch, PLAN.md, and the ADR decision, and leaves the card in
+  `In Progress`. The developer implements by hand, then re-runs `/solomon-start` to open the
+  PR (or opens it and runs `/solomon-review`).
+- Headless (`solomon-harness dev start`): with no one to answer, the stage does not block on
+  the prompt — it defaults to Automatic and prints
+  `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
+
 ## GitHub conventions
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
@@ -57,7 +74,16 @@ choices keep the user's context focused and prevent dispersion.
   `hotfix/<version>` for production-critical fixes. The branch name carries NO issue
   number (kept deliberately clean); `<slug>` is the kebab-cased issue title. The issue
   is linked instead by the back-link comment and the `Refs #`/`Closes #` trailers.
-  Branch from `develop`.
+  Branch from `develop` (or `main` when the repository has no `develop`).
+- Worktrees: `/solomon-start` creates each issue's branch in its own isolated git
+  worktree rather than switching the primary checkout, so a dirty checkout never blocks
+  a start and several issues can be in flight at once. The worktree lives at a sibling
+  path beside the repo — `<parent>/<repo>-worktrees/<branch with '/' as '-'>`, e.g.
+  `../solomon-harness-worktrees/feature-add-csv-export` — never nested inside the repo,
+  so recursive tooling (test collection, IDE indexers) does not double-traverse it.
+  Creation is idempotent; a conflicting path or a branch already checked out elsewhere is
+  reported, never forced. Removal on merge/release is manual for now
+  (`git worktree remove <path>`). The helper is `solomon-harness worktree <branch> [--base <ref>]`.
 - Commits: Conventional Commits, no emojis (the commit-msg hook enforces this).
 - Pull requests: conventional title, body that contains `Closes #<issue>`, opened
   as a draft until `/solomon-review` approves. Link the ADR if one was written.
