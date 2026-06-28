@@ -13,7 +13,26 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    _resolve_database,
+)
+
+
+class TestResolveDatabase(unittest.TestCase):
+    def test_generic_sentinel_derives_owner_repo_tenant(self):
+        with patch("solomon_harness.home.derive_tenant", return_value="acme-widget"):
+            self.assertEqual(_resolve_database("harness", "/repo"), "acme-widget")
+            self.assertEqual(_resolve_database("", "/repo"), "acme-widget")
+            self.assertEqual(_resolve_database(None, "/repo"), "acme-widget")
+
+    def test_explicit_name_is_kept(self):
+        with patch("solomon_harness.home.derive_tenant", return_value="acme-widget"):
+            self.assertEqual(_resolve_database("custom_db", "/repo"), "custom_db")
+
+    def test_falls_back_to_harness_when_derivation_fails(self):
+        with patch("solomon_harness.home.derive_tenant", side_effect=RuntimeError):
+            self.assertEqual(_resolve_database("harness", "/repo"), "harness")
 
 
 class TestDatabaseClient(unittest.TestCase):
@@ -222,6 +241,7 @@ class TestDatabaseClient(unittest.TestCase):
             patch("builtins.__import__", side_effect=mock_import),
             patch("os.path.isfile", side_effect=mock_isfile),
             patch("builtins.open", side_effect=mock_open),
+            patch("solomon_harness.home.derive_tenant", return_value="acme-widget"),
         ):
             # No db_path: an explicit db_path now forces SQLite, so the SurrealDB
             # path is exercised via config resolution instead.
@@ -234,7 +254,9 @@ class TestDatabaseClient(unittest.TestCase):
             mock_surreal_instance.signin.assert_called_once_with(
                 {"user": "root", "pass": "root"}
             )
-            mock_surreal_instance.use.assert_called_once_with("solomon", "harness")
+            # The generic "harness" config name is resolved to the <owner>-<repo>
+            # tenant so projects never collide in the shared SurrealDB.
+            mock_surreal_instance.use.assert_called_once_with("solomon", "acme-widget")
 
             # Verify initialization queries
             mock_surreal_instance.query.assert_called()

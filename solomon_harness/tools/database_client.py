@@ -51,6 +51,25 @@ class SpectronFallbackClient:
         return MockResponse(hits)
 
 
+def _resolve_database(configured: Optional[str], project_root: str) -> str:
+    """Resolve the SurrealDB database name for a project.
+
+    The shared SurrealDB holds every project, so the database name must be unique
+    per project, not the generic "harness". When the config carries that sentinel
+    (or nothing), derive an ``<owner>-<repo>`` tenant from the git remote so two
+    projects never collide in the shared instance. An explicit name is kept as-is.
+    """
+    database = configured or "harness"
+    if database in ("", "harness"):
+        try:
+            from solomon_harness.home import derive_tenant
+
+            return derive_tenant(project_root)
+        except Exception:
+            return "harness"
+    return database
+
+
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
@@ -151,7 +170,7 @@ class DatabaseClient:
 
             if has_surrealdb and Surreal is not None and creds_ok:
                 namespace = db_config.get("namespace", "solomon")
-                database = db_config.get("database", "harness")
+                database = _resolve_database(db_config.get("database"), project_root)
 
                 try:
                     self.db = Surreal(url)
