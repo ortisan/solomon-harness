@@ -105,29 +105,14 @@ def handle_run(harness_dir: str, task=None) -> None:
     with db_client as db:
         print(say("project status"))
 
-        try:
-            latest = db.get_latest_activity()
-            if latest:
-                print("\nResume point (latest activity):")
-                print(
-                    f"  {latest['type']} | {latest['agent']} | {latest['task']} | "
-                    f"{latest['status']} | {latest['timestamp']}"
-                )
-            else:
-                print("\nNo previous sessions or handoffs recorded yet.")
-        except Exception as e:
-            print(f"Warning: could not read latest activity: {e}", file=sys.stderr)
+        # One-screen board digest: resume point, open work, the last loop run,
+        # and PRs awaiting review. Facts only; the next step is decided by
+        # /solomon-loop, never computed here.
+        from solomon_harness.digest import gather_digest
 
-        try:
-            open_issues = db.get_open_issues()
-            if open_issues:
-                print("\nOpen issues:")
-                for issue in open_issues:
-                    print(f"  - [{issue['github_id']}] {issue['title']}")
-            else:
-                print("\nNo open issues.")
-        except Exception as e:
-            print(f"Warning: could not read open issues: {e}", file=sys.stderr)
+        print()
+        for line in gather_digest(harness_dir, db):
+            print(line)
 
         # Surface any pending initialization items (Docker down, memory on the
         # SQLite fallback, missing board scope, global install not run).
