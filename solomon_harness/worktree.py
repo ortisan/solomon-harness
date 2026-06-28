@@ -18,10 +18,12 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
-# Conservative branch grammar: git ref characters we are willing to place on the
-# command line and in a filesystem path. Path traversal and option-injection are
-# rejected before the value reaches subprocess or os.path.
-_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+# Conservative ref grammar: git ref characters we are willing to place on the
+# command line and in a filesystem path. Path traversal, control characters, and
+# option-injection are rejected before the value reaches subprocess or os.path.
+# Matched via re.fullmatch so a trailing newline (which "$" would tolerate) is
+# rejected.
+_REF_RE = re.compile(r"[A-Za-z0-9._/-]+")
 
 # Directory/index redirectors git sets while a hook runs. Inherited into a
 # subprocess they override ``git -C <path>`` and point every command back at the
@@ -66,17 +68,22 @@ def _run_git(repo_root: str, args: List[str], check: bool = True) -> subprocess.
     return proc
 
 
-def _validate_branch(branch: str) -> None:
+def _validate_ref(value: str, label: str) -> None:
     if (
-        not branch
-        or branch.startswith("-")
-        or branch.startswith("/")
-        or ".." in branch
-        or not _BRANCH_RE.match(branch)
+        not value
+        or value.startswith("-")
+        or value.startswith("/")
+        or ".." in value
+        or any(ord(ch) < 0x20 for ch in value)
+        or not _REF_RE.fullmatch(value)
     ):
-        raise WorktreeError(f"invalid branch name: {branch!r}")
-    if any(part in ("", ".", "..") for part in branch.split("/")):
-        raise WorktreeError(f"invalid branch name: {branch!r}")
+        raise WorktreeError(f"invalid {label}: {value!r}")
+    if any(part in ("", ".", "..") for part in value.split("/")):
+        raise WorktreeError(f"invalid {label}: {value!r}")
+
+
+def _validate_branch(branch: str) -> None:
+    _validate_ref(branch, "branch name")
 
 
 def repo_toplevel(repo_root: str) -> str:
@@ -84,10 +91,21 @@ def repo_toplevel(repo_root: str) -> str:
     return _run_git(repo_root, ["rev-parse", "--show-toplevel"]).stdout.strip()
 
 
+def _main_worktree(repo_root: str) -> str:
+    """Absolute path of the repository's main worktree (git lists it first), so the
+    sibling root is the same whether this is called from the primary checkout or
+    from inside a linked worktree."""
+    entries = _list_worktrees(repo_root)
+    if entries:
+        return entries[0][0]
+    return os.path.realpath(repo_toplevel(repo_root))
+
+
 def worktree_root(repo_root: str) -> str:
-    """Return the sibling worktree root ``<parent>/<name>-worktrees``."""
-    top = repo_toplevel(repo_root)
-    return os.path.join(os.path.dirname(top), f"{os.path.basename(top)}-worktrees")
+    """Return the sibling worktree root ``<parent>/<name>-worktrees``, anchored on
+    the main worktree so it does not depend on the caller's current directory."""
+    main = _main_worktree(repo_root)
+    return os.path.join(os.path.dirname(main), f"{os.path.basename(main)}-worktrees")
 
 
 def worktree_path(repo_root: str, branch: str) -> str:
@@ -136,6 +154,10 @@ def ensure_worktree(repo_root: str, branch: str, base: str = "develop") -> str:
     different worktree. No partial worktree is left behind on conflict.
     """
     _validate_branch(branch)
+    # base reaches the git command line as a positional commit-ish; validate it
+    # with the same allowlist so an option-shaped value (e.g. "--force") cannot be
+    # parsed as a flag and defeat the conflict checks below.
+    _validate_ref(base, "base ref")
     target = os.path.realpath(worktree_path(repo_root, branch))
     existing = _list_worktrees(repo_root)
     by_path = dict(existing)

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from solomon_harness import worktree
 
@@ -69,6 +70,12 @@ class TestWorktreePath(WorktreeTestBase):
             with self.assertRaises(worktree.WorktreeError):
                 worktree.worktree_path(self.repo, bad)
 
+    def test_control_characters_rejected(self):
+        # A trailing newline slips past a "$"-anchored regex; fullmatch must reject it.
+        for bad in ["feature/x\n", "feature\tx", "feature/x\r"]:
+            with self.assertRaises(worktree.WorktreeError):
+                worktree.worktree_path(self.repo, bad)
+
 
 class TestEnsureWorktree(WorktreeTestBase):
     def test_creates_worktree_on_branch_from_base(self):
@@ -110,6 +117,64 @@ class TestEnsureWorktree(WorktreeTestBase):
         _git(self.repo, "worktree", "add", "-b", "feature/dup", other, "develop")
         with self.assertRaises(worktree.WorktreeConflict):
             worktree.ensure_worktree(self.repo, "feature/dup", base="develop")
+
+    def test_option_shaped_base_rejected(self):
+        # base="--force" must not be parsed as a git flag (it would defeat the
+        # conflict checks); validation rejects it before it reaches git.
+        with self.assertRaises(worktree.WorktreeError):
+            worktree.ensure_worktree(self.repo, "feature/badbase", base="--force")
+
+    def test_worktree_built_at_the_requested_base_commit(self):
+        # Branch "release" stays at the seed commit; develop advances past it.
+        _git(self.repo, "branch", "release", "develop")
+        with open(os.path.join(self.repo, "EXTRA.txt"), "w", encoding="utf-8") as f:
+            f.write("develop only\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "advance develop")
+        release_sha = _git(self.repo, "rev-parse", "release").stdout.strip()
+        path = worktree.ensure_worktree(self.repo, "feature/frombase", base="release")
+        self.assertEqual(_git(path, "rev-parse", "HEAD").stdout.strip(), release_sha)
+
+    def test_reuses_existing_branch_after_worktree_removed(self):
+        first = worktree.ensure_worktree(self.repo, "feature/readd", base="develop")
+        _git(self.repo, "worktree", "remove", first)
+        # The branch still exists, the worktree dir is gone: re-add without -b.
+        again = worktree.ensure_worktree(self.repo, "feature/readd", base="develop")
+        self.assertEqual(first, again)
+        self.assertTrue(os.path.isdir(again))
+        porcelain = _git(self.repo, "worktree", "list", "--porcelain").stdout
+        self.assertIn("branch refs/heads/feature/readd", porcelain)
+
+
+class TestGitEnvIsolation(WorktreeTestBase):
+    def test_ignores_leaked_git_redirectors(self):
+        # Build a second, unrelated repo whose GIT_* would hijack "git -C" if the
+        # helper did not strip the redirectors (the condition the env-scrub exists
+        # for, e.g. running inside a git hook).
+        other = os.path.join(self.parent, "other-repo")
+        os.makedirs(other)
+        _git(other, "init", "-q")
+        _git(other, "config", "user.email", "o@example.com")
+        _git(other, "config", "user.name", "Other")
+        _git(other, "checkout", "-q", "-b", "develop")
+        with open(os.path.join(other, "f.txt"), "w", encoding="utf-8") as f:
+            f.write("other\n")
+        _git(other, "add", "-A")
+        _git(other, "commit", "-q", "-m", "other init")
+
+        leaked = {
+            "GIT_DIR": os.path.join(other, ".git"),
+            "GIT_WORK_TREE": other,
+            "GIT_INDEX_FILE": os.path.join(other, ".git", "index"),
+        }
+        with mock.patch.dict(os.environ, leaked):
+            path = worktree.ensure_worktree(self.repo, "feature/isolated", base="develop")
+
+        # The worktree must be registered in self.repo, not the leaked "other" repo.
+        registered = _git(self.repo, "worktree", "list", "--porcelain").stdout
+        self.assertIn(os.path.realpath(path), registered)
+        other_list = _git(other, "worktree", "list", "--porcelain").stdout
+        self.assertNotIn("feature/isolated", other_list)
 
 
 class TestCliWorktree(WorktreeTestBase):
