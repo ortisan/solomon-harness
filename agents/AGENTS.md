@@ -214,6 +214,7 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
 - `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, and didactic reporting (absorbs data science).
 - `observability` — logging, metrics, tracing, monitoring dashboards, OpenTelemetry.
+- `practice_curator` — benchmarks delivered work and the agents' own guidance against the state of the art (software, architecture, ML/DRL, trading) and proposes reviewed updates; cited sources, one target agent per change.
 - `product_owner` — PRDs, requirements, user stories, scope and deliverables.
 - `qa` — unit, integration and E2E tests, mocking external services, UAT, QA reports.
 - `quant_trader` — quantitative strategies, backtests, slippage and transaction costs, Sharpe/drawdown/profit-factor risk.

@@ -19,6 +19,15 @@ CLICHES = [
 
 # Required keywords per profile
 REQUIRED_KEYWORDS = {
+    "practice_curator.md": [
+        "Practice Curator",
+        "best practices",
+        "state of the art",
+        "benchmark",
+        "gap report",
+        "reviewed",
+        "sources",
+    ],
     "product_owner.md": [
         "Product Owner",
         "Product Requirements Document",
