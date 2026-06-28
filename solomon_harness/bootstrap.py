@@ -401,4 +401,62 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                 )
             print(f"  Created local Wiki templates inside {wiki_dir}")
 
+    # 10. Index project codebase into database memory
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            index_codebase(workspace_root, db)
+    except Exception as e:
+        print(f"  Warning: Codebase indexing failed: {e}")
+
     print("=== Bootstrap Completed Successfully ===")
+
+
+def index_codebase(workspace_root: str, db) -> None:
+    """Walks the workspace root and indexes text files into the database memory."""
+    print("Indexing project codebase into database...")
+    count = 0
+    # Exclude common binaries, lockfiles, and hidden/build folders to save space
+    exclude_dirs = {
+        ".git", "node_modules", ".venv", "venv", "build", "dist",
+        ".claude", ".agents", "__pycache__", "docs", "planning",
+        ".idea", ".vscode"
+    }
+    exclude_exts = {
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".tar",
+        ".gz", ".exe", ".bin", ".woff", ".woff2", ".eot", ".ttf", ".mp4",
+        ".mp3", ".wav", ".svg", ".lock", "pyc", "pyo"
+    }
+
+    for root, dirs, files in os.walk(workspace_root):
+        # In-place modify dirs to avoid descending into excluded directories
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+
+        for file in files:
+            ext = os.path.splitext(file)[1].lower()
+            if ext in exclude_exts:
+                continue
+
+            file_path = os.path.join(root, file)
+            rel_path = os.path.relpath(file_path, workspace_root)
+
+            # Skip large files > 250KB to preserve token limits
+            try:
+                size = os.path.getsize(file_path)
+                if size > 250000:
+                    continue
+            except OSError:
+                continue
+
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+
+                # Use relative path as key, content as value, category "codebase_indexing"
+                db.save_memory(key=rel_path, value=content, category="codebase_indexing")
+                count += 1
+            except Exception:
+                pass
+
+    print(f"Successfully indexed {count} files in the database.")
+

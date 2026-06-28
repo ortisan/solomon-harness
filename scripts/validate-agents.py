@@ -177,6 +177,27 @@ REQUIRED_KEYWORDS = {
         "XCTest",
         "MVVM",
     ],
+    "dba.md": [
+        "Database Administrator",
+        "data models",
+        "performance audits",
+        "index",
+        "migration",
+    ],
+    "data_analyst.md": [
+        "Data Analyst",
+        "clean incoming",
+        "SQL",
+        "big data",
+        "visualization",
+    ],
+    "data_science.md": [
+        "Data Scientist",
+        "predictive",
+        "statistical",
+        "didactically",
+        "cross-validation",
+    ],
 }
 
 

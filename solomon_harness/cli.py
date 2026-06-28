@@ -265,6 +265,7 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     init_parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode using default configurations")
 
     subparsers.add_parser("compile", help="Compile agent harnesses from templates")
+    subparsers.add_parser("index", help="Index project codebase into the database memory")
 
     skills_parser = subparsers.add_parser("skills", help="Manage agent skills")
     skills_parser.add_argument("skills_args", nargs=argparse.REMAINDER, help="Arguments passed to skills manager")
@@ -309,6 +310,15 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     elif args.command == "compile":
         from solomon_harness.compiler import compile_harnesses
         compile_harnesses(workspace_root)
+    elif args.command == "index":
+        from solomon_harness.bootstrap import index_codebase
+        from solomon_harness.tools.database_client import DatabaseClient
+        try:
+            with DatabaseClient(harness_dir=workspace_root) as db:
+                index_codebase(workspace_root, db)
+        except Exception as e:
+            print(f"Error: Codebase indexing failed: {e}", file=sys.stderr)
+            sys.exit(1)
     elif args.command == "skills":
         from solomon_harness.skills import main as skills_main
         sys.exit(skills_main(args.skills_args, start_dir=workspace_root))

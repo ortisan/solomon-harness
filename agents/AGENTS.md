@@ -48,6 +48,7 @@ own model loop.
 
 - Strict Test-Driven Development (TDD) is mandatory.
 - Follow SOLID principles and maintain a highly modular design.
+- **Karpathy's Simplicity Principle:** Code must be simple, readable, and flat. Avoid premature abstractions, heavy dependency layers, or bloated architectures. Prefer native programming constructs over third-party libraries.
 - Define clear design contracts as boundaries between components.
 - Preserve existing docstrings and comments unrelated to the current change,
   unless explicitly instructed otherwise.
@@ -119,6 +120,38 @@ file per technology, language or tool, with frameworks covered in sections.
 Agents read these before acting. There is no shared boilerplate skill: every
 file is specific to its topic.
 
+### Skill file format
+
+Every skill is a single, self-contained Markdown file that follows the same
+shape, modeled on the `auth_engineer` skills:
+
+```
+# <Skill Title>
+
+<One paragraph stating what this skill governs and the stance to take. This
+first paragraph is what scripts/document-skills.py uses as the one-line summary
+in the profile's Active Skills list, so make the first sentence sharp.>
+
+## <Topic sections>
+
+Concrete, current guidance: name the standards, libraries and versions, give
+thresholds and short code examples, and explain the decision behind each rule.
+Be specific to the topic; do not restate the shared rules in this file.
+
+## Common pitfalls
+
+- Specific failure modes a reviewer should reject, each with the reason.
+
+## Definition of done
+
+- [ ] Checklist items that must hold before the work is considered complete.
+```
+
+Keep filenames `snake_case.md`. Prefer depth over breadth: a skill should read
+like a senior engineer's reference, with real APIs and numbers, not platitudes.
+The cross-cutting files that recur across agents use the same names:
+`definition_of_done`, `common_pitfalls`, `scope_and_non_negotiables`.
+
 You can also pull skills from external skill-server repositories instead of
 authoring everything here. Sources are listed in `skill-sources.json`; manage
 them with the `solomon-harness skills` command (or `python -m solomon_harness.cli skills`):
@@ -138,6 +171,9 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `android` — native Android apps: Kotlin, Jetpack Compose, MVVM, Coroutines/Flow, Room/Retrofit, Gradle, instrumentation and Compose testing.
 - `apple` — native Apple-platform apps: Swift, SwiftUI, UIKit, Swift Concurrency, Combine, SwiftData/Core Data, Xcode/SPM, XCTest.
 - `auth_engineer` — authentication and authorization: OAuth 2.0/OIDC, social and enterprise login, sessions and tokens, MFA, RBAC/ABAC, OPA/Rego policy-as-code, credential security.
+- `data_analyst` — querying, wrangling, processing big data (Spark, ClickHouse), visual storytelling, reporting and SQL analytics.
+- `data_science` — predictive modeling, statistical validation, didactic explanations, report structuring.
+- `dba` — data modeling, performance tuning, indexing, migrations, replication and backups.
 - `documenter` — technical and business documentation, user guides, design docs.
 - `flutter` — Flutter and Dart applications, clean architecture, widget and integration tests.
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
