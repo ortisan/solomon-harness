@@ -176,7 +176,8 @@ class DatabaseClient:
                     self.db = Surreal(url)
                     if hasattr(self.db, "connect"):
                         self.db.connect()
-                    self.db.signin({"user": username, "pass": password})
+                    # SDK 2.x uses username/password keys (1.x used user/pass).
+                    self.db.signin({"username": username, "password": password})
                     self.db.use(namespace, database)
 
                     # Initialize SurrealDB tables

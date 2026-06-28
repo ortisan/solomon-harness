@@ -252,7 +252,7 @@ class TestDatabaseClient(unittest.TestCase):
             mock_surreal_class.assert_called_once_with("ws://localhost:8000/rpc")
             mock_surreal_instance.connect.assert_called_once()
             mock_surreal_instance.signin.assert_called_once_with(
-                {"user": "root", "pass": "root"}
+                {"username": "root", "password": "root"}
             )
             # The generic "harness" config name is resolved to the <owner>-<repo>
             # tenant so projects never collide in the shared SurrealDB.
