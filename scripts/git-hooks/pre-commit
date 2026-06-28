@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# Solomon Harness Local Pre-Commit Validation Loop
+echo "=== Running pre-commit validation loop ==="
+
+# 1. Update skills documentation
+echo "Auto-documenting specialist skills..."
+uv run python scripts/document-skills.py || { echo "Error: Skill auto-documentation failed."; exit 1; }
+
+# 2. Compile agent harnesses
+echo "Compiling specialist agent harnesses..."
+uv run python -m solomon_harness.compiler || { echo "Error: Harness compilation failed."; exit 1; }
+
+# 3. Run full project test suite
+echo "Running project test suite..."
+uv run python -m unittest discover -s tests || { echo "Error: Test suite execution failed."; exit 1; }
+
+echo "=== All pre-commit validations passed successfully! ==="
+exit 0

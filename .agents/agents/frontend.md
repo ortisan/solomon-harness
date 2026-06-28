@@ -1,1 +1,0 @@
-../../agents/frontend/agents/frontend.md

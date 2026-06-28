@@ -7,6 +7,50 @@ from contextlib import contextmanager
 from typing import Generator, Any, Dict, List, Optional, Union
 
 
+class SpectronFallbackClient:
+    """Fallback client for Spectron REST API when the python package doesn't export it."""
+
+    def __init__(self, context: str, endpoint: str, api_key: str, timeout: float = 30.0, max_retries: int = 3):
+        self.context = context
+        self.endpoint = endpoint.rstrip('/')
+        self.api_key = api_key
+        self.timeout = timeout
+        self.max_retries = max_retries
+        import requests
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        })
+
+    def remember(self, fact: str, scope: Optional[List[str]] = None) -> Any:
+        url = f"{self.endpoint}/api/v1/{self.context}/facts"
+        payload = {"fact": fact}
+        if scope:
+            payload["scope"] = scope
+        resp = self.session.post(url, json=payload, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def recall(self, query: str, scope: Optional[List[str]] = None) -> Any:
+        url = f"{self.endpoint}/api/v1/{self.context}/query"
+        payload = {"query": query}
+        if scope:
+            payload["scope"] = scope
+        resp = self.session.post(url, json=payload, timeout=self.timeout)
+        resp.raise_for_status()
+        
+        data = resp.json()
+        class MockHit:
+            def __init__(self, text):
+                self.text = text
+        class MockResponse:
+            def __init__(self, hits):
+                self.hits = hits
+        hits = [MockHit(h.get("text", "")) for h in data.get("hits", [])]
+        return MockResponse(hits)
+
+
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
@@ -29,6 +73,7 @@ class DatabaseClient:
         """
         self.backend = "sqlite"
         self.db = None
+        self.spectron = None
         self.db_path = db_path
 
         # The shared client no longer lives inside the agent directory, so the caller
@@ -48,7 +93,7 @@ class DatabaseClient:
             if (
                 os.path.exists(os.path.join(project_root, "agents"))
                 and os.path.exists(os.path.join(project_root, "memory"))
-                and os.path.exists(os.path.join(project_root, "templates"))
+                and os.path.exists(os.path.join(project_root, "solomon_harness"))
             ):
                 found_root = True
                 break
@@ -77,7 +122,9 @@ class DatabaseClient:
         provider = db_config.get("provider")
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
-        if provider == "surrealdb":
+        # An explicit db_path forces the SQLite backend (used for test isolation and
+        # eval sandboxes), regardless of the configured provider.
+        if provider == "surrealdb" and self.db_path is None:
             # Dynamically import surrealdb to support dynamic backend loading
             try:
                 import surrealdb  # type: ignore[import-not-found]
@@ -88,22 +135,28 @@ class DatabaseClient:
                 has_surrealdb = False
                 Surreal = None
 
-            if has_surrealdb and Surreal is not None:
-                url = os.environ.get(
-                    "SURREAL_URL", db_config.get("url", "ws://localhost:8000/rpc")
-                )
-                username = os.environ.get(
-                    "SURREAL_USER", db_config.get("username", "root")
-                )
-                password = os.environ.get(
-                    "SURREAL_PASS", db_config.get("password", "root")
-                )
+            url = os.environ.get(
+                "SURREAL_URL", db_config.get("url", "ws://localhost:8000/rpc")
+            )
+            # Credentials come from the environment first, then config. There is no
+            # committed default credential: for a non-local server with no credentials
+            # we fail closed and fall back to SQLite rather than guessing root/root.
+            username = os.environ.get("SURREAL_USER", db_config.get("username"))
+            password = os.environ.get("SURREAL_PASS", db_config.get("password"))
+            is_local = any(h in url for h in ("localhost", "127.0.0.1", "0.0.0.0"))
+            if is_local:
+                username = username or "root"
+                password = password or "root"
+            creds_ok = bool(username and password)
+
+            if has_surrealdb and Surreal is not None and creds_ok:
                 namespace = db_config.get("namespace", "solomon")
                 database = db_config.get("database", "harness")
 
                 try:
                     self.db = Surreal(url)
-                    self.db.connect()
+                    if hasattr(self.db, "connect"):
+                        self.db.connect()
                     self.db.signin({"user": username, "pass": password})
                     self.db.use(namespace, database)
 
@@ -119,6 +172,35 @@ class DatabaseClient:
                     )
                     self.db.query(init_query)
                     self.backend = "surrealdb"
+
+                    # Initialize Spectron if URL and API Key are configured
+                    spectron_url = os.environ.get(
+                        "SPECTRON_URL", db_config.get("spectron_url")
+                    )
+                    spectron_api_key = os.environ.get(
+                        "SPECTRON_API_KEY", db_config.get("spectron_api_key")
+                    )
+                    spectron_context = os.environ.get(
+                        "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
+                    )
+                    if spectron_url and spectron_api_key:
+                        try:
+                            try:
+                                from surrealdb import Spectron
+                                self.spectron = Spectron(
+                                    context=spectron_context,
+                                    endpoint=spectron_url,
+                                    api_key=spectron_api_key
+                                )
+                            except (ImportError, AttributeError):
+                                self.spectron = SpectronFallbackClient(
+                                    context=spectron_context,
+                                    endpoint=spectron_url,
+                                    api_key=spectron_api_key
+                                )
+                        except Exception as e:
+                            sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
+                            self.spectron = None
                 except Exception as e:
                     sys.stderr.write(f"Warning: Connection to SurrealDB failed: {e}\n")
                     sys.stderr.write(
@@ -132,9 +214,15 @@ class DatabaseClient:
                         self.db = None
                     self.backend = "sqlite"
             else:
-                sys.stderr.write(
-                    "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
-                )
+                if not creds_ok:
+                    sys.stderr.write(
+                        "SurrealDB credentials are not set for a non-local URL; set "
+                        "SURREAL_USER/SURREAL_PASS. Falling back to SQLite backend.\n"
+                    )
+                else:
+                    sys.stderr.write(
+                        "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
+                    )
                 self.backend = "sqlite"
 
         # Initialize SQLite if backend is sqlite
@@ -388,6 +476,12 @@ class DatabaseClient:
             category: Categorical bucket for the memory.
         """
         if self.backend == "surrealdb":
+            if self.spectron is not None:
+                try:
+                    self.spectron.remember(fact=value, scope=[category, key])
+                except Exception as e:
+                    logging.warning(f"Failed to save memory in Spectron: {e}")
+
             query = """
             UPSERT INTO memory {
                 id: $id,
@@ -435,6 +529,14 @@ class DatabaseClient:
             The memory value string or None if not found.
         """
         if self.backend == "surrealdb":
+            if self.spectron is not None:
+                try:
+                    res = self.spectron.recall(key)
+                    if res and hasattr(res, "hits") and res.hits:
+                        return res.hits[0].text
+                except Exception as e:
+                    logging.warning(f"Failed to recall memory from Spectron: {e}")
+
             query = "SELECT value FROM memory WHERE key = $key"
             try:
                 res = self.db.query(query, {"key": key})

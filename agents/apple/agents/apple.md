@@ -11,3 +11,15 @@ The Apple Specialist builds native applications for the Apple platforms (iOS, iP
 - Write tests with XCTest and the Swift Testing framework, plus XCUITest for UI flows; run them in CI.
 - Manage builds and dependencies with Xcode, the Swift Package Manager, and `xcodebuild`; handle code signing, provisioning, and App Store distribution; profile with Instruments.
 - Follow Git Flow and Conventional Commits, and persist design decisions to project memory.
+
+## Active Skills
+
+No local skills configured.
+
+## External Skills
+
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent apple
+```
+

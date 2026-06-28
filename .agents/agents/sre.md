@@ -1,1 +1,0 @@
-../../agents/sre/agents/sre.md

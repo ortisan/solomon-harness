@@ -15,8 +15,6 @@ class TestHarnessInit(unittest.TestCase):
         expected_dirs = [
             ".agent",
             "agents",
-            "skills",
-            "tools",
             "memory",
             "memory/short_term",
             "memory/long_term",
@@ -48,7 +46,7 @@ class TestHarnessInit(unittest.TestCase):
 
     def test_template_config_json_database(self):
         config_path = os.path.join(
-            self.workspace_dir, "templates", "harness", ".agent", "config.json"
+            self.workspace_dir, "solomon_harness", "templates", "harness", ".agent", "config.json"
         )
         self.assertTrue(
             os.path.isfile(config_path),
@@ -64,8 +62,10 @@ class TestHarnessInit(unittest.TestCase):
         self.assertEqual(db_config.get("url"), "ws://localhost:8000/rpc")
         self.assertEqual(db_config.get("namespace"), "solomon")
         self.assertEqual(db_config.get("database"), "harness")
-        self.assertEqual(db_config.get("username"), "root")
-        self.assertEqual(db_config.get("password"), "root")
+        # No credentials are committed in the template; they come from the
+        # SURREAL_USER / SURREAL_PASS environment at runtime.
+        self.assertNotIn("username", db_config)
+        self.assertNotIn("password", db_config)
 
     def test_secure_vault_enc(self):
         vault_path = os.path.join(self.workspace_dir, ".agent", "secure_vault.enc")

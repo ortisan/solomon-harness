@@ -4,13 +4,19 @@ version = "0.1.0"
 description = "Multi-agent software-development harness with a SurrealDB/SQLite memory layer."
 requires-python = ">=3.10"
 dependencies = [
-    # Primary memory backend. The client currently targets the legacy synchronous API
-    # (connect/signin with user/pass). Reconcile the exact pin against the code in the
-    # dedicated SurrealDB-correctness work before treating this as load-bearing.
-    "surrealdb>=1.0.0",
+    # Primary memory backend. The client targets the legacy synchronous API
+    # (Surreal(url) + connect/signin with user/pass), which is the 1.x line; the 2.x
+    # SDK changed that surface, so the pin is capped below 2.0 to match the code.
+    # The SurrealDB path still needs a live integration test before it is load-bearing;
+    # the client falls back to SQLite on any connection error in the meantime.
+    "surrealdb>=1.0.0,<2.0.0",
     # MCP server that exposes the project memory to the host tools.
-    "mcp>=1.2",
+    "mcp>=1.0",
 ]
+[project.scripts]
+solomon-harness = "solomon_harness.cli:main"
+
+
 
 [project.optional-dependencies]
 dev = [
@@ -29,3 +35,7 @@ target-version = "py310"
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+
+[tool.setuptools]
+packages = ["solomon_harness"]
+

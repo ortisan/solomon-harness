@@ -1,0 +1,18 @@
+# Business Requirements Document (BRD)
+
+## 1. Vision & Objectives
+Provide a high-level summary of the business goals for {{PROJECT_NAME}}. Define what problem this project solves and the value it delivers to stakeholders.
+
+## 2. Target Audience & User Personas
+Identify the core users of this system, their pain points, and how they will interact with the application.
+
+## 3. Scope & Out of Scope
+Clearly delineate what is within the scope of this project and what is excluded (deferred to future phases).
+
+## 4. Key Performance Indicators (KPIs)
+- **Performance:** System response time under peak load.
+- **Reliability:** Service uptime goals (SLAs).
+- **Business metrics:** User conversion, active users, or throughput targets.
+
+## 5. Roadmap & Release Gates
+Outline key milestones and validation gates required before launching features to production.

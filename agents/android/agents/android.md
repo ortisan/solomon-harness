@@ -11,3 +11,15 @@ The Android Specialist builds native Android applications with Kotlin and Jetpac
 - Write unit tests (JUnit, Turbine, MockK) and instrumentation and Compose UI tests (Espresso, Compose test rules); run them in CI.
 - Manage builds with Gradle (Kotlin DSL) and version catalogs, enforce R8/ProGuard shrinking and obfuscation for release, and profile performance, jank, and memory with Android Studio profilers and Macrobenchmark.
 - Follow Git Flow and Conventional Commits, and persist design decisions to project memory.
+
+## Active Skills
+
+No local skills configured.
+
+## External Skills
+
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent android
+```
+

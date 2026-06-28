@@ -223,7 +223,9 @@ class TestDatabaseClient(unittest.TestCase):
             patch("os.path.isfile", side_effect=mock_isfile),
             patch("builtins.open", side_effect=mock_open),
         ):
-            client = DatabaseClient(db_path=self.sqlite_db_path)
+            # No db_path: an explicit db_path now forces SQLite, so the SurrealDB
+            # path is exercised via config resolution instead.
+            client = DatabaseClient()
             self.assertEqual(client.backend, "surrealdb")
 
             # Verify SurrealDB setup calls
@@ -325,6 +327,88 @@ class TestDatabaseClient(unittest.TestCase):
             client.close()
             mock_surreal_instance.close.assert_called_once()
 
+    def test_spectron_initialization_and_usage(self):
+        """Test that the client initializes Spectron when configured and routes calls through it."""
+        mock_surreal_class = MagicMock()
+        mock_surreal_instance = MagicMock()
+        mock_surreal_class.return_value = mock_surreal_instance
+        mock_surreal_instance.query.return_value = []
+
+        mock_spectron_class = MagicMock()
+        mock_spectron_instance = MagicMock()
+        mock_spectron_class.return_value = mock_spectron_instance
+
+        config_data = {
+            "database": {
+                "provider": "surrealdb",
+                "url": "ws://localhost:8000/rpc",
+                "namespace": "solomon",
+                "database": "harness",
+                "username": "root",
+                "password": "root",
+                "spectron_url": "http://localhost:9090",
+                "spectron_api_key": "sk_test_key",
+                "spectron_context": "test-context"
+            }
+        }
+
+        mock_surrealdb = MagicMock()
+        mock_surrealdb.Surreal = mock_surreal_class
+        mock_surrealdb.Spectron = mock_spectron_class
+
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "surrealdb":
+                return mock_surrealdb
+            return original_import(name, *args, **kwargs)
+
+        def mock_isfile(path):
+            if path.endswith("config.json"):
+                return True
+            return os.path.isfile(path)
+
+        original_open = builtins.open
+
+        def mock_open(path, *args, **kwargs):
+            if str(path).endswith("config.json"):
+                return io.StringIO(json.dumps(config_data))
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch("builtins.__import__", side_effect=mock_import),
+            patch("os.path.isfile", side_effect=mock_isfile),
+            patch("builtins.open", side_effect=mock_open),
+        ):
+            # No db_path: see note in test_surrealdb_backend_working_correctly.
+            client = DatabaseClient()
+            self.assertEqual(client.backend, "surrealdb")
+            self.assertIsNotNone(client.spectron)
+
+            # Verify Spectron client initialization
+            mock_spectron_class.assert_called_once_with(
+                context="test-context",
+                endpoint="http://localhost:9090",
+                api_key="sk_test_key"
+            )
+
+            # Test save_memory routes through Spectron
+            client.save_memory("mykey", "myval", "mycat")
+            mock_spectron_instance.remember.assert_called_once_with(
+                fact="myval", scope=["mycat", "mykey"]
+            )
+
+            # Test get_memory routes through Spectron
+            mock_hit = MagicMock()
+            mock_hit.text = "myval"
+            mock_spectron_instance.recall.return_value = MagicMock(hits=[mock_hit])
+            
+            val = client.get_memory("mykey")
+            self.assertEqual(val, "myval")
+            mock_spectron_instance.recall.assert_called_once_with("mykey")
+
+            client.close()
+
     def test_project_root_resolution_with_git(self):
         """Project root resolves to the nearest ancestor containing .git."""
         with (
@@ -374,15 +458,13 @@ class TestDatabaseClient(unittest.TestCase):
         ):
 
             def side_effect_exists(path):
-                # Simulate presence of root-level directories
                 if path in [
                     "/mock/repo/agents",
                     "/mock/repo/memory",
-                    "/mock/repo/templates",
+                    "/mock/repo/solomon_harness",
                 ]:
                     return True
                 return False
-
             mock_exists.side_effect = side_effect_exists
             mock_isfile.return_value = False
 
@@ -412,6 +494,9 @@ class TestDatabaseClient(unittest.TestCase):
                         "url": "ws://harness-local:8000/rpc",
                         "namespace": "solomon",
                         "database": "harness",
+                        # Non-local URL requires explicit credentials (fail-closed).
+                        "username": "qa_user",
+                        "password": "qa_pass",
                     },
                 },
                 f,

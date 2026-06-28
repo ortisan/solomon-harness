@@ -121,11 +121,11 @@ file is specific to its topic.
 
 You can also pull skills from external skill-server repositories instead of
 authoring everything here. Sources are listed in `skill-sources.json`; manage
-them with `scripts/fetch-skills.py`:
+them with the `solomon-harness skills` command (or `python -m solomon_harness.cli skills`):
 
-- `python scripts/fetch-skills.py sources` lists the configured sources.
-- `python scripts/fetch-skills.py list <source>` lists the skills a source offers.
-- `python scripts/fetch-skills.py add <source> <skill> --agent <name>` installs
+- `solomon-harness skills sources` lists the configured sources.
+- `solomon-harness skills list <source>` lists the skills a source offers.
+- `solomon-harness skills add <source> <skill> --agent <name>` installs
   one into `agents/<name>/skills/`.
 
 A source skill is a folder with a `SKILL.md` or a Markdown file under a `skills/`

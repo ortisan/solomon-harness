@@ -1,1 +1,0 @@
-../../agents/software_architect/agents/software_architect.md

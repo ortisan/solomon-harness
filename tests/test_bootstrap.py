@@ -17,10 +17,10 @@ class TestBootstrapAgent(unittest.TestCase):
         self.test_dir = tempfile.TemporaryDirectory()
         self.workspace_dir = self.test_dir.name
 
-        # Copy required templates, agents, and scripts to the test workspace
+        # Copy required package, agents, and scripts to the test workspace
         shutil.copytree(
-            os.path.join(self.real_workspace_dir, "templates"),
-            os.path.join(self.workspace_dir, "templates"),
+            os.path.join(self.real_workspace_dir, "solomon_harness"),
+            os.path.join(self.workspace_dir, "solomon_harness"),
         )
         shutil.copytree(
             os.path.join(self.real_workspace_dir, "agents"),
@@ -176,6 +176,38 @@ class TestBootstrapAgent(unittest.TestCase):
         self.assertEqual(config.get("architecture_pattern"), "functional")
         self.assertEqual(config.get("observability_pattern"), "opentelemetry")
         self.assertEqual(config.get("security_pattern"), "secure_dev")
+
+    def test_bootstrap_creates_fallback_kanban_and_wiki_when_no_github(self):
+        # Remove git repository settings to simulate no git / no github remote
+        import shutil
+        shutil.rmtree(os.path.join(self.workspace_dir, ".git"), ignore_errors=True)
+
+        env = os.environ.copy()
+        env["NON_INTERACTIVE"] = "true"
+
+        result = subprocess.run(
+            ["bash", self.script_path],
+            cwd=self.workspace_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, f"Script failed with: {result.stderr}")
+
+        # Check local KANBAN.md creation
+        kanban_path = os.path.join(self.workspace_dir, "planning", "KANBAN.md")
+        self.assertTrue(os.path.isfile(kanban_path))
+        with open(kanban_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            self.assertIn("Kanban Board", content)
+
+        # Check local Wiki pages creation
+        wiki_dir = os.path.join(self.workspace_dir, "docs", "wiki")
+        self.assertTrue(os.path.isdir(wiki_dir))
+        self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Home.md")))
+        self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Business-Requirements.md")))
+        self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Technical-Documentation.md")))
 
 
 if __name__ == "__main__":

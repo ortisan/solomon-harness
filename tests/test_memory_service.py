@@ -13,10 +13,14 @@ from solomon_harness.memory_service import MemoryService, resolve_harness_dir  #
 class TestMemoryService(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        from unittest.mock import patch
+        self.patcher = patch("os.path.isfile", side_effect=lambda path: False if "config.json" in path else os.path.isfile(path))
+        self.patcher.start()
         self.svc = MemoryService(db_path=os.path.join(self.tmp.name, "memory.db"))
 
     def tearDown(self):
         self.svc.close()
+        self.patcher.stop()
         self.tmp.cleanup()
 
     def test_decision_roundtrip(self):

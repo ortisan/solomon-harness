@@ -11,6 +11,33 @@ import sys
 from typing import Optional, List, Dict, Any
 
 
+def _subagent_description(filepath: str) -> str:
+    """Return a one-line description for a generated subagent file.
+
+    Prefers the YAML front-matter ``description:`` field, falling back to the
+    first non-heading line of the body.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return ""
+
+    if lines and lines[0].strip() == "---":
+        for line in lines[1:]:
+            stripped = line.strip()
+            if stripped == "---":
+                break
+            if stripped.lower().startswith("description:"):
+                return stripped.split(":", 1)[1].strip()
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and stripped != "---":
+            return stripped
+    return ""
+
+
 def handle_db_init(harness_dir: str) -> None:
     """Initializes the database client for the given harness directory."""
     from solomon_harness.tools.database_client import DatabaseClient
@@ -154,11 +181,10 @@ def handle_run(harness_dir: str, task: Optional[str] = None) -> None:
                 except Exception as e:
                     print(f"Warning: Failed to log new issue to database: {e}", file=sys.stderr)
 
-            # Simulate running the agent on this task
-            print("Executing task simulation...")
-            print("Step 1: Loading configuration...")
-            print("Step 2: Loading persona profile instructions...")
-            print("Step 3: Injecting skills...")
+            # This loop records task lifecycle to the project memory; it does not
+            # itself run a model. The host tool (Claude Code, Codex, Gemini CLI)
+            # provides the execution loop and reads the compiled agent definition.
+            print("Recording task lifecycle to project memory...")
 
             # Update/insert active session state
             session_id = str(uuid.uuid4())
@@ -234,10 +260,42 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     run_parser = subparsers.add_parser("run", help="Simulate running a task")
     run_parser.add_argument("task", type=str, nargs="?", default=None, help="The task description to execute (optional)")
 
+    # New subcommands for workspace management
+    init_parser = subparsers.add_parser("init", help="Initialize workspace configuration and rules")
+    init_parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode using default configurations")
+
+    subparsers.add_parser("compile", help="Compile agent harnesses from templates")
+
+    skills_parser = subparsers.add_parser("skills", help="Manage agent skills")
+    skills_parser.add_argument("skills_args", nargs=argparse.REMAINDER, help="Arguments passed to skills manager")
+
+    agents_parser = subparsers.add_parser("agents", help="List and show agent definitions")
+    agents_subparsers = agents_parser.add_subparsers(dest="agents_command", help="Agents subcommands")
+    agents_subparsers.add_parser("list", help="List all available agents")
+    agents_subparsers.add_parser("help", help="Display usage instructions")
+    show_parser = agents_subparsers.add_parser("show", help="Show specific agent profile")
+    show_parser.add_argument("agent_name", type=str, help="Agent name")
+
     args = parser.parse_args(argv)
 
     if harness_dir is None:
         harness_dir = os.getcwd()
+
+    # Determine workspace root
+    project_root = harness_dir
+    found_root = False
+    while project_root and project_root != os.path.dirname(project_root):
+        if os.path.exists(os.path.join(project_root, ".git")):
+            found_root = True
+            break
+        if (
+            os.path.exists(os.path.join(project_root, "agents"))
+            and os.path.exists(os.path.join(project_root, "memory"))
+        ):
+            found_root = True
+            break
+        project_root = os.path.dirname(project_root)
+    workspace_root = project_root if found_root else harness_dir
 
     if args.command == "db-init":
         handle_db_init(harness_dir)
@@ -245,6 +303,63 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_eval(harness_dir)
     elif args.command == "run":
         handle_run(harness_dir, args.task)
+    elif args.command == "init":
+        from solomon_harness.bootstrap import bootstrap_project
+        bootstrap_project(workspace_root, non_interactive=args.non_interactive)
+    elif args.command == "compile":
+        from solomon_harness.compiler import compile_harnesses
+        compile_harnesses(workspace_root)
+    elif args.command == "skills":
+        from solomon_harness.skills import main as skills_main
+        sys.exit(skills_main(args.skills_args, start_dir=workspace_root))
+    elif args.command == "agents":
+        # The generated host-tool subagents live in .claude/agents/ (produced by
+        # scripts/generate-integrations.py from the agents/ source of truth).
+        agents_dir = os.path.join(workspace_root, ".claude", "agents")
+        if args.agents_command == "list":
+            if not os.path.isdir(agents_dir):
+                print(
+                    f"Error: Subagents directory '{agents_dir}' not found. "
+                    "Run 'solomon-harness compile' or scripts/generate-integrations.py first.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            print("Available subagents:")
+            found = False
+            import glob
+            for filepath in sorted(glob.glob(os.path.join(agents_dir, "*.md"))):
+                found = True
+                filename = os.path.basename(filepath)
+                name = filename[:-3]
+                print(f"  {name} - {_subagent_description(filepath)}")
+            if not found:
+                print(f"No subagents found in '{agents_dir}'.")
+        elif args.agents_command == "show":
+            if not args.agent_name:
+                print("Error: Subcommand 'show' requires an agent name.", file=sys.stderr)
+                sys.exit(1)
+            agent_file = os.path.join(agents_dir, f"{args.agent_name}.md")
+            if not os.path.isfile(agent_file):
+                print(f"Error: Subagent '{args.agent_name}' does not exist.", file=sys.stderr)
+                sys.exit(1)
+            try:
+                with open(agent_file, "r", encoding="utf-8") as f:
+                    print(f.read())
+            except Exception as e:
+                print(f"Error reading subagent: {e}", file=sys.stderr)
+                sys.exit(1)
+        elif args.agents_command == "help":
+            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            sys.exit(0)
+        else:
+            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            sys.exit(1)
     else:
         parser.print_help()
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+
+

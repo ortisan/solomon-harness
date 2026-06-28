@@ -5,10 +5,18 @@ __pycache__/
 *.pyo
 *.pyd
 .ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Compiled agent harnesses. Source lives under agents/; the compiler writes the
+# composed instruction files here, so this is build output and is not tracked.
+build/
 
 # Local agent memory stores, at any depth (root or per-agent harness)
 **/memory/long_term/*.db
 **/memory/short_term/*.json
+**/memory/surrealdb/
 *.db-wal
 *.db-shm
 

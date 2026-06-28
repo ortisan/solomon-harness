@@ -1,4 +1,5 @@
-import importlib.util
+import contextlib
+import io
 import os
 import tempfile
 import unittest
@@ -7,11 +8,8 @@ WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _load_module():
-    path = os.path.join(WORKSPACE, "scripts", "fetch-skills.py")
-    spec = importlib.util.spec_from_file_location("fetch_skills", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    import solomon_harness.skills as skills
+    return skills
 
 
 class TestFetchSkills(unittest.TestCase):
@@ -40,6 +38,44 @@ class TestFetchSkills(unittest.TestCase):
         with open(os.path.join(self.root, ".git", "skills", "x.md"), "w", encoding="utf-8") as f:
             f.write("# x")
         self.assertNotIn("x", self.mod.discover_skill_files(self.root))
+
+    def test_discover_is_deterministic_on_duplicate_stems(self):
+        # Two different paths map to the same stem "dup".
+        for top in ("b-dir", "a-dir"):
+            os.makedirs(os.path.join(self.root, top, "skills"))
+            with open(os.path.join(self.root, top, "skills", "dup.md"), "w", encoding="utf-8") as f:
+                f.write(f"# {top}")
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            first = self.mod.discover_skill_files(self.root)
+        second = self.mod.discover_skill_files(self.root)
+
+        # Sorted traversal makes "a-dir" win deterministically across runs.
+        self.assertEqual(first, second)
+        self.assertEqual(first["dup"], os.path.join(self.root, "a-dir", "skills", "dup.md"))
+        warning = stderr.getvalue()
+        self.assertIn("dup", warning)
+        self.assertIn(os.path.join("a-dir", "skills", "dup.md"), warning)
+        self.assertIn(os.path.join("b-dir", "skills", "dup.md"), warning)
+
+    def test_install_skill_md_folder_copies_siblings(self):
+        pkg = os.path.join(self.root, "packaged-skill")
+        os.makedirs(os.path.join(pkg, "assets"))
+        with open(os.path.join(pkg, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("# Packaged")
+        with open(os.path.join(pkg, "helper.py"), "w", encoding="utf-8") as f:
+            f.write("print('hi')\n")
+        with open(os.path.join(pkg, "assets", "data.txt"), "w", encoding="utf-8") as f:
+            f.write("payload")
+
+        skills_dir = os.path.join(self.root, "agents", "qa", "skills")
+        target = self.mod.install_skill(os.path.join(pkg, "SKILL.md"), skills_dir, "packaged-skill")
+
+        self.assertTrue(os.path.isdir(target))
+        self.assertTrue(os.path.isfile(os.path.join(target, "SKILL.md")))
+        self.assertTrue(os.path.isfile(os.path.join(target, "helper.py")))
+        self.assertTrue(os.path.isfile(os.path.join(target, "assets", "data.txt")))
 
     def test_install_skill_copies_into_agent_dir(self):
         src = os.path.join(self.root, "src.md")

@@ -1,1 +1,0 @@
-../../agents/product_owner/agents/product_owner.md
