@@ -209,6 +209,15 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
 
+    wt_parser = subparsers.add_parser(
+        "worktree",
+        help="Create or locate the isolated git worktree for a branch (used by /solomon-start)",
+    )
+    wt_parser.add_argument("branch", type=str, help="Branch name, e.g. feature/<slug>")
+    wt_parser.add_argument(
+        "--base", type=str, default="develop", help="Base ref for a new branch (default: develop)"
+    )
+
     skills_parser = subparsers.add_parser("skills", help="Manage agent skills")
     skills_parser.add_argument("skills_args", nargs=argparse.REMAINDER, help="Arguments passed to skills manager")
 
@@ -260,6 +269,9 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
         sys.exit(run_stage(workspace_root, args.stage, args.dev_args))
+    elif args.command == "worktree":
+        from solomon_harness.worktree import cli_worktree
+        sys.exit(cli_worktree(workspace_root, args.branch, base=args.base))
     elif args.command == "compile":
         from solomon_harness.bootstrap import scaffold_agents
         scaffold_agents(workspace_root)
