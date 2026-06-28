@@ -6,7 +6,7 @@ A flaky test passes and fails on the same code without any source change. It is 
 
 Quantify flakiness before arguing about it. Track the **flip rate** per test: failures on unchanged commits divided by total runs over a rolling window (CI history, or `pytest --last-failed` cross-referenced with git SHA). A test with flip rate above zero on a stable SHA is flaky by definition and gets a tracking issue via `log_issue`.
 
-The cost is compounding. One flaky test at a 2 percent per-run failure rate, in a suite that re-runs on every push, produces a red pipeline several times a day; the team's response is a reflexive re-run, which is exactly the behavior that lets a genuine intermittent regression ship. Google's published data put roughly 1 in 7 of their tests as flaky at some point, and the dominant remediation cost was engineer attention, not compute. The policy below exists to cap that attention cost with an explicit owner and SLA, not to tolerate the flake.
+The cost is compounding. One flaky test at a 2 percent per-run failure rate, in a suite that re-runs on every push, produces a red pipeline several times a day; the team's response is a reflexive re-run, which is exactly the behavior that lets a genuine intermittent regression ship. Google's published data put almost 1 in 6 of their tests (about 16 percent) as flaky at some point, and the dominant remediation cost was engineer attention, not compute. The policy below exists to cap that attention cost with an explicit owner and SLA, not to tolerate the flake.
 
 ## Root-cause taxonomy
 
@@ -22,7 +22,7 @@ Classify every flaker before fixing it; the fix differs by class, and the class 
 
 Find flakers on purpose; do not wait for them to embarrass a release.
 
-- **Randomize order** with `pytest-randomly`. It shuffles test order and reseeds `random`/`numpy`/`PYTHONHASHSEED` each run, and prints the seed so a failure reproduces:
+- **Randomize order** with `pytest-randomly`. It shuffles test order and reseeds `random`, `numpy`, and `faker` each run, and prints the seed so a failure reproduces. (`PYTHONHASHSEED` governs hash randomization fixed at interpreter startup; it cannot be reseeded mid-run, so pin it as an env var — `PYTHONHASHSEED=0` — before launching the suite.)
 
   ```bash
   pytest -p randomly                       # shuffled order, reseeded each run

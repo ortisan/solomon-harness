@@ -19,7 +19,7 @@ Split each input domain into classes the system treats identically, then test on
 
 ## Boundary value analysis and the canonical boundary set
 
-Defects cluster at partition edges. For high-risk numeric inputs use three-value BVA: `boundary-1`, `boundary`, `boundary+1`. A minimum charge of `100` is tested at `99`, `100`, `101`. Two-value BVA (`boundary`, `boundary+1`) is the lighter variant for medium-risk paths.
+Defects cluster at partition edges. For high-risk numeric inputs use three-value BVA: `boundary-1`, `boundary`, `boundary+1`. A minimum charge of `100` is tested at `99`, `100`, `101`. Two-value BVA tests the two values straddling the edge — the last value of one partition and the first of the next (for a minimum of `100`: `99` and `100`) — the lighter variant for medium-risk paths.
 
 This is the canonical boundary checklist. Every input-handling test references it; siblings point here rather than re-listing it:
 
@@ -67,16 +67,15 @@ def test_charge_validation_rejects_nonfinite(bad):
 
 When the outcome depends on a combination of conditions (eligibility, pricing, feature gating, permission rules), list conditions as rows and rules as columns. The full rule count is the product of the condition value counts; collapse infeasible combinations and don't-care cells, then require at least one test per surviving rule.
 
-Worked count: three booleans give `2^3 = 8` rules. If `is_admin=True` forces the result regardless of `is_owner` and `is_locked`, two of those rows collapse into one don't-care rule, leaving 6 tested rules with explicit expected outcomes.
+Worked count: three booleans give `2^3 = 8` rules. If `is_admin=True` forces the result regardless of `is_owner` and `is_locked`, those four `is_admin=True` rows collapse into one don't-care rule, leaving 5 tested rules with explicit expected outcomes.
 
-| # | is_admin | is_owner | is_locked | expected   |
-|---|----------|----------|-----------|------------|
-| 1 | T        | -        | -         | allow      |
-| 2 | F        | T        | F         | allow      |
-| 3 | F        | T        | T         | deny_locked|
-| 4 | F        | F        | F         | deny       |
-| 5 | F        | F        | T         | deny       |
-| 6 | F        | T        | T (audit) | log_then_deny |
+| # | is_admin | is_owner | is_locked | expected    |
+|---|----------|----------|-----------|-------------|
+| 1 | T        | -        | -         | allow       |
+| 2 | F        | T        | F         | allow       |
+| 3 | F        | T        | T         | deny_locked |
+| 4 | F        | F        | F         | deny        |
+| 5 | F        | F        | T         | deny        |
 
 Each surviving row maps to one parametrized case. A few happy-path cases over a decision table is the classic gap where the production bug hides.
 
@@ -89,7 +88,7 @@ For stateful flows (order lifecycle, auth session, retry/backoff, payment captur
 When several independent parameters multiply the matrix beyond what is worth running, generate an all-pairs (2-wise) set so every pair of parameter values appears at least once, at a fraction of the full cross-product. Use `allpairspy` in Python or Microsoft PICT. Then add back, by hand, the specific full combinations that risk analysis in `test_planning_and_traceability` flagged as high-impact.
 
 ```python
-from allpairs import AllPairs
+from allpairspy import AllPairs
 
 params = [
     ["chrome", "firefox", "safari"],
