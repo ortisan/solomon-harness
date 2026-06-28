@@ -148,6 +148,31 @@ class TestStartWorktree(unittest.TestCase):
         self.assertIn("solomon_harness.cli worktree", toml)
 
 
+class TestGeminiDrift(unittest.TestCase):
+    def _generator(self):
+        path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
+        spec = importlib.util.spec_from_file_location("gen_integrations_drift", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_gemini_commands_match_regenerated_source(self):
+        # A true fitness function: every .gemini/commands/*.toml must equal what the
+        # generator produces from its .claude/commands/*.md source. A hand-edit to a
+        # command without recompiling fails here.
+        gen = self._generator()
+        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+        for name in sorted(os.listdir(cmd_dir)):
+            if not name.endswith(".md"):
+                continue
+            description, body = gen._parse_command_file(os.path.join(cmd_dir, name))
+            expected = gen.gemini_command_toml(description, body)
+            actual = _read(os.path.join(".gemini", "commands", name[:-3] + ".toml"))
+            self.assertEqual(
+                actual, expected, f"{name[:-3]}.toml is out of sync; run the generator"
+            )
+
+
 class TestStartAdr(unittest.TestCase):
     def test_adr_0001_records_the_start_stage_decision(self):
         adr = _read(
@@ -169,10 +194,16 @@ class TestStartImplementationMode(unittest.TestCase):
         self.assertIn("implementation mode", low)
         self.assertIn("automatic", low)
         self.assertIn("manual", low)
+        # The third enumerated option is required by the enumerable-options rule.
+        self.assertIn("Other", body)
+        # The choice must precede any code, and print the selected mode.
+        self.assertIn("Before writing any production or test code", body)
+        self.assertIn("(selected)", body)
         # The headless default line is asserted verbatim so QA can grep for it.
         self.assertIn("Implementation mode: Automatic (non-interactive default)", body)
-        # Manual mode must leave the card in progress, not advance it.
-        self.assertIn("In Progress", body)
+        # Manual mode must leave the card in progress; assert the manual-specific
+        # phrase, not the bare "In Progress" that also appears in step 2.
+        self.assertIn("do not advance it to Code Review", body)
 
     def test_gemini_start_mirror_carries_mode_and_default(self):
         toml = _read(os.path.join(".gemini", "commands", "solomon-start.toml"))
