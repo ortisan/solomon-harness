@@ -1,6 +1,6 @@
-# solomon-dev workflow conventions
+# solomon workflow conventions
 
-Shared conventions for the `/solomon-dev-*` workflows. Every workflow command
+Shared conventions for the `/solomon-*` workflows. Every workflow command
 reads this file and follows it so the lifecycle is consistent, auditable, and
 backed by the project memory. The host tool (Claude Code or Gemini CLI) provides
 the model; these workflows orchestrate the specialist agents, the GitHub project,
@@ -14,13 +14,13 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 
 | Stage | Workflow | Driving agents | Board move |
 | --- | --- | --- | --- |
-| Capture an idea | `/solomon-dev-idea` | product_owner | → `Ideas` |
-| Create a feature/story | `/solomon-dev-issue` | product_owner | → `Backlog` |
-| Create a bug | `/solomon-dev-bug` | qa, software_engineer | → `Backlog` |
-| Refine for readiness | `/solomon-dev-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
-| Implement | `/solomon-dev-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `In Review` |
-| Review | `/solomon-dev-review` | qa, security, software_architect | stays `In Review` (approve or request changes) |
-| Deliver and release | `/solomon-dev-release` | sre, software_engineer | `In Review` → `Done` |
+| Capture an idea | `/solomon-idea` | product_owner | → `Ideas` |
+| Create a feature/story | `/solomon-issue` | product_owner | → `Backlog` |
+| Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
+| Refine for readiness | `/solomon-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
+| Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `In Review` |
+| Review | `/solomon-review` | qa, security, software_architect | stays `In Review` (approve or request changes) |
+| Deliver and release | `/solomon-release` | sre, software_engineer | `In Review` → `Done` |
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
 with `ensure_project_board`; move cards with `set_issue_status`.
@@ -33,7 +33,7 @@ with `ensure_project_board`; move cards with `set_issue_status`.
   for defects, `hotfix/<version>` for production-critical fixes. Branch from `develop`.
 - Commits: Conventional Commits, no emojis (the commit-msg hook enforces this).
 - Pull requests: conventional title, body that contains `Closes #<issue>`, opened
-  as a draft until `/solomon-dev-review` approves. Link the ADR if one was written.
+  as a draft until `/solomon-review` approves. Link the ADR if one was written.
 
 ## Issue body templates
 
@@ -60,7 +60,7 @@ so the next stage (and a future session) can resume:
 
 ## ADR trigger
 
-`/solomon-dev-start` and `/solomon-dev-release` must evaluate whether the change is
+`/solomon-start` and `/solomon-release` must evaluate whether the change is
 architecturally significant using the checklist in
 `agents/software_architect/skills/architecture_decisions_in_project_memory.md` and
 `docs/adr/README.md`. If significant, the software_architect agent writes

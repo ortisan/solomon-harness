@@ -423,7 +423,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             board = ensure_project_board()
             if board.get("ok"):
                 action = "Created" if board.get("created") else "Found"
-                print(f"  {action} GitHub delivery board 'solomon-dev'.")
+                print(f"  {action} GitHub delivery board 'solomon'.")
             else:
                 print(f"  Note: could not set up the GitHub board: {board.get('error')}")
         except Exception as exc:

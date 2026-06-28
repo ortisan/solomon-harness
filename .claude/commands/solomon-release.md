@@ -4,7 +4,7 @@ argument-hint: [pr-number]
 allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Bash(scripts/wiki-sync.sh:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
 ---
 
-Read `docs/solomon-dev-workflow.md` first and follow the Deliver/release stage exactly. Drive this as the **sre** specialist; delegate the production readiness review and release mechanics to the `.claude/agents/sre` subagent via the Task tool, grounded in its `production_readiness_review` and `release_engineering_and_progressive_delivery` skills. This is the `In Review` → `Done` transition.
+Read `docs/solomon-workflow.md` first and follow the Deliver/release stage exactly. Drive this as the **sre** specialist; delegate the production readiness review and release mechanics to the `.claude/agents/sre` subagent via the Task tool, grounded in its `production_readiness_review` and `release_engineering_and_progressive_delivery` skills. This is the `In Review` → `Done` transition.
 
 PR to release: **$ARGUMENTS** (a PR number). If empty, stop and ask for it.
 

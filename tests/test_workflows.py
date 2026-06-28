@@ -10,7 +10,7 @@ def _workspace_with_command(stage: str, body: str) -> str:
     tmp = tempfile.mkdtemp()
     cmd_dir = os.path.join(tmp, ".claude", "commands")
     os.makedirs(cmd_dir)
-    with open(os.path.join(cmd_dir, f"solomon-dev-{stage}.md"), "w", encoding="utf-8") as f:
+    with open(os.path.join(cmd_dir, f"solomon-{stage}.md"), "w", encoding="utf-8") as f:
         f.write(body)
     return tmp
 

@@ -88,7 +88,7 @@ def handle_run(harness_dir: str, task=None) -> None:
     """Show where the team stopped and point to the delivery workflows.
 
     The harness does not run a model itself; the host tool (Claude Code or the
-    Gemini CLI) provides the execution loop and the /solomon-dev-* workflows.
+    Gemini CLI) provides the execution loop and the /solomon-* workflows.
     This command resumes context from the project memory and lists those
     workflows. It no longer simulates task execution.
     """
@@ -130,22 +130,22 @@ def handle_run(harness_dir: str, task=None) -> None:
         if task:
             print(
                 "\nTasks are not auto-run here. Start this one with a workflow, "
-                f'e.g.  /solomon-dev-issue "{task}"'
+                f'e.g.  /solomon-issue "{task}"'
             )
 
         print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
         workflows = [
-            ("/solomon-dev-idea", "capture a product idea"),
-            ("/solomon-dev-issue", "create a feature or story issue"),
-            ("/solomon-dev-bug", "create a bug report"),
-            ("/solomon-dev-refine", "refine an issue to Ready"),
-            ("/solomon-dev-start", "start development: branch, plan, TDD, draft PR"),
-            ("/solomon-dev-review", "review a pull request"),
-            ("/solomon-dev-release", "deliver and release"),
+            ("/solomon-idea", "capture a product idea"),
+            ("/solomon-issue", "create a feature or story issue"),
+            ("/solomon-bug", "create a bug report"),
+            ("/solomon-refine", "refine an issue to Ready"),
+            ("/solomon-start", "start development: branch, plan, TDD, draft PR"),
+            ("/solomon-review", "review a pull request"),
+            ("/solomon-release", "deliver and release"),
         ]
         for name, desc in workflows:
             print(f"  {name:<21} {desc}")
-        print("\nHeadless (CI/automation):  solomon-dev <stage> [args]")
+        print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
 
 def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
     """Parser setup and command dispatching.

@@ -4,11 +4,11 @@ argument-hint: <short description of the idea>
 allowed-tools: Bash(gh:*), Bash(uv run:*), Task, Read, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision
 ---
 
-You are running `/solomon-dev-idea`, the discovery-intake stage. This captures an
+You are running `/solomon-idea`, the discovery-intake stage. This captures an
 idea lightly: no build commitment, no implementation plan. The driving specialist
 is **product_owner**.
 
-First, read `docs/solomon-dev-workflow.md` and follow its conventions exactly
+First, read `docs/solomon-workflow.md` and follow its conventions exactly
 (board columns, labels, the memory handoff contract). Then adopt the
 product_owner agent and apply the `product_discovery_and_jtbd` skill — delegate
 the shaping to the `product_owner` subagent via the Task tool.
@@ -55,4 +55,4 @@ If `$ARGUMENTS` is empty, ask the user for the idea in one line and stop.
 
 6. **Output the issue URL** and a one-line recap (JTBD + riskiest assumption).
    State explicitly that no implementation was planned and that promotion to the
-   backlog requires the evidence defined in step 1 (via `/solomon-dev-issue`).
+   backlog requires the evidence defined in step 1 (via `/solomon-issue`).

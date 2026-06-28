@@ -7,7 +7,7 @@ style, numbered sequentially.
 ## When to write one
 
 An ADR is warranted when a change is architecturally significant. The
-`/solomon-dev-start` and `/solomon-dev-release` workflows evaluate this
+`/solomon-start` and `/solomon-release` workflows evaluate this
 automatically against the checklist in `agents/software_architect/skills/architecture_decisions_in_project_memory.md`.
 Write an ADR when the change does any of the following:
 

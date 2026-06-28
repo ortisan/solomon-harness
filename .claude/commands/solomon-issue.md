@@ -4,7 +4,7 @@ argument-hint: <short feature description, or a path/link to context>
 allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff
 ---
 
-Read `docs/solomon-dev-workflow.md` and follow it exactly: this is the "Create a
+Read `docs/solomon-workflow.md` and follow it exactly: this is the "Create a
 feature/story" stage, board move `→ Backlog`. Adopt the **product_owner** agent;
 for non-trivial shaping delegate to the product_owner subagent via the Task tool
 (roadmapping, requirements_traceability, acceptance_criteria_given_when_then).
@@ -55,4 +55,4 @@ Steps:
      "feature-story", contract_path = the issue URL, status="ready_for_refinement".
 
 8. Output the issue URL and a one-line summary (number, title, priority, area).
-   Note that the next stage is `/solomon-dev-refine` to move it `Backlog → Ready`.
+   Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.

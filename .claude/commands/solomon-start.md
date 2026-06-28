@@ -4,7 +4,7 @@ argument-hint: [issue-number]
 allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
 ---
 
-Begin implementation of issue **#$ARGUMENTS**. First read `docs/solomon-dev-workflow.md`
+Begin implementation of issue **#$ARGUMENTS**. First read `docs/solomon-workflow.md`
 and follow its lifecycle, branch/label conventions, ADR trigger, and memory handoff
 contract exactly. This stage is driven by three specialists — delegate the heavy work
 to their subagents via the Task tool: `scrum_master` (branch + board), `software_engineer`
@@ -15,7 +15,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 ## 1. Load context
 - `gh issue view $ARGUMENTS` to read the title, body, acceptance criteria, and labels.
 - `mcp__solomon-memory__get_issue("$ARGUMENTS")` for prior context; check the card is in
-  `Ready`. If it is not refined, stop and tell the user to run `/solomon-dev-refine` first.
+  `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 
@@ -57,4 +57,4 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "In Review"`.
 - `mcp__solomon-memory__log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path="<pr-url>", status="ready")`.
 - `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Implement #$ARGUMENTS", messages=...)` to checkpoint.
-- Report the branch, PR URL, ADR decision, and that qa should run `/solomon-dev-review`.
+- Report the branch, PR URL, ADR decision, and that qa should run `/solomon-review`.

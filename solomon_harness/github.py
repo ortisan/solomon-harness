@@ -1,6 +1,6 @@
-"""GitHub helpers for the solomon-dev workflows: the Project (v2) board.
+"""GitHub helpers for the solomon workflows: the Project (v2) board.
 
-These wrap the ``gh`` CLI so the /solomon-dev-* commands can ensure a delivery
+These wrap the ``gh`` CLI so the /solomon-* commands can ensure a delivery
 board exists and move cards across the lifecycle columns. Every function returns
 a result dict and degrades gracefully (it never raises on a gh failure) so a
 workflow can report the problem instead of aborting. Requires ``gh`` to be
@@ -18,7 +18,7 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
-DEFAULT_BOARD_TITLE = "solomon-dev"
+DEFAULT_BOARD_TITLE = "solomon"
 BOARD_COLUMNS = ["Ideas", "Backlog", "Ready", "In Progress", "In Review", "Done"]
 
 
@@ -161,7 +161,7 @@ def set_issue_status(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="solomon-dev GitHub board helper")
+    parser = argparse.ArgumentParser(description="solomon GitHub board helper")
     sub = parser.add_subparsers(dest="command")
 
     p_board = sub.add_parser("ensure-board", help="Create the delivery board if missing")

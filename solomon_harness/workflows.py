@@ -1,6 +1,6 @@
-"""Headless runner for the /solomon-dev-* delivery workflows.
+"""Headless runner for the /solomon-* delivery workflows.
 
-`run_stage` builds the prompt from the matching `.claude/commands/solomon-dev-<stage>.md`
+`run_stage` builds the prompt from the matching `.claude/commands/solomon-<stage>.md`
 file and runs it through the chosen engine (claude or gemini) non-interactively,
 so the workflows can run in CI and automation, not only inside the host tool.
 """
@@ -15,7 +15,7 @@ STAGES = ["idea", "issue", "bug", "refine", "start", "review", "release"]
 
 def build_prompt(workspace_root: str, stage: str, args: List[str]) -> str:
     """Return the command body for a stage with $ARGUMENTS substituted."""
-    cmd_file = os.path.join(workspace_root, ".claude", "commands", f"solomon-dev-{stage}.md")
+    cmd_file = os.path.join(workspace_root, ".claude", "commands", f"solomon-{stage}.md")
     if not os.path.isfile(cmd_file):
         raise FileNotFoundError(cmd_file)
     with open(cmd_file, "r", encoding="utf-8") as f:
@@ -46,7 +46,7 @@ def run_stage(
         print(f"Error: command file not found ({exc}). Run 'solomon-harness init' first.", file=sys.stderr)
         return 1
 
-    print(f"Running /solomon-dev-{stage} headless via {engine}...")
+    print(f"Running /solomon-{stage} headless via {engine}...")
     try:
         proc = subprocess.run([engine, "-p"], input=prompt, text=True, check=False)
     except FileNotFoundError:

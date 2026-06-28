@@ -41,7 +41,7 @@ class TestEnsureBoard(unittest.TestCase):
             if cmd[:3] == ["gh", "repo", "view"]:
                 return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
             if cmd[:3] == ["gh", "project", "list"]:
-                return _Proc(0, json.dumps({"projects": [{"title": "solomon-dev", "number": 4}]}))
+                return _Proc(0, json.dumps({"projects": [{"title": "solomon", "number": 4}]}))
             raise AssertionError(f"unexpected gh call: {cmd}")
 
         with patch("subprocess.run", side_effect=fake_run):
@@ -58,7 +58,7 @@ class TestEnsureBoard(unittest.TestCase):
             if cmd[:3] == ["gh", "project", "list"]:
                 return _Proc(0, json.dumps({"projects": []}))
             if cmd[:3] == ["gh", "project", "create"]:
-                return _Proc(0, json.dumps({"number": 9, "title": "solomon-dev"}))
+                return _Proc(0, json.dumps({"number": 9, "title": "solomon"}))
             raise AssertionError(f"unexpected gh call: {cmd}")
 
         with patch("subprocess.run", side_effect=fake_run):

@@ -1,8 +1,11 @@
-description = "File a structured bug report, label and prioritize it, place it on the board Backlog, and record it in memory."
+---
+description: File a structured bug report, label and prioritize it, place it on the board Backlog, and record it in memory.
+argument-hint: <bug description, with repro steps / env / severity if known>
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
+---
 
-prompt = '''
-You are running the `/solomon-dev-bug` stage. Read
-`docs/solomon-dev-workflow.md` first and follow it exactly: this is the bug-entry
+You are running the `/solomon-bug` stage. Read
+`docs/solomon-workflow.md` first and follow it exactly: this is the bug-entry
 stage, the issue is labeled `type:bug`, and the card lands in `Backlog`.
 
 Adopt the driving specialists for this stage: **qa** (defect triage, severity,
@@ -12,11 +15,11 @@ severity, or scoping the suspected component — delegate via the Task tool to t
 `qa` and `software_engineer` subagents in `.claude/agents/` and fold their
 findings into the report. Keep the writing direct and professional; no emojis.
 
-Raw input to shape: {{args}}
+Raw input to shape: $ARGUMENTS
 
 Steps:
 
-1. Parse `{{args}}` into the bug template from the workflow doc. Produce a
+1. Parse `$ARGUMENTS` into the bug template from the workflow doc. Produce a
    Markdown body with these exact sections:
    - **Summary** — one or two sentences.
    - **Steps to reproduce** — a numbered, deterministic list.
@@ -47,5 +50,4 @@ Steps:
 8. Report back the issue URL, the assigned priority, and a one-line reminder that
    the regression test is the close gate.
 
-Do not branch, fix, or open a PR here — that begins at `/solomon-dev-start`.
-'''
+Do not branch, fix, or open a PR here — that begins at `/solomon-start`.

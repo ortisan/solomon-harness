@@ -1,17 +1,20 @@
-description = "Refine a backlog issue to Ready — sharpen acceptance criteria, slice, add DoR, estimate, and RAID"
+---
+description: Refine a backlog issue to Ready — sharpen acceptance criteria, slice, add DoR, estimate, and RAID
+argument-hint: [issue-number] (optional refinement notes)
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_latest_activity
+---
 
-prompt = '''
-Read `docs/solomon-dev-workflow.md` and follow it exactly. This is the refinement
+Read `docs/solomon-workflow.md` and follow it exactly. This is the refinement
 stage: drive it as the **product_owner** (acceptance criteria, slicing, scope,
 Definition of Ready) with the **scrum_master** (estimate, RAID, board, handoff).
 Delegate the heavy authoring to the `product_owner` and `scrum_master` subagents
 via the Task tool; load their skills first.
 
-Input: `{{args}}` = the issue number, plus any optional refinement notes.
+Input: `$ARGUMENTS` = the issue number, plus any optional refinement notes.
 
 Steps:
 
-1. Resume context: call `get_latest_activity` and
+1. Resume context: call `mcp__solomon-memory__get_latest_activity` and
    `gh issue view <n> --comments` to read the current issue, labels, and milestone.
    Confirm it is in `Backlog`; if it is already `Ready` or further, stop and report.
 
@@ -36,7 +39,7 @@ Steps:
    probability×impact with response + owner), Assumptions (validation owner +
    check-by date), Issues (blockers now), Dependencies (direction + FS/SS/FF/SF,
    flag cross-team/external). For each medium-or-higher risk and each external
-   dependency, `log_issue` a tracked entry labelled
+   dependency, `mcp__solomon-memory__log_issue` a tracked entry labelled
    `risk` / `dependency` so `get_open_issues` mirrors the RAID.
 
 6. Apply the update: `gh issue edit <n> --body-file <tmp>` (write the refined body
@@ -48,17 +51,16 @@ Steps:
    - `uv run python -m solomon_harness.github set-status --issue <n> --status "Ready"`
 
 8. Persist the handoff contract:
-   - `log_issue` to update the refined issue's status.
-   - `save_decision` recording the refinement outcome
+   - `mcp__solomon-memory__log_issue` to update the refined issue's status.
+   - `mcp__solomon-memory__save_decision` recording the refinement outcome
      (slicing decision, estimate, accepted risks) with rationale and author
      `product_owner`.
-   - `log_handoff` sender `product_owner` recipient
+   - `mcp__solomon-memory__log_handoff` sender `product_owner` recipient
      `software_engineer` (engineering), `contract_type` `prd`, `contract_path`
      the committed issue/PRD reference, `status` `pending` (gate: every story has
      testable acceptance criteria, an estimate, and DoR met).
-   - `save_session` to checkpoint under `<feat>/refine`.
+   - `mcp__solomon-memory__save_session` to checkpoint under `<feat>/refine`.
 
 Report the refined issue link, any sub-issues created, the estimate, the RAID
 summary, and the new board status. Do not run outward-facing `gh` writes or push
 without the user's go-ahead; never touch a protected branch.
-'''

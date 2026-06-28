@@ -1,7 +1,7 @@
 description = "Start development on a Ready issue: branch, PLAN.md, TDD loop, ADR check, draft PR."
 
 prompt = '''
-Begin implementation of issue **#{{args}}**. First read `docs/solomon-dev-workflow.md`
+Begin implementation of issue **#{{args}}**. First read `docs/solomon-workflow.md`
 and follow its lifecycle, branch/label conventions, ADR trigger, and memory handoff
 contract exactly. This stage is driven by three specialists — delegate the heavy work
 to their subagents via the Task tool: `scrum_master` (branch + board), `software_engineer`
@@ -12,7 +12,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 ## 1. Load context
 - `gh issue view {{args}}` to read the title, body, acceptance criteria, and labels.
 - `get_issue("{{args}}")` for prior context; check the card is in
-  `Ready`. If it is not refined, stop and tell the user to run `/solomon-dev-refine` first.
+  `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 
@@ -54,5 +54,5 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - `uv run python -m solomon_harness.github set-status --issue {{args}} --status "In Review"`.
 - `log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path="<pr-url>", status="ready")`.
 - `save_session(session_id="start-{{args}}", agent_name="software_engineer", task="Implement #{{args}}", messages=...)` to checkpoint.
-- Report the branch, PR URL, ADR decision, and that qa should run `/solomon-dev-review`.
+- Report the branch, PR URL, ADR decision, and that qa should run `/solomon-review`.
 '''

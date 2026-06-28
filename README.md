@@ -7,7 +7,7 @@ use — Claude Code or the Gemini CLI. The harness supplies the agents and the
 memory; the host tool supplies the model loop.
 
 It ships a dual-backend memory layer (SurrealDB primary, SQLite fallback), a
-non-destructive scaffolder, and a set of `/solomon-dev-*` workflows that take a
+non-destructive scaffolder, and a set of `/solomon-*` workflows that take a
 piece of work from idea to release while persisting every decision and handoff.
 
 ---
@@ -62,11 +62,11 @@ reachable, the memory layer transparently uses SQLite under `memory/long_term/`.
 In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
 
 ```text
-/solomon-dev-issue   add rate limiting to the public API
-/solomon-dev-refine  42
-/solomon-dev-start    42
-/solomon-dev-review   17
-/solomon-dev-release  17
+/solomon-issue   add rate limiting to the public API
+/solomon-refine  42
+/solomon-start    42
+/solomon-review   17
+/solomon-release  17
 ```
 
 Or headlessly, for CI and automation:
@@ -92,17 +92,17 @@ Ideas → Backlog → Ready → In Progress → In Review → Done
 
 | Workflow | Stage | Driving agents |
 | --- | --- | --- |
-| `/solomon-dev-idea` | capture an idea | product_owner |
-| `/solomon-dev-issue` | create a feature/story | product_owner |
-| `/solomon-dev-bug` | create a bug | qa, software_engineer |
-| `/solomon-dev-refine` | ready an issue | product_owner, scrum_master |
-| `/solomon-dev-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
-| `/solomon-dev-review` | review gates | qa, security, software_architect |
-| `/solomon-dev-release` | deliver and release | sre, software_engineer |
+| `/solomon-idea` | capture an idea | product_owner |
+| `/solomon-issue` | create a feature/story | product_owner |
+| `/solomon-bug` | create a bug | qa, software_engineer |
+| `/solomon-refine` | ready an issue | product_owner, scrum_master |
+| `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
+| `/solomon-review` | review gates | qa, security, software_architect |
+| `/solomon-release` | deliver and release | sre, software_engineer |
 
 The conventions every workflow follows (board columns, Git Flow branches, labels,
 the memory handoff contract, the ADR trigger) live in
-[`docs/solomon-dev-workflow.md`](docs/solomon-dev-workflow.md).
+[`docs/solomon-workflow.md`](docs/solomon-workflow.md).
 
 ---
 
@@ -151,7 +151,7 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 
 ### Delivery workflows
 
-The seven `/solomon-dev-*` commands above are authored once as Claude Code
+The seven `/solomon-*` commands above are authored once as Claude Code
 commands under `.claude/commands/` and mirrored to Gemini commands under
 `.gemini/commands/`. They orchestrate the specialist agents, the `gh` CLI, the
 GitHub board, and the project memory, and confirm before any outward-facing action
@@ -251,15 +251,15 @@ manages the board directly.
 solomon-harness/
 ├── agents/                  # Source-of-truth specialist agents + AGENTS.md (the rules)
 │   └── <name>/              #   persona.md, agents/<name>.md, skills/, .agent/config.json
-├── .claude/                 # Claude Code: agents/ (subagents) and commands/ (/solomon-dev-*)
+├── .claude/                 # Claude Code: agents/ (subagents) and commands/ (/solomon-*)
 ├── .gemini/                 # Gemini CLI: commands/ (generated) and settings.json (MCP)
-├── docs/                    # adr/ (ADRs) and solomon-dev-workflow.md (conventions)
+├── docs/                    # adr/ (ADRs) and solomon-workflow.md (conventions)
 ├── solomon_harness/         # Core package
 │   ├── bootstrap.py         #   init / install / scaffold / codebase indexing
 │   ├── cli.py               #   the solomon-harness CLI (init, doctor, dev, compile, ...)
 │   ├── agent_selection.py   #   stack -> agents
 │   ├── prereqs.py           #   prerequisite check / uv install (doctor)
-│   ├── workflows.py         #   headless /solomon-dev-* runner (dev)
+│   ├── workflows.py         #   headless /solomon-* runner (dev)
 │   ├── github.py            #   GitHub project board helpers
 │   ├── mcp_server.py        #   solomon-memory MCP server
 │   ├── memory_service.py    #   memory service layer
