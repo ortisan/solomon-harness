@@ -64,9 +64,11 @@ auditable record are guaranteed.
   `solomon-harness log` feed. See below.
 - **Phase 1 — Day-to-day UX.** Board digest folded into `cli run`; a one-keystroke
   resume decision card (enumerated options) in `/solomon-loop`.
-- **Phase 2 — Governed autonomy.** An L1/L2/L3 maturity policy with a
-  deny-by-default denylist; merge/release/board-Done permanently human-gated; a
-  verifier pinned to a different model; a kill-switch.
+- **Phase 2 — Governed autonomy (shipped).** An L1/L2/L3 maturity policy
+  (`solomon_harness/loop_policy.py`) enforced portably in `run_stage`; merge,
+  release and board-Done permanently human-gated; an unknown level fails closed; a
+  denylist; the maker/checker model split surfaced; and a kill-switch
+  (`solomon-harness loop-stop`, `loop-policy`). See below.
 - **Phase 3 — Maintenance loops + budget.** `/solomon-scan-arch` and
   `/solomon-scan-dedup` opening draft PRs only; outbound notification egress; a
   post-hoc cost ceiling that degrades L3 to L2.
@@ -87,6 +89,28 @@ auditable record are guaranteed.
 The lock is the precondition for every later phase: it converts the documented
 concurrent-driver race into impossible-by-construction, in code rather than in
 advisory prose.
+
+## Phase 1, as shipped
+
+`solomon_harness/digest.py` renders a facts-only board digest into
+`solomon-harness run` (the SessionStart hook): resume point, open issues, the last
+loop run, and PRs awaiting review (best-effort gh). It ends by pointing at
+`/solomon-loop` and never computes the next step. `/solomon-loop` now offers the
+next step plus alternatives as an enumerated decision card (AskUserQuestion in
+Claude Code, a numbered list in Gemini).
+
+## Phase 2, as shipped
+
+| Piece | Where |
+| --- | --- |
+| L1/L2/L3 ladder + `human` default, fail-closed on a bad level | `solomon_harness/loop_policy.py` |
+| Portable enforcement (both hosts), exit 3 on deny | `run_stage` in `solomon_harness/workflows.py` |
+| Permanent human gate for merge / release / Done | `HUMAN_GATED_STAGES` |
+| Path denylist + maker/checker split surfaced | `is_denied_path`, `checker_split_ok` |
+| Kill-switch (sentinel beside the lock) | `solomon-harness loop-stop` / `loop-policy` |
+
+Set the level in the project's `.agent/config.json` `loop` block (or
+`SOLOMON_LOOP_AUTONOMY`); see `docs/solomon-workflow.md`.
 
 ## Sources
 

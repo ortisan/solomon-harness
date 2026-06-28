@@ -186,6 +186,38 @@ def handle_loop_lock(workspace_root: str, action: str) -> None:
         print("No loop lock to release.")
 
 
+def handle_loop_stop(workspace_root: str, clear: bool) -> None:
+    """Kill-switch: halt all autonomous loop stages immediately, or clear it."""
+    from solomon_harness import loop_policy
+
+    if clear:
+        removed = loop_policy.clear_stop(workspace_root)
+        print("Loop kill-switch cleared." if removed else "No kill-switch was engaged.")
+    else:
+        path = loop_policy.write_stop(workspace_root)
+        print(
+            "Loop HALTED. Every autonomous stage is blocked until you clear it:\n"
+            "  solomon-harness loop-stop --clear\n"
+            f"  ({path})"
+        )
+
+
+def handle_loop_policy(workspace_root: str) -> None:
+    """Show the autonomy level, kill-switch state, denylist and per-stage gates."""
+    from solomon_harness.loop_policy import LoopPolicy
+
+    p = LoopPolicy.from_config(workspace_root)
+    print(f"Autonomy level: {p.level}")
+    print(f"Kill-switch:    {'ENGAGED' if p.is_halted() else 'clear'}")
+    print(f"Checker split:  {'ok' if p.checker_split_ok() else 'not configured (set maker_model/checker_model)'}")
+    print(f"Denylist ({len(p.denylist)}): {', '.join(p.denylist)}")
+    print("Stage gates:")
+    for stage in ["loop", "idea", "issue", "bug", "refine", "start", "review", "release"]:
+        d = p.decide_stage(stage)
+        verdict = "allow" if d.allowed else "DENY "
+        print(f"  {stage:<8} {verdict} {d.reason}")
+
+
 def handle_loop_guard(workspace_root: str) -> None:
     """PreToolUse hook: block git push / gh pr merge under a live foreign lock.
 
@@ -290,6 +322,16 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         help="PreToolUse hook: block push/merge while another driver holds the loop lock (reads the hook payload on stdin)",
     )
 
+    loop_stop_parser = subparsers.add_parser(
+        "loop-stop", help="Kill-switch: halt all autonomous loop stages immediately (or --clear)"
+    )
+    loop_stop_parser.add_argument("--clear", action="store_true", help="Clear the kill-switch")
+
+    subparsers.add_parser(
+        "loop-policy",
+        help="Show the autonomy level, kill-switch state, denylist and per-stage gates",
+    )
+
     dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
@@ -346,6 +388,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_loop_lock(workspace_root, args.action)
     elif args.command == "loop-guard":
         handle_loop_guard(workspace_root)
+    elif args.command == "loop-stop":
+        handle_loop_stop(workspace_root, args.clear)
+    elif args.command == "loop-policy":
+        handle_loop_policy(workspace_root)
     elif args.command == "log":
         handle_log(workspace_root, args.last)
     elif args.command == "dev":

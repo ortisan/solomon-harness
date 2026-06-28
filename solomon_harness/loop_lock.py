@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 DEFAULT_TTL_SECONDS = 1800.0
 LOCK_FILENAME_GIT = "solomon-loop.lock"
-LOCK_RELPATH_FALLBACK = os.path.join(".solomon", "loop.lock")
+LOCK_FILENAME_FALLBACK = "loop.lock"
 
 
 class LoopLockHeld(Exception):
@@ -70,27 +70,38 @@ def _read_gitdir(dotgit_file: str, worktree_root: str) -> Optional[str]:
     return None
 
 
+def _common_anchor(workspace_root: str):
+    """Return ``(dir, is_git)``: the git common dir, or a ``.solomon`` fallback.
+
+    Anchoring shared loop state (the lock and the kill-switch sentinel) at the git
+    common directory is what makes every linked worktree contend on one file.
+    """
+    repo = _find_repo_dir(workspace_root)
+    if repo is not None:
+        dotgit = os.path.join(repo, ".git")
+        if os.path.isdir(dotgit):
+            return dotgit, True
+        if os.path.isfile(dotgit):
+            gitdir = _read_gitdir(dotgit, repo)
+            marker = os.sep + "worktrees" + os.sep
+            if gitdir and marker in gitdir:
+                return gitdir.split(marker)[0], True
+            if gitdir:
+                return gitdir, True
+            return dotgit, True
+    return os.path.join(os.path.abspath(workspace_root), ".solomon"), False
+
+
 def resolve_lock_path(workspace_root: str) -> str:
     """Resolve the lockfile path, anchored at the git common dir when possible."""
-    repo = _find_repo_dir(workspace_root)
-    if repo is None:
-        return os.path.join(os.path.abspath(workspace_root), LOCK_RELPATH_FALLBACK)
+    anchor, is_git = _common_anchor(workspace_root)
+    return os.path.join(anchor, LOCK_FILENAME_GIT if is_git else LOCK_FILENAME_FALLBACK)
 
-    dotgit = os.path.join(repo, ".git")
-    if os.path.isdir(dotgit):
-        common = dotgit
-    elif os.path.isfile(dotgit):
-        gitdir = _read_gitdir(dotgit, repo)
-        marker = os.sep + "worktrees" + os.sep
-        if gitdir and marker in gitdir:
-            common = gitdir.split(marker)[0]
-        elif gitdir:
-            common = gitdir
-        else:
-            common = dotgit
-    else:  # pragma: no cover - defensive
-        return os.path.join(os.path.abspath(workspace_root), LOCK_RELPATH_FALLBACK)
-    return os.path.join(common, LOCK_FILENAME_GIT)
+
+def resolve_common_file(workspace_root: str, git_name: str, fallback_name: str) -> str:
+    """Resolve a shared loop-state file beside the lock (same git-common anchor)."""
+    anchor, is_git = _common_anchor(workspace_root)
+    return os.path.join(anchor, git_name if is_git else fallback_name)
 
 
 def _pid_alive(pid: int) -> bool:

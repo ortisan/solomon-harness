@@ -161,6 +161,42 @@ Human approval before any merge or release is unchanged: the lock bounds *who*
 may drive, not *whether* a human approves. See `docs/loop-engineering.md` for the
 full adaptation roadmap.
 
+## Autonomy levels and the kill-switch
+
+How far the automation path (`solomon-harness dev <stage>` and any host-scheduled
+cadence) may act is one dial, set in the project's `.agent/config.json` `loop`
+block (overridable with `SOLOMON_LOOP_AUTONOMY`) and enforced in portable Python
+inside `run_stage` (`solomon_harness/loop_policy.py`), so it holds on both Claude
+Code and the Gemini CLI — not only in a Claude-only hook.
+
+```json
+"loop": { "autonomy": "L2", "maker_model": "...", "checker_model": "...",
+          "denylist": ["**/*.enc", "**/secrets/**"] }
+```
+
+- **human (default):** no restriction. A repository with no `loop` block behaves
+  exactly as before — the human is driving.
+- **L1 (report):** the loop may only scan and propose (`loop`); every mutating
+  stage is denied.
+- **L2 (assisted):** the loop may create work and open draft PRs (`idea`..`review`)
+  but never merge or release.
+- **L3 (unattended):** as L2, but may run on a cadence and only while it holds the
+  single-driver lock.
+
+Three rules no level can widen: **merge, release, and moving a card to Done are
+permanently human-gated**; an unknown/typo'd level **fails closed** (denied); and
+the **kill-switch** halts every stage at once. A blocked stage exits non-zero (3),
+never silently.
+
+- `solomon-harness loop-policy` — show the level, kill-switch state, denylist, and
+  the per-stage allow/deny table.
+- `solomon-harness loop-stop` / `loop-stop --clear` — engage or clear the
+  kill-switch (a sentinel beside the lock at the git common dir).
+
+The maker/checker split (a verifier on a *different* model than the maker) is
+declared in the same block and surfaced by `loop-policy`; it complements, and does
+not replace, the human `/solomon-review` gate.
+
 ## ADR trigger
 
 `/solomon-start` and `/solomon-release` must evaluate whether the change is

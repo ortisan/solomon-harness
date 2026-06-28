@@ -71,6 +71,20 @@ def run_stage(
         print(f"Error: command file not found ({exc}). Run 'solomon-harness init' first.", file=sys.stderr)
         return 1
 
+    # Governed-autonomy gate (portable, both hosts): the maturity ladder, the
+    # permanent human gate for merge/release/Done, and the kill-switch. At the
+    # default "human" level this allows everything, so behavior is unchanged.
+    from solomon_harness.loop_policy import LoopPolicy
+
+    policy = LoopPolicy.from_config(workspace_root)
+    decision = policy.decide_stage(stage)
+    if not decision.allowed:
+        print(
+            f"Blocked by loop autonomy policy (level {policy.level}): {decision.reason}",
+            file=sys.stderr,
+        )
+        return 3
+
     lock = None
     if stage in LOCKED_STAGES:
         from solomon_harness.loop_lock import LoopLock, LoopLockHeld

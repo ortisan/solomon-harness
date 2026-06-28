@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -5,7 +6,16 @@ from unittest.mock import patch
 
 from solomon_harness import workflows
 from solomon_harness import loop_lock
+from solomon_harness import loop_policy
 from solomon_harness.loop_lock import LoopLock
+
+
+def _workspace_with_loop(stage, body, loop_block):
+    root = _workspace_with_command(stage, body)
+    os.makedirs(os.path.join(root, ".agent"), exist_ok=True)
+    with open(os.path.join(root, ".agent", "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"agent_name": "x", "loop": loop_block}, f)
+    return root
 
 
 def _workspace_with_command(stage: str, body: str) -> str:
@@ -94,6 +104,43 @@ class TestRunStageDriverLock(unittest.TestCase):
             rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
         self.assertEqual(rc, 0)
         mock_run.assert_called_once()  # idea creates no branch/merge, so it is not gated
+
+
+class TestRunStageAutonomyPolicy(unittest.TestCase):
+    """The portable governed-autonomy gate, enforced in run_stage on both hosts."""
+
+    def test_l1_blocks_a_mutating_stage(self):
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L1"})
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_release_is_blocked_even_at_l3(self):
+        root = _workspace_with_loop("release", "---\nx\n---\nShip $ARGUMENTS", {"autonomy": "L3"})
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "release", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_l2_allows_start(self):
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L2"})
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        mock_run.assert_called_once()
+
+    def test_kill_switch_blocks_everything(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+        loop_policy.write_stop(root)
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "loop", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
 
 
 if __name__ == "__main__":
