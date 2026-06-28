@@ -1,116 +1,291 @@
 # Solomon Harness
 
-A multi-agent software development harness with a dual-backend memory layer: SurrealDB as the primary store and SQLite as the fallback.
+A multi-agent harness for controlling, planning, and delivering software. It
+defines a team of specialist agents, a project memory, and an end-to-end,
+GitHub-integrated delivery workflow that runs inside the host tool you already
+use — Claude Code or the Gemini CLI. The harness supplies the agents and the
+memory; the host tool supplies the model loop.
 
-This harness packages all templates, agent rules, and compilers into a unified Python command-line interface (`solomon-harness`). It enables dynamic project structure extraction, safe execution boundaries, and customizable development configurations.
+It ships a dual-backend memory layer (SurrealDB primary, SQLite fallback), a
+non-destructive compiler, and a set of `/solomon-dev-*` workflows that take a
+piece of work from idea to release while persisting every decision and handoff.
 
 ---
 
-## Directory Structure
+## Getting started
+
+### Prerequisites
+
+- **Python 3.10+** and [uv](https://github.com/astral-sh/uv) (package/venv manager).
+- A **host tool** to run the workflows: [Claude Code](https://claude.com/claude-code) or the **Gemini CLI**.
+- **GitHub CLI** (`gh`), authenticated, for the issue/PR/board steps (`gh auth login`; the board needs the `project` scope).
+- **Node.js 16+** only if you use the `solomon-dev` installer/CLI.
+- **Docker** (optional) to run SurrealDB locally; without it the harness falls back to SQLite.
+
+### Option A — install into an existing project
+
+```bash
+npx solomon-dev init
+```
+
+This detects the project's stack, drops the harness in (agents, the
+`solomon_harness` package, scripts, config), installs the git hooks, compiles the
+agent harnesses, generates the host-tool integrations, and indexes the codebase.
+
+### Option B — develop the harness itself
+
+```bash
+git clone <this-repo> && cd solomon-harness
+uv sync                 # create the venv and install dependencies
+uv pip install -e .     # expose the `solomon-harness` CLI
+uv run python -m solomon_harness.cli init --non-interactive
+```
+
+### Start the memory stack (optional)
+
+```bash
+docker compose up -d
+```
+
+SurrealDB is served at `ws://localhost:8000/rpc` and the Surrealist IDE at
+`http://localhost:3000`. Provide credentials via the `SURREAL_USER` /
+`SURREAL_PASS` environment variables (none are committed). If SurrealDB is not
+reachable, the memory layer transparently uses SQLite under `memory/long_term/`.
+
+### Run your first workflow
+
+In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
+
+```text
+/solomon-dev-issue   add rate limiting to the public API
+/solomon-dev-refine  42
+/solomon-dev-start    42
+/solomon-dev-review   17
+/solomon-dev-release  17
+```
+
+Or headlessly, for CI and automation:
+
+```bash
+SOLOMON_ENGINE=claude solomon-dev start 42     # or SOLOMON_ENGINE=gemini
+```
+
+Each command shapes the work with the right specialist agents, creates and moves
+the GitHub issue/PR/board card, evaluates whether an ADR is warranted, and records
+the decisions and handoffs in the project memory.
+
+---
+
+## How it works
+
+Work flows across a GitHub Project (v2) board, each column owned by a workflow and
+the specialists that drive it:
+
+```
+Ideas → Backlog → Ready → In Progress → In Review → Done
+```
+
+| Workflow | Stage | Driving agents |
+| --- | --- | --- |
+| `/solomon-dev-idea` | capture an idea | product_owner |
+| `/solomon-dev-issue` | create a feature/story | product_owner |
+| `/solomon-dev-bug` | create a bug | qa, software_engineer |
+| `/solomon-dev-refine` | ready an issue | product_owner, scrum_master |
+| `/solomon-dev-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
+| `/solomon-dev-review` | review gates | qa, security, software_architect |
+| `/solomon-dev-release` | deliver and release | sre, software_engineer |
+
+The conventions every workflow follows (board columns, Git Flow branches, labels,
+the memory handoff contract, the ADR trigger) live in
+[`docs/solomon-dev-workflow.md`](docs/solomon-dev-workflow.md).
+
+---
+
+## Capabilities
+
+### Specialist agents
+
+Nineteen role-specific agents, each defined modularly under `agents/<name>/`
+(`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
+`.agent/config.json`). They are exposed to the host tools as Claude Code
+subagents and Gemini commands.
+
+| Agent | Focus |
+| --- | --- |
+| `product_owner` | PRDs, user stories, acceptance criteria, roadmapping, traceability |
+| `scrum_master` | milestones, backlog, sprints, flow metrics, Git Flow |
+| `software_architect` | C4, ADRs, design contracts, resilience patterns, review gate |
+| `software_engineer` | TDD, clean code, REST/error handling, debugging, Git Flow |
+| `qa` | the full test pyramid (unit, integration, E2E, mutation), CI gates |
+| `security` | STRIDE threat modeling, SAST, dependency and vulnerability checks |
+| `sre` | progressive delivery, DORA, PRR, Kubernetes, incident runbooks |
+| `observability` | logging, metrics, tracing, dashboards, OpenTelemetry |
+| `auth_engineer` | OAuth/OIDC, MFA/passkeys, sessions/tokens, RBAC/ABAC, OPA |
+| `frontend` | React and Angular, state, design tokens, accessibility |
+| `android` | Kotlin, Jetpack Compose, MVVM, Coroutines/Flow, Play delivery |
+| `apple` | Swift, SwiftUI, Swift Concurrency, SwiftData, App Store delivery |
+| `flutter` | Flutter/Dart, clean architecture, widget and integration tests |
+| `ml_engineer` | model training/validation, statistical modeling, leakage checks |
+| `quant_trader` | strategies, backtests, slippage/cost, Sharpe/drawdown risk |
+| `data_analyst` | SQL analytics, big data (Spark/ClickHouse), reporting |
+| `dba` | data modeling, performance tuning, migrations, replication |
+| `documenter` | technical and business docs, user guides, design docs |
+| `seo` | semantic structure, metadata, indexing, page speed, audits |
+
+The shared rules, the memory guide, and the agent index are the single source of
+truth in [`agents/AGENTS.md`](agents/AGENTS.md); `CLAUDE.md`, `GEMINI.md`, the root
+`AGENTS.md`, and the Copilot instructions all point there.
+
+### Skills
+
+Each agent carries granular, single-topic skills under `agents/<name>/skills/` —
+deep, version-current references (real APIs, thresholds, code, pitfalls, and a
+definition of done), modeled on the `auth_engineer` set. The format is documented
+in `agents/AGENTS.md`. You can also pull skills from external skill-server
+repositories listed in `skill-sources.json` with `solomon-harness skills`.
+
+### Delivery workflows
+
+The seven `/solomon-dev-*` commands above are authored once as Claude Code
+commands under `.claude/commands/` and mirrored to Gemini commands under
+`.gemini/commands/`. They orchestrate the specialist agents, the `gh` CLI, the
+GitHub board, and the project memory, and confirm before any outward-facing action
+(creating issues/PRs, merging, releasing).
+
+### Project memory and MCP
+
+A SurrealDB-primary, SQLite-fallback store (`solomon_harness/tools/database_client.py`)
+records decisions, sessions, handoffs, issues, milestones, and backtests. It is
+exposed as the `solomon-memory` MCP server (`solomon_harness/mcp_server.py`),
+registered for Claude Code (`.mcp.json`) and the Gemini CLI (`.gemini/settings.json`),
+with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
+`log_issue`/`get_open_issues`/`get_issue`, `create_milestone`, `save_backtest`,
+`save_session`/`get_session`, `log_handoff`, and `get_latest_activity`.
+
+### Architecture Decision Records
+
+The `start` and `release` workflows evaluate whether a change is architecturally
+significant (the checklist in `docs/adr/README.md`) and, if so, write a MADR record
+to `docs/adr/NNNN-*.md` and persist it with `save_decision`.
+
+### Stack-based agent selection
+
+`solomon_harness/agent_selection.py` inspects the project's files and manifests and
+enables only the agents the stack needs (a core delivery/planning set plus platform
+and domain agents on detected signals), instead of all nineteen.
+
+### GitHub project board
+
+`solomon_harness/github.py` wraps the `gh` CLI to ensure a Project (v2) board
+exists and move issue cards across the lifecycle columns; `init` creates the board
+for GitHub-hosted projects.
+
+### Codebase indexing
+
+`solomon-harness index` walks the project (excluding binaries, build output, and
+large files) and stores each file in the memory so agents can query the codebase.
+
+### Host-tool integrations
+
+`scripts/generate-integrations.py` regenerates the Claude Code subagents
+(`.claude/agents/`) from `agents/` and the Gemini commands (`.gemini/commands/`)
+from `.claude/commands/`. `solomon-harness compile` runs it automatically so the
+integrations never drift from their sources.
+
+### Non-destructive compiler
+
+`solomon-harness compile` treats `agents/<name>/` as source — it never overwrites a
+hand-authored persona or config — and writes the composed instruction (rules +
+persona + profile + the configured dynamic patterns) to a gitignored
+`build/agents/<name>/`. A test guards that compiling never mutates tracked source.
+
+### Dynamic patterns
+
+Architecture (Clean/Functional/Hexagonal), observability (OpenTelemetry), and
+security (Secure Development) patterns are injected into the relevant agents'
+compiled output based on `.agent/config.json`.
+
+### Quality and invariants
+
+Strict TDD is the standard; the suite (run with the command below) covers the
+compiler, memory client, MCP server, agent selection, the board helpers, the host
+integrations, and the Gemini mirror, plus invariant guards (compile is
+non-destructive, the MCP server builds, the SurrealDB path works against a live
+server). The humanizer rules forbid emojis and AI cliches in all generated output.
+
+---
+
+## CLI reference
+
+### `solomon-harness`
+
+| Command | Description |
+| --- | --- |
+| `init [--non-interactive]` | Bootstrap a workspace: metadata, patterns, agents, board, index |
+| `compile` | Compile agent harnesses and regenerate host-tool integrations |
+| `index` | Index the project codebase into the memory |
+| `run` | Show the resume point (latest activity, open issues) and list the workflows |
+| `db-init` | Initialize the memory store |
+| `eval` | Run the agent evaluation suite |
+| `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
+| `agents list \| show <name>` | List or show the generated subagents |
+
+`python -m solomon_harness.github ensure-board \| set-status --issue N --status "<col>" \| add-issue --issue N`
+manages the board directly.
+
+### `solomon-dev` (npm CLI)
+
+| Command | Description |
+| --- | --- |
+| `solomon-dev init` | Install the harness into the current project |
+| `solomon-dev <stage> [args]` | Run a workflow headless (stages: idea, issue, bug, refine, start, review, release) |
+
+Set `SOLOMON_ENGINE=claude` (default) or `gemini` to choose the engine.
+
+---
+
+## Repository layout
 
 ```
 solomon-harness/
-├── .agent/                    # Workspace configuration files
-├── .claude/                   # Claude Code integration files
-├── agents/                    # Source-of-truth specialist agent definitions
-├── memory/                    # Memory storage files (SQLite databases & SurrealDB volume data)
-├── pyproject.toml             # Python packaging configuration
-├── scripts/                   # Thin wrappers delegating to the CLI module
-├── solomon_harness/           # Core library package
-│   ├── templates/             # Bundled agent harness and pattern templates
-│   ├── tools/                 # Database clients and helper tools
-│   ├── bootstrap.py           # Workspace initialization logic
-│   ├── cli.py                 # Command line interface and dispatcher
-│   ├── compiler.py            # Agent harness compilation engine
-│   ├── skills.py              # External skill synchronization tools
-│   ├── mcp_server.py          # solomon-memory MCP server
-│   ├── memory_service.py      # Memory service layer
-│   └── evals.py               # Agent evaluation suites
-└── tests/                     # Verification test suites
+├── agents/                  # Source-of-truth specialist agents + AGENTS.md (the rules)
+│   └── <name>/              #   persona.md, agents/<name>.md, skills/, .agent/config.json
+├── .claude/                 # Claude Code: agents/ (subagents) and commands/ (/solomon-dev-*)
+├── .gemini/                 # Gemini CLI: commands/ (generated) and settings.json (MCP)
+├── docs/                    # adr/ (ADRs) and solomon-dev-workflow.md (conventions)
+├── solomon_harness/         # Core package
+│   ├── compiler.py          #   non-destructive compile -> build/
+│   ├── bootstrap.py         #   init / codebase indexing
+│   ├── cli.py               #   the solomon-harness CLI
+│   ├── agent_selection.py   #   stack -> agents
+│   ├── github.py            #   GitHub project board helpers
+│   ├── mcp_server.py        #   solomon-memory MCP server
+│   ├── memory_service.py    #   memory service layer
+│   ├── skills.py            #   external skill fetching
+│   ├── evals.py             #   per-agent evaluation suite
+│   ├── templates/           #   bundled harness/pattern templates
+│   └── tools/               #   database_client.py, browser.py
+├── solomon_dev/             # The npm installer/CLI front-end (templates/ is generated)
+├── scripts/                 # generate-integrations, document-skills, scrum-master, validators
+├── build/                   # Compiled agent output (gitignored)
+└── tests/                   # Verification suite
 ```
 
 ---
 
-## Installation & Setup
+## Customization
 
-Ensure Python 3.10+ is installed. It is recommended to manage the project environment using [uv](https://github.com/astral-sh/uv).
-
-1. Install dependencies and set up the virtual environment:
-   ```bash
-   uv sync
-   ```
-
-2. Expose the CLI globally or in development mode:
-   ```bash
-   uv pip install -e .
-   ```
-
----
-
-## Workspace Initialization & Harness Compilation
-
-### CLI Subcommands
-
-Once installed, the unified `solomon-harness` command provides the following interface:
-
-- **`solomon-harness init`**: Bootstraps the current workspace. It extracts project metadata (Name, Git origin, detected technologies), prompts for software patterns, generates `CLAUDE.md`, `agents/AGENTS.md`, and compiles initial harnesses. Run with `--non-interactive` to use default values:
-  ```bash
-  solomon-harness init --non-interactive
-  ```
-
-- **`solomon-harness compile`**: Scans the `agents/` directory and compiles harnesses for all discovered agents. It pulls rules and injects configured architectural, observability, or security patterns into each agent.
-
-- **`solomon-harness skills`**: Fetches external agent skills from repositories configured in `skill-sources.json`.
-  - List sources: `solomon-harness skills sources`
-  - List skills in a source: `solomon-harness skills list <source_name>`
-  - Add skill to an agent: `solomon-harness skills add <source_name> <skill_name> --agent <agent_name>`
-
-- **`solomon-harness agents`**: Lists or displays details of active agent definitions.
-  - List agents: `solomon-harness agents list`
-  - Show agent: `solomon-harness agents show <agent_name>`
-
-- **`solomon-harness db-init`**: Initializes the SQLite database client or connects to SurrealDB to initialize memory schemas.
-
-- **`solomon-harness run [task]`**: Launches the interactive execution loop to simulate agent tasks.
-
-- **`solomon-harness eval`**: Runs agent evaluation test suites.
-
----
-
-## Memory Infrastructure Setup
-
-The project uses SurrealDB as its primary database backend, with SQLite as the fallback store. SurrealDB provides the document, graph, and vector storage the memory layer relies on. (An optional Spectron-style tri-temporal extension is experimental and not a primary feature.)
-
-Use the provided [docker-compose.yml](file:///Users/marcelo/Documents/Projects/solomon-harness/docker-compose.yml) to deploy a local instance of SurrealDB and the Surrealist IDE:
-
-1. Start the memory stack:
-   ```bash
-   docker compose up -d
-   ```
-
-2. Access the database interfaces:
-   - **SurrealDB Client API**: `ws://localhost:8000/rpc`
-   - **Surrealist IDE Web Dashboard**: `http://localhost:3000` (Configure to connect to `http://localhost:8000` with username `root` and password `root`).
-
-Data is persistent and stored in `memory/surrealdb/`, which is ignored by Git configuration.
-
----
-
-## Customization & Custom Components
-
-### Adding External Agents
-To register a new agent, create a markdown specification under `agents/<name>/agents/<name>.md`. Upon running `solomon-harness compile`, the tool automatically compiles a new agent harness under `agents/<name>/`.
-
-### Overriding Templates
-The compilation uses bundled templates inside the package directory. To override templates globally in a workspace:
-1. Create a `templates/harness` or `templates/patterns` folder in the project root.
-2. The compilation engine will automatically prioritize local templates over the bundled ones.
+- **Add an agent:** create `agents/<name>/agents/<name>.md`, `persona.md`, `skills/`,
+  and `.agent/config.json`, add the agent to the `agents/AGENTS.md` index, then run
+  `solomon-harness compile` and `scripts/document-skills.py`.
+- **Override templates:** create a `templates/harness` or `templates/patterns` folder
+  in the project root; the compiler prefers local templates over the bundled ones.
 
 ---
 
 ## Verification
 
-Run the test suite using unittest:
 ```bash
 uv run python -m unittest discover -s tests
+uv run ruff check solomon_harness scripts tests
 ```
