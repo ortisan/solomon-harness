@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    container_name: solomon_surrealdb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./memory/surrealdb:/memory/surrealdb
+    command: start --user root --pass root --log debug file:/memory/surrealdb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  surrealist:
+    image: surrealdb/surrealist:latest
+    container_name: solomon_surrealist
+    ports:
+      - "3000:80"
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  spectron:
+    image: ghcr.io/surrealdb/spectron:latest
+    container_name: solomon_spectron
+    ports:
+      - "9090:9090"
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    environment:
+      SPECTRON_SURREALDB_URL: ws://surrealdb:8000
+      SPECTRON_SURREALDB_USER: root
+      SPECTRON_SURREALDB_PASS: root
+      SPECTRON_OBJECT_STORE: local:///memory/spectron/objects
+      SPECTRON_BIND: 0.0.0.0:9090
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./memory/spectron:/memory/spectron
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

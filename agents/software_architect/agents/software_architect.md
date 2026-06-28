@@ -11,40 +11,30 @@ The Software Architect establishes the system design, records architectural choi
 ## Outputs
 - Design Contract
 
-<!-- BEST_PRACTICES_APPENDED_START -->
+## Active Skills
 
-# Hexagonal Architecture Pattern
+The following specific skills are actively configured for this agent:
+- [architectural_decision_records](skills/architectural_decision_records.md) — One decision per ADR.
+- [architecture_decisions_in_project_memory](skills/architecture_decisions_in_project_memory.md) — Persist every architecture decision as an MADR-shaped record in the project memory through `save_decision`, retrieve it with…
+- [architecture_review_gate](skills/architecture_review_gate.md) — The architecture review gate is the explicit checkpoint where a design or a delivered change is judged against the architecture's binding…
+- [architecture_styles](skills/architecture_styles.md) — Choose and enforce a top-level architecture style per bounded context, and record the choice and its trade-offs as an ADR.
+- [c4_model_diagrams](skills/c4_model_diagrams.md) — C4 names four levels after four C's: Context, Containers, Components, Code.
+- [definition_of_done](skills/definition_of_done.md) — Context and Container diagrams exist as version-controlled text (Structurizr/Mermaid/PlantUML), dated, with every arrow labeled by…
+- [design_contracts_as_component_boundaries](skills/design_contracts_as_component_boundaries.md) — This is the role's primary output.
+- [evolutionary_architecture_fitness_functions](skills/evolutionary_architecture_fitness_functions.md) — Encode every structural rule you care about as an automated fitness function that runs in CI and fails the build, so architecture erosion…
+- [incremental_migration_and_delivery](skills/incremental_migration_and_delivery.md) — Deliver large architectural changes as a sequence of small, reversible, always-shippable steps instead of a big-bang rewrite, so the…
+- [mandatory_project_competencies_to_honor_in_any_design](skills/mandatory_project_competencies_to_honor_in_any_design.md) — These come from the project rules and bind every artifact you produce.
+- [non_functional_requirements](skills/non_functional_requirements.md) — NFRs are part of the architecture, not an afterthought.
+- [resilience_patterns](skills/resilience_patterns.md) — Treat every integration point as a guaranteed future failure and decide which stability pattern guards it before the failure arrives, not…
+- [rest_api_design](skills/rest_api_design.md) — Design an HTTP API as a contract over resources, not a transport for remote procedure calls, and decide its maturity level deliberately…
+- [solid_and_structural_discipline](skills/solid_and_structural_discipline.md) — Apply SOLID at the boundaries you design, and name the principle when you cite it in review:
+- [twelve_factor_app](skills/twelve_factor_app.md) — Treat the Twelve-Factor App as hard structural constraints on every service you design: one versioned codebase builds an immutable…
+- [when_this_skill_applies](skills/when_this_skill_applies.md) — a concrete standard for producing C4 diagrams, Architectural Decision Records, design contracts, and non-functional requirements that hold…
 
-This document defines the guidelines and constraints for implementing Hexagonal Architecture (Ports and Adapters). This pattern decouples the core business logic from external components, frameworks, and delivery mechanisms.
+## External Skills
 
-## Core Layers
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent software_architect
+```
 
-1. Core Domain
-   - Location: The center of the hexagon.
-   - Scope: Contains entities, aggregates, and domain services that implement business rules and use cases.
-   - Constraints: Must be isolated. It must not depend on database clients, UI components, HTTP routers, or messaging protocols. It communicates with the outside world solely through Ports.
-
-2. Ports
-   - Scope: Interfaces that define structural contracts between the Core Domain and the external world.
-   - Incoming (Driving) Ports: Define boundary APIs used by external triggers to interact with the domain (e.g., executing a command or querying state).
-   - Outgoing (Driven) Ports: Define contracts that the Core Domain requires from the external environment to perform its tasks (e.g., fetching data, persisting records, or publishing events).
-
-## Adapters
-
-Adapters translate data between external technologies and the formats defined by Ports.
-
-1. Driving (Input) Adapters
-   - Scope: Handle external triggers and call Incoming Ports to invoke domain logic.
-   - Examples: REST API controllers, CLI command processors, GraphQL resolvers, message queue listeners, and scheduled job runners.
-   - Behavior: Receive input data, validate transport-level constraints, translate the payload into domain request models, and execute the matching Incoming Port.
-
-2. Driven (Output) Adapters
-   - Scope: Implement the Outgoing Ports defined by the Core Domain to communicate with infrastructure.
-   - Examples: Database clients, HTTP outbound gateways, file system clients, SMTP client wrappers, and third-party API clients.
-   - Behavior: Invoked by the Core Domain, receive domain models, map them to external infrastructure models, execute the operations, and return translated results back to the core.
-
-## Decoupling Core Logic
-
-- External dependency isolation: The Core Domain must contain zero references to external libraries, framework features, object-relational mapping (ORM) systems, or database systems.
-- Technology-agnostic domain: Changing a database, switching from REST to gRPC, or replacing a messaging provider must only require writing a new adapter. The Core Domain code must remain completely untouched.
-- Clean interfaces: Ports must be expressed in terms of domain primitives and domain models, never transport-specific or database-specific structures.

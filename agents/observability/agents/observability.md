@@ -8,44 +8,25 @@ The Observability Specialist establishes monitoring infrastructure, sets up inst
 - Conduct regular performance profiling to identify execution bottlenecks, memory leaks, and latency issues.
 - Build and maintain system monitoring dashboards to provide clear visibility into system health and resource consumption.
 
-<!-- BEST_PRACTICES_APPENDED_START -->
+## Active Skills
 
-# OpenTelemetry Observability Pattern
+The following specific skills are actively configured for this agent:
+- [alerting](skills/alerting.md) — Alert on symptoms (SLO burn), not causes.
+- [common_pitfalls_to_reject_in_review](skills/common_pitfalls_to_reject_in_review.md) — Averaging latency or alerting on the mean instead of percentiles.
+- [cross_cutting_mandatory_competencies](skills/cross_cutting_mandatory_competencies.md) — These project rules apply to the observability code and configs this agent ships:
+- [definition_of_done](skills/definition_of_done.md) — Logs are structured JSON with `trace_id`, `span_id`, `service.name`, `service.version`, and `deployment.environment`; no secrets or PII;…
+- [distributed_tracing](skills/distributed_tracing.md) — Propagate context with W3C Trace Context (`traceparent`, `tracestate`) on every outbound HTTP call and IPC hop.
+- [logging](skills/logging.md) — Structured JSON only, one event per line.
+- [metrics](skills/metrics.md) — Pick the right method per surface: RED (Rate, Errors, Duration) for request-driven services; USE (Utilization, Saturation, Errors) for…
+- [monitoring_dashboards](skills/monitoring_dashboards.md) — One overview dashboard per service, top to bottom by importance: golden signals / RED at the top, dependencies and saturation below, infra…
+- [opentelemetry_instrumentation](skills/opentelemetry_instrumentation.md) — Prefer auto-instrumentation for frameworks and clients; add manual spans only for business logic the libraries cannot see.
+- [operating_principles](skills/operating_principles.md) — Concrete standards for logging, metrics, tracing, OpenTelemetry instrumentation, dashboards, SLIs, and alerting that this agent must apply…
+- [slis_and_slos](skills/slis_and_slos.md) — SLI = good events / valid events, expressed as a ratio.
 
-This document defines the guidelines and rules for integrating the OpenTelemetry standard into the system. The objective is to achieve comprehensive, structured, and correlatable telemetry across all application services.
+## External Skills
 
-## Core Telemetry Components
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent observability
+```
 
-1. Structured JSON Logging
-   - All log outputs must be written in a structured JSON format.
-   - Every log message must include active tracing context keys: `trace_id` and `span_id`.
-   - Include relevant metadata fields (e.g., service name, environment, process version) in the JSON payload structure.
-   - Do not include sensitive information or credentials in log statements.
-
-2. Custom Metrics
-   - Instrument key system components with dedicated metrics types:
-     - Counters: Monotonically increasing values to track quantities (e.g., total requests handled, transaction attempts, validation errors).
-     - Gauges: Non-monotonic values representing immediate states (e.g., active connection pool size, memory utilization percentage).
-     - Histograms: Measures the distribution of values over time (e.g., response latency distributions, database query execution times).
-   - Metrics must include standardized attribute tags to allow filtering by service, region, and operation type.
-
-3. Distributed Tracing
-   - Capture transaction lifecycles as a sequence of connected Spans.
-   - Pass tracking metadata across network and process boundaries to trace complete execution paths in distributed setups.
-
-## Instrumentation Rules
-
-1. Entry Point Spans
-   - Every external entry point (e.g., HTTP request controller, cron job runner, queue worker) must immediately initialize a root or child Span representing the request lifecycle.
-   - Extract tracing context from incoming requests to link the span to the caller.
-
-2. Logical Block Isolation
-   - Initialize distinct child Spans for significant nested operations, particularly database queries, outbound HTTP requests, external file system lookups, and computationally heavy functions.
-   - Provide clear, descriptive names for child spans (e.g., `db.query.select_user`, `http.out.fetch_rates`).
-
-3. Exception Reporting
-   - When an exception occurs within a Span, catch the error, write it to the Span details using the standard API (`record_exception`), set the Span status to error, and raise or handle the error appropriately.
-   - Ensure the stack trace and the error message are attached to the span without disclosing internal secrets.
-
-4. Propagation Headers
-   - For all outbound HTTP calls or inter-process communications (IPC), inject the current trace parent information into the transport headers (following the W3C Trace Context specification: `traceparent` and `tracestate`).

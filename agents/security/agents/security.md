@@ -8,60 +8,24 @@ The Security Specialist conducts regular security assessments, performs threat a
 - Conduct vulnerability checks on code changes, APIs, and execution environments.
 - Validate project dependencies to prevent supply-chain attacks and ensure license compliance.
 
-<!-- BEST_PRACTICES_APPENDED_START -->
+## Active Skills
 
-# Secure Development Pattern
+The following specific skills are actively configured for this agent:
+- [common_pitfalls](skills/common_pitfalls.md) — Treating the UI/API gateway as the only authorization point while service-to-service and data-layer calls trust each other implicitly.
+- [definition_of_done](skills/definition_of_done.md) — Data flow diagram and trust boundaries documented; every element threat-modeled across all six STRIDE categories.
+- [dependency_and_supply_chain_security](skills/dependency_and_supply_chain_security.md) — Pin every dependency to an exact version and verify integrity with hashes (`pip install --require-hashes`, or a locked…
+- [mandatory_project_competencies](skills/mandatory_project_competencies.md) — These are non-negotiable and carry into security work:
+- [sast](skills/sast.md) — Static analysis runs in CI and as a pre-commit hook.
+- [secrets_handling](skills/secrets_handling.md) — Never hardcode credentials, API keys, or database passwords in source or commit them to git history.
+- [secure_python_development](skills/secure_python_development.md) — Input validation: never trust input from clients, network, env, files, or the database.
+- [threat_modeling_with_stride](skills/threat_modeling_with_stride.md) — Build a data flow diagram first.
+- [vulnerability_mitigation_and_remediation_slas](skills/vulnerability_mitigation_and_remediation_slas.md) — Score every finding with CVSS.
+- [when_this_applies](skills/when_this_applies.md) — a concrete, checkable playbook for threat modeling, SAST, dependency and vulnerability management, secure Python development, and secrets…
 
-This document defines the guidelines and security practices to ensure code resilience, prevent vulnerabilities, and mitigate system exploits.
+## External Skills
 
-## Threat Modeling: The STRIDE Framework
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent security
+```
 
-Apply the STRIDE framework during the design and planning phase of every feature. Identify and document potential threats in the following categories:
-
-1. Spoofing
-   - Threat: An attacker acts as another user or system entity.
-   - Mitigation: Enforce robust authentication mechanisms, secure session tokens, and cryptographic verification of service identities.
-
-2. Tampering
-   - Threat: Unauthorized modification of data, configurations, or system binaries.
-   - Mitigation: Implement message authentication codes (MACs), digital signatures, strict filesystem permissions, and write-once storage rules where applicable.
-
-3. Repudiation
-   - Threat: A user denies performing an action due to a lack of evidence or logging.
-   - Mitigation: Implement immutable audit logs, verify transactions with digital signatures, and establish secure log forwarding policies.
-
-4. Information Disclosure
-   - Threat: Unauthorized users gain access to sensitive or private data.
-   - Mitigation: Encrypt data at rest and in transit, apply access control verification, mask sensitive records, and restrict logs to non-sensitive payloads.
-
-5. Denial of Service (DoS)
-   - Threat: Exhausting system resources to make the service unavailable.
-   - Mitigation: Implement rate-limiting rules, enforce execution timeouts, validate payload size constraints, and manage request timeouts at boundary gateways.
-
-6. Elevation of Privilege
-   - Threat: An attacker gains permissions higher than their authorization level.
-   - Mitigation: Apply the principle of least privilege, enforce role-based access control (RBAC) at every endpoint, and avoid dynamic privilege assignments.
-
-## Secure Coding Practices
-
-1. Input Sanitization and Schema Validation
-   - Never trust input from external clients, network endpoints, or database fields.
-   - Validate all payloads against strict schemas before processing.
-   - Sanitize text values to remove markup or script tags before outputting them to web clients or files.
-
-2. Parameterized Queries
-   - Construct database queries using parameterized values or raw prepared statements.
-   - Never construct queries by concatenating raw strings with user input, as this practice causes SQL injection vulnerabilities.
-
-3. Dependency Scanning
-   - Scan all third-party libraries and modules for known security vulnerabilities continuously during build cycles.
-   - Pins all dependency versions and review updates systematically to avoid supply chain exploits.
-
-4. Cryptographic Isolation
-   - Store sensitive keys, API credentials, and database passwords in isolated environment variables or dedicated secret management systems.
-   - Never hardcode credentials in code repositories or commit them to git history.
-   - Keep keys isolated from application logic, rotating them on a set schedule.
-
-5. Stripped Error Disclosures
-   - Strip stack traces, internal system details, hostnames, and database architectures from external error messages.
-   - Return generic error messages to external callers, saving detailed logs containing debugging context in secure, internal logging systems.

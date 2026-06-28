@@ -1,1 +1,0 @@
-../../agents/qa/agents/qa.md

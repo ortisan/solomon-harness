@@ -1,0 +1,18 @@
+# Technical Documentation
+
+## 1. System Architecture
+Describe the core architecture pattern utilized in {{PROJECT_NAME}} (e.g., Clean Architecture, Hexagonal, or Functional). Include system component boundaries.
+
+## 2. Technology Stack
+- **Languages:** {{TECH_STACK}}
+- **Database:** SurrealDB (Primary memory/knowledge store), SQLite (local development/testing).
+- **Observability:** OpenTelemetry (Traces, spans, metrics).
+
+## 3. Database Schema & Data Models
+Outline the core database tables/collections, relations, indices, and data storage requirements.
+
+## 4. Design Contracts & API Specifications
+Define the communication contracts between components (e.g., OpenAPI specs, gRPC proto files, or class diagrams).
+
+## 5. Development & Deployment Procedures
+Details on how to build, test, containerize, and deploy the application. Refer to `CLAUDE.md` for local testing guidelines.

@@ -1,0 +1,14 @@
+# Welcome to the {{PROJECT_NAME}} Wiki
+
+This wiki serves as the central knowledge base for the project, containing both business requirements and technical design specifications.
+
+## Documentation Index
+
+- [Business Requirements](Business-Requirements.md)
+  Overview of business goals, user personas, target metrics, and release criteria.
+
+- [Technical Documentation](Technical-Documentation.md)
+  System architecture, tech stack description, database schema, and design patterns.
+
+- [Development Workflow Guide](CLAUDE.md)
+  Guidelines for local development, code style, testing, and CI/CD pipelines.

@@ -5,8 +5,24 @@ __pycache__/
 *.pyo
 *.pyd
 .ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+node_modules/
 
-memory/long_term/harness.db
-memory/short_term/*.json
-.agent/secure_vault.enc
-templates/harness/memory/long_term/harness.db
+# Compiled agent harnesses. Source lives under agents/; the compiler writes the
+# composed instruction files here, so this is build output and is not tracked.
+build/
+
+# Local agent memory stores, at any depth (root or per-agent harness)
+**/memory/long_term/*.db
+**/memory/short_term/*.json
+**/memory/surrealdb/
+*.db-wal
+*.db-shm
+
+# Encrypted secret vaults, at any depth
+**/.agent/secure_vault.enc
+
+# Local lifecycle state: handoff contract artifacts written between workflow stages
+.solomon/

@@ -1,16 +1,27 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropic-cookbook/claude-code/main/schema/settings.schema.json",
-  "model": "claude-3-5-sonnet-latest",
   "watch": true,
   "permissions": {
     "allow": [
-      "git status",
-      "git diff",
-      "git log"
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
     ],
     "ask": [
-      "git commit",
-      "git push"
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"
+          }
+        ]
+      }
     ]
   }
 }

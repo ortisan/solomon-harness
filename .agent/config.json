@@ -6,7 +6,10 @@
   },
   "timeout_seconds": 30,
   "max_retries": 3,
-  "architecture_pattern": "hexagonal",
-  "observability_pattern": "opentelemetry",
-  "security_pattern": "secure_dev"
+  "database": {
+    "provider": "surrealdb",
+    "url": "ws://localhost:8000/rpc",
+    "namespace": "solomon",
+    "database": "harness"
+  }
 }

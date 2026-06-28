@@ -1,4 +1,0 @@
-test_runner:
-  command: "python3 -m unittest discover -s tests"
-  fallback: "pytest"
-  verify: "grep -i fail"

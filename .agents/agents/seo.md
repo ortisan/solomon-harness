@@ -1,1 +1,0 @@
-../../agents/seo/agents/seo.md
