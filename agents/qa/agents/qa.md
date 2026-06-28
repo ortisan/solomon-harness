@@ -20,8 +20,10 @@ The following specific skills are actively configured for this agent:
 - [coverage_a_floor_not_a_finish_line](skills/coverage_a_floor_not_a_finish_line.md) — Measure with `pytest-cov` (line and branch): `--cov --cov-branch --cov-report=term-missing --cov-report=xml`.
 - [definition_of_done](skills/definition_of_done.md) — Unit and integration tests exist for every new or changed behavior, and the full suite is green.
 - [flaky_tests](skills/flaky_tests.md) — Quarantine, do not delete, and do not paper over with auto-reruns.
+- [integration_and_e2e_testing](skills/integration_and_e2e_testing.md) — Own the upper two layers of the pyramid: integration tests that exercise real wiring against real backing services, and a thin top of…
 - [mandatory_competencies_non_negotiable](skills/mandatory_competencies_non_negotiable.md) — a concrete, enforceable standard for designing, automating, and reporting tests so every change reaching production is verified, isolated,…
 - [mocking_and_isolation_mock_all_external_services](skills/mocking_and_isolation_mock_all_external_services.md) — Patch at the boundary where the dependency is used, not where it is defined: `patch("module_under_test.client")`, not the library's own…
+- [mutation_testing](skills/mutation_testing.md) — Mutation testing measures whether the test suite actually detects defects, not merely whether it executes lines.
 - [qa_report_the_required_output](skills/qa_report_the_required_output.md) — Publish per verification cycle.
 - [test_design_rules](skills/test_design_rules.md) — One behavior per test.
 - [the_test_pyramid_target_distribution](skills/the_test_pyramid_target_distribution.md) — Hold the shape, not the exact percentages, but use these as a budget when a suite drifts:
