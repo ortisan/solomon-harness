@@ -11,5 +11,16 @@
     "url": "ws://localhost:8000/rpc",
     "namespace": "solomon",
     "database": "harness"
-  }
+  },
+  "enabled_agents": [
+    "documenter",
+    "observability",
+    "product_owner",
+    "qa",
+    "scrum_master",
+    "security",
+    "software_architect",
+    "software_engineer",
+    "sre"
+  ]
 }
