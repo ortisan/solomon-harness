@@ -73,8 +73,11 @@ auditable record are guaranteed.
   `/solomon-scan-dedup` (gated `dev` stages) that open draft PRs only; outbound
   notification egress (`notify.py`); a post-hoc cost ceiling (`loop_budget.py`)
   that degrades the automation path to report-only. See below.
-- **Phase 4 — Ownership and hygiene.** A dedicated `loop_engineer` agent (deferred
-  until the Phase 0-2 modules exist for it to own), worktree hygiene, state GC.
+- **Phase 4 — Ownership (loop_engineer shipped).** A dedicated `loop_engineer`
+  agent now owns the lock/policy/run-log/budget/notify modules, with six skills
+  citing their real APIs (the precedent `practice_curator` set for a deferred
+  agent). Remaining: the `agents/AGENTS.md` index entry (deferred while a
+  concurrent session edits that file), worktree hygiene, and state GC.
 
 ## Phase 0, as shipped
 
