@@ -148,5 +148,28 @@ class TestStartWorktree(unittest.TestCase):
         self.assertIn("solomon_harness.cli worktree", toml)
 
 
+class TestStartImplementationMode(unittest.TestCase):
+    def test_start_command_asks_mode_before_coding(self):
+        body = _read(os.path.join(".claude", "commands", "solomon-start.md"))
+        low = body.lower()
+        self.assertIn("implementation mode", low)
+        self.assertIn("automatic", low)
+        self.assertIn("manual", low)
+        # The headless default line is asserted verbatim so QA can grep for it.
+        self.assertIn("Implementation mode: Automatic (non-interactive default)", body)
+        # Manual mode must leave the card in progress, not advance it.
+        self.assertIn("In Progress", body)
+
+    def test_gemini_start_mirror_carries_mode_and_default(self):
+        toml = _read(os.path.join(".gemini", "commands", "solomon-start.toml"))
+        self.assertIn("Implementation mode: Automatic (non-interactive default)", toml)
+        self.assertIn("Manual", toml)
+
+    def test_workflow_doc_documents_both_modes(self):
+        doc = _read(os.path.join("docs", "solomon-workflow.md")).lower()
+        self.assertIn("automatic", doc)
+        self.assertIn("manual", doc)
+
+
 if __name__ == "__main__":
     unittest.main()

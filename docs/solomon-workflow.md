@@ -49,6 +49,23 @@ list and invite a free-text reply. Lead with the recommended option first and ke
 options mutually exclusive. Prefer this over an open prose question: discrete, numbered
 choices keep the user's context focused and prevent dispersion.
 
+## Implementation mode (automatic or manual)
+
+`/solomon-start` asks, before any code is written, whether the change is implemented
+**automatically** by the agent or **manually** by a developer — the team still has
+hands-on developers who want to write the code themselves. The choice uses the
+enumerated-options style above (Automatic, recommended and first; Manual; Other).
+
+- Automatic: the agent runs the TDD loop (Red/Green/Refactor) per PLAN.md, then opens the
+  draft PR and moves the card to Code Review — the existing behavior.
+- Manual: the agent writes no production or test code and opens no PR. It hands back the
+  prepared worktree, branch, PLAN.md, and the ADR decision, and leaves the card in
+  `In Progress`. The developer implements by hand, then re-runs `/solomon-start` to open the
+  PR (or opens it and runs `/solomon-review`).
+- Headless (`solomon-harness dev start`): with no one to answer, the stage does not block on
+  the prompt — it defaults to Automatic and prints
+  `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
+
 ## GitHub conventions
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
