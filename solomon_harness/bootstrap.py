@@ -102,9 +102,17 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
     return project_name, git_remote, technologies
 
 
-def ensure_database_config(workspace_root: str) -> None:
-    """Ensure .agent/config.json carries a database block. No credentials are
-    written here; they come from SURREAL_USER / SURREAL_PASS at runtime."""
+def ensure_database_config(workspace_root: str) -> str:
+    """Ensure .agent/config.json points at the shared SurrealDB with a per-project
+    tenant database, and return the tenant id.
+
+    The memory backend is shared across all projects on the machine (one
+    SurrealDB), so each project is isolated by its own database (the tenant),
+    derived from the git remote. No credentials are written here; they come from
+    SURREAL_USER / SURREAL_PASS at runtime.
+    """
+    from solomon_harness.home import assigned_memory_port, derive_tenant
+
     config_dir = os.path.join(workspace_root, ".agent")
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config.json")
@@ -117,16 +125,23 @@ def ensure_database_config(workspace_root: str) -> None:
         except Exception:
             pass
 
-    if "database" not in config_data:
-        config_data["database"] = {
-            "provider": "surrealdb",
-            "url": "ws://localhost:8000/rpc",
-            "namespace": "solomon",
-            "database": "harness",
-        }
+    tenant = derive_tenant(workspace_root)
+    port = assigned_memory_port()
+    db = config_data.setdefault("database", {})
+    db.setdefault("provider", "surrealdb")
+    db.setdefault("namespace", "solomon")
+    # Point at the shared backend on its assigned host port, migrating the legacy
+    # default but preserving a custom URL the user set.
+    if db.get("url") in (None, "", "ws://localhost:8000/rpc"):
+        db["url"] = f"ws://localhost:{port}/rpc"
+    # Adopt the tenant as the database, migrating the legacy shared default
+    # ("harness") but preserving an explicit name the user set.
+    if db.get("database") in (None, "", "harness"):
+        db["database"] = tenant
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=2)
+    return db["database"]
 
 
 def interpolate_and_write(template_path: str, dest_path: str, replacements: Dict[str, str], fallback_content: str) -> None:
@@ -188,8 +203,10 @@ def _install_harness_files(workspace_root: str) -> None:
     print("Installing harness files into the project...")
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "build", "node_modules")
     trees = ["agents", "scripts", "solomon_harness", "docs", ".claude", ".gemini"]
+    # No per-project docker-compose.yml: the memory backend is a single shared
+    # instance in ~/.solomon-harness (see solomon_harness/memory.py).
     files = [
-        ".mcp.json", "docker-compose.yml", "pyproject.toml", "uv.lock",
+        ".mcp.json", "pyproject.toml", "uv.lock",
         "AGENTS.md", "GEMINI.md", "CLAUDE.md", "README.md", "skill-sources.json",
     ]
     for tree in trees:
@@ -262,7 +279,16 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
 
-    ensure_database_config(workspace_root)
+    tenant = ensure_database_config(workspace_root)
+    try:
+        from solomon_harness.home import assigned_memory_port
+        from solomon_harness.memory import ensure_home_compose
+
+        port = assigned_memory_port()
+        ensure_home_compose()
+        print(f"  - Memory tenant: {tenant} (shared SurrealDB on host port {port})")
+    except Exception as exc:
+        print(f"  Warning: could not prepare the shared memory home: {exc}")
 
     # 3. Generate .claude/settings.json only when it does not already exist, so
     # re-running init never clobbers a hand-maintained settings file. No model is
@@ -497,6 +523,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         print(f"  Warning: Codebase indexing failed: {e}")
 
     print("=== Bootstrap Completed Successfully ===")
+    print(
+        "  Tip: run 'solomon-harness install-global' to install the agents and "
+        "/solomon-* commands into ~/.claude once, so every project shares them."
+    )
 
 
 def index_codebase(workspace_root: str, db) -> None:

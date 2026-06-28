@@ -179,6 +179,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     mem_up.add_argument("--wait", type=int, default=25, help="Seconds to wait for the backend port after starting")
     subparsers.add_parser("memory-down", help="Stop the memory backend (docker compose down)")
 
+    ig_parser = subparsers.add_parser(
+        "install-global",
+        help="Install agents, /solomon commands, the session hook, and the shared memory home into ~/.claude and ~/.solomon-harness",
+    )
+    ig_parser.add_argument("--no-mcp", action="store_true", help="Skip MCP server registration with the host CLI")
+
     doctor_parser = subparsers.add_parser("doctor", help="Check (and install) prerequisites")
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
 
@@ -257,6 +263,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         result = stop_memory(workspace_root)
         print(_describe(result))
         sys.exit(0 if result.get("ok") else 1)
+    elif args.command == "install-global":
+        from solomon_harness.install_global import describe, install_global
+        result = install_global(register_mcp=not args.no_mcp)
+        print(describe(result))
     elif args.command == "wiki":
         from solomon_harness.bootstrap import index_codebase, write_code_overview
         from solomon_harness.tools.database_client import DatabaseClient

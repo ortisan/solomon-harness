@@ -88,9 +88,20 @@ class TestBootstrapAgent(unittest.TestCase):
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.test_initial_config, f, indent=2)
 
+        # Sandbox the shared harness home so init never writes to the real
+        # ~/.solomon-harness during the test run.
+        self._home = tempfile.mkdtemp()
+        self._prev_home = os.environ.get("SOLOMON_HARNESS_HOME")
+        os.environ["SOLOMON_HARNESS_HOME"] = self._home
+
     def tearDown(self):
         # Clean up temporary directory
         self.test_dir.cleanup()
+        if self._prev_home is None:
+            os.environ.pop("SOLOMON_HARNESS_HOME", None)
+        else:
+            os.environ["SOLOMON_HARNESS_HOME"] = self._prev_home
+        shutil.rmtree(self._home, ignore_errors=True)
 
     def test_non_interactive_default_via_env(self):
         env = os.environ.copy()
