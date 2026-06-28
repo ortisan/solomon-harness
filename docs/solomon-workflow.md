@@ -39,6 +39,16 @@ project status (latest activity and open issues) through a SessionStart hook tha
 runs `solomon-harness run`, so a session always resumes where the previous one
 stopped. Run `/solomon-loop` to continue from there.
 
+## Interaction style
+
+When a workflow needs a decision or confirmation from the user — which next step,
+which option, which target — present the choices as an enumerated list (1, 2, 3, …),
+with the final option always being "Other", where the user types a free-form answer.
+In Claude Code this is the AskUserQuestion tool; in the Gemini CLI, present a numbered
+list and invite a free-text reply. Lead with the recommended option first and keep the
+options mutually exclusive. Prefer this over an open prose question: discrete, numbered
+choices keep the user's context focused and prevent dispersion.
+
 ## GitHub conventions
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
