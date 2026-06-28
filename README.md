@@ -221,11 +221,11 @@ and domain agents on detected signals), instead of all nineteen.
 
 `solomon_harness/github.py` wraps the `gh` CLI to ensure a Project (v2) board
 exists and move issue cards across the lifecycle columns; `init` creates the board
-for GitHub-hosted projects. Each repository gets its own board, titled
-`solomon - <repo>`, linked to the repository. The harness configures the seven
-lifecycle columns as the Status field options, but GitHub's API has no mutation to
-set a view's layout, so switching the default view to a Board grouped by Status is
-a one-time manual step in the project UI (`ensure-board` prints the reminder).
+for GitHub-hosted projects. Each repository gets one board, titled after the
+repository and linked to it. The harness configures the seven lifecycle columns as
+the Status field options, but GitHub's API has no mutation to create or lay out
+views, so switching the default view to a Board grouped by Status is a one-time
+manual step in the project UI (`ensure-board` prints the reminder).
 
 ### Codebase indexing
 

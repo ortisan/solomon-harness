@@ -19,6 +19,7 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
+# Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
 BOARD_COLUMNS = ["Ideas", "Backlog", "Ready", "In Progress", "Code Review", "QA", "Done"]
 
@@ -65,14 +66,13 @@ def repo_name_with_owner() -> Optional[str]:
 
 
 def board_title(repo: Optional[str] = None) -> str:
-    """The per-repository board title.
+    """The per-repository board title: the repository name itself.
 
-    Each repository gets its own board, named ``solomon - <repo>`` so boards do
-    not collide under one generic title (and ``find_project`` resolves the right
-    one). Falls back to the bare base name when the repo cannot be resolved.
+    Each repository gets one board named after it, so boards never collide and
+    ``find_project`` resolves the right one. Falls back to the base name when the
+    repository cannot be resolved.
     """
-    repo = repo or repo_name()
-    return f"{DEFAULT_BOARD_TITLE} - {repo}" if repo else DEFAULT_BOARD_TITLE
+    return (repo or repo_name()) or DEFAULT_BOARD_TITLE
 
 
 def _link_project_to_repo(owner: str, number, repo_with_owner: Optional[str]) -> Dict[str, Any]:
@@ -315,14 +315,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         if result.get("ok"):
             num = (result.get("project") or {}).get("number")
             print(json.dumps(result, indent=2))
-            # GitHub's API cannot set a view's layout; the columns live on the
-            # Status field but the default view is a table. Tell the user the
-            # one manual step to see the Kanban board.
+            # GitHub's API has no view mutation, so a fresh board has only a table
+            # view. The columns live on the Status field; the layout is manual.
             print(
                 "\nColumns are configured on the Status field: "
                 + " -> ".join(BOARD_COLUMNS)
-                + f"\nGitHub's API cannot switch the view layout. Open project #{num}, "
-                "and on 'View 1' choose Board layout grouped by Status to see the columns."
+                + f"\nGitHub's API cannot create or name views. Open project #{num} and "
+                "set its view to Board layout grouped by Status to see the columns."
             )
             return 0
     elif args.command == "ensure-labels":

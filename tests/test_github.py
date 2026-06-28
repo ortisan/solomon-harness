@@ -158,14 +158,14 @@ class TestRecordTransition(unittest.TestCase):
 
 
 class TestBoardTitleAndLink(unittest.TestCase):
-    def test_board_title_includes_repo_name(self):
+    def test_board_title_is_the_repo_name(self):
         def fake_run(cmd, **kwargs):
             if cmd[:4] == ["gh", "repo", "view", "--json"] and cmd[4] == "name":
                 return _Proc(0, json.dumps({"name": "widget"}))
             raise AssertionError(f"unexpected gh call: {cmd}")
 
         with patch("subprocess.run", side_effect=fake_run):
-            self.assertEqual(github.board_title(), "solomon - widget")
+            self.assertEqual(github.board_title(), "widget")
 
     def test_board_title_falls_back_when_repo_unknown(self):
         with patch("subprocess.run", return_value=_Proc(1, "", "no repo")):
@@ -186,7 +186,7 @@ class TestBoardTitleAndLink(unittest.TestCase):
             if cmd[:3] == ["gh", "project", "list"]:
                 return _Proc(0, json.dumps({"projects": []}))
             if cmd[:3] == ["gh", "project", "create"]:
-                return _Proc(0, json.dumps({"number": 9, "title": "solomon - widget"}))
+                return _Proc(0, json.dumps({"number": 9, "title": "widget"}))
             if cmd[:3] == ["gh", "project", "field-list"]:
                 return _Proc(0, json.dumps({"fields": [{"name": "Status", "id": "F1", "options": [{"name": "Todo", "id": "o1"}]}]}))
             if cmd[:3] == ["gh", "api", "graphql"]:
@@ -200,8 +200,8 @@ class TestBoardTitleAndLink(unittest.TestCase):
             res = github.ensure_project_board()
         self.assertTrue(res["created"])
         self.assertTrue(res["linked_to_repo"])
-        # The board was created with the repo-aware title and linked to the repo.
-        self.assertEqual(res["project"]["title"], "solomon - widget")
+        # The board is titled after the repo and linked to it.
+        self.assertEqual(res["project"]["title"], "widget")
         self.assertEqual(len(links), 1)
         self.assertIn("acme/widget", links[0])
 
