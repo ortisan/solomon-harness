@@ -222,11 +222,60 @@ def has_github_project_and_wiki(workspace_root: str, git_remote: str) -> bool:
         return False
 
 
+def _install_harness_files(workspace_root: str) -> None:
+    """Copy the harness files into a fresh project (no-op when already present).
+
+    The source is this package's repository (resolved from __file__), so running
+    `solomon-harness init` from a clone or editable install scaffolds the harness
+    into the current project. When workspace_root already has agents/, nothing is
+    copied and the workspace is configured in place.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.abspath(repo_root) == os.path.abspath(workspace_root):
+        return  # developing the harness in place
+    if os.path.isdir(os.path.join(workspace_root, "agents")):
+        return  # already installed
+    if not os.path.isdir(os.path.join(repo_root, "agents")):
+        return  # the harness tree is not bundled with this install
+
+    print("Installing harness files into the project...")
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "build", "node_modules")
+    trees = ["agents", "scripts", "solomon_harness", "docs", ".claude", ".gemini"]
+    files = [
+        ".mcp.json", "docker-compose.yml", "pyproject.toml", "uv.lock",
+        "AGENTS.md", "GEMINI.md", "CLAUDE.md", "README.md", "skill-sources.json",
+    ]
+    for tree in trees:
+        src = os.path.join(repo_root, tree)
+        dest = os.path.join(workspace_root, tree)
+        if os.path.isdir(src) and not os.path.exists(dest):
+            shutil.copytree(src, dest, ignore=ignore)
+    for name in files:
+        src = os.path.join(repo_root, name)
+        dest = os.path.join(workspace_root, name)
+        if os.path.isfile(src) and not os.path.exists(dest):
+            shutil.copy2(src, dest)
+    print("  Harness files installed.")
+
+
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:
     """Initializes the agent harness workspace in workspace_root."""
     if os.environ.get("NON_INTERACTIVE") == "true":
         non_interactive = True
     print("=== Solomon Agent Bootstrap ===")
+
+    # Check prerequisites and install the safe ones (uv) before doing any work.
+    try:
+        from solomon_harness.prereqs import check_prerequisites
+
+        check_prerequisites(auto_install=True)
+    except Exception as exc:
+        print(f"  Warning: prerequisite check failed: {exc}")
+
+    # When run in a fresh project (no agents/ yet), install the harness files from
+    # this package's repository into the workspace before configuring it.
+    _install_harness_files(workspace_root)
+
     project_name, git_remote, technologies = get_project_metadata(workspace_root)
     print(f"  - Project Name: {project_name}")
     print(f"  - Git Remote:   {git_remote}")

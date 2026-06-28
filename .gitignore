@@ -10,11 +10,6 @@ __pycache__/
 *.egg-info/
 node_modules/
 
-# solomon-dev npm CLI: templates/ is a generated, vendored copy of this repo
-# (sync-templates.js / npm prepack regenerate it), so it is not tracked.
-solomon_dev/templates/
-solomon_dev/node_modules/
-
 # Compiled agent harnesses. Source lives under agents/; the compiler writes the
 # composed instruction files here, so this is build output and is not tracked.
 build/

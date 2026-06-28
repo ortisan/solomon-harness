@@ -173,6 +173,13 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     )
     subparsers.add_parser("index", help="Index project codebase into the database memory")
 
+    doctor_parser = subparsers.add_parser("doctor", help="Check (and install) prerequisites")
+    doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
+
+    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (idea, issue, bug, refine, start, review, release)")
+    dev_parser.add_argument("stage", type=str, help="The workflow stage")
+    dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
+
     skills_parser = subparsers.add_parser("skills", help="Manage agent skills")
     skills_parser.add_argument("skills_args", nargs=argparse.REMAINDER, help="Arguments passed to skills manager")
 
@@ -213,6 +220,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     elif args.command == "init":
         from solomon_harness.bootstrap import bootstrap_project
         bootstrap_project(workspace_root, non_interactive=args.non_interactive)
+    elif args.command == "doctor":
+        from solomon_harness.prereqs import check_prerequisites
+        sys.exit(0 if check_prerequisites(auto_install=not args.no_install) else 1)
+    elif args.command == "dev":
+        from solomon_harness.workflows import run_stage
+        sys.exit(run_stage(workspace_root, args.stage, args.dev_args))
     elif args.command == "compile":
         from solomon_harness.compiler import compile_harnesses
         compile_harnesses(workspace_root)

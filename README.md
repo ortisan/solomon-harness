@@ -14,32 +14,37 @@ piece of work from idea to release while persisting every decision and handoff.
 
 ## Getting started
 
+`solomon-harness` is a single Python CLI — engine, installer, prerequisite check,
+and headless workflow runner all in one. `solomon-harness doctor` checks the
+prerequisites and installs the ones that are safe to install (uv) without sudo.
+
 ### Prerequisites
 
-- **Python 3.10+** and [uv](https://github.com/astral-sh/uv) (package/venv manager).
+- **Python 3.10+** and [uv](https://github.com/astral-sh/uv) (`solomon-harness doctor` installs uv if missing).
 - A **host tool** to run the workflows: [Claude Code](https://claude.com/claude-code) or the **Gemini CLI**.
 - **GitHub CLI** (`gh`), authenticated, for the issue/PR/board steps (`gh auth login`; the board needs the `project` scope).
-- **Node.js 16+** only if you use the `solomon-dev` installer/CLI.
 - **Docker** (optional) to run SurrealDB locally; without it the harness falls back to SQLite.
 
-### Option A — install into an existing project
-
-```bash
-npx solomon-dev init
-```
-
-This detects the project's stack, drops the harness in (agents, the
-`solomon_harness` package, scripts, config), installs the git hooks, compiles the
-agent harnesses, generates the host-tool integrations, and indexes the codebase.
-
-### Option B — develop the harness itself
+### Install the CLI
 
 ```bash
 git clone <this-repo> && cd solomon-harness
 uv sync                 # create the venv and install dependencies
-uv pip install -e .     # expose the `solomon-harness` CLI
-uv run python -m solomon_harness.cli init --non-interactive
+uv pip install -e .     # expose the `solomon-harness` CLI on PATH
 ```
+
+### Install into an existing project
+
+From your project directory, run init: it checks prerequisites, copies the harness
+in (agents, the `solomon_harness` package, scripts, config), configures it,
+generates the host-tool integrations, and indexes the codebase.
+
+```bash
+cd /path/to/your/project
+solomon-harness init            # add --non-interactive for defaults
+```
+
+Running it from the harness repo itself configures it in place (no copy).
 
 ### Start the memory stack (optional)
 
@@ -67,7 +72,7 @@ In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
 Or headlessly, for CI and automation:
 
 ```bash
-SOLOMON_ENGINE=claude solomon-dev start 42     # or SOLOMON_ENGINE=gemini
+SOLOMON_ENGINE=claude solomon-harness dev start 42     # or SOLOMON_ENGINE=gemini
 ```
 
 Each command shapes the work with the right specialist agents, creates and moves
@@ -221,7 +226,9 @@ server). The humanizer rules forbid emojis and AI cliches in all generated outpu
 
 | Command | Description |
 | --- | --- |
-| `init [--non-interactive]` | Bootstrap a workspace: metadata, patterns, agents, board, index |
+| `init [--non-interactive]` | Install into / bootstrap a project: prerequisites, files, config, board, index |
+| `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
+| `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release) |
 | `compile` | Compile agent harnesses and regenerate host-tool integrations |
 | `index` | Index the project codebase into the memory |
 | `run` | Show the resume point (latest activity, open issues) and list the workflows |
@@ -230,17 +237,9 @@ server). The humanizer rules forbid emojis and AI cliches in all generated outpu
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
 | `agents list \| show <name>` | List or show the generated subagents |
 
+For `dev`, set `SOLOMON_ENGINE=claude` (default) or `gemini` to choose the engine.
 `python -m solomon_harness.github ensure-board \| set-status --issue N --status "<col>" \| add-issue --issue N`
 manages the board directly.
-
-### `solomon-dev` (npm CLI)
-
-| Command | Description |
-| --- | --- |
-| `solomon-dev init` | Install the harness into the current project |
-| `solomon-dev <stage> [args]` | Run a workflow headless (stages: idea, issue, bug, refine, start, review, release) |
-
-Set `SOLOMON_ENGINE=claude` (default) or `gemini` to choose the engine.
 
 ---
 
@@ -256,16 +255,17 @@ solomon-harness/
 ├── solomon_harness/         # Core package
 │   ├── compiler.py          #   non-destructive compile -> build/
 │   ├── bootstrap.py         #   init / codebase indexing
-│   ├── cli.py               #   the solomon-harness CLI
+│   ├── cli.py               #   the solomon-harness CLI (init, doctor, dev, compile, ...)
 │   ├── agent_selection.py   #   stack -> agents
+│   ├── prereqs.py           #   prerequisite check / uv install (doctor)
+│   ├── workflows.py         #   headless /solomon-dev-* runner (dev)
 │   ├── github.py            #   GitHub project board helpers
 │   ├── mcp_server.py        #   solomon-memory MCP server
 │   ├── memory_service.py    #   memory service layer
 │   ├── skills.py            #   external skill fetching
 │   ├── evals.py             #   per-agent evaluation suite
 │   ├── templates/           #   bundled harness/pattern templates
-│   └── tools/               #   database_client.py, browser.py
-├── solomon_dev/             # The npm installer/CLI front-end (templates/ is generated)
+│   └── tools/               #   database_client.py
 ├── scripts/                 # generate-integrations, document-skills, scrum-master, validators
 ├── build/                   # Compiled agent output (gitignored)
 └── tests/                   # Verification suite
