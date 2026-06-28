@@ -1,9 +1,9 @@
 services:
   surrealdb:
-    # SurrealDB v3 (latest). The Python SDK is pinned surrealdb>=2.0.0,<3.0.0,
-    # which speaks the v2.0.0-v3.1.4 protocol. Pin to a specific v3.x tag for
-    # reproducibility once validated against a live server.
-    image: surrealdb/surrealdb:latest
+    # Pinned to a validated v3 tag for reproducibility (the Python SDK is
+    # surrealdb>=2.0.0,<3.0.0, which speaks the v2.0.0-v3.x protocol). Bump
+    # deliberately rather than tracking :latest, which could jump to a new major.
+    image: surrealdb/surrealdb:v3.1.5
     container_name: solomon_surrealdb
     ports:
       # Host port 8099 (8000 is too contended); the harness re-templates this to
