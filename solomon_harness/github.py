@@ -48,6 +48,40 @@ def repo_owner() -> Optional[str]:
     return None
 
 
+def repo_name() -> Optional[str]:
+    """Return the current repository's short name (without owner), or None."""
+    res = _gh(["repo", "view", "--json", "name"], parse_json=True)
+    if res["ok"] and res.get("data"):
+        return res["data"].get("name")
+    return None
+
+
+def repo_name_with_owner() -> Optional[str]:
+    """Return the current repository's owner/name, or None."""
+    res = _gh(["repo", "view", "--json", "nameWithOwner"], parse_json=True)
+    if res["ok"] and res.get("data"):
+        return res["data"].get("nameWithOwner")
+    return None
+
+
+def board_title(repo: Optional[str] = None) -> str:
+    """The per-repository board title.
+
+    Each repository gets its own board, named ``solomon - <repo>`` so boards do
+    not collide under one generic title (and ``find_project`` resolves the right
+    one). Falls back to the bare base name when the repo cannot be resolved.
+    """
+    repo = repo or repo_name()
+    return f"{DEFAULT_BOARD_TITLE} - {repo}" if repo else DEFAULT_BOARD_TITLE
+
+
+def _link_project_to_repo(owner: str, number, repo_with_owner: Optional[str]) -> Dict[str, Any]:
+    """Link a project to the repository so it shows under the repo's Projects."""
+    if not number or not repo_with_owner:
+        return {"ok": False, "error": "missing project number or repository"}
+    return _gh(["project", "link", str(number), "--owner", owner, "--repo", repo_with_owner])
+
+
 def find_project(owner: str, title: str) -> Optional[Dict[str, Any]]:
     """Return the project dict whose title matches, or None."""
     res = _gh(["project", "list", "--owner", owner, "--format", "json"], parse_json=True)
@@ -60,12 +94,15 @@ def find_project(owner: str, title: str) -> Optional[Dict[str, Any]]:
 
 
 def ensure_project_board(
-    title: str = DEFAULT_BOARD_TITLE, owner: Optional[str] = None
+    title: Optional[str] = None, owner: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Find or create the delivery board for the repo owner."""
+    """Find or create the per-repository delivery board, linked to the repo."""
     owner = owner or repo_owner()
     if not owner:
         return {"ok": False, "error": "could not resolve the repository owner via gh."}
+
+    title = title or board_title()
+    repo_with_owner = repo_name_with_owner()
 
     existing = find_project(owner, title)
     if existing:
@@ -78,14 +115,17 @@ def ensure_project_board(
     if not res["ok"]:
         return {"ok": False, "error": res["error"]}
     project = res.get("data") or {}
-    # Configure the lifecycle columns on the new board so issues can be placed on it.
+    # Configure the lifecycle columns (Status options) on the new board.
     cols = _configure_board_columns(owner, project.get("number"))
+    # Link it to the repository so it shows under the repo's Projects tab.
+    linked = _link_project_to_repo(owner, project.get("number"), repo_with_owner)
     return {
         "ok": True,
         "created": True,
         "owner": owner,
         "project": project,
         "columns_configured": bool(cols.get("ok")),
+        "linked_to_repo": bool(linked.get("ok")),
     }
 
 
@@ -113,7 +153,7 @@ def _configure_board_columns(owner: str, project_number) -> Dict[str, Any]:
 
 
 def add_issue_to_board(
-    issue_number: int, title: str = DEFAULT_BOARD_TITLE, owner: Optional[str] = None
+    issue_number: int, title: Optional[str] = None, owner: Optional[str] = None
 ) -> Dict[str, Any]:
     """Add an issue to the board, returning the created item."""
     board = ensure_project_board(title=title, owner=owner)
@@ -155,13 +195,15 @@ def _status_field(owner: str, project_number: int) -> Optional[Dict[str, Any]]:
 def set_issue_status(
     issue_number: int,
     status: str,
-    title: str = DEFAULT_BOARD_TITLE,
+    title: Optional[str] = None,
     owner: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Move an issue's card to a Status column, adding it to the board if needed."""
     if status not in BOARD_COLUMNS:
         return {"ok": False, "error": f"unknown status '{status}'; expected one of {BOARD_COLUMNS}."}
 
+    owner = owner or repo_owner()
+    title = title or board_title()
     added = add_issue_to_board(issue_number, title=title, owner=owner)
     if not added["ok"]:
         return added
@@ -247,7 +289,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     p_board = sub.add_parser("ensure-board", help="Create the delivery board if missing")
-    p_board.add_argument("--title", default=DEFAULT_BOARD_TITLE)
+    p_board.add_argument("--title", default=None)
     p_board.add_argument("--owner", default=None)
 
     sub.add_parser("ensure-labels", help="Create the standard issue labels")
@@ -255,16 +297,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_status = sub.add_parser("set-status", help="Move an issue card to a column")
     p_status.add_argument("--issue", type=int, required=True)
     p_status.add_argument("--status", required=True)
-    p_status.add_argument("--title", default=DEFAULT_BOARD_TITLE)
+    p_status.add_argument("--title", default=None)
 
     p_add = sub.add_parser("add-issue", help="Add an issue to the board")
     p_add.add_argument("--issue", type=int, required=True)
-    p_add.add_argument("--title", default=DEFAULT_BOARD_TITLE)
+    p_add.add_argument("--title", default=None)
 
     args = parser.parse_args(argv)
 
     if args.command == "ensure-board":
         result = ensure_project_board(title=args.title, owner=args.owner)
+        # Ensure the link even when the board already existed (cheap, idempotent).
+        if result.get("ok") and not result.get("created"):
+            num = (result.get("project") or {}).get("number")
+            linked = _link_project_to_repo(result.get("owner"), num, repo_name_with_owner())
+            result["linked_to_repo"] = bool(linked.get("ok"))
+        if result.get("ok"):
+            num = (result.get("project") or {}).get("number")
+            print(json.dumps(result, indent=2))
+            # GitHub's API cannot set a view's layout; the columns live on the
+            # Status field but the default view is a table. Tell the user the
+            # one manual step to see the Kanban board.
+            print(
+                "\nColumns are configured on the Status field: "
+                + " -> ".join(BOARD_COLUMNS)
+                + f"\nGitHub's API cannot switch the view layout. Open project #{num}, "
+                "and on 'View 1' choose Board layout grouped by Status to see the columns."
+            )
+            return 0
     elif args.command == "ensure-labels":
         result = ensure_labels()
     elif args.command == "set-status":
