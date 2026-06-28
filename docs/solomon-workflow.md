@@ -43,8 +43,11 @@ stopped. Run `/solomon-loop` to continue from there.
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
   `type:idea`, `type:chore`; plus `priority:p0|p1|p2` and `area:<domain>`.
-- Branches (Git Flow): `feature/<issue>-<slug>` for features, `bugfix/<issue>-<slug>`
-  for defects, `hotfix/<version>` for production-critical fixes. Branch from `develop`.
+- Branches (Git Flow): `feature/<slug>` for features, `bugfix/<slug>` for defects,
+  `hotfix/<version>` for production-critical fixes. The branch name carries NO issue
+  number (kept deliberately clean); `<slug>` is the kebab-cased issue title. The issue
+  is linked instead by the back-link comment and the `Refs #`/`Closes #` trailers.
+  Branch from `develop`.
 - Commits: Conventional Commits, no emojis (the commit-msg hook enforces this).
 - Pull requests: conventional title, body that contains `Closes #<issue>`, opened
   as a draft until `/solomon-review` approves. Link the ADR if one was written.

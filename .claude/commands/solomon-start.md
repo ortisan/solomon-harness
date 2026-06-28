@@ -24,13 +24,14 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 
 ## 2. Branch and move to In Progress (scrum_master)
-- The branch follows Git Flow and reflects the task: `feature/$ARGUMENTS-<slug>` (or
-  `bugfix/$ARGUMENTS-<slug>` for `type:bug`), where `<slug>` is the kebab-cased issue title
-  (trim to ~6 words). The issue number is embedded so the branch maps back to the task.
+- The branch follows Git Flow and reflects the task: `feature/<slug>` (or
+  `bugfix/<slug>` for `type:bug`), where `<slug>` is the kebab-cased issue title
+  (trim to ~6 words). The branch name carries NO issue number — keep it clean; the branch
+  maps back to the issue via the back-link comment and the `Refs #` / `Closes #` trailers.
   Confirm the name with the user, then:
-  `git fetch origin && git switch develop && git pull && git switch -c feature/$ARGUMENTS-<slug>`.
+  `git fetch origin && git switch develop && git pull && git switch -c feature/<slug>`.
 - Bidirectional link: comment the branch onto the issue —
-  `gh issue comment $ARGUMENTS --body "Started on branch \`feature/$ARGUMENTS-<slug>\`."` —
+  `gh issue comment $ARGUMENTS --body "Started on branch \`feature/<slug>\`."` —
   so the issue points to the branch and the branch name points back to the issue.
 - `uv run python -m solomon_harness.github ensure-board` (idempotent), then
   `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "In Progress"`.
@@ -41,7 +42,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   proposed change and the boundary it touches, target files, edge cases as observable outcomes,
   a 3–8 step red/green TDD breakdown (one commit each), STRIDE notes when input/auth/data/external
   surface is touched, and objectively checkable verification criteria.
-- Record the design decision: `mcp__solomon-memory__save_decision(title, rationale, outcome, author="software_engineer", branch="feature/$ARGUMENTS-<slug>")`.
+- Record the design decision: `mcp__solomon-memory__save_decision(title, rationale, outcome, author="software_engineer", branch="feature/<slug>")`.
 - Show PLAN.md to the user before coding.
 
 ## 4. ADR evaluation (software_architect)
@@ -50,7 +51,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   contract or data model, cross-cutting pattern, quality-attribute trade-off, hard to reverse).
 - If significant: the `software_architect` subagent copies `docs/adr/0000-adr-template.md` to
   `docs/adr/NNNN-<slug>.md` (next number), fills the MADR sections, and records it with
-  `mcp__solomon-memory__save_decision(title="ADR-NNNN: ...", outcome="Status: Accepted\n...", author="software_architect", branch="feature/$ARGUMENTS-<slug>")`.
+  `mcp__solomon-memory__save_decision(title="ADR-NNNN: ...", outcome="Status: Accepted\n...", author="software_architect", branch="feature/<slug>")`.
 - If not significant: state that explicitly (you will repeat it in the PR body).
 
 ## 5. TDD implementation (software_engineer, tdd_red_green_refactor)
@@ -61,7 +62,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Keep the diff inside the PLAN.md target-files fence; re-plan if it strays.
 
 ## 6. Draft PR, Code Review, handoff
-- Confirm with the user, then push: `git push -u origin feature/$ARGUMENTS-<slug>`.
+- Confirm with the user, then push: `git push -u origin feature/<slug>`.
 - Open a draft PR: `gh pr create --draft --base develop --title "<conventional title>" --body "..."`.
   The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
   (`docs/adr/NNNN-<slug>.md`) or state that no ADR was warranted and why.
