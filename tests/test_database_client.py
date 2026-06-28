@@ -543,6 +543,35 @@ class TestDatabaseClient(unittest.TestCase):
             mock_class.assert_called_once_with("ws://harness-local:8000/rpc")
             client.close()
 
+    def test_releases_and_milestones_listing_sqlite(self):
+        """Milestones and delivered releases are recorded and listable."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+
+        m1 = client.create_milestone("M1", "first", "2026-07-01", "active")
+        m2 = client.create_milestone("M2", "second", "2026-08-01", "active")
+        milestones = client.list_milestones()
+        self.assertEqual({m["title"] for m in milestones}, {"M1", "M2"})
+
+        rid = client.save_release(
+            version="v1.0.0",
+            tag="v1.0.0",
+            notes="Initial release",
+            issue_github_id="42",
+            milestone_id=m1,
+            commit_sha="abc1234",
+        )
+        self.assertIsNotNone(rid)
+        rel = client.get_release(rid)
+        self.assertEqual(rel["version"], "v1.0.0")
+        self.assertEqual(rel["issue_github_id"], "42")
+        self.assertEqual(rel["milestone_id"], str(m1))
+
+        client.save_release(version="v1.1.0", tag="v1.1.0", milestone_id=m2)
+        releases = client.list_releases()
+        self.assertEqual(len(releases), 2)
+        self.assertEqual({r["version"] for r in releases}, {"v1.0.0", "v1.1.0"})
+        client.close()
+
     def test_delete_memory_sqlite(self):
         """delete_memory removes a key so get_memory returns None afterwards."""
         client = DatabaseClient(db_path=self.sqlite_db_path)

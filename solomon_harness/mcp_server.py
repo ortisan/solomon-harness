@@ -79,6 +79,35 @@ def build_server() -> Any:
         return service.create_milestone(title, description, due_date, state)
 
     @server.tool()
+    def list_milestones() -> dict:
+        """List project milestones, most recent first."""
+        return service.list_milestones()
+
+    @server.tool()
+    def save_release(
+        version: str,
+        tag: str = "",
+        notes: str = "",
+        issue_github_id: str = "",
+        milestone_id: str = "",
+        commit_sha: str = "",
+    ) -> dict:
+        """Record a delivered release (version, tag, notes, the closed issue and milestone)."""
+        return service.save_release(
+            version, tag, notes, issue_github_id, milestone_id, commit_sha
+        )
+
+    @server.tool()
+    def get_release(release_id: str) -> dict:
+        """Get a delivered release by id."""
+        return service.get_release(release_id)
+
+    @server.tool()
+    def list_releases(limit: int = 20) -> dict:
+        """List delivered releases, most recent first."""
+        return service.list_releases(limit)
+
+    @server.tool()
     def save_backtest(
         strategy_name: str,
         sharpe_ratio: float,

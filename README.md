@@ -195,7 +195,8 @@ records decisions, sessions, handoffs, issues, milestones, and backtests. It is
 exposed as the `solomon-memory` MCP server (`solomon_harness/mcp_server.py`),
 registered for Claude Code (`.mcp.json`) and the Gemini CLI (`.gemini/settings.json`),
 with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
-`log_issue`/`get_open_issues`/`get_issue`, `create_milestone`, `save_backtest`,
+`log_issue`/`get_open_issues`/`get_issue`, `create_milestone`/`list_milestones`,
+`save_release`/`get_release`/`list_releases`, `save_backtest`,
 `save_session`/`get_session`, `log_handoff`, and `get_latest_activity`.
 
 The SurrealDB backend is a single shared instance per machine, defined in

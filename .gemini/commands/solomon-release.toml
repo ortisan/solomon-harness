@@ -37,6 +37,7 @@ Summarize the PRR verdict, the version bump, and the changelog entry, then **ask
   `docs/wiki/Code-Overview.md` from the re-indexed code, then append one line to
   `docs/wiki/Delivered.md` (create it if absent) recording the delivered issue (number,
   title, version, date). Sync to the GitHub wiki with `scripts/wiki-sync.sh`.
+- Record the delivered release in the project memory: `save_release(version="vX.Y.Z", tag="vX.Y.Z", notes="<changelog section>", issue_github_id="<issue>", milestone_id="<milestone if any>", commit_sha="<merge SHA>")`.
 - `save_decision` for the release: title `Release vX.Y.Z`, the PRR verdict and conditions, outcome, author `sre`, the `develop` branch, and the merge commit SHA.
 - Write the compact release → done handoff contract to `.solomon/handoffs/issue-<issue>-release-to-done.md` using the template in `docs/solomon-workflow.md` (release notes, the version/tag, what shipped, and any GO-WITH-CONDITIONS follow-ups).
 - `log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/issue-<issue>-release-to-done.md", status="completed")`.

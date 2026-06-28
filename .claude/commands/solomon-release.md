@@ -1,7 +1,7 @@
 ---
 description: Run the production readiness review, then merge and release an approved PR (sre).
 argument-hint: [pr-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Bash(scripts/wiki-sync.sh:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_latest_activity
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Bash(scripts/wiki-sync.sh:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__save_release, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_latest_activity
 ---
 
 Read `docs/solomon-workflow.md` first and follow the Deliver/release stage exactly. Drive this as the **sre** specialist; delegate the production readiness review and release mechanics to the `.claude/agents/sre` subagent via the Task tool, grounded in its `production_readiness_review` and `release_engineering_and_progressive_delivery` skills. This is the `QA` → `Done` transition.
@@ -40,6 +40,7 @@ Summarize the PRR verdict, the version bump, and the changelog entry, then **ask
   `docs/wiki/Code-Overview.md` from the re-indexed code, then append one line to
   `docs/wiki/Delivered.md` (create it if absent) recording the delivered issue (number,
   title, version, date). Sync to the GitHub wiki with `scripts/wiki-sync.sh`.
+- Record the delivered release in the project memory: `mcp__solomon-memory__save_release(version="vX.Y.Z", tag="vX.Y.Z", notes="<changelog section>", issue_github_id="<issue>", milestone_id="<milestone if any>", commit_sha="<merge SHA>")`.
 - `mcp__solomon-memory__save_decision` for the release: title `Release vX.Y.Z`, the PRR verdict and conditions, outcome, author `sre`, the `develop` branch, and the merge commit SHA.
 - Write the compact release → done handoff contract to `.solomon/handoffs/issue-<issue>-release-to-done.md` using the template in `docs/solomon-workflow.md` (release notes, the version/tag, what shipped, and any GO-WITH-CONDITIONS follow-ups).
 - `mcp__solomon-memory__log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/issue-<issue>-release-to-done.md", status="completed")`.

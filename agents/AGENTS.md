@@ -144,7 +144,8 @@ so the host tool can read and write project memory directly. It is registered
 for Claude Code in `.mcp.json` and for the Gemini CLI in `.gemini/settings.json`;
 Codex and other MCP clients register the same command in their own config. Tools:
 `save_decision` / `get_decision`, `save_memory` / `get_memory`,
-`log_issue` / `get_open_issues` / `get_issue`, `create_milestone`,
+`log_issue` / `get_open_issues` / `get_issue`, `create_milestone` /
+`list_milestones`, `save_release` / `get_release` / `list_releases`,
 `save_backtest`, `save_session` / `get_session`, `log_handoff`, and
 `get_latest_activity`. Requires the `mcp` package (`uv sync`).
 

@@ -189,7 +189,8 @@ class DatabaseClient:
                         "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
                         "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
                         "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS;"
+                        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;"
                     )
                     self.db.query(init_query)
                     self.backend = "surrealdb"
@@ -346,6 +347,18 @@ class DatabaseClient:
                 contract_path TEXT,
                 status TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS releases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version TEXT NOT NULL,
+                tag TEXT,
+                notes TEXT,
+                issue_github_id TEXT,
+                milestone_id TEXT,
+                commit_sha TEXT,
+                released_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
         ]
@@ -654,6 +667,140 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
+
+    def list_milestones(self) -> List[Dict[str, Any]]:
+        """List milestones, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query("SELECT * FROM milestones ORDER BY created_at DESC")
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list milestones from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list milestones from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM milestones ORDER BY created_at DESC, id DESC"
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list milestones: {e}")
+                raise RuntimeError(f"Failed to list milestones: {e}")
+
+    def save_release(
+        self,
+        version: str,
+        tag: Optional[str] = None,
+        notes: Optional[str] = None,
+        issue_github_id: Optional[str] = None,
+        milestone_id: Optional[Union[str, int]] = None,
+        commit_sha: Optional[str] = None,
+    ) -> Union[str, int, None]:
+        """Record a delivered release in the project memory.
+
+        Args:
+            version: Semantic version of the release (e.g. v1.2.0).
+            tag: Git tag for the release.
+            notes: Changelog or release notes.
+            issue_github_id: The delivered issue this release closes, if any.
+            milestone_id: Associated milestone id, if any.
+            commit_sha: The merge/release commit SHA.
+
+        Returns:
+            The id of the created release record.
+        """
+        mid = str(milestone_id) if milestone_id is not None else None
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO releases {
+                version: $version,
+                tag: $tag,
+                notes: $notes,
+                issue_github_id: $issue_github_id,
+                milestone_id: $milestone_id,
+                commit_sha: $commit_sha,
+                released_at: time::now()
+            }
+            """
+            params = {
+                "version": version,
+                "tag": tag,
+                "notes": notes,
+                "issue_github_id": issue_github_id,
+                "milestone_id": mid,
+                "commit_sha": commit_sha,
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to save release in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to save release in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO releases
+                (version, tag, notes, issue_github_id, milestone_id, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        query, (version, tag, notes, issue_github_id, mid, commit_sha)
+                    )
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to save release: {e}")
+                raise RuntimeError(f"Failed to save release: {e}")
+
+    def get_release(self, release_id: Union[str, int]) -> Optional[Dict[str, Any]]:
+        """Retrieve a release by id."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    "SELECT * FROM $id", {"id": self._parse_rid(release_id)}
+                )
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve release from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve release from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM releases WHERE id = ?", (release_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve release: {e}")
+                raise RuntimeError(f"Failed to retrieve release: {e}")
+
+    def list_releases(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """List delivered releases, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    f"SELECT * FROM releases ORDER BY released_at DESC LIMIT {int(limit)}"
+                )
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list releases from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list releases from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM releases ORDER BY released_at DESC, id DESC LIMIT ?",
+                        (int(limit),),
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list releases: {e}")
+                raise RuntimeError(f"Failed to list releases: {e}")
 
     def log_issue(
         self,
