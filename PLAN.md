@@ -1,111 +1,120 @@
-# PLAN — isolated worktree + implementation-mode choice on /solomon-start
+# PLAN — #6 delivery-spine skills to canonical depth (software_architect + sre)
 
-Delivers issues #8 (dedicated git worktree on start) and #23 (automatic vs manual
-implementation mode) in one branch, #8 leading. Both edit the same start stage.
+Issue: #6 `feat(agents): upgrade delivery-spine agent skills to the canonical depth standard`
+Branch: `feature/architect-sre-skills-canonical-depth` (worktree `sh-6`, off `origin/main` @ 0f36018)
 
 ## Problem statement
 
-- #8: `/solomon-start` switches the single checkout onto the new branch
-  (`git switch -c`), which couples one branch to the working directory, blocks on a
-  dirty tree, and prevents parallel in-flight issues.
-- #23: the stage then falls straight into the agent-driven TDD loop, with no point
-  where a human is asked whether the agent implements automatically or a developer
-  implements by hand. The team still has hands-on developers.
+Epic #6 re-scoped to a depth upgrade and judged `software_architect` and `sre` as
+"already meet the bar — no child, spot-review only", using a `<200w` "thin"
+threshold. The epic's own acceptance criteria, however, set the bar at
+`>= ~600 words` plus `## Common pitfalls` and `## Definition of done` plus a named
+standard/tool and a worked example. A spot-review against that written bar fails:
+14 role-core skills across the two agents are under it. The required spot-review
+therefore does not confirm compliance, so the epic cannot close honestly until
+these are addressed. This slice closes the gap for both agents.
 
-## Proposed change and the boundary it touches
+## Scope decision (read before implementing)
 
-- New module `solomon_harness/worktree.py` — the single source of truth for the
-  worktree contract (path computation, idempotent create/locate, conflict
-  reporting). This is the real, unit-tested logic.
-- New CLI subcommand `solomon-harness worktree <branch> [--base <ref>]` wrapping
-  the module: prints the absolute worktree path to stdout and exits 0 on
-  success/reuse; prints a diagnostic to stderr and exits non-zero on conflict.
-- `.claude/commands/solomon-start.md`:
-  - step 2 calls the worktree helper instead of `git switch -c`, and steps 3-6 run
-    inside the worktree;
-  - step 5 asks the implementation mode (Automatic / Manual / Other) before any
-    code is written, with the manual-mode behavior and a deterministic
-    non-interactive default (Automatic) for the headless path.
-- `.gemini/commands/solomon-start.toml` regenerated from the source (never
-  hand-edited); a drift check guards it.
-- `docs/solomon-workflow.md` documents the sibling worktree-location convention and
-  the two implementation modes.
-- `docs/adr/0001-isolated-worktree-and-implementation-mode-on-start.md` records the
-  cross-cutting decision (worktree layout + mode gate).
+Deepen all 14 sub-bar role-core skills to the canonical bar. Three of them are
+meta/scope files that currently restate the shared `agents/AGENTS.md` rules or act
+as an applicability gate. They are NOT exempted; instead they are rewritten as
+genuine single-concern skills so reaching `>= 600w` adds real, role-specific
+guidance rather than restating shared rules (which the epic's RAID tells the review
+gate to reject). The reframe per meta file:
 
-Boundary: the worktree contract is owned by `solomon_harness/worktree.py`; the
-command file and the CLI are thin callers. The mode choice is prompt-level
-(host tool is the LLM), verified by command-file/Gemini content assertions.
+- `software_architect/when_this_skill_applies.md` — from a one-paragraph gate into
+  an "architecture engagement model": which artifact for which decision, the
+  blast-radius / cost-of-reversal triage test, a worked triage example, ADR-vs-
+  commit-note heuristics.
+- `software_architect/mandatory_project_competencies_to_honor_in_any_design.md` —
+  from a restatement of AGENTS.md into "how to honor each competency at design
+  time": testability seams, consumer-driven contract tests (Pact), a worked
+  STRIDE-per-container table, fitness functions (ArchUnit / import-linter).
+- `sre/mandatory_competencies_carried_into_sre_work.md` — from a restatement into
+  "how SRE operationalizes each competency": IaC test pyramids, signed-artifact
+  supply chain, structured-log/trace propagation, with named tools and an example.
 
-## Worktree-location convention (decided in refinement, #8)
+### Deepening targets (14)
 
-`<PARENT>/<NAME>-worktrees/<branch with '/' replaced by '-'>` where
-`NAME = basename(repo top-level)`, `PARENT = dirname(repo top-level)`. Sibling, not
-in-repo, so recursive tooling never double-traverses a nested checkout.
+`software_architect` (7):
+- `when_this_skill_applies.md` (100w)
+- `solid_and_structural_discipline.md` (207w)
+- `non_functional_requirements.md` (220w)
+- `architectural_decision_records.md` (242w)
+- `mandatory_project_competencies_to_honor_in_any_design.md` (273w)
+- `design_contracts_as_component_boundaries.md` (307w)
+- `c4_model_diagrams.md` (370w)
+
+`sre` (7):
+- `disaster_recovery.md` (201w)
+- `load_and_resilience_testing.md` (205w)
+- `incident_response_and_runbooks.md` (238w)
+- `high_availability.md` (266w)
+- `infrastructure_and_deployment_pipelines.md` (270w)
+- `mandatory_competencies_carried_into_sre_work.md` (294w)
+- `reliability_targets_sli_slo_sla_error_budgets.md` (439w)
+
+## Proposed change and boundary touched
+
+Documentation only. Rewrite each of the 11 skills to the canonical format:
+sharp one-paragraph summary; topic sections naming concrete standards/tools with
+versions/thresholds and at least one worked example; `## Common pitfalls` (each
+with the reason a reviewer rejects it); `## Definition of done` checklist. Then
+regenerate the two agent profiles' Active Skills with `scripts/document-skills.py`.
+No production Python, no public contract, no data model, no dependency change.
 
 ## Target files
 
-- `solomon_harness/worktree.py` (new)
-- `tests/test_worktree.py` (new)
-- `solomon_harness/cli.py` (add `worktree` subcommand)
-- `.claude/commands/solomon-start.md` (steps 2 and 5)
-- `.gemini/commands/solomon-start.toml` (regenerated)
-- `tests/test_integrations.py` (assert start-command + Gemini mirror carry the
-  worktree call, the mode prompt, and the non-interactive default line)
-- `docs/solomon-workflow.md` (conventions + modes)
-- `docs/adr/0001-*.md` (new)
+- All 7 `agents/software_architect/skills/*.md` listed above.
+- All 7 `agents/sre/skills/*.md` listed above.
+- `agents/software_architect/agents/software_architect.md` and `agents/sre/agents/sre.md` (Active Skills block, regenerated only)
+- `scripts/check-skill-depth.py` (new, the mechanical gate)
 
-## Edge cases as observable outcomes
+## Edge cases (observable outcomes)
 
-- New branch + new worktree from base: `git worktree list` shows the computed path
-  on the branch; helper prints the path; exit 0 (AC-8.1).
-- Dirty main checkout: create still succeeds; main checkout's changes untouched
-  (AC-8.2) — inherent to `git worktree add`, asserted by test.
-- Idempotent reuse: path already a worktree on the expected branch -> no
-  `git worktree add` runs; same path printed; exit 0 (AC-8.3).
-- Conflict: path exists as a non-worktree dir, or the branch is checked out in
-  another worktree -> raise, no partial worktree added, diagnostic to stderr,
-  non-zero exit (AC-8.4).
-- Mode prompt present before codegen; three options Automatic/Manual/Other;
-  manual leaves the card In Progress and writes no code; headless prints
-  "Implementation mode: Automatic (non-interactive default)" (AC #23).
-- Gemini start command mirrors the same prompt + default line; drift check passes.
+- A deepened skill must not restate shared AGENTS.md rules; it stays single-concern.
+- `document-skills.py` must still parse the first paragraph as the one-line summary,
+  so the opening paragraph stays a single sharp sentence-led paragraph.
+- `solomon-harness compile` must not mutate tracked source beyond the regenerated
+  Active Skills blocks.
+- Named standards must be real and current (e.g. C4 model levels; ISO/IEC 25010
+  quality attributes; DR RTO/RPO; SLI/SLO/SLA + error-budget math; k6/Locust for load).
 
-## TDD breakdown (one commit each, Red -> Green)
+## Red/green breakdown (mechanical depth proxy is the test)
 
-1. `test_worktree.py`: `worktree_path` computation + `ensure_worktree` happy /
-   idempotent-reuse / conflict (path-occupied, branch-checked-out-elsewhere) on a
-   temp git repo. Implement `solomon_harness/worktree.py`. (Refs #8)
-2. `test_worktree.py`: CLI `worktree` subcommand contract (stdout path + exit 0;
-   stderr + non-zero on conflict). Wire the subcommand in `cli.py`. (Refs #8)
-3. `test_integrations.py`: start command step 2 invokes the worktree helper and
-   the worktree-location convention is documented. Edit `solomon-start.md` step 2
-   and `docs/solomon-workflow.md`. (Refs #8)
-4. `test_integrations.py`: start command step 5 carries the Automatic/Manual/Other
-   prompt, the manual-mode no-code/In-Progress behavior, and the exact
-   non-interactive default line. Edit `solomon-start.md` step 5 and the doc.
-   (Refs #23)
-5. `test_integrations.py`: `.gemini/commands/solomon-start.toml` mirrors the
-   worktree call, the mode prompt, and the default line. Regenerate via
-   `scripts/generate-integrations.py`. (Refs #8 #23)
-6. Write ADR-0001; assert it exists and is linked from the PR. (Refs #8 #23)
+The acceptance criterion is a mechanical proxy, so the "test" is a depth check, run
+red-before-green per file:
 
-## STRIDE notes
+1. Add `scripts/check-skill-depth.py` asserting, for every non-shared role-core
+   skill in both agents' dirs: `>= 600` words, presence of `## Common pitfalls` and
+   `## Definition of done`. Run it: it fails for the 14 sub-bar files (Red). Commit the gate.
+2. Deepen the 7 `software_architect` skills. Re-run: the architect subset passes
+   (Green). Commit.
+3. Deepen the 7 `sre` skills. Re-run: all pass (Green). Commit.
+4. Regenerate Active Skills (`document-skills.py`); commit the profile diff.
+5. Refactor pass: trim any restated shared rules, tighten summaries.
 
-- Tampering / Injection: branch names flow into `git worktree add` and into a
-  filesystem path. Validate the branch (allow `[A-Za-z0-9._/-]`, reject `..` path
-  segments and a leading `-`) before path construction or subprocess use; pass git
-  args as a list (never `shell=True`). Reject a computed path that escapes the
-  worktree root.
-- Denial of service: `git worktree add` is bounded; idempotent reuse runs no add.
-- No secrets, auth, or PII surface in this change.
+Each step is one Conventional Commit ending with `Refs #6`.
+
+## STRIDE
+
+Not applicable: documentation-only change, no input/auth/data/external surface.
+(The depth-check script reads repo files only; no external input.)
 
 ## Verification criteria
 
-- `python -m unittest tests.test_worktree tests.test_integrations tests.test_workflows`
-  passes.
-- `ruff check solomon_harness/worktree.py tests/test_worktree.py` clean.
-- `git worktree list` shows a created worktree at the documented path; re-running
-  the helper adds nothing; a conflicting path exits non-zero with a clear message.
-- `solomon-start.md` and the regenerated `.toml` both contain the mode prompt and
-  the exact non-interactive default line; the drift check passes.
+- `python scripts/check-skill-depth.py` passes for every non-shared role-core skill
+  in both agents' dirs (`>= 600w` + both sections).
+- Each deepened skill names at least one concrete standard/tool and shows one worked example.
+- No deepened skill restates shared AGENTS.md rules verbatim; each stays single-concern.
+- `uv run python scripts/document-skills.py` exits 0 and Active Skills renders cleanly.
+- `uv run python -m solomon_harness.cli compile` produces no tracked-source diff
+  beyond the regenerated Active Skills blocks.
+
+## Epic closeout note
+
+This slice covers architect + sre. With #9-#12 already Done, delivering this lets
+the epic's spot-review pass against the written bar. The PR will use `Refs #6`
+(not `Closes`) and recommend closing the epic after the architect/sre spot-review
+re-runs green, leaving the close decision to the product owner.
