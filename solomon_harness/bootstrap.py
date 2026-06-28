@@ -58,7 +58,10 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
             ["git", "remote", "get-url", "origin"],
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
-            text=True
+            text=True,
+            # Strip GIT_* so a worktree/hook context does not redirect this to the
+            # enclosing repo (see solomon_harness.home._clean_git_env / issue #24).
+            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         ).strip()
     except Exception:
         git_remote = "none"
