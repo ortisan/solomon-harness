@@ -51,6 +51,25 @@ class SpectronFallbackClient:
         return MockResponse(hits)
 
 
+def _resolve_database(configured: Optional[str], project_root: str) -> str:
+    """Resolve the SurrealDB database name for a project.
+
+    The shared SurrealDB holds every project, so the database name must be unique
+    per project, not the generic "harness". When the config carries that sentinel
+    (or nothing), derive an ``<owner>-<repo>`` tenant from the git remote so two
+    projects never collide in the shared instance. An explicit name is kept as-is.
+    """
+    database = configured or "harness"
+    if database in ("", "harness"):
+        try:
+            from solomon_harness.home import derive_tenant
+
+            return derive_tenant(project_root)
+        except Exception:
+            return "harness"
+    return database
+
+
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
@@ -151,24 +170,27 @@ class DatabaseClient:
 
             if has_surrealdb and Surreal is not None and creds_ok:
                 namespace = db_config.get("namespace", "solomon")
-                database = db_config.get("database", "harness")
+                database = _resolve_database(db_config.get("database"), project_root)
 
                 try:
                     self.db = Surreal(url)
                     if hasattr(self.db, "connect"):
                         self.db.connect()
-                    self.db.signin({"user": username, "pass": password})
+                    # SDK 2.x uses username/password keys (1.x used user/pass).
+                    self.db.signin({"username": username, "password": password})
                     self.db.use(namespace, database)
 
-                    # Initialize SurrealDB tables
+                    # Initialize SurrealDB tables. IF NOT EXISTS makes this
+                    # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
                     init_query = (
-                        "DEFINE TABLE decisions SCHEMALESS; "
-                        "DEFINE TABLE memory SCHEMALESS; "
-                        "DEFINE TABLE milestones SCHEMALESS; "
-                        "DEFINE TABLE issues SCHEMALESS; "
-                        "DEFINE TABLE backtest_runs SCHEMALESS; "
-                        "DEFINE TABLE sessions SCHEMALESS; "
-                        "DEFINE TABLE handoffs SCHEMALESS;"
+                        "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;"
                     )
                     self.db.query(init_query)
                     self.backend = "surrealdb"
@@ -327,6 +349,18 @@ class DatabaseClient:
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS releases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version TEXT NOT NULL,
+                tag TEXT,
+                notes TEXT,
+                issue_github_id TEXT,
+                milestone_id TEXT,
+                commit_sha TEXT,
+                released_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
         ]
 
         try:
@@ -339,68 +373,79 @@ class DatabaseClient:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
 
-    def _extract_id(self, res: Any) -> Optional[str]:
-        """Helper to extract record ID safely from SurrealDB query results."""
-        if not res:
-            return None
-        first = res[0]
-        if isinstance(first, list):
-            if first:
-                item = first[0]
-                return item.get("id") if isinstance(item, dict) else None
-        elif isinstance(first, dict):
-            if "result" in first and isinstance(first["result"], list):
-                if first["result"]:
-                    item = first["result"][0]
-                    return item.get("id") if isinstance(item, dict) else None
-            else:
-                return first.get("id")
-        return None
+    @staticmethod
+    def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
+        """Make a SurrealDB record JSON-serializable.
 
-    def _extract_field(self, res: Any, field_name: str) -> Any:
-        """Helper to extract a specific field value safely from SurrealDB query results."""
-        if not res:
-            return None
-        first = res[0]
-        if isinstance(first, list):
-            if first:
-                item = first[0]
-                return item.get(field_name) if isinstance(item, dict) else None
-        elif isinstance(first, dict):
-            if "result" in first and isinstance(first["result"], list):
-                if first["result"]:
-                    item = first["result"][0]
-                    return item.get(field_name) if isinstance(item, dict) else None
+        SurrealDB returns RecordID objects for ids and datetime objects for
+        time::now() fields; both must become strings so callers (and the MCP
+        server) can json.dumps the result.
+        """
+        out = {}
+        for k, v in record.items():
+            if type(v).__name__ == "RecordID":
+                out[k] = str(v)
+            elif hasattr(v, "isoformat"):  # datetime / date
+                out[k] = v.isoformat()
             else:
-                return first.get(field_name)
-        return None
+                out[k] = v
+        return out
+
+    def _extract_list(self, res: Any) -> List[Dict[str, Any]]:
+        """Return the record dicts from a SurrealDB query result.
+
+        SDK 2.x returns ``query()`` results as a flat ``list[dict]``; this also
+        tolerates the legacy ``[{"result": [...]}]`` and ``[[...]]`` shapes.
+        """
+        if not res:
+            return []
+        rows = res
+        if isinstance(rows, list) and rows:
+            head = rows[0]
+            if isinstance(head, dict) and isinstance(head.get("result"), list):
+                rows = head["result"]
+            elif isinstance(head, list):
+                rows = head
+        return [self._normalize(r) for r in rows if isinstance(r, dict)]
 
     def _extract_record(self, res: Any) -> Optional[Dict[str, Any]]:
-        """Helper to extract a full record dictionary safely from SurrealDB query results."""
-        if not res:
-            return None
-        first = res[0]
-        if isinstance(first, list):
-            if first:
-                item = first[0]
-                return dict(item) if isinstance(item, dict) else None
-        elif isinstance(first, dict):
-            if "result" in first and isinstance(first["result"], list):
-                if first["result"]:
-                    item = first["result"][0]
-                    return dict(item) if isinstance(item, dict) else None
-            else:
-                return dict(first)
+        """Extract the first record dictionary from a SurrealDB query result."""
+        rows = self._extract_list(res)
+        return rows[0] if rows else None
+
+    def _extract_field(self, res: Any, field_name: str) -> Any:
+        """Extract a single field from the first record of a query result."""
+        rec = self._extract_record(res)
+        return rec.get(field_name) if rec else None
+
+    def _extract_id(self, res: Any) -> Optional[str]:
+        """Extract the (stringified) record id from a query result."""
+        rec = self._extract_record(res)
+        if rec and rec.get("id") is not None:
+            return str(rec["id"])
         return None
 
-    def _format_id(self, table: str, record_id: Union[str, int, None]) -> Optional[str]:
-        """Formats the ID parameter for SurrealDB queries."""
-        if record_id is None:
+    @staticmethod
+    def _rid(table: str, key: Union[str, int]) -> Any:
+        """Build a SurrealDB RecordID for ``table:key`` (deterministic upsert id)."""
+        from surrealdb import RecordID
+
+        return RecordID(table, str(key))
+
+    @staticmethod
+    def _parse_rid(id_value: Union[str, int, None]) -> Any:
+        """Turn a 'table:id' string (or RecordID) into a RecordID for querying."""
+        if id_value is None:
             return None
-        s_id = str(record_id)
-        if s_id.startswith(f"{table}:"):
-            return s_id
-        return f"{table}:{s_id}"
+        if type(id_value).__name__ == "RecordID":
+            return id_value
+        s = str(id_value)
+        if ":" in s:
+            from surrealdb import RecordID
+
+            table, _, rid = s.partition(":")
+            return RecordID(table, rid)
+        return s
 
     def log_decision(
         self,
@@ -482,17 +527,18 @@ class DatabaseClient:
                 except Exception as e:
                     logging.warning(f"Failed to save memory in Spectron: {e}")
 
+            # Upsert by a deterministic record id derived from the key, so
+            # re-saving the same key updates in place.
             query = """
-            UPSERT INTO memory {
-                id: $id,
+            UPSERT $id CONTENT {
                 key: $key,
                 value: $value,
                 category: $category,
                 updated_at: time::now()
-            }
+            };
             """
             params = {
-                "id": f"memory:{key}",
+                "id": self._rid("memory", key),
                 "key": key,
                 "value": value,
                 "category": category,
@@ -523,7 +569,7 @@ class DatabaseClient:
         """Deletes a memory entry by key (no-op if it does not exist)."""
         if self.backend == "surrealdb":
             try:
-                self.db.query("DELETE FROM memory WHERE key = $key", {"key": key})
+                self.db.query("DELETE memory WHERE key = $key;", {"key": key})
             except Exception as e:
                 logging.error(f"Failed to delete memory in SurrealDB: {e}")
         else:
@@ -552,7 +598,7 @@ class DatabaseClient:
                 except Exception as e:
                     logging.warning(f"Failed to recall memory from Spectron: {e}")
 
-            query = "SELECT value FROM memory WHERE key = $key"
+            query = "SELECT `value` FROM memory WHERE key = $key"
             try:
                 res = self.db.query(query, {"key": key})
                 return self._extract_field(res, "value")
@@ -622,6 +668,140 @@ class DatabaseClient:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
 
+    def list_milestones(self) -> List[Dict[str, Any]]:
+        """List milestones, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query("SELECT * FROM milestones ORDER BY created_at DESC")
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list milestones from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list milestones from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM milestones ORDER BY created_at DESC, id DESC"
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list milestones: {e}")
+                raise RuntimeError(f"Failed to list milestones: {e}")
+
+    def save_release(
+        self,
+        version: str,
+        tag: Optional[str] = None,
+        notes: Optional[str] = None,
+        issue_github_id: Optional[str] = None,
+        milestone_id: Optional[Union[str, int]] = None,
+        commit_sha: Optional[str] = None,
+    ) -> Union[str, int, None]:
+        """Record a delivered release in the project memory.
+
+        Args:
+            version: Semantic version of the release (e.g. v1.2.0).
+            tag: Git tag for the release.
+            notes: Changelog or release notes.
+            issue_github_id: The delivered issue this release closes, if any.
+            milestone_id: Associated milestone id, if any.
+            commit_sha: The merge/release commit SHA.
+
+        Returns:
+            The id of the created release record.
+        """
+        mid = str(milestone_id) if milestone_id is not None else None
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO releases {
+                version: $version,
+                tag: $tag,
+                notes: $notes,
+                issue_github_id: $issue_github_id,
+                milestone_id: $milestone_id,
+                commit_sha: $commit_sha,
+                released_at: time::now()
+            }
+            """
+            params = {
+                "version": version,
+                "tag": tag,
+                "notes": notes,
+                "issue_github_id": issue_github_id,
+                "milestone_id": mid,
+                "commit_sha": commit_sha,
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to save release in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to save release in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO releases
+                (version, tag, notes, issue_github_id, milestone_id, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        query, (version, tag, notes, issue_github_id, mid, commit_sha)
+                    )
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to save release: {e}")
+                raise RuntimeError(f"Failed to save release: {e}")
+
+    def get_release(self, release_id: Union[str, int]) -> Optional[Dict[str, Any]]:
+        """Retrieve a release by id."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    "SELECT * FROM $id", {"id": self._parse_rid(release_id)}
+                )
+                return self._extract_record(res)
+            except Exception as e:
+                logging.error(f"Failed to retrieve release from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to retrieve release from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM releases WHERE id = ?", (release_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to retrieve release: {e}")
+                raise RuntimeError(f"Failed to retrieve release: {e}")
+
+    def list_releases(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """List delivered releases, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    f"SELECT * FROM releases ORDER BY released_at DESC LIMIT {int(limit)}"
+                )
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list releases from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list releases from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM releases ORDER BY released_at DESC, id DESC LIMIT ?",
+                        (int(limit),),
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list releases: {e}")
+                raise RuntimeError(f"Failed to list releases: {e}")
+
     def log_issue(
         self,
         github_id: str,
@@ -641,18 +821,17 @@ class DatabaseClient:
         """
         if self.backend == "surrealdb":
             query = """
-            UPSERT INTO issues {
-                id: $id,
+            UPSERT $id CONTENT {
                 github_id: $github_id,
                 title: $title,
                 type_: $type_,
                 status: $status,
                 milestone_id: $milestone_id,
                 created_at: time::now()
-            }
+            };
             """
             params = {
-                "id": f"issues:{github_id}",
+                "id": self._rid("issues", github_id),
                 "github_id": github_id,
                 "title": title,
                 "type_": type_,
@@ -777,17 +956,16 @@ class DatabaseClient:
         """
         if self.backend == "surrealdb":
             query = """
-            UPSERT INTO sessions {
-                id: $id,
+            UPSERT $id CONTENT {
                 session_id: $session_id,
                 agent_name: $agent_name,
                 task: $task,
                 messages: $messages,
                 timestamp: time::now()
-            }
+            };
             """
             params = {
-                "id": f"sessions:{session_id}",
+                "id": self._rid("sessions", session_id),
                 "session_id": session_id,
                 "agent_name": agent_name,
                 "task": task,
@@ -921,10 +1099,10 @@ class DatabaseClient:
             A dictionary containing the handoff details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM handoffs WHERE id = $id"
+            query = "SELECT * FROM $id"
             try:
                 res = self.db.query(
-                    query, {"id": self._format_id("handoffs", handoff_id)}
+                    query, {"id": self._parse_rid(handoff_id)}
                 )
                 return self._extract_record(res)
             except Exception as e:
@@ -952,10 +1130,10 @@ class DatabaseClient:
             A dictionary containing the record details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM decisions WHERE id = $id"
+            query = "SELECT * FROM $id"
             try:
                 res = self.db.query(
-                    query, {"id": self._format_id("decisions", decision_id)}
+                    query, {"id": self._parse_rid(decision_id)}
                 )
                 return self._extract_record(res)
             except Exception as e:
@@ -983,10 +1161,10 @@ class DatabaseClient:
             A dictionary containing the record details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM milestones WHERE id = $id"
+            query = "SELECT * FROM $id"
             try:
                 res = self.db.query(
-                    query, {"id": self._format_id("milestones", milestone_id)}
+                    query, {"id": self._parse_rid(milestone_id)}
                 )
                 return self._extract_record(res)
             except Exception as e:
@@ -1014,9 +1192,9 @@ class DatabaseClient:
             A dictionary containing the record details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM issues WHERE id = $id"
+            query = "SELECT * FROM issues WHERE github_id = $github_id"
             try:
-                res = self.db.query(query, {"id": self._format_id("issues", github_id)})
+                res = self.db.query(query, {"github_id": github_id})
                 return self._extract_record(res)
             except Exception as e:
                 logging.error(f"Failed to retrieve issue from SurrealDB: {e}")
@@ -1043,10 +1221,10 @@ class DatabaseClient:
             A dictionary containing the record details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM backtest_runs WHERE id = $id"
+            query = "SELECT * FROM $id"
             try:
                 res = self.db.query(
-                    query, {"id": self._format_id("backtest_runs", backtest_id)}
+                    query, {"id": self._parse_rid(backtest_id)}
                 )
                 return self._extract_record(res)
             except Exception as e:
@@ -1065,22 +1243,6 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
-
-    def _extract_list(self, res: Any) -> List[Dict[str, Any]]:
-        """Helper to extract a list of records safely from SurrealDB query results."""
-        if not res:
-            return []
-        first = res[0]
-        if isinstance(first, list):
-            return [dict(item) for item in first if isinstance(item, dict)]
-        elif isinstance(first, dict):
-            if "result" in first and isinstance(first["result"], list):
-                return [
-                    dict(item) for item in first["result"] if isinstance(item, dict)
-                ]
-            else:
-                return [dict(first)]
-        return []
 
     def get_open_issues(self) -> List[Dict[str, Any]]:
         """Retrieves all open issues.

@@ -1,17 +1,22 @@
-version: '3.8'
-
 services:
   surrealdb:
-    image: surrealdb/surrealdb:latest
+    # Pinned to a validated v3 tag for reproducibility (the Python SDK is
+    # surrealdb>=2.0.0,<3.0.0, which speaks the v2.0.0-v3.x protocol). Bump
+    # deliberately rather than tracking :latest, which could jump to a new major.
+    image: surrealdb/surrealdb:v3.1.5
     container_name: solomon_surrealdb
     ports:
-      - "8000:8000"
+      # Host port 8099 (8000 is too contended); the harness re-templates this to
+      # the auto-assigned port. The container always listens on 8000 internally.
+      - "8099:8000"
     volumes:
-      - ./memory/surrealdb:/memory/surrealdb
-    command: start --user root --pass root --log debug file:/memory/surrealdb
+      - ./memory/surrealdb:/data
+    # SurrealDB v3: --username/--password (v2+ renamed --user/--pass) and the
+    # rocksdb store ("file:" was removed in v2).
+    command: start --username root --password root --log info rocksdb:/data/solomon.db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
+      test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -26,27 +31,4 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  spectron:
-    image: ghcr.io/surrealdb/spectron:latest
-    container_name: solomon_spectron
-    ports:
-      - "9090:9090"
-    depends_on:
-      surrealdb:
-        condition: service_healthy
-    environment:
-      SPECTRON_SURREALDB_URL: ws://surrealdb:8000
-      SPECTRON_SURREALDB_USER: root
-      SPECTRON_SURREALDB_PASS: root
-      SPECTRON_OBJECT_STORE: local:///memory/spectron/objects
-      SPECTRON_BIND: 0.0.0.0:9090
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    volumes:
-      - ./memory/spectron:/memory/spectron
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+

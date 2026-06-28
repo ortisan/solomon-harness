@@ -90,6 +90,34 @@ class MemoryService:
         )
         return {"milestone_id": milestone_id}
 
+    def list_milestones(self) -> Dict[str, List[Dict[str, Any]]]:
+        return {"milestones": self.client.list_milestones()}
+
+    def save_release(
+        self,
+        version: str,
+        tag: str = "",
+        notes: str = "",
+        issue_github_id: str = "",
+        milestone_id: str = "",
+        commit_sha: str = "",
+    ) -> Dict[str, Any]:
+        release_id = self.client.save_release(
+            version=version,
+            tag=tag or None,
+            notes=notes or None,
+            issue_github_id=issue_github_id or None,
+            milestone_id=milestone_id or None,
+            commit_sha=commit_sha or None,
+        )
+        return {"release_id": release_id}
+
+    def get_release(self, release_id: str) -> Dict[str, Any]:
+        return {"release": self.client.get_release(release_id)}
+
+    def list_releases(self, limit: int = 20) -> Dict[str, List[Dict[str, Any]]]:
+        return {"releases": self.client.list_releases(limit=limit)}
+
     def save_backtest(
         self,
         strategy_name: str,

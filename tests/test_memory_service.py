@@ -53,6 +53,19 @@ class TestMemoryService(unittest.TestCase):
         activity = self.svc.get_latest_activity()["activity"]
         self.assertIsNotNone(activity)
 
+    def test_milestones_and_releases(self):
+        mid = self.svc.create_milestone("M1", "goals", "2026-07-01", "active")["milestone_id"]
+        self.assertEqual(len(self.svc.list_milestones()["milestones"]), 1)
+
+        rid = self.svc.save_release(
+            "v1.0.0", tag="v1.0.0", notes="first", issue_github_id="42", milestone_id=str(mid)
+        )["release_id"]
+        self.assertIsNotNone(rid)
+        rel = self.svc.get_release(rid)["release"]
+        self.assertEqual(rel["version"], "v1.0.0")
+        self.assertEqual(rel["issue_github_id"], "42")
+        self.assertEqual(len(self.svc.list_releases()["releases"]), 1)
+
     def test_resolve_harness_dir_finds_package(self):
         self.assertEqual(resolve_harness_dir(WORKSPACE), WORKSPACE)
 

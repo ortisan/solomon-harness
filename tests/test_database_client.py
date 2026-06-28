@@ -13,7 +13,26 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    _resolve_database,
+)
+
+
+class TestResolveDatabase(unittest.TestCase):
+    def test_generic_sentinel_derives_owner_repo_tenant(self):
+        with patch("solomon_harness.home.derive_tenant", return_value="acme-widget"):
+            self.assertEqual(_resolve_database("harness", "/repo"), "acme-widget")
+            self.assertEqual(_resolve_database("", "/repo"), "acme-widget")
+            self.assertEqual(_resolve_database(None, "/repo"), "acme-widget")
+
+    def test_explicit_name_is_kept(self):
+        with patch("solomon_harness.home.derive_tenant", return_value="acme-widget"):
+            self.assertEqual(_resolve_database("custom_db", "/repo"), "custom_db")
+
+    def test_falls_back_to_harness_when_derivation_fails(self):
+        with patch("solomon_harness.home.derive_tenant", side_effect=RuntimeError):
+            self.assertEqual(_resolve_database("harness", "/repo"), "harness")
 
 
 class TestDatabaseClient(unittest.TestCase):
@@ -222,6 +241,7 @@ class TestDatabaseClient(unittest.TestCase):
             patch("builtins.__import__", side_effect=mock_import),
             patch("os.path.isfile", side_effect=mock_isfile),
             patch("builtins.open", side_effect=mock_open),
+            patch("solomon_harness.home.derive_tenant", return_value="acme-widget"),
         ):
             # No db_path: an explicit db_path now forces SQLite, so the SurrealDB
             # path is exercised via config resolution instead.
@@ -232,9 +252,11 @@ class TestDatabaseClient(unittest.TestCase):
             mock_surreal_class.assert_called_once_with("ws://localhost:8000/rpc")
             mock_surreal_instance.connect.assert_called_once()
             mock_surreal_instance.signin.assert_called_once_with(
-                {"user": "root", "pass": "root"}
+                {"username": "root", "password": "root"}
             )
-            mock_surreal_instance.use.assert_called_once_with("solomon", "harness")
+            # The generic "harness" config name is resolved to the <owner>-<repo>
+            # tenant so projects never collide in the shared SurrealDB.
+            mock_surreal_instance.use.assert_called_once_with("solomon", "acme-widget")
 
             # Verify initialization queries
             mock_surreal_instance.query.assert_called()
@@ -520,6 +542,35 @@ class TestDatabaseClient(unittest.TestCase):
             self.assertEqual(client.backend, "surrealdb")
             mock_class.assert_called_once_with("ws://harness-local:8000/rpc")
             client.close()
+
+    def test_releases_and_milestones_listing_sqlite(self):
+        """Milestones and delivered releases are recorded and listable."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+
+        m1 = client.create_milestone("M1", "first", "2026-07-01", "active")
+        m2 = client.create_milestone("M2", "second", "2026-08-01", "active")
+        milestones = client.list_milestones()
+        self.assertEqual({m["title"] for m in milestones}, {"M1", "M2"})
+
+        rid = client.save_release(
+            version="v1.0.0",
+            tag="v1.0.0",
+            notes="Initial release",
+            issue_github_id="42",
+            milestone_id=m1,
+            commit_sha="abc1234",
+        )
+        self.assertIsNotNone(rid)
+        rel = client.get_release(rid)
+        self.assertEqual(rel["version"], "v1.0.0")
+        self.assertEqual(rel["issue_github_id"], "42")
+        self.assertEqual(rel["milestone_id"], str(m1))
+
+        client.save_release(version="v1.1.0", tag="v1.1.0", milestone_id=m2)
+        releases = client.list_releases()
+        self.assertEqual(len(releases), 2)
+        self.assertEqual({r["version"] for r in releases}, {"v1.0.0", "v1.1.0"})
+        client.close()
 
     def test_delete_memory_sqlite(self):
         """delete_memory removes a key so get_memory returns None afterwards."""

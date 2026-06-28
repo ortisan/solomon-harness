@@ -10,6 +10,7 @@ developer without Docker is never blocked.
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -20,7 +21,7 @@ from typing import List, Optional, Tuple
 
 from solomon_harness.home import assigned_memory_port, harness_home
 
-DEFAULT_URL = "ws://localhost:8000/rpc"
+DEFAULT_URL = "ws://localhost:8099/rpc"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
 
 
@@ -110,6 +111,16 @@ def _packaged_compose() -> Optional[str]:
     return candidate if os.path.isfile(candidate) else None
 
 
+def _set_published_port(compose_text: str, port: int) -> str:
+    """Rewrite the SurrealDB published host port in a compose file's text.
+
+    Only the host side of the ``"<host>:8000"`` mapping changes; the container
+    still listens on 8000 internally (Surrealist/Spectron reach it by service
+    name). Works whatever the template's current host port is.
+    """
+    return re.sub(r'"\d+:8000"', f'"{port}:8000"', compose_text)
+
+
 def ensure_home_compose() -> Optional[str]:
     """Ensure the shared home holds a docker-compose.yml; return its path or None.
 
@@ -130,9 +141,7 @@ def ensure_home_compose() -> Optional[str]:
     port = assigned_memory_port(home)
     with open(src, "r", encoding="utf-8") as f:
         content = f.read()
-    # Only the host side of the SurrealDB mapping changes; the container still
-    # listens on 8000 internally (Surrealist/Spectron reach it by service name).
-    content = content.replace('"8000:8000"', f'"{port}:8000"')
+    content = _set_published_port(content, port)
     os.makedirs(home, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
@@ -233,6 +242,12 @@ def stop_memory(workspace_root: Optional[str] = None) -> dict:
 
 def _describe(result: dict) -> str:
     """One-line human summary of an ensure_memory_up/stop_memory result."""
+    from solomon_harness.voice import say
+
+    return say(_describe_body(result))
+
+
+def _describe_body(result: dict) -> str:
     if result.get("already_running"):
         return "Memory backend already running."
     if result.get("started"):

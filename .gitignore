@@ -27,3 +27,10 @@ build/
 
 # Local lifecycle state: handoff contract artifacts written between workflow stages
 .solomon/
+
+# Git Worktrees
+ui-worktree/
+
+# Generated living-wiki overview (regenerated on each init/release)
+docs/wiki/Code-Overview.md
+

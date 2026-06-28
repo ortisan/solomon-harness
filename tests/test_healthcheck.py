@@ -1,0 +1,148 @@
+import json
+import os
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from solomon_harness import healthcheck as hc
+
+
+class _P:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class TestDocker(unittest.TestCase):
+    def test_not_installed(self):
+        with patch.object(hc.shutil, "which", return_value=None):
+            c = hc.check_docker()
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("not installed", c["detail"])
+
+    def test_daemon_down(self):
+        with patch.object(hc.shutil, "which", return_value="/usr/bin/docker"), \
+             patch.object(hc, "_run", return_value=_P(1)):
+            c = hc.check_docker()
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("not running", c["detail"])
+        self.assertIn("Start Docker", c["fix"])
+
+    def test_running(self):
+        with patch.object(hc.shutil, "which", return_value="/usr/bin/docker"), \
+             patch.object(hc, "_run", return_value=_P(0)):
+            c = hc.check_docker()
+        self.assertEqual(c["status"], hc.OK)
+
+
+class TestMemory(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, ".agent"))
+        with open(os.path.join(self.root, ".agent", "config.json"), "w") as f:
+            json.dump({"database": {"provider": "surrealdb", "url": "ws://localhost:8099/rpc", "database": "harness"}}, f)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_serving(self):
+        with patch.object(hc.memory, "is_serving", return_value=True), \
+             patch.object(hc, "derive_tenant", return_value="acme-widget"):
+            c = hc.check_memory(self.root)
+        self.assertEqual(c["status"], hc.OK)
+        self.assertIn("acme-widget", c["detail"])
+
+    def test_port_conflict(self):
+        with patch.object(hc.memory, "is_serving", return_value=False), \
+             patch.object(hc.memory, "_tcp_open", return_value=True), \
+             patch.object(hc, "derive_tenant", return_value="acme-widget"):
+            c = hc.check_memory(self.root)
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("held by a non-SurrealDB", c["detail"])
+
+    def test_not_running_sqlite_fallback(self):
+        with patch.object(hc.memory, "is_serving", return_value=False), \
+             patch.object(hc.memory, "_tcp_open", return_value=False), \
+             patch.object(hc, "derive_tenant", return_value="acme-widget"):
+            c = hc.check_memory(self.root)
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("SQLite fallback", c["detail"])
+
+
+class TestGitHub(unittest.TestCase):
+    def test_missing_project_scope(self):
+        with patch.object(hc.shutil, "which", return_value="/usr/bin/gh"), \
+             patch.object(hc, "_run", return_value=_P(0, "Token scopes: 'repo', 'read:org'")):
+            c = hc.check_github()
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("project", c["fix"])
+
+    def test_has_project_scope(self):
+        with patch.object(hc.shutil, "which", return_value="/usr/bin/gh"), \
+             patch.object(hc, "_run", return_value=_P(0, "Token scopes: 'repo', 'project', 'read:project'")):
+            c = hc.check_github()
+        self.assertEqual(c["status"], hc.OK)
+
+    def test_not_authenticated(self):
+        with patch.object(hc.shutil, "which", return_value="/usr/bin/gh"), \
+             patch.object(hc, "_run", return_value=_P(1, "", "not logged in")):
+            c = hc.check_github()
+        self.assertEqual(c["status"], hc.WARN)
+
+
+class TestGlobalInstall(unittest.TestCase):
+    def test_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = hc.check_global_install(claude_dir=d)
+        self.assertEqual(c["status"], hc.WARN)
+
+    def test_present(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "agents"))
+            os.makedirs(os.path.join(d, "commands"))
+            with open(os.path.join(d, "agents", "qa.md"), "w") as f:
+                f.write("x")
+            with open(os.path.join(d, "commands", "solomon-loop.md"), "w") as f:
+                f.write("x")
+            c = hc.check_global_install(claude_dir=d)
+        self.assertEqual(c["status"], hc.OK)
+
+
+class TestSharedHome(unittest.TestCase):
+    def test_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = hc.check_shared_home(home=os.path.join(d, "nope"))
+        self.assertEqual(c["status"], hc.WARN)
+
+    def test_present(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "docker-compose.yml"), "w") as f:
+                f.write("services: {}")
+            c = hc.check_shared_home(home=d)
+        self.assertEqual(c["status"], hc.OK)
+
+
+class TestReport(unittest.TestCase):
+    def test_format_and_pending(self):
+        checks = [
+            hc._check("A", hc.OK, "fine"),
+            hc._check("B", hc.WARN, "degraded", "do X"),
+        ]
+        report = hc.format_report(checks)
+        self.assertIn("A: fine", report)
+        self.assertIn("-> do X", report)
+        pending = hc.pending_summary(checks)
+        self.assertEqual(pending, ["B: do X"])
+
+    def test_run_checks_never_raises_and_returns_all(self):
+        with patch.object(hc, "check_docker", side_effect=RuntimeError("boom")):
+            checks = hc.run_checks("/tmp")
+        # The failing check is captured as a warn rather than propagating.
+        self.assertTrue(any(c["status"] == hc.WARN for c in checks))
+        self.assertEqual(len(checks), 5)
+
+
+if __name__ == "__main__":
+    unittest.main()

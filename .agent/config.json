@@ -8,7 +8,7 @@
   "max_retries": 3,
   "database": {
     "provider": "surrealdb",
-    "url": "ws://localhost:8000/rpc",
+    "url": "ws://localhost:8099/rpc",
     "namespace": "solomon",
     "database": "harness"
   },

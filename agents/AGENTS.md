@@ -38,6 +38,12 @@ own model loop.
   direct, concise, professional human-like tone, matching a senior engineer's style.
 - Emojis, icons, or any other visual ornaments in commit messages, documentation,
   PRs, or comments are strictly prohibited.
+- The harness's interactive voice. When you speak to the user as the harness
+  through Claude Code or the Gemini CLI — running a `/solomon-*` workflow or
+  reporting harness status — open your user-facing summary with the Solomon sage
+  icon and name: `🧙 Solomon: ...`. This icon is reserved for that live voice; it
+  must never appear in commit messages, PR descriptions, documentation, wiki
+  pages, or code comments, which stay emoji-free per the rule above.
 - Avoid typical AI cliches such as "delve", "leverage", "testament to", "feel free
   to", "dive into", "in summary", or other redundant and flowery terms. Get
   straight to the point professionally.
@@ -119,9 +125,9 @@ context and persist what it did. Reach it through the harness:
 - The SurrealDB backend is a single shared instance per machine, defined in
   `~/.solomon-harness/docker-compose.yml`. On session start the Claude Code hook
   runs `solomon-harness memory-up`, which starts it with `docker compose up -d`
-  only when it is not already serving. The host port is auto-assigned (8000 when
+  only when it is not already serving. The host port is auto-assigned (8099 when
   free, else the next free port, recorded in `~/.solomon-harness/memory.json`), so
-  it never collides with another process on 8000. Best-effort: if the port is held
+  it never collides with another process on the host. Best-effort: if the port is held
   by a non-SurrealDB process or there is no Docker daemon, the client falls back to
   SQLite, so work is never blocked. Stop it with `solomon-harness memory-down`.
 - Each project is a tenant: its memory is its own SurrealDB database (named from
@@ -138,7 +144,8 @@ so the host tool can read and write project memory directly. It is registered
 for Claude Code in `.mcp.json` and for the Gemini CLI in `.gemini/settings.json`;
 Codex and other MCP clients register the same command in their own config. Tools:
 `save_decision` / `get_decision`, `save_memory` / `get_memory`,
-`log_issue` / `get_open_issues` / `get_issue`, `create_milestone`,
+`log_issue` / `get_open_issues` / `get_issue`, `create_milestone` /
+`list_milestones`, `save_release` / `get_release` / `list_releases`,
 `save_backtest`, `save_session` / `get_session`, `log_handoff`, and
 `get_latest_activity`. Requires the `mcp` package (`uv sync`).
 

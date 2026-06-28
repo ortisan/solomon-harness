@@ -12,9 +12,11 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from typing import Dict, List, Optional
 
-from solomon_harness.home import harness_home
+from solomon_harness.home import assigned_memory_port, harness_home
+from solomon_harness.memory import _set_published_port
 
 MEMORY_UP_CMD = "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"
 RUN_CMD = "uv run python -m solomon_harness.cli run 2>/dev/null || true"
@@ -74,17 +76,22 @@ def _merge_session_start_hook(settings_path: str) -> bool:
     return True
 
 
-def _register_mcp(scope_args: List[str], cli: str) -> Optional[bool]:
-    """Best-effort: register the solomon-memory MCP server with a host CLI.
+def _register_mcp(add_args: List[str], cli: str, server: str = "solomon-memory") -> Optional[bool]:
+    """Best-effort: register the MCP server with a host CLI, idempotently.
 
-    Returns True on success, False on failure, None if the CLI is absent. Never
-    raises; the user can register manually if this does not apply.
+    Removes any existing registration first (``mcp add`` refuses to overwrite),
+    then adds. Returns True on success, False on failure, None if the CLI is
+    absent. Never raises; the user can register manually if this does not apply.
     """
     if not shutil.which(cli):
         return None
     try:
+        subprocess.run(
+            [cli, "mcp", "remove", "--scope", "user", server],
+            capture_output=True, text=True, check=False,
+        )
         proc = subprocess.run(
-            [cli, *scope_args],
+            [cli, *add_args],
             capture_output=True,
             text=True,
             check=False,
@@ -129,8 +136,16 @@ def install_global(
         result["home_agents"] = True
     src_compose = os.path.join(source_root, "docker-compose.yml")
     if os.path.isfile(src_compose):
-        shutil.copyfile(src_compose, os.path.join(home_dir, "docker-compose.yml"))
+        with open(src_compose, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Template the auto-assigned host port so the shared backend does not
+        # re-introduce the 8000 collision this whole design exists to avoid.
+        port = assigned_memory_port(home_dir)
+        content = _set_published_port(content, port)
+        with open(os.path.join(home_dir, "docker-compose.yml"), "w", encoding="utf-8") as f:
+            f.write(content)
         result["home_compose"] = True
+        result["memory_port"] = port
 
     # 2. Global Claude subagents + commands (already generated in the package).
     result["claude_agents"] = _copy_dir_contents(
@@ -158,9 +173,11 @@ def install_global(
 
     # 5. Best-effort MCP registration with the host CLIs (user scope).
     if register_mcp:
+        # Use the current interpreter (the venv that has solomon_harness
+        # installed); a bare "python3" usually cannot import the package.
         result["mcp_claude"] = _register_mcp(
             ["mcp", "add", "--scope", "user", "solomon-memory", "--",
-             "python3", "-m", "solomon_harness.mcp_server"],
+             sys.executable, "-m", "solomon_harness.mcp_server"],
             "claude",
         )
 
@@ -170,7 +187,9 @@ def install_global(
 def describe(result: dict) -> str:
     """Human summary of an install_global result."""
     lines = ["Global install:"]
-    lines.append(f"  shared home: agents={result.get('home_agents', False)} compose={result.get('home_compose', False)}")
+    port = result.get("memory_port")
+    port_note = f" (SurrealDB host port {port})" if port else ""
+    lines.append(f"  shared home: agents={result.get('home_agents', False)} compose={result.get('home_compose', False)}{port_note}")
     lines.append(f"  ~/.claude: {len(result.get('claude_agents', []))} agents, {len(result.get('claude_commands', []))} commands")
     lines.append(f"  ~/.gemini: {len(result.get('gemini_commands', []))} commands")
     lines.append(f"  session hook: {'installed' if result.get('hook_installed') else 'already present'}")

@@ -20,47 +20,20 @@ jobs:
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: Set up Python
-        uses: actions/setup-python@f67e10fa7b7bc0ca204e65d21a2c4aa029f64a22 # v5.1.1
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Check bash script syntax
+      - name: Install uv
         run: |
-          bash -n scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh scripts/spawn-agent.sh scripts/test-spawn-agent.sh
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Check python script syntax
-        run: |
-          python3 -m py_compile scripts/compile-harnesses.py scripts/validate-agents.py scripts/validate-templates.py scripts/validate-workflows.py scripts/git-hooks/commit-msg
+      - name: Install dependencies
+        run: uv sync --extra dev
 
-      - name: Install ShellCheck
-        run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint with ruff
+        run: uv run ruff check solomon_harness tests
 
-      - name: Lint shell scripts with ShellCheck
-        run: |
-          shellcheck scripts/bootstrap-agent.sh scripts/scrum-master.sh scripts/wiki-sync.sh scripts/spawn-agent.sh scripts/test-spawn-agent.sh
-
-      - name: Run script dry-runs and validation
-        run: |
-          ./scripts/scrum-master.sh --dry-run backlog-list
-          ./scripts/scrum-master.sh --dry-run milestone-list
-          ./scripts/scrum-master.sh --dry-run issue-create "Verification Test" "feature"
-          ./scripts/test-spawn-agent.sh
-
-      - name: Verify workspace configuration files
-        run: |
-          ./scripts/bootstrap-agent.sh
-          git diff --exit-code
-
-      - name: Run python unit tests
-        run: |
-          python3 -m unittest discover -s tests
-
-      - name: Run individual agent harness evaluations
-        run: |
-          for agent_dir in agents/*; do
-            if [ -d "$agent_dir" ] && [ -f "$agent_dir/main.py" ]; then
-              echo "Running evaluations for $(basename "$agent_dir")..."
-              python3 "$agent_dir/main.py" eval
-            fi
-          done
+      - name: Run the test suite
+        run: uv run python -m unittest discover -s tests

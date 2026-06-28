@@ -75,10 +75,10 @@ solomon-harness memory-down     # stop it
 - **Per-project tenant.** Each project gets its own SurrealDB *database* (the
   tenant), derived from the git remote (e.g. `ortisan-solomon-harness`), inside
   the shared `solomon` namespace. Memory never leaks between projects.
-- **Auto-assigned port.** The backend prefers host port 8000 but, if 8000 is
-  already taken, claims the next free port and records it in
+- **Auto-assigned port.** The backend prefers host port 8099 (8000 is too
+  contended) but, if it is taken, claims the next free port and records it in
   `~/.solomon-harness/memory.json`. The chosen port is written into the compose
-  mapping and each project's config URL, so a busy 8000 never blocks startup.
+  mapping and each project's config URL, so a busy port never blocks startup.
 - **Conflict is safe.** If a non-SurrealDB process already holds the configured
   port, `memory-up` detects it, does *not* run `docker compose up` (which would
   fail to bind), and the client transparently uses SQLite under
@@ -195,14 +195,15 @@ records decisions, sessions, handoffs, issues, milestones, and backtests. It is
 exposed as the `solomon-memory` MCP server (`solomon_harness/mcp_server.py`),
 registered for Claude Code (`.mcp.json`) and the Gemini CLI (`.gemini/settings.json`),
 with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
-`log_issue`/`get_open_issues`/`get_issue`, `create_milestone`, `save_backtest`,
+`log_issue`/`get_open_issues`/`get_issue`, `create_milestone`/`list_milestones`,
+`save_release`/`get_release`/`list_releases`, `save_backtest`,
 `save_session`/`get_session`, `log_handoff`, and `get_latest_activity`.
 
 The SurrealDB backend is a single shared instance per machine, defined in
 `~/.solomon-harness/docker-compose.yml` and managed by `solomon_harness/memory.py`.
 Each project is isolated as its own SurrealDB database (the tenant, derived from
 the git remote by `solomon_harness/home.py`), and the host port is auto-assigned to
-avoid clashing with whatever already holds 8000. See *Shared memory and tenancy*.
+avoid clashing with whatever already holds the preferred port. See *Shared memory and tenancy*.
 
 ### Architecture Decision Records
 
@@ -220,7 +221,11 @@ and domain agents on detected signals), instead of all nineteen.
 
 `solomon_harness/github.py` wraps the `gh` CLI to ensure a Project (v2) board
 exists and move issue cards across the lifecycle columns; `init` creates the board
-for GitHub-hosted projects.
+for GitHub-hosted projects. Each repository gets one board, titled after the
+repository and linked to it. The harness configures the seven lifecycle columns as
+the Status field options, but GitHub's API has no mutation to create or lay out
+views, so switching the default view to a Board grouped by Status is a one-time
+manual step in the project UI (`ensure-board` prints the reminder).
 
 ### Codebase indexing
 

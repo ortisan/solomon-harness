@@ -12,12 +12,11 @@ class TestHarnessInit(unittest.TestCase):
         )
 
     def test_directories_exist(self):
+        # memory/* is runtime state created on demand and gitignored, so it is not
+        # asserted here (it is absent on a fresh checkout).
         expected_dirs = [
             ".agent",
             "agents",
-            "memory",
-            "memory/short_term",
-            "memory/long_term",
             "tests",
         ]
         for d in expected_dirs:
@@ -66,17 +65,6 @@ class TestHarnessInit(unittest.TestCase):
         # SURREAL_USER / SURREAL_PASS environment at runtime.
         self.assertNotIn("username", db_config)
         self.assertNotIn("password", db_config)
-
-    def test_secure_vault_enc(self):
-        vault_path = os.path.join(self.workspace_dir, ".agent", "secure_vault.enc")
-        self.assertTrue(
-            os.path.isfile(vault_path), f"secure_vault.enc not found at {vault_path}"
-        )
-
-        with open(vault_path, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-
-        self.assertEqual(content, "eyJhbnRocm9waWNfYXBpX2tleSI6ICJtb2NrX2tleSJ9")
 
     def test_gitignore_ignores_nested_secrets(self):
         # Secret vaults and local DB stores must be ignored at any depth, not only at

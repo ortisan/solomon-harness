@@ -260,7 +260,9 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     init is non-interactive; the ``non_interactive`` parameter is kept for CLI
     compatibility and has no effect now that pattern prompting was retired.
     """
-    print("=== Solomon Agent Bootstrap ===")
+    from solomon_harness.voice import say
+
+    print(say("bootstrapping the agent workspace"))
 
     # Check prerequisites and install the safe ones (uv) before doing any work.
     try:
