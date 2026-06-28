@@ -76,6 +76,17 @@ def assigned_memory_port(home: Optional[str] = None, preferred: int = DEFAULT_ME
     return port
 
 
+def _clean_git_env() -> dict:
+    """Return the environment with all ``GIT_*`` variables removed.
+
+    Inside a git worktree or a git hook, ``GIT_DIR`` / ``GIT_WORK_TREE`` (and
+    friends) are exported and would redirect a ``git -C <other>`` call back to the
+    enclosing repository. Stripping them makes git resolve the repo from the given
+    working directory, so tenant resolution stays correct in worktrees and hooks.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def _git_remote(workspace_root: str) -> Optional[str]:
     """Return the origin remote URL of the repo, or None."""
     try:
@@ -84,6 +95,7 @@ def _git_remote(workspace_root: str) -> Optional[str]:
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
             text=True,
+            env=_clean_git_env(),
         ).strip()
         return out or None
     except Exception:
