@@ -20,7 +20,10 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    _ConnectionLost,
+)
 
 
 # The exact transport symptom observed in the v0.3.0 incident.
@@ -228,6 +231,53 @@ class TestGetLatestActivityNeverSilentNull(ResilienceTestBase):
         self.assertIsNone(activity, "a genuinely empty store still returns None")
         self.assertEqual(len(reconnect_calls), 0, "a true empty must not reconnect")
         self.assertEqual(client.backend, "surrealdb", "a true empty must not fall back")
+
+
+class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
+    def test_run_surreal_classifies_transport_versus_query_error(self):
+        # _run_surreal converts only a transport fault into _ConnectionLost; a
+        # genuine query/data error is re-raised unchanged so it cannot trigger a
+        # reconnect or a fallback that would mask a real bug.
+        transport = FakeSurreal()
+        transport.always_fail = True
+        client = self._surreal_client(transport)
+        with self.assertRaises(_ConnectionLost):
+            client._run_surreal("SELECT * FROM decisions")
+
+        data_error = FakeSurreal()
+        data_error.query_error = True
+        client.db = data_error
+        with self.assertRaises(Exception) as ctx:
+            client._run_surreal("SELECT * FROM decisions")
+        self.assertNotIsInstance(ctx.exception, _ConnectionLost)
+
+    def test_query_error_does_not_reconnect_or_fall_back(self):
+        fake = FakeSurreal()
+        fake.query_error = True  # not a transport fault
+        client = self._surreal_client(fake)
+
+        reconnect_calls = []
+
+        def fake_reconnect():
+            reconnect_calls.append(1)
+            return True
+
+        client._connect_surreal = fake_reconnect
+
+        # The query error must surface as before (the SurrealDB branch wraps it),
+        # not be swallowed by a reconnect or a fallback.
+        with self.assertRaises(RuntimeError):
+            client.log_decision(
+                title="t",
+                rationale="r",
+                outcome="o",
+                author="po",
+                branch="b",
+                commit_sha="sha",
+            )
+
+        self.assertEqual(len(reconnect_calls), 0, "a query/data error must not reconnect")
+        self.assertEqual(client.backend, "surrealdb", "a query/data error must not fall back")
 
 
 if __name__ == "__main__":
