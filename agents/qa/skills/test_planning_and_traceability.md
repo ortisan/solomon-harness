@@ -33,14 +33,7 @@ Test depth is a budget; spend it where failure costs most. Score each criterion 
 
 ## Test design techniques
 
-Name the technique per criterion; "I tested it" is not a technique. These are the ISO/IEC/IEEE 29119-4 specification-based methods.
-
-- Equivalence partitioning. Split each input domain into classes that the system treats identically; pick one value per valid class and one per invalid class. This is what stops redundant cases from inflating the suite without adding coverage.
-- Boundary value analysis. Test at and immediately around each partition edge. Use three-value BVA (`boundary-1`, `boundary`, `boundary+1`) on high-risk numeric inputs to catch off-by-one; two-value (`boundary`, `boundary+1`) is the lighter variant for medium risk. The concrete boundary set (empty, single, max, zero, negative, None, NaN, inf, overflow, timezone edges) lives in `test_design_rules`; this skill decides which criteria warrant it.
-- Decision tables. For combinational logic (eligibility, pricing, feature gating, permission rules), list conditions as rows and rules as columns. The full rule count is the product of the condition value counts; collapse infeasible combinations and don't-care cells, then require at least one test per surviving rule. Example: 3 boolean conditions = 8 rules; after collapsing two impossible states, 6 tested rules with explicit expected outcomes.
-- State transition testing for stateful flows (order lifecycle, session, retries): cover every valid transition and at least the invalid transitions that must be rejected.
-- Combinatorial / pairwise testing when many independent parameters would explode the matrix. Generate an all-pairs (2-wise) set with a tool such as `allpairspy` or PICT to cover every pair of parameter values in a fraction of the full cross-product, then add back high-risk full combinations by hand.
-- Property-based tests (`hypothesis`) complement these for parsers, math, and invariants, as covered in `test_design_rules`; reference the invariant in the matrix as the verifying artifact.
+Name the technique per criterion; "I tested it" is not a technique. The ISO/IEC/IEEE 29119-4 specification-based methods — equivalence partitioning, boundary value analysis, decision tables, state-transition, pairwise/combinatorial, and property-based — are owned, with their mechanics, worked examples, and the canonical boundary set, by `test_design_rules`. This skill does not re-explain them; it decides which technique each criterion warrants — by the risk band defined in `Risk-based prioritization` above, so a High-band criterion draws the full set at unit and integration while Medium and Low scale down exactly as that map specifies — and records the chosen technique in the matrix so case design is auditable. For parsers, math, and stated invariants, record the `hypothesis` property and its invariant as the verifying artifact. Every technique's definition and code example lives in `test_design_rules`; cite it, do not restate it.
 
 ## The traceability matrix
 
