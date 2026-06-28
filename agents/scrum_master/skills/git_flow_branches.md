@@ -39,15 +39,11 @@ gh issue comment 142 --body "Branch \`feature/walk-forward-backtest\` opened for
 # TDD commits, each body carrying the Refs trailer
 git commit -m "test(backtest): add failing walk-forward split spec
 
-Refs #142
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+Refs #142"
 
 git commit -m "feat(backtest): add walk-forward split
 
-Refs #142
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+Refs #142"
 
 git push -u origin feature/walk-forward-backtest
 

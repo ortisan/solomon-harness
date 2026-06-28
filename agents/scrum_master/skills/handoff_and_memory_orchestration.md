@@ -28,7 +28,7 @@ issue: 142
 boundary: software_engineer -> qa
 contract_type: code
 milestone: 1.4
-branch: feature/142-opa-policy-cache
+branch: feature/opa-policy-cache
 commit_shas: [a1b2c3d, e4f5a6b]
 status: pending
 decision_refs: [ADR-17, ADR-19]
@@ -88,7 +88,7 @@ A rejection is itself a recorded event: log the return handoff (`qa -> software_
 
 Feature #142 reaches the Build -> Verify boundary. The sequence you orchestrate:
 
-1. `software_engineer` commits `.solomon/handoffs/issue-142-software_engineer-to-qa.md` on `feature/142-opa-policy-cache`, with the front matter and entry-gate body above, `status: pending`.
+1. `software_engineer` commits `.solomon/handoffs/issue-142-software_engineer-to-qa.md` on `feature/opa-policy-cache`, with the front matter and entry-gate body above, `status: pending`.
 2. They call `log_handoff(..., status="pending")` pointing at that committed path.
 3. You verify the entry gate: `get_open_issues()` shows no open P0/P1 on milestone 1.4, the artifact's coverage (91%) clears the 85% threshold, and the TDD red/green shas resolve. RAID R-09 is a tracked risk, not a blocker, so it does not hold the gate.
 4. You flip the handoff to `approved` and update the artifact front matter `status: approved` in a commit. QA can now start with everything it needs and nothing to ask.

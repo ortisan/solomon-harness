@@ -21,7 +21,7 @@ Definition of Ready (DoR) and Definition of Done (DoD) are the two bookends you 
 
 ## What each specialist's gate requires
 
-These are the substantive checks behind the matrix. Reject the handoff if the owning specialist's gate is unmet.
+These are the substantive checks behind the matrix — a quick reference. `agents/AGENTS.md` is the source of truth for each specialist's competencies and thresholds; if it diverges from the figures below, confirm against `AGENTS.md`. Reject the handoff if the owning specialist's gate is unmet.
 
 - **Software engineering:** strict TDD (Red, Green, Refactor), SOLID, clear design contracts at component boundaries, and existing docstrings and comments preserved.
 - **QA:** unit and integration tests for every new code path or logic change, all external API calls and services mocked, and explicit tests covering backtesting logic and parameters.
