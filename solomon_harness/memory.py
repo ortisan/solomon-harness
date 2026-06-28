@@ -15,7 +15,10 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from typing import List, Optional, Tuple
+
+from solomon_harness.home import assigned_memory_port, harness_home
 
 DEFAULT_URL = "ws://localhost:8000/rpc"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
@@ -52,12 +55,35 @@ def _host_port(url: str, default_port: int = 8000) -> Tuple[str, int]:
     return authority or "localhost", default_port
 
 
-def is_reachable(host: str, port: int, timeout: float = 0.75) -> bool:
-    """Return True if a TCP connection to host:port succeeds within timeout."""
+def _tcp_open(host: str, port: int, timeout: float = 0.75) -> bool:
+    """Return True if a TCP connection to host:port succeeds within timeout.
+
+    A bare open port is not proof the right service is there: any process can
+    hold the port. Use is_serving to confirm it is actually SurrealDB.
+    """
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
+        return False
+
+
+def is_serving(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Return True only if SurrealDB is actually serving on host:port.
+
+    SurrealDB answers GET /version with its version banner (e.g.
+    ``surrealdb-2.1.0``). A foreign process that merely holds the port (or
+    answers /health) will not, so this is the signal we trust instead of a raw
+    TCP probe.
+    """
+    url = f"http://{host}:{port}/version"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 (local URL)
+            if getattr(resp, "status", 200) != 200:
+                return False
+            body = resp.read(256).decode("utf-8", "ignore")
+            return "surreal" in body.lower()
+    except Exception:
         return False
 
 
@@ -75,6 +101,42 @@ def _compose_command() -> Optional[List[str]]:
     if shutil.which("docker-compose"):
         return ["docker-compose"]
     return None
+
+
+def _packaged_compose() -> Optional[str]:
+    """Path to the docker-compose.yml bundled with this package's repo, or None."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(repo_root, "docker-compose.yml")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def ensure_home_compose() -> Optional[str]:
+    """Ensure the shared home holds a docker-compose.yml; return its path or None.
+
+    The memory backend is shared across all projects on the machine, so its
+    compose file lives once in ``~/.solomon-harness`` rather than in each repo --
+    which is what removes the per-project port collision. The SurrealDB host port
+    is the one assigned for this machine (8000 when free, otherwise the next free
+    port), templated into the published mapping so it never clashes with whatever
+    already holds 8000 on the host.
+    """
+    home = harness_home()
+    dest = os.path.join(home, "docker-compose.yml")
+    if os.path.isfile(dest):
+        return dest
+    src = _packaged_compose()
+    if not src:
+        return None
+    port = assigned_memory_port(home)
+    with open(src, "r", encoding="utf-8") as f:
+        content = f.read()
+    # Only the host side of the SurrealDB mapping changes; the container still
+    # listens on 8000 internally (Surrealist/Spectron reach it by service name).
+    content = content.replace('"8000:8000"', f'"{port}:8000"')
+    os.makedirs(home, exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(content)
+    return dest
 
 
 def ensure_memory_up(
@@ -96,12 +158,26 @@ def ensure_memory_up(
     if host not in LOCAL_HOSTS:
         return {"ok": True, "skipped": f"backend host '{host}' is not local"}
 
-    if is_reachable(host, port):
+    if is_serving(host, port):
         return {"ok": True, "already_running": True}
 
-    compose_file = os.path.join(workspace_root, "docker-compose.yml")
-    if not os.path.isfile(compose_file):
-        return {"ok": False, "error": "docker-compose.yml not found"}
+    # The port is open but it is not SurrealDB: a foreign process holds it.
+    # Starting compose would fail to bind, and the client would silently fall
+    # back to SQLite, so report the conflict instead of pretending it is up.
+    if _tcp_open(host, port):
+        return {
+            "ok": False,
+            "port_conflict": True,
+            "error": (
+                f"port {port} is held by a process that is not SurrealDB; the client "
+                f"will use the SQLite fallback. Free the port (or change the configured "
+                f"URL) and run 'solomon-harness memory-up' again."
+            ),
+        }
+
+    compose_file = ensure_home_compose()
+    if not compose_file:
+        return {"ok": False, "error": "shared docker-compose.yml not found"}
 
     compose = _compose_command()
     if not compose:
@@ -112,7 +188,7 @@ def ensure_memory_up(
 
     proc = subprocess.run(
         [*compose, "-f", compose_file, "up", "-d"],
-        cwd=workspace_root,
+        cwd=os.path.dirname(compose_file),
         capture_output=True,
         text=True,
         check=False,
@@ -120,29 +196,32 @@ def ensure_memory_up(
     if proc.returncode != 0:
         return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
 
-    # Wait briefly for the port so this session connects to SurrealDB rather than
-    # falling back to SQLite while the container is still starting.
+    # Wait for SurrealDB to actually serve (not just for the port to open) so this
+    # session connects to it rather than falling back to SQLite mid-startup.
     waited = 0.0
     while waited < wait_seconds:
-        if is_reachable(host, port):
+        if is_serving(host, port):
             return {"ok": True, "started": True}
         time.sleep(1.0)
         waited += 1.0
-    return {"ok": True, "started": True, "warning": "compose started; not reachable yet"}
+    return {"ok": True, "started": True, "warning": "compose started; SurrealDB not serving yet"}
 
 
 def stop_memory(workspace_root: Optional[str] = None) -> dict:
-    """Stop the memory backend (docker compose down). Best-effort."""
-    workspace_root = workspace_root or os.getcwd()
-    compose_file = os.path.join(workspace_root, "docker-compose.yml")
+    """Stop the shared memory backend (docker compose down). Best-effort.
+
+    The backend is shared across projects, so this stops it for the whole
+    machine, not just one repo.
+    """
+    compose_file = os.path.join(harness_home(), "docker-compose.yml")
     if not os.path.isfile(compose_file):
-        return {"ok": False, "error": "docker-compose.yml not found"}
+        return {"ok": False, "error": "shared docker-compose.yml not found"}
     compose = _compose_command()
     if not compose:
         return {"ok": False, "error": "Docker is unavailable."}
     proc = subprocess.run(
         [*compose, "-f", compose_file, "down"],
-        cwd=workspace_root,
+        cwd=os.path.dirname(compose_file),
         capture_output=True,
         text=True,
         check=False,
@@ -163,6 +242,8 @@ def _describe(result: dict) -> str:
         return "Memory backend stopped."
     if result.get("skipped"):
         return f"Memory backend not managed: {result['skipped']}."
+    if result.get("port_conflict"):
+        return f"Memory backend not started: {result['error']}"
     return result.get("error", "Memory backend: unknown state.")
 
 

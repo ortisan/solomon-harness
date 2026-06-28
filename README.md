@@ -37,7 +37,8 @@ uv pip install -e .     # expose the `solomon-harness` CLI on PATH
 
 From your project directory, run init: it checks prerequisites, copies the harness
 in (agents, the `solomon_harness` package, scripts, config), configures it,
-generates the host-tool integrations, and indexes the codebase.
+generates the host-tool integrations, sets the project's memory tenant, and
+indexes the codebase.
 
 ```bash
 cd /path/to/your/project
@@ -46,16 +47,46 @@ solomon-harness init            # add --non-interactive for defaults
 
 Running it from the harness repo itself configures it in place (no copy).
 
-### Start the memory stack (optional)
+### Share the agents across projects (once per machine)
 
 ```bash
-docker compose up -d
+solomon-harness install-global
 ```
 
-SurrealDB is served at `ws://localhost:8000/rpc` and the Surrealist IDE at
-`http://localhost:3000`. Provide credentials via the `SURREAL_USER` /
-`SURREAL_PASS` environment variables (none are committed). If SurrealDB is not
-reachable, the memory layer transparently uses SQLite under `memory/long_term/`.
+This installs the agents and `/solomon-*` commands into the user-global
+`~/.claude` (and Gemini commands into `~/.gemini`), registers the `solomon-memory`
+MCP server, and sets up the shared memory home in `~/.solomon-harness`. After
+this, every project on the machine uses the same agents with no per-project
+copies; a project carries only its `.agent/config.json` (its tenant).
+
+### Shared memory and tenancy
+
+There is one memory backend per machine, not one per project. The SurrealDB
+stack lives in `~/.solomon-harness/docker-compose.yml` and the harness starts it
+on session start:
+
+```bash
+solomon-harness memory-up       # start the shared backend if it is not running
+solomon-harness memory-down     # stop it
+```
+
+- **One shared instance.** All projects connect to the same SurrealDB, so there
+  is no per-project container fighting over a port.
+- **Per-project tenant.** Each project gets its own SurrealDB *database* (the
+  tenant), derived from the git remote (e.g. `ortisan-solomon-harness`), inside
+  the shared `solomon` namespace. Memory never leaks between projects.
+- **Auto-assigned port.** The backend prefers host port 8000 but, if 8000 is
+  already taken, claims the next free port and records it in
+  `~/.solomon-harness/memory.json`. The chosen port is written into the compose
+  mapping and each project's config URL, so a busy 8000 never blocks startup.
+- **Conflict is safe.** If a non-SurrealDB process already holds the configured
+  port, `memory-up` detects it, does *not* run `docker compose up` (which would
+  fail to bind), and the client transparently uses SQLite under
+  `memory/long_term/` — work is never blocked.
+
+Provide credentials via the `SURREAL_USER` / `SURREAL_PASS` environment variables
+(none are committed); locally they default to `root`/`root`. The Surrealist IDE is
+at `http://localhost:3000`.
 
 ### Run your first workflow
 
@@ -167,6 +198,12 @@ with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
 `log_issue`/`get_open_issues`/`get_issue`, `create_milestone`, `save_backtest`,
 `save_session`/`get_session`, `log_handoff`, and `get_latest_activity`.
 
+The SurrealDB backend is a single shared instance per machine, defined in
+`~/.solomon-harness/docker-compose.yml` and managed by `solomon_harness/memory.py`.
+Each project is isolated as its own SurrealDB database (the tenant, derived from
+the git remote by `solomon_harness/home.py`), and the host port is auto-assigned to
+avoid clashing with whatever already holds 8000. See *Shared memory and tenancy*.
+
 ### Architecture Decision Records
 
 The `start` and `release` workflows evaluate whether a change is architecturally
@@ -228,11 +265,15 @@ AI cliches in all generated output.
 
 | Command | Description |
 | --- | --- |
-| `init [--non-interactive]` | Install into / bootstrap a project: prerequisites, files, config, board, index |
+| `init [--non-interactive]` | Install into / bootstrap a project: prerequisites, files, config, tenant, board, index |
+| `install-global [--no-mcp]` | Install agents + `/solomon-*` commands into `~/.claude`/`~/.gemini`, the MCP server, and the shared memory home |
+| `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
+| `memory-down` | Stop the shared memory backend |
 | `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
 | `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release) |
 | `compile` | Compile agent harnesses and regenerate host-tool integrations |
 | `index` | Index the project codebase into the memory |
+| `wiki` | Refresh the living code-overview wiki page from the index |
 | `run` | Show the resume point (latest activity, open issues) and list the workflows |
 | `db-init` | Initialize the memory store |
 | `eval` | Run the agent evaluation suite |

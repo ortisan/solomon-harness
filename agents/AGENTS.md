@@ -116,11 +116,17 @@ implemented in `solomon_harness/tools/database_client.py`. It records decisions,
 sessions, handoffs, issues, milestones, and backtests, so an agent can see prior
 context and persist what it did. Reach it through the harness:
 
-- The SurrealDB backend runs from `docker-compose.yml`. On session start the
-  Claude Code hook runs `solomon-harness memory-up`, which brings the stack up
-  with `docker compose up -d` only when the configured local backend is not
-  already reachable. It is best-effort: with no Docker daemon the client falls
-  back to SQLite, so work is never blocked. Stop it with `solomon-harness memory-down`.
+- The SurrealDB backend is a single shared instance per machine, defined in
+  `~/.solomon-harness/docker-compose.yml`. On session start the Claude Code hook
+  runs `solomon-harness memory-up`, which starts it with `docker compose up -d`
+  only when it is not already serving. The host port is auto-assigned (8000 when
+  free, else the next free port, recorded in `~/.solomon-harness/memory.json`), so
+  it never collides with another process on 8000. Best-effort: if the port is held
+  by a non-SurrealDB process or there is no Docker daemon, the client falls back to
+  SQLite, so work is never blocked. Stop it with `solomon-harness memory-down`.
+- Each project is a tenant: its memory is its own SurrealDB database (named from
+  the git remote) inside the shared `solomon` namespace, so memory never leaks
+  between projects. `solomon-harness init` sets the tenant in `.agent/config.json`.
 - `python agents/<name>/main.py db-init` initializes the store.
 - `DatabaseClient(harness_dir=...)` reads and writes memory from code.
 - Backend and credentials come from the agent's `.agent/config.json`; SurrealDB
