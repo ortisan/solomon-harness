@@ -51,8 +51,11 @@ Steps:
    - `mcp__solomon-memory__save_decision` — record the product decision (title,
      rationale = the problem and prioritization inputs, outcome = "story created
      and backlogged", author="product_owner").
+   - Write the handoff contract to `.solomon/handoffs/issue-<n>-issue-to-refine.md`
+     using the contract template in the conventions doc (`.solomon/` is gitignored
+     local state).
    - `mcp__solomon-memory__log_handoff` — product_owner → scrum_master, contract
-     "feature-story", contract_path = the issue URL, status="ready_for_refinement".
+     "feature-story", contract_path = that handoff file, status="ready_for_refinement".
 
 8. Output the issue URL and a one-line summary (number, title, priority, area).
    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.

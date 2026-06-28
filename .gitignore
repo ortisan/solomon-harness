@@ -23,3 +23,6 @@ build/
 
 # Encrypted secret vaults, at any depth
 **/.agent/secure_vault.enc
+
+# Local lifecycle state: handoff contract artifacts written between workflow stages
+.solomon/

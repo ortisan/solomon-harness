@@ -58,17 +58,58 @@ stopped. Run `/solomon-loop` to continue from there.
 - Idea: the job-to-be-done, the opportunity, the riskiest assumption to validate,
   and what evidence would justify promoting it to the backlog.
 
-## Memory handoff contract
+## Handoff contracts (bounded context)
 
-Every stage persists to the project memory through the `solomon-memory` MCP tools
-so the next stage (and a future session) can resume:
+To keep each stage's context bounded and avoid re-reading everything, every stage
+transition produces a compact **handoff contract** artifact, and the receiving
+stage reads that contract as its primary input — opening additional files only
+through the pointers the contract gives. This is what prevents context overflow as
+work moves across stages and sessions.
+
+Rules:
+
+- At the end of a stage that hands off, WRITE the contract to
+  `.solomon/handoffs/issue-<N>-<from>-to-<to>.md` (the `.solomon/` directory is
+  gitignored local state), then call
+  `log_handoff(sender, recipient, contract_type, contract_path, status)` with
+  `contract_path` set to that file.
+- At the start of a stage, READ the latest incoming contract first
+  (`get_latest_activity` returns the most recent handoff and its `contract_path`).
+  Treat it as your bounded input; open the artifacts it points to (PLAN.md, the
+  diff, the ADR, the PR) only when you actually need them. Do not re-derive prior
+  context from scratch.
+- The contract is a summary plus pointers, kept short on purpose. The full detail
+  lives in the artifacts it references and in the project memory.
+
+Contract template:
+
+```
+# Handoff: <from-stage> -> <to-stage> · issue #<N>
+- Date: <YYYY-MM-DD> · Author: <agent>
+- Issue: #<N> <url> · Branch: <branch> · PR: #<M> <url> · Board: <column>
+
+## What this stage did
+<2-5 lines>
+
+## Artifacts (open only if needed)
+- PLAN.md · docs/adr/NNNN-*.md · PR #<M> · test plan · ...
+
+## Acceptance criteria status
+<which acceptance criteria are met; what remains>
+
+## Input for the next stage (<to-stage>)
+<exactly what the next stage needs to act — the bounded handoff>
+
+## Open questions / risks
+<anything the next stage must watch>
+```
+
+Each stage also persists the lifecycle facts to the project memory:
 
 - `log_issue(github_id, title, type_, status, milestone_id)` when an issue is created
   or its status changes.
 - `save_decision(title, rationale, outcome, author, branch, commit_sha)` for product,
   design, review, and release decisions (and for every ADR).
-- `log_handoff(sender, recipient, contract_type, contract_path, status)` at each
-  stage boundary (e.g. software_engineer → qa at PR open, qa → sre at approval).
 - `save_session(session_id, agent_name, task, messages)` to checkpoint long work.
 - `get_open_issues` / `get_latest_activity` to resume where the team stopped.
 

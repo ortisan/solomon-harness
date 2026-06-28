@@ -1,7 +1,7 @@
 ---
 description: Start development on a Ready issue: branch, PLAN.md, TDD loop, ADR check, draft PR.
 argument-hint: [issue-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
 ---
 
 Begin implementation of issue **#$ARGUMENTS**. First read `docs/solomon-workflow.md`
@@ -13,6 +13,10 @@ to their subagents via the Task tool: `scrum_master` (branch + board), `software
 Confirm with the user before any push or PR creation. Never push to `develop` or `main`.
 
 ## 1. Load context
+- First read the incoming handoff contract: `mcp__solomon-memory__get_latest_activity` returns the
+  latest `refine -> start` contract and its `contract_path`. Treat that contract as your bounded input
+  and open the artifacts it points to (the refined issue, acceptance criteria) only when you need them,
+  instead of re-deriving prior context.
 - `gh issue view $ARGUMENTS` to read the title, body, acceptance criteria, and labels.
 - `mcp__solomon-memory__get_issue("$ARGUMENTS")` for prior context; check the card is in
   `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
@@ -55,6 +59,9 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
   (`docs/adr/NNNN-<slug>.md`) or state that no ADR was warranted and why.
 - `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "In Review"`.
-- `mcp__solomon-memory__log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path="<pr-url>", status="ready")`.
+- Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
+  using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
+  and how to verify (the test plan). Keep it compact — a summary plus pointers.
+- `mcp__solomon-memory__log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-$ARGUMENTS-start-to-review.md", status="ready")`.
 - `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Implement #$ARGUMENTS", messages=...)` to checkpoint.
 - Report the branch, PR URL, ADR decision, and that qa should run `/solomon-review`.

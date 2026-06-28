@@ -1,7 +1,7 @@
 ---
 description: Run the production readiness review, then merge and release an approved PR (sre).
 argument-hint: [pr-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Bash(scripts/wiki-sync.sh:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Bash(scripts/wiki-sync.sh:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_latest_activity
 ---
 
 Read `docs/solomon-workflow.md` first and follow the Deliver/release stage exactly. Drive this as the **sre** specialist; delegate the production readiness review and release mechanics to the `.claude/agents/sre` subagent via the Task tool, grounded in its `production_readiness_review` and `release_engineering_and_progressive_delivery` skills. This is the `In Review` → `Done` transition.
@@ -9,6 +9,7 @@ Read `docs/solomon-workflow.md` first and follow the Deliver/release stage exact
 PR to release: **$ARGUMENTS** (a PR number). If empty, stop and ask for it.
 
 ## 1. Gather state
+- First read the latest incoming handoff with `mcp__solomon-memory__get_latest_activity` and open its `contract_path` (the review → release contract). Treat it as the bounded input for this release; open the artifacts it points to (PLAN.md, the diff, the ADR, the PR) only when needed instead of re-deriving prior context.
 - `gh pr view $ARGUMENTS --json number,title,state,mergeable,reviewDecision,headRefName,baseRefName,body,statusCheckRollup` — confirm it is open, `APPROVED`, mergeable, and that required checks are green. If review is not approved or checks fail, stop and report; do not proceed to merge.
 - Read the linked issue from the PR body (`Closes #<issue>`) and `gh issue view <issue>`.
 - Confirm the board exists with `uv run python -m solomon_harness.github ensure-board`.
@@ -37,7 +38,8 @@ Summarize the PRR verdict, the version bump, and the changelog entry, then **ask
 - Move the card: `uv run python -m solomon_harness.github set-status --issue <issue> --status "Done"`.
 - Sync docs to the wiki: `scripts/wiki-sync.sh`.
 - `mcp__solomon-memory__save_decision` for the release: title `Release vX.Y.Z`, the PRR verdict and conditions, outcome, author `sre`, the `develop` branch, and the merge commit SHA.
-- `mcp__solomon-memory__log_handoff(sender="sre", recipient="done", contract_type="release", contract_path="<PR or release URL>", status="completed")`.
+- Write the compact release → done handoff contract to `.solomon/handoffs/issue-<issue>-release-to-done.md` using the template in `docs/solomon-workflow.md` (release notes, the version/tag, what shipped, and any GO-WITH-CONDITIONS follow-ups).
+- `mcp__solomon-memory__log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/issue-<issue>-release-to-done.md", status="completed")`.
 - `mcp__solomon-memory__save_session` to checkpoint the PRR baseline for the next release.
 
 Report the released version, the merge commit, the board move, and any GO-WITH-CONDITIONS follow-ups.

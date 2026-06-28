@@ -1,7 +1,7 @@
 ---
 description: Review a pull request through QA, security, and architecture gates, then approve or request changes
 argument-hint: [pr-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
 ---
 
 You are running the Review stage of the solomon lifecycle for PR #$ARGUMENTS.
@@ -17,9 +17,13 @@ subagents); do not review with a single generic pass.
   linked issue. Identify the issue number from the `Closes #<issue>` line.
 - Check the board card is `In Review`; if not, `uv run python -m solomon_harness.github ensure-board`
   then `uv run python -m solomon_harness.github set-status --issue <issue> --status "In Review"`.
-- Pull prior context: `mcp__solomon-memory__get_latest_activity` and
-  `mcp__solomon-memory__get_open_issues` for known debt and the design this change
-  claims to implement (link any ADR referenced in the PR body).
+- Pull prior context: `mcp__solomon-memory__get_latest_activity` first — read the
+  latest incoming handoff contract at its `contract_path` (the start -> review
+  contract) and treat it as the bounded input, reviewing the diff through the
+  pointers it gives (PLAN.md, the diff, the ADR, the PR) only as needed instead of
+  re-deriving the whole context. Then `mcp__solomon-memory__get_open_issues` for known
+  debt and the design this change claims to implement (link any ADR referenced in the
+  PR body).
 
 ## 2. Run the three lenses (delegate, in parallel where possible)
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
@@ -50,8 +54,12 @@ Each lens returns findings tagged blocker, major, or minor.
 ## 5. Persist to memory
 - `mcp__solomon-memory__save_decision` with the review outcome (title, rationale,
   outcome go/no-go, author, branch, commit_sha) in ADR shape.
-- On approval only: `mcp__solomon-memory__log_handoff(sender="qa", recipient="sre",
-  contract_type="release-candidate", contract_path="PR #$ARGUMENTS", status="approved")`
+- On approval only: write the compact review -> release handoff contract to
+  `.solomon/handoffs/issue-<issue>-review-to-release.md` using the template in
+  `docs/solomon-workflow.md` (go/no-go verdict, findings, what to release), then
+  `mcp__solomon-memory__log_handoff(sender="qa", recipient="sre",
+  contract_type="release-candidate",
+  contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="approved")`
   so the Release stage can resume.
 - `mcp__solomon-memory__save_session` capturing what was reviewed, the verdict, and
   the linked decision and issue IDs.

@@ -1,7 +1,7 @@
 ---
 description: File a structured bug report, label and prioritize it, place it on the board Backlog, and record it in memory.
 argument-hint: <bug description, with repro steps / env / severity if known>
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
 ---
 
 You are running the `/solomon-bug` stage. Read
@@ -45,7 +45,10 @@ Steps:
    `uv run python -m solomon_harness.github set-status --issue <n> --status "Backlog"`.
 7. Persist to memory per the handoff contract:
    - `log_issue(github_id=<n>, title=<title>, type_="bug", status="Backlog", milestone_id=null)`.
-   - `log_handoff(sender="qa", recipient="software_engineer", contract_type="bug_report", contract_path="<issue URL>", status="open")` to hand the defect to implementation.
+   - Write the compact handoff contract to `.solomon/handoffs/issue-<n>-bug-to-refine.md`
+     using the template in `docs/solomon-workflow.md` (a summary plus pointers to the
+     issue and its repro/severity), so `/solomon-refine` reads it as its bounded input.
+   - `log_handoff(sender="qa", recipient="software_engineer", contract_type="bug_report", contract_path=".solomon/handoffs/issue-<n>-bug-to-refine.md", status="open")` to hand the defect to implementation.
    - `save_session(...)` to checkpoint if triage required substantial subagent work.
 8. Report back the issue URL, the assigned priority, and a one-line reminder that
    the regression test is the close gate.

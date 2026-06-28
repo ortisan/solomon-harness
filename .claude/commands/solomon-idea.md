@@ -1,7 +1,7 @@
 ---
 description: Capture a product idea as a discovery item — JTBD, opportunity, riskiest assumption — and file it in the Ideas column
 argument-hint: <short description of the idea>
-allowed-tools: Bash(gh:*), Bash(uv run:*), Task, Read, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision
+allowed-tools: Bash(gh:*), Bash(uv run:*), Task, Write, Read, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff
 ---
 
 You are running `/solomon-idea`, the discovery-intake stage. This captures an
@@ -52,6 +52,11 @@ If `$ARGUMENTS` is empty, ask the user for the idea in one line and stop.
      milestone_id=null)`.
    - `save_decision(...)` only if a notable framing call was made (e.g. the chosen
      core job or the named riskiest assumption); otherwise skip.
+   - **Hand off to refine.** Write the compact handoff contract to
+     `.solomon/handoffs/issue-<n>-idea-to-refine.md` using the template in
+     `docs/solomon-workflow.md`, then call `log_handoff(sender="product_owner",
+     recipient="refine", contract_type="idea",
+     contract_path=".solomon/handoffs/issue-<n>-idea-to-refine.md", status="ready")`.
 
 6. **Output the issue URL** and a one-line recap (JTBD + riskiest assumption).
    State explicitly that no implementation was planned and that promotion to the
