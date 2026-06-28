@@ -126,6 +126,41 @@ Each stage also persists the lifecycle facts to the project memory:
 - `save_session(session_id, agent_name, task, messages)` to checkpoint long work.
 - `get_open_issues` / `get_latest_activity` to resume where the team stopped.
 
+## Single-driver lock and the loop run-log
+
+Loop engineering turns the harness into a system that can advance work on a
+cadence, so two drivers must never act on one repository at once. A documented
+incident — two concurrent `/solomon-loop` drivers — produced premature merges
+that bypassed the review gate and flipped `core.bare=true` on a worktree. The
+safety floor prevents that by construction:
+
+- **Single-driver lock.** Before a mutating stage runs (`loop`, `start`,
+  `review`, `release`), the headless runner acquires one advisory lock anchored
+  at the git *common* directory (`<common>/solomon-loop.lock`), so every linked
+  worktree of the repository contends on the same file. A second driver is
+  refused. The lock is a plain JSON file (the holder is auditable), and a stale
+  lock — heartbeat older than the TTL, or a dead pid on the same host — is
+  reclaimed automatically. Implementation: `solomon_harness/loop_lock.py`; the
+  portable gate lives in `run_stage` so it enforces on both Claude Code and the
+  Gemini CLI.
+- **PreToolUse guard (Claude Code only).** A `loop-guard` hook in
+  `.claude/settings.json` blocks `git push` / `gh pr merge` while another live
+  driver holds the lock. It is defense-in-depth on top of the portable gate and
+  fails open — the run_stage gate, not the hook, is the enforcement of record.
+- **Recovery.** `solomon-harness loop-lock status` shows the current holder and
+  whether it is stale; `solomon-harness loop-lock release` clears a stuck lock
+  after a crash.
+- **Run-log.** Each driven stage appends one entry to the `loop_runs` ledger in
+  the project memory (the single source of truth). `solomon-harness log` renders
+  a read-only, chronological feed over loop runs, decisions and handoffs, so the
+  loop's own decisions are auditable. The concurrent-driver guard is the
+  lockfile, never a row count — under the SQLite fallback each worktree has its
+  own database, so a cross-worktree count would be invisible.
+
+Human approval before any merge or release is unchanged: the lock bounds *who*
+may drive, not *whether* a human approves. See `docs/loop-engineering.md` for the
+full adaptation roadmap.
+
 ## ADR trigger
 
 `/solomon-start` and `/solomon-release` must evaluate whether the change is

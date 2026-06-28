@@ -190,7 +190,8 @@ class DatabaseClient:
                         "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
                         "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
                         "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;"
+                        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
+                        "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;"
                     )
                     self.db.query(init_query)
                     self.backend = "surrealdb"
@@ -359,6 +360,17 @@ class DatabaseClient:
                 milestone_id TEXT,
                 commit_sha TEXT,
                 released_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS loop_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT,
+                target TEXT,
+                decision TEXT,
+                status TEXT,
+                session_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
         ]
@@ -1364,6 +1376,130 @@ class DatabaseClient:
                 "contract_path": latest_handoff.get("contract_path"),
                 "timestamp": latest_handoff.get("timestamp"),
             }
+
+    def save_loop_run(
+        self,
+        stage: str,
+        target: str,
+        decision: str,
+        status: str,
+        session_id: str,
+    ) -> Union[str, int, None]:
+        """Append one loop-run entry to the auditable ledger.
+
+        Each driven stage records what it advanced and the outcome, so the loop's
+        own decisions become an auditable trail. The concurrent-driver guard is
+        the lockfile, not this ledger, because under the SQLite fallback each
+        worktree gets a separate database and a cross-worktree count would be
+        invisible.
+        """
+        if self.backend == "surrealdb":
+            query = """
+            INSERT INTO loop_runs {
+                stage: $stage,
+                target: $target,
+                decision: $decision,
+                status: $status,
+                session_id: $session_id,
+                created_at: time::now()
+            }
+            """
+            params = {
+                "stage": stage,
+                "target": target,
+                "decision": decision,
+                "status": status,
+                "session_id": session_id,
+            }
+            try:
+                res = self.db.query(query, params)
+                return self._extract_id(res)
+            except Exception as e:
+                logging.error(f"Failed to save loop run in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to save loop run in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO loop_runs (stage, target, decision, status, session_id)
+            VALUES (?, ?, ?, ?, ?)
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, (stage, target, decision, status, session_id))
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to save loop run: {e}")
+                raise RuntimeError(f"Failed to save loop run: {e}")
+
+    def list_loop_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """List loop runs, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    f"SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT {int(limit)}"
+                )
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list loop runs from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list loop runs from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM loop_runs ORDER BY id DESC LIMIT ?", (int(limit),)
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list loop runs: {e}")
+                raise RuntimeError(f"Failed to list loop runs: {e}")
+
+    def list_decisions(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """List logged decisions, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    f"SELECT * FROM decisions ORDER BY created_at DESC LIMIT {int(limit)}"
+                )
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list decisions from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list decisions from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (int(limit),)
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list decisions: {e}")
+                raise RuntimeError(f"Failed to list decisions: {e}")
+
+    def list_handoffs(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """List handoff log entries, most recent first."""
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query(
+                    f"SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT {int(limit)}"
+                )
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list handoffs from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list handoffs from SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM handoffs ORDER BY id DESC LIMIT ?", (int(limit),)
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list handoffs: {e}")
+                raise RuntimeError(f"Failed to list handoffs: {e}")
 
     def close(self) -> None:
         """Closes the database client and any open connections."""

@@ -163,6 +163,88 @@ def handle_run(harness_dir: str, task=None) -> None:
             print(f"  {name:<21} {desc}")
         print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
 
+
+def handle_loop_lock(workspace_root: str, action: str) -> None:
+    """Inspect or clear the single-driver loop lock (recovery after a crash)."""
+    from solomon_harness.loop_lock import LoopLock
+
+    lock = LoopLock(workspace_root)
+    info = lock.read()
+
+    if action == "status":
+        if not info:
+            print(f"No loop lock held. ({lock.path})")
+            return
+        state = "STALE (reclaimable)" if lock.is_stale(info) else "live"
+        print(f"Loop lock: {lock.path}")
+        print(f"  session:   {info.get('session_id')}  pid: {info.get('pid')}  host: {info.get('host')}")
+        print(f"  stage:     {info.get('stage')}")
+        print(f"  acquired:  {info.get('acquired_at')}")
+        print(f"  heartbeat: {info.get('heartbeat_at')}")
+        print(f"  state:     {state}")
+        return
+
+    # release: force-remove for recovery, warning if a live foreign driver owns it.
+    if not info:
+        print("No loop lock to release.")
+        return
+    if info.get("session_id") != lock.session_id and not lock.is_stale(info):
+        print(
+            f"Warning: lock is held by a live driver (session {info.get('session_id')}, "
+            f"pid {info.get('pid')}). Removing anyway.",
+            file=sys.stderr,
+        )
+    try:
+        os.remove(lock.path)
+        print(f"Released loop lock at {lock.path}")
+    except FileNotFoundError:
+        print("No loop lock to release.")
+
+
+def handle_loop_guard(workspace_root: str) -> None:
+    """PreToolUse hook: block git push / gh pr merge under a live foreign lock.
+
+    Reads the Claude Code hook payload from stdin. Exits 2 to block (the message
+    is fed back to the model), 0 to allow. Fail-open: any error allows the tool,
+    because the portable enforcement is the run_stage gate, not this hook.
+    """
+    import json as _json
+
+    try:
+        raw = sys.stdin.read()
+        payload = _json.loads(raw) if raw.strip() else {}
+    except Exception:
+        sys.exit(0)
+
+    try:
+        from solomon_harness.loop_lock import LoopLock, guard_verdict
+
+        lock = LoopLock(workspace_root, session_id=payload.get("session_id"))
+        block, reason = guard_verdict(payload, lock)
+    except Exception:
+        sys.exit(0)
+
+    if block:
+        print(reason, file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0)
+
+
+def handle_log(workspace_root: str, last: int) -> None:
+    """Print the read-only loop activity feed over the project memory."""
+    from solomon_harness import loop_log
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    try:
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            entries = loop_log.gather_feed(db, last=last)
+    except Exception as e:
+        print(f"Error: could not read loop activity: {e}", file=sys.stderr)
+        sys.exit(1)
+    for line in loop_log.format_feed(entries):
+        print(line)
+
+
 def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
     """Parser setup and command dispatching.
 
@@ -204,6 +286,24 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
 
     subparsers.add_parser("healthcheck", help="Report runtime readiness and pending init items (Docker, memory, board, global install)")
+
+    loop_lock_parser = subparsers.add_parser(
+        "loop-lock", help="Inspect or clear the single-driver loop lock"
+    )
+    loop_lock_parser.add_argument(
+        "action", choices=["status", "release"], nargs="?", default="status",
+        help="status (default) shows the holder; release clears a stale or stuck lock",
+    )
+
+    log_parser = subparsers.add_parser(
+        "log", help="Show the loop activity feed (loop runs, decisions, handoffs)"
+    )
+    log_parser.add_argument("--last", type=int, default=20, help="How many recent entries to show")
+
+    subparsers.add_parser(
+        "loop-guard",
+        help="PreToolUse hook: block push/merge while another driver holds the loop lock (reads the hook payload on stdin)",
+    )
 
     dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
@@ -257,6 +357,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         checks = run_checks(workspace_root)
         print(format_report(checks))
         sys.exit(1 if any(c["status"] == "fail" for c in checks) else 0)
+    elif args.command == "loop-lock":
+        handle_loop_lock(workspace_root, args.action)
+    elif args.command == "loop-guard":
+        handle_loop_guard(workspace_root)
+    elif args.command == "log":
+        handle_log(workspace_root, args.last)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
         sys.exit(run_stage(workspace_root, args.stage, args.dev_args))

@@ -4,6 +4,8 @@ import unittest
 from unittest.mock import patch
 
 from solomon_harness import workflows
+from solomon_harness import loop_lock
+from solomon_harness.loop_lock import LoopLock
 
 
 def _workspace_with_command(stage: str, body: str) -> str:
@@ -50,6 +52,48 @@ class TestWorkflows(unittest.TestCase):
         args, kwargs = mock_run.call_args
         self.assertEqual(args[0], ["claude", "-p"])
         self.assertIn("Do work on 42", kwargs["input"])
+
+
+class TestRunStageDriverLock(unittest.TestCase):
+    """The portable single-driver gate lives in run_stage (both hosts run it)."""
+
+    def _foreign_live_lock(self, root):
+        # A live foreign lock: different session, this process's (alive) pid.
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="foreign-driver", pid=os.getpid()).acquire()
+        return path
+
+    def test_mutating_stage_is_blocked_when_a_foreign_lock_is_held(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+        self._foreign_live_lock(root)
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 1)
+        mock_run.assert_not_called()  # never reach the engine while another driver holds the lock
+
+    def test_mutating_stage_acquires_and_releases_the_lock(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        # The lock is released after the stage completes.
+        self.assertFalse(os.path.exists(loop_lock.resolve_lock_path(root)))
+
+    def test_non_mutating_stage_ignores_the_lock(self):
+        root = _workspace_with_command("idea", "---\nx\n---\nCapture $ARGUMENTS")
+        self._foreign_live_lock(root)
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
+        self.assertEqual(rc, 0)
+        mock_run.assert_called_once()  # idea creates no branch/merge, so it is not gated
 
 
 if __name__ == "__main__":
