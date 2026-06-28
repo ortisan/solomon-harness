@@ -23,15 +23,27 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 
-## 2. Branch and move to In Progress (scrum_master)
+## 2. Worktree and move to In Progress (scrum_master)
 - The branch follows Git Flow and reflects the task: `feature/<slug>` (or
   `bugfix/<slug>` for `type:bug`), where `<slug>` is the kebab-cased issue title
   (trim to ~6 words). The branch name carries NO issue number — keep it clean; the branch
   maps back to the issue via the back-link comment and the `Refs #` / `Closes #` trailers.
-  Confirm the name with the user, then:
-  `git fetch origin && git switch develop && git pull && git switch -c feature/<slug>`.
+  Confirm the name with the user.
+- Create the branch in its own **isolated git worktree** instead of switching the current
+  checkout, so the main checkout and any other in-flight issue stay untouched (a dirty tree
+  never blocks a start, and several issues can be in flight at once):
+  ```
+  git fetch origin
+  uv run python -m solomon_harness.cli worktree feature/<slug> --base develop
+  ```
+  Use `--base main` when the repository has no `develop` branch. The helper is idempotent
+  (re-running reuses the existing worktree) and prints the absolute worktree path; on a
+  conflicting path, or a branch already checked out elsewhere, it stops with a clear message
+  and changes nothing. `cd` into the printed path and run the rest of this workflow
+  (PLAN.md, ADR, TDD, commits, PR) from inside that worktree. The worktree lives at the
+  sibling path `<repo>-worktrees/feature-<slug>` documented in `docs/solomon-workflow.md`.
 - Bidirectional link: comment the branch onto the issue —
-  `gh issue comment $ARGUMENTS --body "Started on branch \`feature/<slug>\`."` —
+  `gh issue comment $ARGUMENTS --body "Started on branch \`feature/<slug>\` in a dedicated worktree."` —
   so the issue points to the branch and the branch name points back to the issue.
 - `uv run python -m solomon_harness.github ensure-board` (idempotent), then
   `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "In Progress"`.

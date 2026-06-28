@@ -57,7 +57,16 @@ choices keep the user's context focused and prevent dispersion.
   `hotfix/<version>` for production-critical fixes. The branch name carries NO issue
   number (kept deliberately clean); `<slug>` is the kebab-cased issue title. The issue
   is linked instead by the back-link comment and the `Refs #`/`Closes #` trailers.
-  Branch from `develop`.
+  Branch from `develop` (or `main` when the repository has no `develop`).
+- Worktrees: `/solomon-start` creates each issue's branch in its own isolated git
+  worktree rather than switching the primary checkout, so a dirty checkout never blocks
+  a start and several issues can be in flight at once. The worktree lives at a sibling
+  path beside the repo — `<parent>/<repo>-worktrees/<branch with '/' as '-'>`, e.g.
+  `../solomon-harness-worktrees/feature-add-csv-export` — never nested inside the repo,
+  so recursive tooling (test collection, IDE indexers) does not double-traverse it.
+  Creation is idempotent; a conflicting path or a branch already checked out elsewhere is
+  reported, never forced. Removal on merge/release is manual for now
+  (`git worktree remove <path>`). The helper is `solomon-harness worktree <branch> [--base <ref>]`.
 - Commits: Conventional Commits, no emojis (the commit-msg hook enforces this).
 - Pull requests: conventional title, body that contains `Closes #<issue>`, opened
   as a draft until `/solomon-review` approves. Link the ADR if one was written.

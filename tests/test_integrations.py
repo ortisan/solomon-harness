@@ -133,5 +133,20 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
         mock_gen.assert_called_once()
 
 
+class TestStartWorktree(unittest.TestCase):
+    def test_start_command_creates_worktree_instead_of_switching(self):
+        body = _read(os.path.join(".claude", "commands", "solomon-start.md"))
+        self.assertIn("solomon_harness.cli worktree", body)
+        self.assertNotIn("git switch -c", body)
+
+    def test_workflow_doc_documents_worktree_location(self):
+        doc = _read(os.path.join("docs", "solomon-workflow.md"))
+        self.assertIn("-worktrees", doc)
+
+    def test_gemini_start_mirror_includes_worktree_call(self):
+        toml = _read(os.path.join(".gemini", "commands", "solomon-start.toml"))
+        self.assertIn("solomon_harness.cli worktree", toml)
+
+
 if __name__ == "__main__":
     unittest.main()
