@@ -250,9 +250,17 @@ class DatabaseClient:
         # Initialize SQLite if backend is sqlite
         if self.backend == "sqlite":
             if self.db_path is None:
-                db_dir: str = os.path.join(project_root, "memory", "long_term")
-                os.makedirs(db_dir, exist_ok=True)
-                self.db_path = os.path.join(db_dir, "harness.db")
+                # HARNESS_DB_PATH lets tests (and ad-hoc runs) redirect the SQLite
+                # store to a temp file so the real project memory is never touched
+                # (issue #24). Falls back to the per-project memory dir.
+                env_db = os.environ.get("HARNESS_DB_PATH")
+                if env_db:
+                    os.makedirs(os.path.dirname(os.path.abspath(env_db)), exist_ok=True)
+                    self.db_path = env_db
+                else:
+                    db_dir: str = os.path.join(project_root, "memory", "long_term")
+                    os.makedirs(db_dir, exist_ok=True)
+                    self.db_path = os.path.join(db_dir, "harness.db")
             self._init_sqlite_db()
 
     @contextmanager
