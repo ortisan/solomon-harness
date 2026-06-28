@@ -33,13 +33,7 @@ Test depth is a budget; spend it where failure costs most. Score each criterion 
 
 ## Test design techniques
 
-Name the technique per criterion; "I tested it" is not a technique. The ISO/IEC/IEEE 29119-4 specification-based methods — equivalence partitioning, boundary value analysis, decision tables, state-transition, pairwise/combinatorial, and property-based — are owned, with their mechanics, worked examples, and the canonical boundary set, by `test_design_rules`. This skill does not re-explain them; it decides, per the risk band above, which technique each criterion warrants and records that choice in the matrix so case design is auditable:
-
-- High band: the full set (equivalence + boundary + decision table, plus state-transition or pairwise where the logic is stateful or multi-parameter) at unit and integration.
-- Medium band: equivalence partitions plus boundaries at one level.
-- Low band: a single representative case.
-
-For parsers, math, and stated invariants, record the `hypothesis` property and its invariant as the verifying artifact in the matrix. Every technique's definition and code example lives in `test_design_rules`; cite it, do not restate it.
+Name the technique per criterion; "I tested it" is not a technique. The ISO/IEC/IEEE 29119-4 specification-based methods — equivalence partitioning, boundary value analysis, decision tables, state-transition, pairwise/combinatorial, and property-based — are owned, with their mechanics, worked examples, and the canonical boundary set, by `test_design_rules`. This skill does not re-explain them; it decides which technique each criterion warrants — by the risk band defined in `Risk-based prioritization` above, so a High-band criterion draws the full set at unit and integration while Medium and Low scale down exactly as that map specifies — and records the chosen technique in the matrix so case design is auditable. For parsers, math, and stated invariants, record the `hypothesis` property and its invariant as the verifying artifact. Every technique's definition and code example lives in `test_design_rules`; cite it, do not restate it.
 
 ## The traceability matrix
 

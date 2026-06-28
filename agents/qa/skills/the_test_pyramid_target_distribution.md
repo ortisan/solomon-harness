@@ -10,9 +10,9 @@ Treat the percentages as a band, not a target to hit exactly. A parser-heavy lib
 
 ## Anti-patterns: ice-cream cone and hourglass
 
-Two broken shapes recur, both named by Alister Scott:
+Two broken shapes recur:
 
-- Ice-cream cone (inverted pyramid): most tests are E2E or manual, few are unit. Every logic change is verified by driving the whole system, so the suite is slow (minutes per test), flaky (network, timing, shared state), and gives a stack trace that points at "checkout failed" instead of the function that broke. CI wall-clock balloons, retries creep in to get green, and the gate loses credibility.
+- Ice-cream cone (inverted pyramid, a term popularized by Alister Scott): most tests are E2E or manual, few are unit. Every logic change is verified by driving the whole system, so the suite is slow (minutes per test), flaky (network, timing, shared state), and gives a stack trace that points at "checkout failed" instead of the function that broke. CI wall-clock balloons, retries creep in to get green, and the gate loses credibility.
 - Hourglass: a fat unit base and a fat E2E cap with almost no integration middle. Units pass because collaborators are mocked, E2E sometimes passes, but the seams the mocks stand in for, the SQL the ORM actually emits, the serializer, the real HTTP contract, are never exercised by a fast test. Integration faults surface only at the expensive E2E layer or in production. The fix is to move seam coverage down into Testcontainers-backed integration tests (`integration_and_e2e_testing`), not to add more E2E.
 
 Both are slow and flaky for the same root reason: work that a millisecond unit test or a few-second integration test should do is being done by a multi-second E2E test that touches a network, a browser, and shared state.
