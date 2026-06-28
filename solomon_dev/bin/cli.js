@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 
@@ -113,12 +114,133 @@ function checkDependency(cmd, name) {
   }
 }
 
-function initProject() {
+function commandExists(cmd) {
+  const probe = process.platform === 'win32' ? `where ${cmd}` : `command -v ${cmd}`;
+  try {
+    execSync(probe, { stdio: 'ignore', shell: process.platform === 'win32' ? undefined : '/bin/sh' });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function pythonOk() {
+  for (const c of ['python3', 'python']) {
+    try {
+      const out = execSync(`${c} --version`, { encoding: 'utf8' }).trim();
+      const m = out.match(/(\d+)\.(\d+)/);
+      if (m && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 10))) return true;
+    } catch (e) {}
+  }
+  return false;
+}
+
+function ensureUvOnPath() {
+  const dirs = [path.join(os.homedir(), '.local', 'bin'), path.join(os.homedir(), '.cargo', 'bin')];
+  for (const dir of dirs) {
+    if (fs.existsSync(path.join(dir, 'uv')) || fs.existsSync(path.join(dir, 'uv.exe'))) {
+      if (!(process.env.PATH || '').split(path.delimiter).includes(dir)) {
+        process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ''}`;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function installUv() {
+  console.log(blue('  Installing uv (user-local, no sudo)...'));
+  try {
+    if (process.platform === 'win32') {
+      execSync('powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"', { stdio: 'inherit' });
+    } else {
+      execSync('curl -LsSf https://astral.sh/uv/install.sh | sh', { stdio: 'inherit', shell: '/bin/sh' });
+    }
+  } catch (e) {
+    console.log(yellow(`  Could not auto-install uv: ${e.message}`));
+  }
+  ensureUvOnPath();
+  return commandExists('uv');
+}
+
+const INSTALL_HINTS = {
+  gh: { darwin: 'brew install gh', linux: 'https://github.com/cli/cli#installation', win32: 'winget install --id GitHub.cli' },
+  docker: { all: 'https://docs.docker.com/get-docker/' },
+  python: { darwin: 'brew install python', linux: 'sudo apt-get install -y python3', win32: 'https://www.python.org/downloads/' },
+  host: { all: 'npm i -g @anthropic-ai/claude-code   (or install the Gemini CLI)' },
+};
+
+function hint(key) {
+  const h = INSTALL_HINTS[key];
+  return h[process.platform] || h.all || 'see the project README';
+}
+
+// Checks the prerequisites and auto-installs the ones that are safe to install
+// without sudo (uv). For the rest it prints the exact per-platform command,
+// because installing them needs a package manager or elevated privileges.
+function checkPrerequisites(options = {}) {
+  const autoInstall = options.autoInstall !== false;
+  console.log(bold(blue('Checking prerequisites...')));
+  let missingRequired = 0;
+
+  if (pythonOk()) {
+    console.log(`${green('✓')} Python 3.10+`);
+  } else {
+    console.log(`${red('✗')} Python 3.10+ (required)  ->  ${hint('python')}`);
+    missingRequired++;
+  }
+
+  if (commandExists('uv')) {
+    console.log(`${green('✓')} uv`);
+  } else if (autoInstall && installUv()) {
+    console.log(`${green('✓')} uv (installed)`);
+  } else {
+    console.log(`${red('✗')} uv (required)  ->  curl -LsSf https://astral.sh/uv/install.sh | sh`);
+    missingRequired++;
+  }
+
+  if (commandExists('git')) {
+    console.log(`${green('✓')} git`);
+  } else {
+    console.log(`${red('✗')} git (required)  ->  install git for your platform`);
+    missingRequired++;
+  }
+
+  if (commandExists('gh')) {
+    console.log(`${green('✓')} GitHub CLI (gh)`);
+  } else {
+    console.log(`${yellow('!')} GitHub CLI (gh) - needed for the delivery workflows  ->  ${hint('gh')}`);
+  }
+
+  if (commandExists('claude') || commandExists('gemini')) {
+    console.log(`${green('✓')} host tool (claude or gemini)`);
+  } else {
+    console.log(`${yellow('!')} host tool - install Claude Code or the Gemini CLI  ->  ${hint('host')}`);
+  }
+
+  if (commandExists('docker')) {
+    console.log(`${green('✓')} Docker (optional)`);
+  } else {
+    console.log(`${yellow('!')} Docker (optional; SQLite fallback works without it)  ->  ${hint('docker')}`);
+  }
+
+  if (missingRequired > 0) {
+    console.log(yellow(`\n  ${missingRequired} required prerequisite(s) still missing - install them and re-run.\n`));
+  } else {
+    console.log(green('  All required prerequisites are present.\n'));
+  }
+  return missingRequired === 0;
+}
+
+function initProject(options = {}) {
   const destDir = process.cwd();
   const pkgDir = path.join(__dirname, '..');
   const templatesSrc = path.join(pkgDir, 'templates');
 
   console.log(blue(`Initializing solomon-harness in: ${destDir}\n`));
+
+  // 0. Prerequisites: check, and auto-install the ones that are safe to install.
+  checkPrerequisites({ autoInstall: options.autoInstall !== false });
 
   // 1. Check template source exists (run sync if missing during local development)
   if (!fs.existsSync(templatesSrc)) {
@@ -353,19 +475,25 @@ function runWorkflow(stage, args) {
 
 function printUsage() {
   console.log('Usage:');
-  console.log('  solomon-dev init                 Install the harness into this project');
+  console.log('  solomon-dev init [--no-install]   Install the harness into this project');
+  console.log('  solomon-dev doctor [--no-install] Check (and install) prerequisites');
   console.log('  solomon-dev <stage> [args]       Run a delivery workflow headlessly');
   console.log(`  stages: ${STAGES.join(', ')}`);
   console.log('  engine: set SOLOMON_ENGINE=claude|gemini (default claude)');
+  console.log('  --no-install: only report missing prerequisites, do not install');
 }
 
 function main() {
   const args = process.argv.slice(2);
   const command = args[0] || 'init';
+  const autoInstall = !args.includes('--no-install');
 
   if (command === 'init') {
     printBanner();
-    initProject();
+    initProject({ autoInstall });
+  } else if (command === 'doctor') {
+    printBanner();
+    checkPrerequisites({ autoInstall });
   } else if (STAGES.includes(command)) {
     runWorkflow(command, args.slice(1));
   } else if (command === 'help' || command === '--help' || command === '-h') {
