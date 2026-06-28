@@ -81,11 +81,23 @@ class TestLoopLock(unittest.TestCase):
         self._lock("b").release()
         self.assertEqual(self._lock("z").read()["session_id"], "a")
 
-    def test_stale_by_ttl_is_reclaimed(self):
-        self._lock("old", clock=lambda: 1000.0).acquire()
-        new = self._lock("new", clock=lambda: 1000.0 + 5000.0)  # past the 1800s TTL
+    def test_cross_host_stale_by_ttl_is_reclaimed(self):
+        # TTL only governs a cross-host holder (no remote pid to probe).
+        self._lock("old", host="other-host", clock=lambda: 1000.0).acquire()
+        new = self._lock("new", host="h1", clock=lambda: 1000.0 + 5000.0)  # past TTL
         new.acquire()
         self.assertEqual(new.read()["session_id"], "new")
+
+    def test_same_host_live_pid_is_never_stale_past_ttl(self):
+        # Regression: a live same-host holder must NOT be reclaimed on the TTL,
+        # even far past it (a long stage never refreshes its heartbeat).
+        self._lock("holder", pid=os.getpid(), clock=lambda: 1000.0).acquire()
+        new = self._lock(
+            "new", host="h1", pid=os.getpid(), pid_alive=lambda p: True,
+            clock=lambda: 1000.0 + 999999.0,
+        )
+        with self.assertRaises(LoopLockHeld):
+            new.acquire()
 
     def test_stale_by_dead_pid_is_reclaimed(self):
         self._lock("holder", pid=424242).acquire()

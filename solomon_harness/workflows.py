@@ -102,8 +102,11 @@ def run_stage(
             )
             return 3
 
+    # Acquire the single-driver lock for stages that touch git/board state, and —
+    # at L3 — for every stage the policy says must hold it (requires_lock), so the
+    # "L3 only runs while holding the lock" contract is enforced, not just claimed.
     lock = None
-    if stage in LOCKED_STAGES:
+    if stage in LOCKED_STAGES or policy.requires_lock(stage):
         from solomon_harness.loop_lock import LoopLock, LoopLockHeld
 
         lock = LoopLock(workspace_root, stage=stage)

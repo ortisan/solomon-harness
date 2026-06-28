@@ -7,6 +7,7 @@ from unittest.mock import patch
 from solomon_harness import workflows
 from solomon_harness import loop_lock
 from solomon_harness import loop_policy
+from solomon_harness import loop_budget
 from solomon_harness.loop_lock import LoopLock
 
 
@@ -141,6 +142,41 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
             rc = workflows.run_stage(root, "loop", ["1"], engine="claude")
         self.assertEqual(rc, 3)
         mock_run.assert_not_called()
+
+    def test_l3_requires_lock_on_a_nonmutating_stage(self):
+        # At L3 every stage but 'loop' must hold the lock; a foreign lock blocks idea.
+        root = _workspace_with_loop("idea", "---\nx\n---\nCapture $ARGUMENTS", {"autonomy": "L3"})
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="foreign", pid=os.getpid()).acquire()
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
+        self.assertEqual(rc, 1)
+        mock_run.assert_not_called()
+
+    def test_budget_ceiling_blocks_at_l2(self):
+        root = _workspace_with_loop(
+            "start", "---\nx\n---\nGo $ARGUMENTS",
+            {"autonomy": "L2", "daily_cost_ceiling_usd": 1.0},
+        )
+        loop_budget.record(root, 1.5)  # today's spend already over the $1 ceiling
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_cost_capture_records_at_l2(self):
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L2"})
+
+        class _Proc:
+            returncode = 0
+            stdout = '{"total_cost_usd": 0.5}'
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        args, _ = mock_run.call_args
+        self.assertEqual(args[0], ["claude", "-p", "--output-format", "json"])
+        self.assertAlmostEqual(loop_budget.daily_spend(root), 0.5)
 
 
 if __name__ == "__main__":

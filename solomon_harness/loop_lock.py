@@ -158,18 +158,23 @@ class LoopLock:
             return None
 
     def is_stale(self, info: Dict[str, Any]) -> bool:
-        """A lock is stale past its TTL, or with a dead pid on the same host."""
-        beat = info.get("heartbeat_at") or info.get("acquired_at")
-        ts = _parse_epoch(beat)
-        if ts is None or (self._clock() - ts) > self.ttl:
-            return True
+        """Is this lock reclaimable?
+
+        A live process on the SAME host is never stale, no matter how long it has
+        held the lock and even though the heartbeat is never refreshed mid-run.
+        This is the guarantee a long-running stage needs: a `/solomon-start` that
+        runs for hours must not have its lock judged stale on the TTL and stolen
+        by a second driver (that would re-open the concurrent-driver race the lock
+        exists to close). Only a DEAD same-host pid, or a cross-host lock whose
+        heartbeat is older than the TTL (we cannot probe a remote pid), is stale.
+        """
         if info.get("host") == self.host and info.get("pid") is not None:
             try:
-                if not self._pid_alive(int(info["pid"])):
-                    return True
+                return not self._pid_alive(int(info["pid"]))
             except (TypeError, ValueError):
                 pass
-        return False
+        ts = _parse_epoch(info.get("heartbeat_at") or info.get("acquired_at"))
+        return ts is None or (self._clock() - ts) > self.ttl
 
     def held_by_other(self) -> Optional[Dict[str, Any]]:
         """Return the holder if a *live* lock owned by another session exists."""
@@ -218,8 +223,14 @@ class LoopLock:
                 return self
             if info and not self.is_stale(info):
                 raise LoopLockHeld(info)
-            # Stale or unreadable: reclaim by overwriting atomically.
+            # Stale or unreadable: reclaim by atomic replace, then re-read to
+            # confirm we won. If two drivers race to reclaim the same dead lock,
+            # os.replace is last-writer-wins; the loser sees a live foreign holder
+            # on re-read and backs off rather than both believing they hold it.
             self._write_atomically(now)
+            check = self.read()
+            if check and check.get("session_id") != self.session_id and not self.is_stale(check):
+                raise LoopLockHeld(check)
             return self
         else:
             with os.fdopen(fd, "w", encoding="utf-8") as f:

@@ -134,15 +134,20 @@ incident — two concurrent `/solomon-loop` drivers — produced premature merge
 that bypassed the review gate and flipped `core.bare=true` on a worktree. The
 safety floor prevents that by construction:
 
-- **Single-driver lock.** Before a mutating stage runs (`loop`, `start`,
-  `review`, `release`), the headless runner acquires one advisory lock anchored
-  at the git *common* directory (`<common>/solomon-loop.lock`), so every linked
-  worktree of the repository contends on the same file. A second driver is
-  refused. The lock is a plain JSON file (the holder is auditable), and a stale
-  lock — heartbeat older than the TTL, or a dead pid on the same host — is
-  reclaimed automatically. Implementation: `solomon_harness/loop_lock.py`; the
-  portable gate lives in `run_stage` so it enforces on both Claude Code and the
-  Gemini CLI.
+- **Single-driver lock.** Before a stage that touches git/board state runs
+  (`loop`, `start`, `review`, `release`, and the `scan-arch` / `scan-dedup`
+  maintenance loops — and, at L3, every stage the policy's `requires_lock`
+  names), the headless runner acquires one advisory lock anchored at the git
+  *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of
+  the repository contends on the same file. A second driver is refused. The lock
+  is a plain JSON file (the holder is auditable). Staleness favors safety: a
+  **live process on the same host is never stale**, however long it has held the
+  lock, so a long-running stage is never reclaimed mid-run; only a dead same-host
+  pid, or a cross-host lock past the TTL (`DEFAULT_TTL_SECONDS = 1800`, since a
+  remote pid cannot be probed), is reclaimed. Implementation:
+  `solomon_harness/loop_lock.py`; the portable gate lives in `run_stage` so it
+  enforces on both Claude Code and the Gemini CLI. (`workflows.LOCKED_STAGES` is
+  the source of truth for the static set.)
 - **PreToolUse guard (Claude Code only).** A `loop-guard` hook in
   `.claude/settings.json` blocks `git push` / `gh pr merge` while another live
   driver holds the lock. It is defense-in-depth on top of the portable gate and

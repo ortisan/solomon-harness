@@ -6,7 +6,7 @@ Every driver acquires the single-driver lock before it touches git or the board;
 
 - **Anchor at the git common dir.** `resolve_lock_path` resolves `.git` directly (dir or worktree file) and places the lock at `<common>/solomon-loop.lock`, so every linked worktree contends on ONE file. A per-checkout `.solomon/loop.lock` gives zero cross-worktree exclusion and must never be used — it fails the exact incident it targets. The fallback for a non-git dir is `<root>/.solomon/loop.lock`.
 - **Atomic acquire.** `LoopLock.acquire()` creates the file with `os.O_CREAT | os.O_EXCL`. If it exists: a same-session lock is re-entrant (heartbeat refreshed); a live foreign lock raises `LoopLockHeld`; a stale lock is reclaimed.
-- **Staleness.** A lock is stale when its heartbeat is older than the TTL (`DEFAULT_TTL_SECONDS = 1800`) or its pid is dead on the same host. The body is plain JSON (`session_id`, `pid`, `host`, `stage`, `acquired_at`, `heartbeat_at`), so the holder is itself auditable.
+- **Staleness favors safety.** A live process on the SAME host is never stale, however long it has held the lock and even though the heartbeat is never refreshed mid-run — a long stage must not have its lock stolen. Only a dead same-host pid, or a cross-host lock whose heartbeat is older than the TTL (`DEFAULT_TTL_SECONDS = 1800`; a remote pid cannot be probed), is reclaimable. The body is plain JSON (`session_id`, `pid`, `host`, `stage`, `acquired_at`, `heartbeat_at`), so the holder is itself auditable.
 
 ## Enforcement and recovery
 
