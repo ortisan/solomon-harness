@@ -212,6 +212,7 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `documenter` — technical and business documentation, user guides, design docs.
 - `flutter` — Flutter and Dart applications, clean architecture, widget and integration tests.
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
+- `loop_engineer` — autonomous-loop mechanics: the single-driver lock, the autonomy ladder and guardrails, the run-log, the cost budget, and the context-reset discipline, so loops run unattended without bypassing the human review gate.
 - `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, and didactic reporting (absorbs data science).
 - `observability` — logging, metrics, tracing, monitoring dashboards, OpenTelemetry.
 - `practice_curator` — benchmarks delivered work and the agents' own guidance against the state of the art (software, architecture, ML/DRL, trading) and proposes reviewed updates; cited sources, one target agent per change.

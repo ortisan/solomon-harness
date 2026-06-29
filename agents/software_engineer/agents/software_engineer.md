@@ -17,6 +17,7 @@ The following specific skills are actively configured for this agent:
 - [common_pitfalls_for_this_role](skills/common_pitfalls_for_this_role.md) — Writing the implementation first and back-filling tests.
 - [debugging_method](skills/debugging_method.md) — This skill governs how to find and kill a bug systematically rather than by guessing.
 - [definition_of_done](skills/definition_of_done.md) — A failing test existed first for every behavior, was observed red, and now passes.
+- [duplication_scan_loop](skills/duplication_scan_loop.md) — This skill governs the standing duplicate-abstraction maintenance loop: a
 - [error_handling_and_problem_details](skills/error_handling_and_problem_details.md) — Centralize error handling so the domain defines each failure once, a single handler per transport renders it, and the wire format is…
 - [git_flow_and_conventional_commits](skills/git_flow_and_conventional_commits.md) — This skill governs the implementer's branch and commit workflow for this repository: how to name a branch, how to link it to an issue, and…
 - [harness_memory_and_handoff](skills/harness_memory_and_handoff.md) — Persist the reasoning and state of your work to the project memory so the next agent resumes from a record, not from re-reading the diff.
