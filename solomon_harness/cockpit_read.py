@@ -10,10 +10,12 @@ aggregation and the 207/403 partial-render contract are slice 1b (#59).
 
 import argparse
 import json
+import os
 import sys
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from opentelemetry import trace
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from solomon_harness.tools.database_client import DatabaseClient
 
@@ -44,7 +46,9 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
     ``total == sum(column counts) + unmapped`` holds and no issue is silently
     dropped. Read-only: it never creates or mutates a row.
     """
-    with _tracer.start_as_current_span("cockpit.read_board") as span:
+    carrier = {"traceparent": os.environ.get("traceparent")} if "traceparent" in os.environ else {}
+    context = TraceContextTextMapPropagator().extract(carrier=carrier)
+    with _tracer.start_as_current_span("cockpit.read_board", context=context) as span:
         span.set_attribute("cockpit.project", project)
         issues = client.list_issues()
 
@@ -97,7 +101,7 @@ def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
 
 
 def board_payload(
-    project: str,
+    project: Optional[str] = None,
     harness_dir: Optional[str] = None,
     client_factory: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
@@ -117,13 +121,22 @@ def board_payload(
     client = factory()
     try:
         available = discover_projects(client.list_databases)
-        if project not in available:
-            payload = empty_board(project)
+        selected = project
+        if not selected:
+            selected = available[0] if available else ""
+
+        if not selected or selected not in available:
+            payload = empty_board(selected)
             payload["found"] = False
+            payload["projects"] = available
+            payload["selectedProject"] = selected
             return payload
-        client.use_tenant(project)
-        payload = build_board(client, project)
+
+        client.use_tenant(selected)
+        payload = build_board(client, selected)
         payload["found"] = True
+        payload["projects"] = available
+        payload["selectedProject"] = selected
         return payload
     finally:
         client.close()
@@ -135,21 +148,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
     board for one tenant. Output is JSON on stdout so the Next route can parse it.
     """
+    if "traceparent" in os.environ:
+        from opentelemetry import trace
+        from opentelemetry.trace import ProxyTracerProvider
+        try:
+            if isinstance(trace.get_tracer_provider(), ProxyTracerProvider):
+                from opentelemetry.sdk.trace import TracerProvider
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+                provider = TracerProvider()
+                processor = BatchSpanProcessor(ConsoleSpanExporter(out=sys.stderr))
+                provider.add_span_processor(processor)
+                trace.set_tracer_provider(provider)
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(prog="solomon_harness.cockpit_read")
+    parser.add_argument("--harness-dir", default=None, help="harness directory path")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("projects", help="list the harness-managed tenants")
     board_parser = sub.add_parser("board", help="render one tenant's board")
-    board_parser.add_argument("--project", required=True)
+    board_parser.add_argument("--project", default=None, help="the tenant/project name")
     args = parser.parse_args(argv)
 
     if args.command == "projects":
-        client = DatabaseClient()
+        client = DatabaseClient(harness_dir=args.harness_dir)
         try:
             print(json.dumps(discover_projects(client.list_databases)))
         finally:
             client.close()
     elif args.command == "board":
-        print(json.dumps(board_payload(args.project)))
+        print(json.dumps(board_payload(args.project, harness_dir=args.harness_dir)))
     return 0
 
 

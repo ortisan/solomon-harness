@@ -77,23 +77,26 @@ export async function GET(request: Request): Promise<Response> {
       // Propagate the active trace to the Python read path via the subprocess env.
       const env = withTraceparent(process.env, span);
 
-      const projects: string[] = JSON.parse(
-        await readBridge(bin, ["-m", MODULE, "projects"], rootDir, env),
-      );
-      const selectedProject = requested || projects[0] || "";
-      span.setAttribute("cockpit.project", selectedProject);
+      const boardArgs = ["-m", MODULE, "board"];
+      if (requested) {
+        boardArgs.push("--project", requested);
+      }
 
-      // The requested project is passed as a single argv element. The Python
-      // composer validates it against the discovered allowlist and returns
+      // The requested project is passed as a single argv element if provided.
+      // The Python composer validates it against the discovered allowlist and returns
       // found:false for an unknown (or injection) value, which maps to 404 here.
       const board = JSON.parse(
         await readBridge(
           bin,
-          ["-m", MODULE, "board", "--project", selectedProject],
+          boardArgs,
           rootDir,
           env,
         ),
       );
+
+      const projects: string[] = board.projects;
+      const selectedProject: string = board.selectedProject;
+      span.setAttribute("cockpit.project", selectedProject);
 
       const status = board.found === false ? 404 : 200;
       return Response.json({ projects, selectedProject, board }, { status });

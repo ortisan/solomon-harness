@@ -39,8 +39,7 @@ function emptyColumns() {
   return SEVEN.map((name) => ({ name, count: 0, issues: [] }));
 }
 
-// Drive the mocked subprocess: `projects` returns the known tenants; `board`
-// returns a board whose `found` reflects allowlist membership of --project.
+// Drive the mocked subprocess: `board` returns a board containing `projects` and `selectedProject`.
 function wireBridge() {
   vi.mocked(execFile).mockImplementation(((
     _file: string,
@@ -51,7 +50,7 @@ function wireBridge() {
     if (args.includes("projects")) {
       callback(null, JSON.stringify(KNOWN_TENANTS), "");
     } else if (args.includes("board")) {
-      const project = args[args.indexOf("--project") + 1];
+      const project = args.includes("--project") ? args[args.indexOf("--project") + 1] : KNOWN_TENANTS[0];
       const found = KNOWN_TENANTS.includes(project);
       callback(
         null,
@@ -61,6 +60,8 @@ function wireBridge() {
           columns: emptyColumns(),
           total: 0,
           unmapped: 0,
+          projects: KNOWN_TENANTS,
+          selectedProject: project,
         }),
         "",
       );

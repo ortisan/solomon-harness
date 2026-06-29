@@ -28,7 +28,7 @@ def _repo_root() -> str:
 
 def _copy_dir_contents(src: str, dest: str, suffixes: tuple) -> List[str]:
     """Copy files with the given suffixes from src into dest. Returns names copied."""
-    copied = []
+    copied: List[str] = []
     if not os.path.isdir(src):
         return copied
     os.makedirs(dest, exist_ok=True)

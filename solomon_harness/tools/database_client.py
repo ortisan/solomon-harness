@@ -25,7 +25,7 @@ class SpectronFallbackClient:
 
     def remember(self, fact: str, scope: Optional[List[str]] = None) -> Any:
         url = f"{self.endpoint}/api/v1/{self.context}/facts"
-        payload = {"fact": fact}
+        payload: Dict[str, Any] = {"fact": fact}
         if scope:
             payload["scope"] = scope
         resp = self.session.post(url, json=payload, timeout=self.timeout)
@@ -34,7 +34,7 @@ class SpectronFallbackClient:
 
     def recall(self, query: str, scope: Optional[List[str]] = None) -> Any:
         url = f"{self.endpoint}/api/v1/{self.context}/query"
-        payload = {"query": query}
+        payload: Dict[str, Any] = {"query": query}
         if scope:
             payload["scope"] = scope
         resp = self.session.post(url, json=payload, timeout=self.timeout)
@@ -217,7 +217,7 @@ class DatabaseClient:
                     if spectron_url and spectron_api_key:
                         try:
                             try:
-                                from surrealdb import Spectron
+                                from surrealdb import Spectron  # type: ignore[attr-defined]
                                 self.spectron = Spectron(
                                     context=spectron_context,
                                     endpoint=spectron_url,
