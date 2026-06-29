@@ -12,6 +12,8 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from opentelemetry import trace
@@ -48,6 +50,14 @@ FORBIDDEN_HTTP_STATUS = 403
 # Aggregate HTTP status: 200 when every project read cleanly, else 207 Multi-Status.
 AGGREGATE_OK = 200
 AGGREGATE_MULTI_STATUS = 207
+
+# A per-project read that blocks past this many seconds is classified UNREACHABLE
+# rather than allowed to stall the fan-out (DoS mitigation, R-04).
+PER_PROJECT_TIMEOUT_S = 5.0
+
+# Read-failure messages matching one of these patterns are treated as an access
+# denial (FORBIDDEN) rather than an unreachable tenant.
+_PERMISSION_PATTERNS = ("permission", "forbidden", "denied", "unauthor", "not allowed")
 
 
 def build_board(client: Any, project: str) -> Dict[str, Any]:
@@ -196,6 +206,68 @@ def compose_portfolio(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "unmapped": unmapped,
         "aggregateStatus": aggregate_status,
     }
+
+
+def _is_permission_failure(error: Exception) -> bool:
+    """Report whether a read failure reads as an access denial (FORBIDDEN)."""
+    message = str(error).lower()
+    return any(pattern in message for pattern in _PERMISSION_PATTERNS)
+
+
+def _bind_and_build(client: Any, project: str) -> Dict[str, Any]:
+    """Bind the tenant on the read port, then group its board."""
+    client.use_tenant(project)
+    return build_board(client, project)
+
+
+def _read_board_within_timeout(
+    client: Any, project: str, timeout: float
+) -> Dict[str, Any]:
+    """Run one tenant's bind-and-read in a worker, abandoning it past ``timeout``.
+
+    A hung tenant must classify as UNREACHABLE rather than block the fan-out, so
+    the blocking read runs in a one-shot worker and a deadline-exceeded result
+    raises ``TimeoutError`` instead of waiting. The worker is not joined on
+    timeout (the tenant is already degraded); the bounded fan-out pool and the
+    25-project cap keep the number of abandoned workers small.
+    """
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(_bind_and_build, client, project)
+    try:
+        return future.result(timeout=timeout)
+    finally:
+        pool.shutdown(wait=False)
+
+
+def read_tenant_swimlane(
+    project: str,
+    client_factory: Callable[[], Any],
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Read exactly one tenant and classify the outcome (OK/FORBIDDEN/UNREACHABLE).
+
+    Owns its own per-tenant client from ``client_factory`` (a fresh
+    ``DatabaseClient`` bound to that one tenant via ``use_tenant``), so no
+    connection is shared or rebound across the fan-out and per-tenant isolation
+    (ADR-0002) holds by construction. A clean read returns ``OK`` with the grouped
+    board; a ``PermissionError`` or a permission-pattern read failure returns
+    ``FORBIDDEN`` with no data; a read past ``timeout`` or any other read failure
+    returns ``UNREACHABLE`` with no data. The result is the ``compose_portfolio``
+    input element.
+    """
+    client = client_factory()
+    try:
+        board = _read_board_within_timeout(client, project, timeout)
+        return {"project": project, "status": STATUS_OK, "board": board}
+    except PermissionError:
+        return {"project": project, "status": STATUS_FORBIDDEN, "board": None}
+    except FuturesTimeoutError:
+        return {"project": project, "status": STATUS_UNREACHABLE, "board": None}
+    except Exception as error:
+        status = STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE
+        return {"project": project, "status": status, "board": None}
+    finally:
+        client.close()
 
 
 def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:

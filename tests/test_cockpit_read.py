@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -345,6 +346,111 @@ class TestComposePortfolio(unittest.TestCase):
         column_total = sum(c["count"] for c in portfolio["columns"])
         self.assertEqual(portfolio["total"], column_total + portfolio["unmapped"])
         self.assertEqual(portfolio["aggregateStatus"], 207)
+
+
+class _CleanTenantClient:
+    """A per-tenant read port that returns a fixed issue list and closes once."""
+
+    def __init__(self, issues):
+        self._issues = issues
+        self.closed = False
+        self.bound = None
+
+    def use_tenant(self, database):
+        self.bound = database
+
+    def list_issues(self):
+        return list(self._issues)
+
+    def close(self):
+        self.closed = True
+
+
+class _RaisingTenantClient:
+    """A per-tenant read port whose ``list_issues`` raises a given error."""
+
+    def __init__(self, error):
+        self._error = error
+        self.closed = False
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        raise self._error
+
+    def close(self):
+        self.closed = True
+
+
+class _SlowTenantClient:
+    """A per-tenant read port whose read blocks longer than the read timeout."""
+
+    def __init__(self, delay):
+        self._delay = delay
+        self.closed = False
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        time.sleep(self._delay)
+        return []
+
+    def close(self):
+        self.closed = True
+
+
+class TestReadTenantSwimlane(unittest.TestCase):
+    def test_read_tenant_swimlane_classifies_ok_forbidden_unreachable(self):
+        """read_tenant_swimlane reads one tenant through its own client and
+        classifies the outcome: a clean read is OK with the board; a
+        PermissionError or a permission-pattern read failure is FORBIDDEN with
+        no data; a read exceeding the timeout or any other failure is
+        UNREACHABLE with no data."""
+        # A clean read binds the tenant and returns OK with the grouped board.
+        clean = _CleanTenantClient([{"github_id": "a1", "status": "Backlog"}])
+        ok = cockpit_read.read_tenant_swimlane("alpha", lambda: clean, timeout=1.0)
+        self.assertEqual(ok["status"], "OK")
+        self.assertEqual(ok["project"], "alpha")
+        self.assertEqual(ok["board"]["total"], 1)
+        self.assertEqual(clean.bound, "alpha")
+        self.assertTrue(clean.closed)
+
+        # A PermissionError is FORBIDDEN and carries no board data.
+        forbidden = cockpit_read.read_tenant_swimlane(
+            "beta", lambda: _RaisingTenantClient(PermissionError("access denied")),
+            timeout=1.0,
+        )
+        self.assertEqual(forbidden["status"], "FORBIDDEN")
+        self.assertIsNone(forbidden["board"])
+
+        # A permission-pattern read failure is also FORBIDDEN, no data.
+        pattern = cockpit_read.read_tenant_swimlane(
+            "beta",
+            lambda: _RaisingTenantClient(RuntimeError("permission denied for tenant")),
+            timeout=1.0,
+        )
+        self.assertEqual(pattern["status"], "FORBIDDEN")
+        self.assertIsNone(pattern["board"])
+
+        # A read that exceeds the timeout is UNREACHABLE, no data.
+        slow = cockpit_read.read_tenant_swimlane(
+            "gamma", lambda: _SlowTenantClient(0.5), timeout=0.05
+        )
+        self.assertEqual(slow["status"], "UNREACHABLE")
+        self.assertIsNone(slow["board"])
+
+        # A non-permission read failure (a dead connection) is UNREACHABLE.
+        unreachable = cockpit_read.read_tenant_swimlane(
+            "delta",
+            lambda: _RaisingTenantClient(
+                RuntimeError("Failed to list issues: connection lost")
+            ),
+            timeout=1.0,
+        )
+        self.assertEqual(unreachable["status"], "UNREACHABLE")
+        self.assertIsNone(unreachable["board"])
 
 
 class TestBoardPayloadTenantTargeting(unittest.TestCase):
