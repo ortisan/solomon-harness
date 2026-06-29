@@ -197,6 +197,28 @@ class TestReconcileTrackingRows(unittest.TestCase):
         self.assertIn("68-R-01", {i["github_id"] for i in client.get_open_issues()})
         client.close()
 
+    def test_close_preserves_non_null_milestone_and_assignee(self):
+        """The close pass read-modify-writes the row through the 6-arg log_issue,
+        carrying every non-status field forward. A row seeded with a NON-NULL
+        milestone_id and assignee must come back terminal with both fields intact,
+        proving the close only rewrites the status and never drops the milestone or
+        owner of a resolved tracking item."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("68-R-03", "RAID R-03 (#68)", "raid", "in_progress", 7, "marcelo")
+
+        result = cli.reconcile_tracking_rows(client, {"68": True})
+
+        self.assertEqual(result["closed"], 1)
+        closed_row = client.get_issue("68-R-03")
+        self.assertTrue(is_terminal(closed_row["status"]))
+        # The non-status fields survived the close unchanged.
+        self.assertEqual(closed_row["milestone_id"], 7)
+        self.assertEqual(closed_row["assignee"], "marcelo")
+        # Read back through the open-issue view as well: the row is gone from it
+        # (terminal), so the survival is confirmed via the direct get_issue read.
+        self.assertNotIn("68-R-03", {i["github_id"] for i in client.get_open_issues()})
+        client.close()
+
 
 class TestFetchGhIssueStates(unittest.TestCase):
     def test_validates_number_and_state_as_data(self):
@@ -325,6 +347,21 @@ class TestBuildResolvedMap(unittest.TestCase):
             [{"number": "45", "state": "MERGED"}],
         )
         self.assertTrue(resolved["45"])
+
+    def test_a_none_number_record_is_skipped_in_both_lists(self):
+        """The defensive ``number is None`` guards (one per loop) drop a record
+        with no number before it can key the map, so None is never a key, while a
+        valid record sitting alongside it in the same list resolves normally."""
+        resolved = cli._build_resolved_map(
+            [{"number": None, "state": "CLOSED"}, {"number": "68", "state": "CLOSED"}],
+            [{"number": None, "state": "MERGED"}, {"number": "45", "state": "MERGED"}],
+        )
+        # The None-number records were skipped: None is absent from the map.
+        self.assertNotIn(None, resolved)
+        # The valid records sharing each list still resolved correctly.
+        self.assertTrue(resolved["68"])
+        self.assertTrue(resolved["45"])
+        self.assertEqual(set(resolved), {"68", "45"})
 
 
 class _FakeSqliteClient:
