@@ -38,6 +38,10 @@ _LEVEL_NAME = {_PATCH: "patch", _MINOR: "minor", _MAJOR: "major"}
 _PATCH_TYPES = {"fix", "perf", "refactor", "revert"}
 
 _HEADER_RE = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]*)\))?(?P<bang>!)?:\s*(?P<subject>.*)$")
+# A breaking change is a Conventional Commits footer: the token at line start
+# followed by a colon. Anchoring it this way means prose that merely mentions
+# "BREAKING CHANGE" (e.g. "this is NOT a BREAKING CHANGE") does not over-bump.
+_BREAKING_FOOTER_RE = re.compile(r"^BREAKING[ -]CHANGE:", re.MULTILINE)
 _PYPROJECT_VERSION_RE = re.compile(r'^version\s*=\s*"(?P<v>[^"]+)"', re.MULTILINE)
 _CHANGELOG_HEADING_RE = re.compile(
     r"^##\s*\[(?P<v>\d+\.\d+\.\d+)\]\s*(?:-\s*(?P<date>\d{4}-\d{2}-\d{2}))?"
@@ -85,7 +89,7 @@ def classify_commit(message: str) -> Tuple[Optional[str], bool]:
     first_line = text.splitlines()[0] if text else ""
     m = _HEADER_RE.match(first_line)
     ctype = m.group("type") if m else None
-    breaking = bool(m and m.group("bang")) or "BREAKING CHANGE" in message or "BREAKING-CHANGE" in message
+    breaking = bool(m and m.group("bang")) or bool(_BREAKING_FOOTER_RE.search(message))
     return ctype, breaking
 
 
@@ -197,7 +201,13 @@ def render_changelog_section(version: str, date: str, commit_messages: List[str]
         ctype, breaking = classify_commit(msg)
         section = _SECTION_FOR_TYPE.get(ctype or "")
         if not section:
-            continue
+            # A breaking change of an otherwise non-releasable type (e.g.
+            # `chore!:`) still bumped the version, so it must appear in the
+            # notes rather than render an empty section.
+            if breaking:
+                section = "Changed"
+            else:
+                continue
         prefix = "BREAKING: " if breaking else ""
         buckets[section].append(f"- {prefix}{_subject(msg)}")
     lines = [f"## [{version}] - {date}", ""]
@@ -243,17 +253,36 @@ def commits_since(tag: Optional[str], cwd: str, ref: str = "HEAD") -> List[str]:
     return [chunk.strip() for chunk in out.split("\x00") if chunk.strip()]
 
 
+def trunk_ref(cwd: str) -> str:
+    """Resolve the trunk ref to compute the release window against.
+
+    The window is always ``<last-tag>..main`` per the policy, so a plan/prep run
+    from a non-main checkout (a worktree or the loop) never bakes unmerged
+    commits into the version. Prefer the local ``main``, fall back to
+    ``origin/main``, and only as a last resort the current ``HEAD``.
+    """
+    for ref in ("main", "origin/main"):
+        try:
+            _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd)
+            return ref
+        except subprocess.CalledProcessError:
+            continue
+    return "HEAD"
+
+
 def plan(workspace_root: str) -> dict:
-    """Compute the next release from the commits since the last tag."""
+    """Compute the next release from the commits on trunk since the last tag."""
     pyproject = os.path.join(workspace_root, "pyproject.toml")
     current_version = read_pyproject_version(pyproject)
     tag = last_version_tag(workspace_root)
     base = SemVer.parse(tag) if tag else SemVer.parse(current_version)
-    commits = commits_since(tag, workspace_root)
+    ref = trunk_ref(workspace_root)
+    commits = commits_since(tag, workspace_root, ref=ref)
     level, new_version = compute_release(base, commits)
     return {
         "last_tag": tag,
         "base": str(base),
+        "trunk_ref": ref,
         "level": level,
         "next": str(new_version) if new_version else None,
         "commit_count": len(commits),
@@ -332,6 +361,11 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     new_version = version or info["next"]
     if not new_version:
         print("Nothing to release: no releasable commits since the last tag.", file=sys.stderr)
+        return 1
+    try:
+        SemVer.parse(new_version)  # reject a malformed explicit version before branching
+    except ValueError as exc:
+        print(f"release prep: {exc}", file=sys.stderr)
         return 1
     branch = f"chore/release-v{new_version}"
     pyproject = os.path.join(workspace_root, "pyproject.toml")

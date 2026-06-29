@@ -163,12 +163,13 @@ the tag and publishes the Release, so there is one owner and no manual race.
 every `chore/release-*` PR:
 
 - `git tag` to be created == `pyproject.toml` version == the top `CHANGELOG.md` heading;
-- the `CHANGELOG.md` top heading carries today's date in Keep a Changelog form
-  (`## [X.Y.Z] - YYYY-MM-DD`);
-- the tag does not already exist;
-- tests and `ruff` are green.
+- the `CHANGELOG.md` top heading carries a date in Keep a Changelog form
+  (`## [X.Y.Z] - YYYY-MM-DD`; `release prep` stamps the cut date);
+- the tag does not already exist.
 
-`check` exits non-zero on any mismatch, so a drifted release cannot proceed.
+`check` exits non-zero on any mismatch, so a drifted release cannot proceed. Tests and
+`ruff` are a separate gate (the `ci.yml` suite and the library readiness gate), not part
+of `release check` — `check` is purely the version/tag/CHANGELOG consistency invariant.
 
 Humans never hand-edit `pyproject.toml` `version` and never add a `CHANGELOG.md`
 heading by hand. `release prep` writes both. A complementary CI check rejects any
@@ -181,10 +182,12 @@ the three copies agree before either side acts.
 
 `solomon-harness release plan | prep | check`.
 
-- `release plan` — read-only, headless-safe. Detect the target (a milestone at or near
-  zero open issues, or an on-demand batch), compute the SemVer bump from the commit
-  window since the last tag, and print the planned version plus the rendered CHANGELOG
-  section. It mutates nothing, so the loop may run it unattended to propose a release.
+- `release plan` — read-only, headless-safe. Compute the SemVer bump from the commit
+  window on trunk since the last tag (`<last-tag>..main --first-parent`) and print the
+  planned version plus the rendered CHANGELOG section. It computes the version only; it
+  does not query GitHub — the milestone-at-zero gate is a board check done by the
+  `/solomon-release` skill (or the loop) via `gh`. It mutates nothing, so the loop may
+  run it unattended to propose a release.
 - `release prep` — opens a PR, never merges. Create `chore/release-vX.Y.Z`, write the
   computed `pyproject.toml` bump and the `CHANGELOG.md` section, commit
   `chore(release): vX.Y.Z`, open the PR, then stop. The human takes it from there.
@@ -230,13 +233,14 @@ tag, no moved Release.
 For an epic milestone `v0.5.0` reaching zero open issues with CI green (v0.4.0 already
 shipped the memory-resilience release, so the cockpit epic is the next minor):
 
-1. `solomon-harness release plan` — confirms target `v0.5.0` milestone, computes the
-   bump from `<last-tag>..main --first-parent`, prints `v0.5.0` and the CHANGELOG
-   section. Safe to have proposed by the loop.
+1. Confirm the `v0.5.0` milestone has zero open issues with CI green on `main` (a board
+   check via `gh`), then `solomon-harness release plan` computes the bump from
+   `<last-tag>..main --first-parent` and prints `v0.5.0` and the CHANGELOG section. Safe
+   to have proposed by the loop.
 2. `solomon-harness release prep` — opens `chore/release-v0.5.0` with the
    `pyproject.toml` bump and the CHANGELOG section, commit `chore(release): v0.5.0`.
-3. CI on the PR runs `release check` (version == tag == CHANGELOG, tag absent, tests +
-   ruff green) and the non-release-PR guard.
+3. CI on the PR runs `release check` (version == tag == CHANGELOG, tag absent) plus the
+   `ci.yml` tests + ruff suite and, for non-release PRs, the version/CHANGELOG drift guard.
 4. The human merges the prep PR into `main`. That is the release authorization.
 5. The release workflow triggers on the `main` push, creates and pushes the annotated
    `v0.5.0` tag with `GITHUB_TOKEN`, and publishes the GitHub Release from the CHANGELOG

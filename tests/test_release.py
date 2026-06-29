@@ -7,7 +7,9 @@ These tests pin the pure core: the version math, the commit classifier, the
 parsers, and the consistency gate. The git/gh I/O is a thin shell over them.
 """
 
+import os
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -214,3 +216,153 @@ def test_render_changelog_section_groups_by_type():
     assert "## [0.4.0] - 2026-06-28" in section
     assert "### Added" in section and "board view" in section
     assert "### Fixed" in section and "reconnect" in section
+
+
+def test_render_changelog_section_keeps_breaking_of_nonbucketed_type():
+    # A breaking `chore!` bumps the version, so it must still appear in the notes
+    # rather than render an empty section.
+    section = release.render_changelog_section(
+        "1.0.0", "2026-06-28", ["chore!: drop legacy config layout"]
+    )
+    assert "### Changed" in section
+    assert "BREAKING: drop legacy config layout" in section
+
+
+# --- BREAKING is a footer, not prose (regression for the over-bump bug) -----
+
+def test_breaking_prose_does_not_flag_breaking():
+    msg = "fix: tweak\n\nThis is explicitly NOT a BREAKING CHANGE to the API."
+    ctype, breaking = release.classify_commit(msg)
+    assert ctype == "fix"
+    assert breaking is False
+    level, newv = release.compute_release(release.SemVer(1, 4, 2), [msg])
+    assert (level, str(newv)) == ("patch", "1.4.3")
+
+
+def test_real_breaking_footer_still_flags():
+    msg = "feat: x\n\nBREAKING CHANGE: removed the old flag."
+    _, breaking = release.classify_commit(msg)
+    assert breaking is True
+
+
+# --- File mutators (cmd_prep relies on these; previously untested) ----------
+
+def test_set_pyproject_version_rewrites_only_the_version(tmp_path):
+    p = tmp_path / "pyproject.toml"
+    p.write_text(
+        '[project]\nname = "x"\nversion = "0.3.1"\nrequires-python = ">=3.10"\n',
+        encoding="utf-8",
+    )
+    release.set_pyproject_version(str(p), "0.4.0")
+    text = p.read_text(encoding="utf-8")
+    assert 'version = "0.4.0"' in text
+    assert 'version = "0.3.1"' not in text
+    assert 'name = "x"' in text  # nothing else disturbed
+
+
+def test_prepend_changelog_section_inserts_above_first_heading(tmp_path):
+    c = tmp_path / "CHANGELOG.md"
+    c.write_text(
+        "# Changelog\n\n## [0.3.1] - 2026-06-27\n\n### Fixed\n- old\n",
+        encoding="utf-8",
+    )
+    release.prepend_changelog_section(
+        str(c), "## [0.4.0] - 2026-06-28\n\n### Added\n- new\n"
+    )
+    version, date = release.read_changelog_top(str(c))
+    assert (version, date) == ("0.4.0", "2026-06-28")
+    # The prior entry is preserved below the new one.
+    assert "## [0.3.1] - 2026-06-27" in c.read_text(encoding="utf-8")
+
+
+# --- run() dispatch ---------------------------------------------------------
+
+def test_run_rejects_unknown_subcommand(capsys):
+    assert release.run("/nonexistent", ["frobnicate"]) == 1
+
+
+def test_run_with_no_args_prints_usage(capsys):
+    assert release.run("/nonexistent", []) == 1
+    assert "plan" in capsys.readouterr().err
+
+
+# --- git-backed helpers against a real temp repo ----------------------------
+
+def _git(repo, *args):
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(
+        ["git", "-C", repo, *args], check=True, capture_output=True, text=True, env=env
+    )
+
+
+@pytest.fixture()
+def repo(tmp_path):
+    r = tmp_path / "proj"
+    r.mkdir()
+    _git(str(r), "init", "-q")
+    _git(str(r), "config", "user.email", "t@example.com")
+    _git(str(r), "config", "user.name", "Test")
+    _git(str(r), "checkout", "-q", "-b", "main")
+    (r / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0.3.1"\n', encoding="utf-8"
+    )
+    (r / "CHANGELOG.md").write_text("# Changelog\n\n## [0.3.1] - 2026-06-27\n", encoding="utf-8")
+    _git(str(r), "add", "-A")
+    _git(str(r), "commit", "-q", "-m", "chore(release): v0.3.1")
+    _git(str(r), "tag", "-a", "v0.3.1", "-m", "Release v0.3.1")
+    return str(r)
+
+
+def test_trunk_ref_prefers_main(repo):
+    assert release.trunk_ref(repo) == "main"
+
+
+def test_trunk_ref_falls_back_to_head_without_main(tmp_path):
+    r = tmp_path / "p2"
+    r.mkdir()
+    _git(str(r), "init", "-q")
+    _git(str(r), "config", "user.email", "t@e.com")
+    _git(str(r), "config", "user.name", "T")
+    _git(str(r), "checkout", "-q", "-b", "trunkless")
+    (r / "f").write_text("x", encoding="utf-8")
+    _git(str(r), "add", "-A")
+    _git(str(r), "commit", "-q", "-m", "feat: seed")
+    assert release.trunk_ref(str(r)) == "HEAD"
+
+
+def test_plan_computes_window_from_main_not_a_side_branch(repo):
+    # A feat lands on a side branch checked out as HEAD; the window must follow
+    # main (where nothing new merged), so plan reports no release.
+    _git(repo, "checkout", "-q", "-b", "feature/side")
+    (Path(repo) / "x.py").write_text("y\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: side-only work not on main")
+    info = release.plan(repo)
+    assert info["trunk_ref"] == "main"
+    assert info["next"] is None  # main has no new commits since v0.3.1
+
+
+def test_plan_detects_feat_merged_to_main(repo):
+    (Path(repo) / "y.py").write_text("z\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: real feature on main")
+    info = release.plan(repo)
+    assert (info["level"], info["next"]) == ("minor", "0.4.0")
+
+
+def test_cmd_prep_returns_nonzero_when_nothing_to_release(repo, capsys):
+    # No new commits since v0.3.1 -> nothing to prep, and no branch is created.
+    assert release.cmd_prep(repo) == 1
+    assert "Nothing to release" in capsys.readouterr().err
+    branches = _git(repo, "branch", "--list", "chore/release-*").stdout.strip()
+    assert branches == ""
+
+
+def test_cmd_prep_rejects_a_malformed_explicit_version(repo, capsys):
+    # Force a releasable window so the version check is what stops it.
+    (Path(repo) / "z.py").write_text("1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: something")
+    assert release.cmd_prep(repo, version="not.a.version") == 1
+    assert "not a SemVer" in capsys.readouterr().err

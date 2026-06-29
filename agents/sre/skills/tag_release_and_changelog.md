@@ -54,11 +54,10 @@ Revisit a fatter branch model only under a concrete trigger: external consumers 
 
 `solomon-harness release check` asserts, and CI enforces on every `chore/release-*` PR, all of:
 
-- `git` tag-to-be == `pyproject.toml` `version` == the top `CHANGELOG.md` `## [X.Y.Z]` heading (Keep a Changelog, dated today);
-- the tag does **not** already exist (`git rev-parse vX.Y.Z` must fail) — published tags are immutable and never re-cut;
-- `pytest` and `ruff check` are green.
+- `git` tag-to-be == `pyproject.toml` `version` == the top `CHANGELOG.md` `## [X.Y.Z]` heading (Keep a Changelog, carrying its cut date `## [X.Y.Z] - YYYY-MM-DD`; `release prep` stamps it);
+- the tag does **not** already exist (`git rev-parse vX.Y.Z` must fail) — published tags are immutable and never re-cut.
 
-A second CI guard runs on every non-`chore/release-*` PR and rejects any diff that touches `pyproject.toml`'s `version` line or adds a `CHANGELOG.md` heading. Together these structurally prevent three-way version drift: humans never hand-edit the version or the changelog heading; only `release prep` writes them.
+`release check` is purely this version/tag/CHANGELOG consistency invariant; `pytest` and `ruff check` are a separate gate (the `ci.yml` suite and the library readiness gate), not part of `check`. A second CI guard (the `pr-guards` job) runs on every non-`chore/release-*` PR and rejects any diff that touches `pyproject.toml`'s `version` line or adds a `CHANGELOG.md` heading. Together these structurally prevent three-way version drift: humans never hand-edit the version or the changelog heading; only `release prep` writes them.
 
 ```yaml
 # .github/workflows/version-guard.yml — reject hand-edits on ordinary PRs

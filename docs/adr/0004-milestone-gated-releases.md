@@ -163,18 +163,20 @@ branch-protected) — no PAT, and CI never pushes a commit to protected `main`.
 
 `solomon-harness release check` asserts (and CI enforces on every
 `chore/release-*` PR): `tag == pyproject.version ==` the top `CHANGELOG.md`
-heading (Keep a Changelog, with today's date) AND the tag does not already exist
-AND tests + ruff are green. Humans never hand-edit `pyproject.version` or add a
-CHANGELOG heading; `release prep` writes them, and a CI check rejects any
+heading (Keep a Changelog, carrying the cut date) AND the tag does not already
+exist. Tests and ruff are a separate gate (the `ci.yml` suite), not part of
+`release check`. Humans never hand-edit `pyproject.version` or add a CHANGELOG
+heading; `release prep` writes them, and the `pr-guards` job rejects any
 non-release PR that touches them — which structurally prevents three-way version
 drift.
 
 ### 6. CLI surface — `solomon-harness release plan|prep|check`
 
-- `release plan` (read-only, headless-safe): detect the target (a milestone at or
-  near 0 open issues, or an on-demand batch), compute the SemVer bump from commits
-  since the last tag, print the planned version plus the rendered CHANGELOG
-  section. Safe to run unattended — the loop may *propose* a release with it.
+- `release plan` (read-only, headless-safe): compute the SemVer bump from the
+  commits on trunk since the last tag and print the planned version plus the
+  rendered CHANGELOG section. It computes the version only; the milestone-at-zero
+  gate is a board check the `/solomon-release` skill (or the loop) performs via
+  `gh`. Safe to run unattended — the loop may *propose* a release with it.
 - `release prep` (opens a PR only, never merges): create `chore/release-vX.Y.Z`,
   write the computed `pyproject` bump plus the CHANGELOG section, commit
   `chore(release): vX.Y.Z`, open the PR, then STOP.

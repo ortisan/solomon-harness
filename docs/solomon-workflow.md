@@ -141,11 +141,13 @@ fail-closed gate.
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
   `type:idea`, `type:chore`; plus `priority:p0|p1|p2` and `area:<domain>`.
-- Branches (Git Flow): `feature/<slug>` for features, `bugfix/<slug>` for defects,
-  `hotfix/<version>` for production-critical fixes. The branch name carries NO issue
-  number (kept deliberately clean); `<slug>` is the kebab-cased issue title. The issue
-  is linked instead by the back-link comment and the `Refs #`/`Closes #` trailers.
-  Branch from `develop` (or `main` when the repository has no `develop`).
+- Branches (trunk-based): `feature/<slug>` for features, `bugfix/<slug>` for defects,
+  both cut from `main` and squash-merged back to `main`. There is no `develop` and no
+  long-lived `release/*` or `hotfix/*`; a production-critical fix is a `bugfix/<slug>`
+  off `main` that ships in the next patch. The only release branch is the ephemeral
+  `chore/release-vX.Y.Z` prep branch. The branch name carries NO issue number (kept
+  deliberately clean); `<slug>` is the kebab-cased issue title. The issue is linked
+  instead by the back-link comment and the `Refs #`/`Closes #` trailers.
 - Worktrees: `/solomon-start` creates each issue's branch in its own isolated git
   worktree rather than switching the primary checkout, so a dirty checkout never blocks
   a start and several issues can be in flight at once. The worktree lives at a sibling

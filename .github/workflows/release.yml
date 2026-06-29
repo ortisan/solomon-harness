@@ -2,14 +2,18 @@ name: Release
 
 # CI is the single owner of tags and published GitHub Releases. A release ships
 # in two halves, both anchored to main:
-#   - release-check: gates every `chore/release-*` prep PR before it can merge,
-#     running `solomon-harness release check` (tag == pyproject.version == top
-#     CHANGELOG heading, tag unused, tests + ruff green). Fail-closed.
+#   - pr-guards: runs on EVERY pull_request to main (never skipped, so it is a
+#     real required check). On a `chore/release-*` prep PR it runs the fail-closed
+#     `release check` (tag == pyproject.version == top CHANGELOG heading, tag
+#     unused); on any other PR it asserts the diff does not hand-edit the version
+#     or add a CHANGELOG heading (those belong only to `release prep`). Tests and
+#     ruff are the separate ci.yml gate, not this job.
 #   - release: fires only when a prep PR has merged to main (its commit subject
-#     is exactly `chore(release): vX.Y.Z`). It derives the version, tags it, and
-#     publishes the Release. There is no `gh release create` in the skill and no
-#     tag-push trigger, which removes the published-manual vs draft-auto race
-#     (issue #34).
+#     is exactly `chore(release): vX.Y.Z`; the repo squash-merges, so the squash
+#     subject is the prep PR title). It derives the version, verifies the pinned
+#     action SHAs resolve, tags it, and publishes the Release. There is no
+#     `gh release create` in the skill and no tag-push trigger, which removes the
+#     published-manual vs draft-auto race (issue #34).
 
 on:
   push:
@@ -88,6 +92,25 @@ jobs:
           fi
           echo "file=${notes_file}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify pinned action SHAs resolve
+        # Done BEFORE the tag is pushed: a corrupted/unresolvable action pin must
+        # fail here, not at the Publish step after an immutable tag already exists
+        # (which would leave a dangling tag the Assert step then blocks on retry).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for pin in \
+            "actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332" \
+            "softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda"; do
+            repo="${pin%@*}"; sha="${pin#*@}"
+            if ! gh api "repos/${repo}/commits/${sha}" --jq .sha >/dev/null 2>&1; then
+              echo "Pinned action SHA does not resolve: ${pin}" >&2
+              exit 1
+            fi
+          done
+          echo "All pinned action SHAs resolve."
+
       - name: Create and push annotated tag
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -99,7 +122,7 @@ jobs:
           git push origin "refs/tags/${TAG}"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@c95fe1489396fe8a9eb77c0abf8aa5b2ef267fda # v2.0.6
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
@@ -108,10 +131,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  release-check:
-    name: Validate release prep PR
-    # Fail-closed gate on every release-prep PR: an inconsistent prep cannot merge.
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'chore/release-')
+  pr-guards:
+    name: Release guards on PRs to main
+    # Runs on EVERY pull_request to main. The branch decision lives INSIDE the
+    # steps, not in a job-level `if`, because a job skipped by `if` is reported as
+    # a passing required check — which would make the fail-closed gate bypassable.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -119,8 +144,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
-          # `release check` asserts the target tag does not yet exist, so it
-          # needs full history and tag context too.
+          # `release check` asserts the target tag does not yet exist, and the
+          # drift guard diffs against the base, so both need full history + tags.
           fetch-depth: 0
           fetch-tags: true
 
@@ -135,8 +160,28 @@ jobs:
         # GitHub Action in this file stays SHA-pinned.
         run: uv sync --extra dev
 
-      - name: Run release check
-        # This repo sets [tool.uv] package = false, so `uv sync` does not install
-        # the `solomon-harness` console script. Invoke the module directly, the
-        # same way CLAUDE.md runs the CLI.
-        run: uv run python -m solomon_harness.cli release check
+      - name: Release-prep gate, or non-release drift guard
+        # [tool.uv] package = false, so `uv sync` does not install the
+        # `solomon-harness` console script; invoke the module directly.
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${HEAD_REF}" == chore/release-* ]]; then
+            echo "Release-prep PR: running the fail-closed release check."
+            uv run python -m solomon_harness.cli release check
+          else
+            echo "Non-release PR: asserting it does not hand-edit the version or add a CHANGELOG heading."
+            git fetch origin "${BASE_REF}" -q
+            base="origin/${BASE_REF}"
+            if git diff "${base}...HEAD" -- pyproject.toml | grep -qE '^[+-]version = '; then
+              echo "This PR edits the pyproject.toml 'version =' line. A version bump belongs only to a chore/release-* prep PR (solomon-harness release prep)." >&2
+              exit 1
+            fi
+            if git diff "${base}...HEAD" -- CHANGELOG.md | grep -qE '^\+## \[[0-9]+\.[0-9]+\.[0-9]+\]'; then
+              echo "This PR adds a CHANGELOG version heading. Changelog sections are written only by release prep." >&2
+              exit 1
+            fi
+            echo "OK: no version or CHANGELOG-heading drift."
+          fi
