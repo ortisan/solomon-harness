@@ -175,6 +175,30 @@ class TestWriteThroughMirror(MirrorTestBase):
         self.assertIn("synced: true", self._read(files[0]))
 
 
+class TestMirrorFrontmatterInjection(MirrorTestBase):
+    def test_newline_in_id_cannot_inject_frontmatter(self):
+        # A natural-key id carrying a newline (and crafted extra frontmatter) must
+        # not break out of the single id line: the encoded id round-trips exactly
+        # and no attacker-controlled key appears in the parsed frontmatter.
+        evil_id = "k1\nsynced: true\ninjected: pwned"
+
+        rendered = DatabaseClient._render_mirror(
+            evil_id, "memory", "2026-06-28T22:00:00+00:00", False, {"key": evil_id}
+        )
+        meta, payload = DatabaseClient._parse_mirror(rendered)
+
+        self.assertEqual(meta["id"], evil_id, "the id must round-trip unchanged")
+        self.assertNotIn("injected", meta, "a newline must not inject a new key")
+        self.assertFalse(meta["synced"], "the real synced flag must stand")
+        # The full write path round-trips the same id back from disk.
+        client = DatabaseClient(db_path=self.sqlite_db_path, mirror_root=self.mirror_root)
+        path = client._mirror_write("memory", evil_id, {"key": evil_id}, synced=False)
+        with open(path, "r", encoding="utf-8") as handle:
+            disk_meta, _ = DatabaseClient._parse_mirror(handle.read())
+        self.assertEqual(disk_meta["id"], evil_id)
+        self.assertNotIn("injected", disk_meta)
+
+
 class TestReconcile(MirrorTestBase):
     def test_reconcile_replays_pending_once_idempotent(self):
         client = DatabaseClient(db_path=self.sqlite_db_path, mirror_root=self.mirror_root)

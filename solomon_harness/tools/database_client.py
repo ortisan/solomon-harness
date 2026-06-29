@@ -821,9 +821,13 @@ class DatabaseClient:
     ) -> str:
         """Render a mirror file: YAML-ish frontmatter plus a readable JSON body."""
         payload = json.dumps(fields, indent=2, sort_keys=True, default=str)
+        # JSON-encode the id so a natural-key id carrying a newline or control
+        # character cannot break out of its single frontmatter line and inject
+        # extra keys (which would corrupt the parsed id on replay). The quoted form
+        # round-trips losslessly through _parse_mirror (issue #35).
         lines = [
             "---",
-            f"id: {record_id}",
+            f"id: {json.dumps(str(record_id))}",
             f"kind: {kind}",
             f"created_at: {created_at}",
             f"synced: {'true' if synced else 'false'}",
@@ -852,7 +856,16 @@ class DatabaseClient:
         for line in parts[1].strip().splitlines():
             if ":" in line:
                 key, _, value = line.partition(":")
-                meta[key.strip()] = value.strip()
+                value = value.strip()
+                # A JSON-quoted value (e.g. an encoded id) is decoded back to its
+                # exact original; plain values pass through unchanged so older
+                # mirror files stay readable.
+                if value.startswith('"'):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                meta[key.strip()] = value
         meta["synced"] = str(meta.get("synced", "true")).lower() == "true"
         body = parts[2]
         payload: Dict[str, Any] = {}
