@@ -99,12 +99,11 @@ advisory prose.
 
 ## Phase 1, as shipped
 
-`solomon_harness/digest.py` renders a facts-only board digest into
+`solomon_harness/digest.py` renders the board digest and next step options into
 `solomon-harness run` (the SessionStart hook): resume point, open issues, the last
-loop run, and PRs awaiting review (best-effort gh). It ends by pointing at
-`/solomon-loop` and never computes the next step. `/solomon-loop` now offers the
-next step plus alternatives as an enumerated decision card (AskUserQuestion in
-Claude Code, a numbered list in Gemini).
+loop run, and PRs awaiting review. It checks memory for pending tasks (or shows open
+issues if empty) and automatically prints the enumerated options. The agent reads this
+on start and immediately prompts the user with the options.
 
 ## Phase 2, as shipped
 

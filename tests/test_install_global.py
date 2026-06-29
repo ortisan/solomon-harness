@@ -73,6 +73,9 @@ class TestInstallGlobal(unittest.TestCase):
     def test_session_hook_is_added_then_idempotent(self):
         res1 = self._install()
         self.assertTrue(res1["hook_installed"])
+        self.assertTrue(res1["gemini_hook_installed"])
+        
+        # Verify Claude
         settings_path = os.path.join(self.claude, "settings.json")
         with open(settings_path) as f:
             settings = json.load(f)
@@ -80,12 +83,24 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertIn("memory-up", cmds)
         self.assertIn("solomon_harness.cli run", cmds)
 
+        # Verify Gemini
+        gemini_settings_path = os.path.join(self.gemini, "settings.json")
+        with open(gemini_settings_path) as f:
+            gemini_settings = json.load(f)
+        gemini_cmds = json.dumps(gemini_settings["hooks"]["SessionStart"])
+        self.assertIn("memory-up", gemini_cmds)
+        self.assertIn("solomon_harness.cli run", gemini_cmds)
+
         # Second install must not duplicate the hook.
         res2 = self._install()
         self.assertFalse(res2["hook_installed"])
+        self.assertFalse(res2["gemini_hook_installed"])
         with open(settings_path) as f:
             settings2 = json.load(f)
         self.assertEqual(len(settings2["hooks"]["SessionStart"]), 1)
+        with open(gemini_settings_path) as f:
+            gemini_settings2 = json.load(f)
+        self.assertEqual(len(gemini_settings2["hooks"]["SessionStart"]), 1)
 
     def test_preserves_existing_settings(self):
         os.makedirs(self.claude, exist_ok=True)

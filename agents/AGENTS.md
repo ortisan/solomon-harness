@@ -111,9 +111,11 @@ This lifecycle is driven by the `/solomon-*` workflows, orchestrated by
 `/solomon-loop`: it scans the project memory and the GitHub board for where work
 stopped and proposes the next step (development, review, release, or — when nothing
 is in flight — creating a feature, bug, or refinement). At the start of every
-Claude Code or Gemini CLI session a SessionStart hook runs `solomon-harness run`
-to surface the resume point, so a session always continues where the last one
-stopped; run `/solomon-loop` to proceed. See `docs/solomon-workflow.md`.
+Claude Code or Gemini CLI session, a SessionStart hook runs `solomon-harness run`
+which automatically detects pending tasks via memory (or prints GitHub issues if empty)
+and outputs enumerable options to proceed. The agent must read this output immediately
+on session start and present the enumerated options card to the user so they can choose
+how to proceed. See `docs/solomon-workflow.md`.
 
 ## Memory layer
 

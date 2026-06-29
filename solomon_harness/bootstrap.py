@@ -491,6 +491,63 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     else:
         print("Keeping existing .claude/settings.json.")
 
+    # 3.5 Generate .gemini/settings.json only when it does not already exist.
+    gemini_settings_dir = os.path.join(workspace_root, ".gemini")
+    os.makedirs(gemini_settings_dir, exist_ok=True)
+    gemini_settings_path = os.path.join(gemini_settings_dir, "settings.json")
+    if not os.path.isfile(gemini_settings_path):
+        print("Generating .gemini/settings.json...")
+        gemini_settings = {
+            "permissions": {
+                "allow": [
+                    "command(git)",
+                    "command(uv)",
+                    "command(gh)",
+                ]
+            },
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true",
+                            },
+                            {
+                                "type": "command",
+                                "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true",
+                            },
+                        ]
+                    }
+                ]
+            },
+        }
+        with open(gemini_settings_path, "w", encoding="utf-8") as f:
+            json.dump(gemini_settings, f, indent=2)
+    else:
+        # If settings.json exists, merge the SessionStart hook into it.
+        try:
+            with open(gemini_settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f) or {}
+        except Exception:
+            settings = {}
+        
+        hooks = settings.setdefault("hooks", {})
+        session_start = hooks.setdefault("SessionStart", [])
+        existing = json.dumps(session_start)
+        if "solomon_harness.cli memory-up" not in existing:
+            session_start.append({
+                "hooks": [
+                    {"type": "command", "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"},
+                    {"type": "command", "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"},
+                ]
+            })
+            with open(gemini_settings_path, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2)
+            print("Merged SessionStart hooks into existing .gemini/settings.json.")
+        else:
+            print("Keeping existing .gemini/settings.json (hooks already present).")
+
     # Resolve templates directory (bundled inside the package or root fallback)
     package_dir = os.path.dirname(os.path.abspath(__file__))
     bundled_templates_dir = os.path.join(package_dir, "templates")

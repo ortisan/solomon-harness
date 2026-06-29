@@ -30,15 +30,14 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("PRs awaiting review: 1", text)  # only #31: not draft, not approved
         self.assertIn("#31", text)
         self.assertNotIn("#32", text)  # drafts excluded
-        self.assertNotIn("#33", text)  # approved excluded
-        self.assertIn("run /solomon-loop", text)
+        self.assertIn("/solomon-release 33", text)
 
     def test_empty_digest_degrades_cleanly(self):
         text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=None))
         self.assertIn("no prior activity", text)
         self.assertIn("Open issues: 0", text)
         self.assertIn("gh unavailable", text)
-        self.assertIn("run /solomon-loop", text)
+        self.assertIn("/solomon-idea", text)
 
     def test_terminal_issues_excluded_from_count_and_list(self):
         """build_digest defensively drops terminal rows (closed/done/Done) from
@@ -96,7 +95,32 @@ class TestBuildDigest(unittest.TestCase):
 
         # A broken memory backend must not break session start.
         text = "\n".join(digest.gather_digest(".", BrokenDB(), fetch_github=False))
-        self.assertIn("run /solomon-loop", text)
+        self.assertIn("Options to proceed", text)
+
+    def test_digest_shows_pending_task_options(self):
+        # Case 1: Approved PR -> release
+        prs = [{"number": 12, "title": "fix auth", "reviewDecision": "APPROVED", "isDraft": False}]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=prs))
+        self.assertIn("We found a pending task: Release approved PR #12", text)
+        self.assertIn("1. Single Step (Recommended): Run /solomon-release 12", text)
+
+        # Case 2: Open PR awaiting review -> review
+        prs = [{"number": 15, "title": "add feature", "reviewDecision": "REVIEW_REQUIRED", "isDraft": False}]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=prs))
+        self.assertIn("We found a pending task: Review open PR #15", text)
+        self.assertIn("1. Single Step (Recommended): Run /solomon-review 15", text)
+
+    def test_digest_shows_no_pending_task_options(self):
+        # No pending tasks -> lists github open issues (ideas/backlog) and their refine/issue commands
+        issues = [
+            {"github_id": "45", "title": "fix login", "status": "backlog"},
+            {"github_id": "46", "title": "new profile", "status": "ideas"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("GitHub Open Issues:", text)
+        self.assertIn("Refine/Start Issue #45: /solomon-refine 45", text)
+        self.assertIn("Refine/Start Issue #46: /solomon-issue 46", text)
+        self.assertIn("Capture a new product idea: /solomon-idea", text)
 
 
 if __name__ == "__main__":

@@ -58,8 +58,9 @@ human.
 
 At the start of every Claude Code or Gemini CLI session, the harness surfaces the
 project status (latest activity and open issues) through a SessionStart hook that
-runs `solomon-harness run`, so a session always resumes where the previous one
-stopped. Run `/solomon-loop` to continue from there.
+runs `solomon-harness run`. This hook automatically checks memory for pending tasks
+(or prints open issues if none) and outputs the options card. The agent reads this
+on start and immediately prompts the user with the enumerated choices.
 
 ## Interaction style
 

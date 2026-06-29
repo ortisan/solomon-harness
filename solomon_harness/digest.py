@@ -9,6 +9,7 @@ never computed in Python (which would fork the ladder and drift).
 """
 
 import json
+import re
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -90,8 +91,119 @@ def build_digest(
         for p in awaiting[:_MAX_LIST]:
             lines.append(f"  - #{p.get('number')} {p.get('title')}")
 
+    # Determine if there is anything pending
+    pending = None
+
+    # Check for approved PRs
+    approved_prs = []
+    if prs:
+        for p in prs:
+            if p.get("isDraft"):
+                continue
+            if p.get("reviewDecision") == "APPROVED":
+                approved_prs.append(p)
+
+    if approved_prs:
+        pr = approved_prs[0]
+        pending = {
+            "command": f"/solomon-release {pr.get('number')}",
+            "description": f"Release approved PR #{pr.get('number')}: {pr.get('title')}"
+        }
+    elif prs and awaiting:
+        pr = awaiting[0]
+        pending = {
+            "command": f"/solomon-review {pr.get('number')}",
+            "description": f"Review open PR #{pr.get('number')}: {pr.get('title')}"
+        }
+    else:
+        # Check in-progress/review/qa issues from memory
+        in_flight_issues = [
+            i for i in issues
+            if i.get("status") in ("in_progress", "In Progress", "code_review", "Code Review", "qa", "QA")
+        ]
+        if in_flight_issues:
+            issue = in_flight_issues[0]
+            status = str(issue.get("status")).lower().replace(" ", "_")
+            if status == "in_progress":
+                cmd = f"/solomon-start {issue.get('github_id')}"
+                desc = f"Resume implementation for issue #{issue.get('github_id')}: {issue.get('title')}"
+            else:
+                cmd = f"/solomon-review {issue.get('github_id')}"
+                desc = f"Review/QA issue #{issue.get('github_id')}: {issue.get('title')}"
+            pending = {
+                "command": cmd,
+                "description": desc
+            }
+        elif resume and resume.get("status") == "active":
+            task_str = resume.get("task", "")
+            cmd = "/solomon-loop"
+            if "start" in str(task_str).lower():
+                m = re.search(r'\d+', str(task_str))
+                if m:
+                    cmd = f"/solomon-start {m.group(0)}"
+            pending = {
+                "command": cmd,
+                "description": f"Resume last activity: {resume.get('agent')} is working on '{task_str}'"
+            }
+        else:
+            # Check Ready issues
+            ready_issues = [
+                i for i in issues
+                if str(i.get("status")).lower() == "ready"
+            ]
+            if ready_issues:
+                issue = ready_issues[0]
+                pending = {
+                    "command": f"/solomon-start {issue.get('github_id')}",
+                    "description": f"Start development on Ready issue #{issue.get('github_id')}: {issue.get('title')}"
+                }
+
     lines.append("")
-    lines.append("Next: run /solomon-loop to decide and advance one step.")
+    if pending:
+        lines.append(f"We found a pending task: {pending['description']}")
+        lines.append("Options to proceed:")
+        lines.append(f"  1. Single Step (Recommended): Run {pending['command']}")
+        lines.append("  2. Autonomous Mode: Advance eligible tasks in sequence")
+        lines.append("  3. Other: Free-text entry")
+    else:
+        lines.append("No pending tasks found in memory.")
+        # Filter issues to show (e.g. Backlog or Ideas)
+        non_pending_issues = [
+            i for i in issues
+            if str(i.get("status")).lower() in ("backlog", "ideas", "idea", "none", "null", "")
+        ]
+        if non_pending_issues:
+            lines.append("GitHub Open Issues:")
+            for i in non_pending_issues[:_MAX_LIST]:
+                lines.append(f"  - [{i.get('github_id')}] {i.get('title')} ({i.get('status') or 'Backlog'})")
+            if len(non_pending_issues) > _MAX_LIST:
+                lines.append(f"  ... and {len(non_pending_issues) - _MAX_LIST} more")
+
+            lines.append("")
+            lines.append("Options to proceed:")
+            option_idx = 1
+            for i in non_pending_issues[:3]:
+                status = str(i.get("status")).lower()
+                cmd = f"/solomon-refine {i.get('github_id')}" if status == "backlog" else f"/solomon-issue {i.get('github_id')}"
+                lines.append(f"  {option_idx}. Refine/Start Issue #{i.get('github_id')}: {cmd}")
+                option_idx += 1
+
+            lines.append(f"  {option_idx}. Capture a new product idea: /solomon-idea")
+            option_idx += 1
+            lines.append(f"  {option_idx}. Create a new feature/story issue: /solomon-issue")
+            option_idx += 1
+            lines.append(f"  {option_idx}. Create a new bug report: /solomon-bug")
+            option_idx += 1
+            lines.append(f"  {option_idx}. Other: Free-text entry")
+        else:
+            lines.append("No open issues found on GitHub.")
+            lines.append("")
+            lines.append("Options to proceed:")
+            lines.append("  1. Capture a new product idea: /solomon-idea")
+            lines.append("  2. Create a new feature/story issue: /solomon-issue")
+            lines.append("  3. Create a new bug report: /solomon-bug")
+            lines.append("  4. Other: Free-text entry")
+
     return lines
 
 

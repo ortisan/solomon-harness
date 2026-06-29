@@ -13,5 +13,21 @@
       "read_file(/Users/marcelo/Documents/Projects/solomon-harness-worktrees)",
       "write_file(/Users/marcelo/Documents/Projects/solomon-harness-worktrees)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
   }
 }

@@ -214,9 +214,12 @@ def install_global(
     else:
         result["agy_imported"] = None
 
-    # 4. SessionStart hook in the global Claude settings.
+    # 4. SessionStart hook in the global Claude and Gemini settings.
     result["hook_installed"] = _merge_session_start_hook(
         os.path.join(claude_dir, "settings.json")
+    )
+    result["gemini_hook_installed"] = _merge_session_start_hook(
+        os.path.join(gemini_dir, "settings.json")
     )
 
     # 5. Best-effort MCP registration with the host CLIs (user scope).
@@ -227,6 +230,11 @@ def install_global(
             ["mcp", "add", "--scope", "user", "solomon-memory", "--",
              sys.executable, "-m", "solomon_harness.mcp_server"],
             "claude",
+        )
+        result["mcp_gemini"] = _register_mcp(
+            ["mcp", "add", "--scope", "user", "solomon-memory", "--",
+             sys.executable, "-m", "solomon_harness.mcp_server"],
+            "gemini",
         )
 
     return result
@@ -248,10 +256,16 @@ def describe(result: dict) -> str:
     elif agy_imported is None and result.get("gemini_extension"):
         # Only show note if extension was processed but agy wasn't found/run
         lines.append("  ~/.gemini (Antigravity): agy CLI not found or non-default path; no import executed")
-    lines.append(f"  session hook: {'installed' if result.get('hook_installed') else 'already present'}")
-    mcp = result.get("mcp_claude")
-    if mcp is None:
-        lines.append("  MCP: claude CLI not found; register manually with 'claude mcp add --scope user solomon-memory -- python3 -m solomon_harness.mcp_server'")
+    lines.append(f"  session hook (claude): {'installed' if result.get('hook_installed') else 'already present'}")
+    lines.append(f"  session hook (gemini): {'installed' if result.get('gemini_hook_installed') else 'already present'}")
+    mcp_c = result.get("mcp_claude")
+    if mcp_c is None:
+        lines.append("  MCP (claude): claude CLI not found; register manually")
     else:
-        lines.append(f"  MCP (claude, user scope): {'registered' if mcp else 'registration failed; do it manually'}")
+        lines.append(f"  MCP (claude, user scope): {'registered' if mcp_c else 'registration failed'}")
+    mcp_g = result.get("mcp_gemini")
+    if mcp_g is None:
+        lines.append("  MCP (gemini): gemini CLI not found; register manually")
+    else:
+        lines.append(f"  MCP (gemini, user scope): {'registered' if mcp_g else 'registration failed'}")
     return "\n".join(lines)
