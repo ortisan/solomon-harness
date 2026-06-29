@@ -232,6 +232,54 @@ def compose_portfolio(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _filter_lane(lane: Dict[str, Any], person_key: str) -> Dict[str, Any]:
+    """Narrow one OK swimlane to the cards whose personKey matches (pure).
+
+    Keeps only the matching card in each column, recomputes that column's count
+    and the lane total, and zeroes ``unmapped``: an unmapped issue carries no
+    card and so cannot be attributed to a person. Because it only removes cards
+    already in this lane, it cannot pull in another tenant's row.
+    """
+    columns: List[Dict[str, Any]] = []
+    for column in lane["columns"]:
+        kept = [card for card in column["issues"] if card.get("personKey") == person_key]
+        columns.append({"name": column["name"], "count": len(kept), "issues": kept})
+    total = sum(column["count"] for column in columns)
+    return {**lane, "columns": columns, "total": total, "unmapped": 0}
+
+
+def filter_portfolio(payload: Dict[str, Any], person_key: str) -> Dict[str, Any]:
+    """Narrow a composed portfolio payload to one person key (pure).
+
+    Operates on the already-composed, per-tenant-isolated payload, so it can only
+    REMOVE non-matching cards within each lane — it never joins lanes, and tenant
+    isolation (ADR-0002 compose-never-join) holds by construction. Within each OK
+    swimlane it keeps the cards whose surfaced ``personKey`` matches and re-sums
+    that lane; it keeps one swimlane per project (an unmatched project becomes a
+    present-but-empty lane, never hidden) and leaves degraded (UNREACHABLE/
+    FORBIDDEN) lanes untouched, since they already carry no rows. It re-sums the
+    seven portfolio column counts and the portfolio total over the matched set,
+    re-asserts the reconciliation invariant, stamps ``filteredUser``, and passes
+    ``aggregateStatus``/``overflow``/``notice`` straight through.
+    """
+    swimlanes = [
+        _filter_lane(lane, person_key) if lane["status"] == STATUS_OK else lane
+        for lane in payload["swimlanes"]
+    ]
+    columns = _portfolio_columns(swimlanes)
+    total = sum(lane["total"] for lane in swimlanes)
+    unmapped = sum(lane["unmapped"] for lane in swimlanes)
+    _assert_reconciles(total, columns, unmapped)
+    return {
+        **payload,
+        "swimlanes": swimlanes,
+        "columns": columns,
+        "total": total,
+        "unmapped": unmapped,
+        "filteredUser": person_key,
+    }
+
+
 def _is_permission_failure(error: Exception) -> bool:
     """Report whether a read failure reads as an access denial (FORBIDDEN)."""
     message = str(error).lower()

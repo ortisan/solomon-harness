@@ -428,6 +428,117 @@ class TestComposePortfolio(unittest.TestCase):
             cockpit_read.compose_portfolio([broken])
 
 
+def _portfolio_with_assignees():
+    """Compose a three-tenant portfolio whose cards carry mixed person keys.
+
+    alice owns 3 cards in alpha and 2 in beta and none in gamma; bob owns cards
+    in every tenant; two alpha cards and one beta card are unassigned. Built
+    through the real compose_portfolio so every card carries the surfaced
+    personKey the filter matches on.
+    """
+    alpha = [
+        {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+        {"github_id": "a2", "status": "In Progress", "assignee": "alice@example.com"},
+        {"github_id": "a3", "status": "Done", "assignee": "alice@example.com"},
+        {"github_id": "a4", "status": "Backlog", "assignee": "gh:bob"},
+        {"github_id": "a5", "status": "Ready", "assignee": None},
+        {"github_id": "a6", "status": "QA", "assignee": None},
+    ]
+    beta = [
+        {"github_id": "b1", "status": "Ready", "assignee": "alice@example.com"},
+        {"github_id": "b2", "status": "QA", "assignee": "alice@example.com"},
+        {"github_id": "b3", "status": "Done", "assignee": "gh:bob"},
+        {"github_id": "b4", "status": "Backlog", "assignee": None},
+    ]
+    gamma = [
+        {"github_id": "g1", "status": "Backlog", "assignee": "gh:bob"},
+        {"github_id": "g2", "status": "In Progress", "assignee": "gh:bob"},
+    ]
+    return cockpit_read.compose_portfolio(
+        [
+            _ok_result("alpha", alpha),
+            _ok_result("beta", beta),
+            _ok_result("gamma", gamma),
+        ]
+    )
+
+
+class TestFilterPortfolio(unittest.TestCase):
+    def _ids_by_project(self, payload):
+        return {
+            lane["project"]: {
+                card["github_id"]
+                for column in lane["columns"]
+                for card in column["issues"]
+            }
+            for lane in payload["swimlanes"]
+        }
+
+    def test_filter_portfolio_narrows_to_one_person_key(self):
+        """filter_portfolio keeps one swimlane per project and, within each, only
+        the cards whose surfaced personKey matches: alice renders her alpha/beta
+        cards with gamma a present-but-empty lane and a re-summed total of 5; a
+        person assigned nowhere (carol) keeps all three lanes present and empty
+        with total 0; the unassigned pseudo-key renders only the null-assignee
+        cards. The lane is narrowed not flattened, filteredUser is stamped, the
+        seven portfolio column counts re-sum over the matched set, and no card
+        carrying another person's key survives anywhere."""
+        portfolio = _portfolio_with_assignees()
+
+        cases = {
+            "alice@example.com": {
+                "ids": {
+                    "alpha": {"a1", "a2", "a3"},
+                    "beta": {"b1", "b2"},
+                    "gamma": set(),
+                },
+                "total": 5,
+            },
+            "carol@example.com": {
+                "ids": {"alpha": set(), "beta": set(), "gamma": set()},
+                "total": 0,
+            },
+            "unassigned": {
+                "ids": {"alpha": {"a5", "a6"}, "beta": {"b4"}, "gamma": set()},
+                "total": 3,
+            },
+        }
+
+        for person_key, expected in cases.items():
+            with self.subTest(person_key=person_key):
+                filtered = cockpit_read.filter_portfolio(portfolio, person_key)
+
+                # One lane per project survives: narrowed, never flattened.
+                self.assertEqual(
+                    [lane["project"] for lane in filtered["swimlanes"]],
+                    ["alpha", "beta", "gamma"],
+                )
+                self.assertEqual(self._ids_by_project(filtered), expected["ids"])
+
+                # Each lane total re-sums its filtered cards; an unmatched lane is
+                # present at zero, never hidden.
+                lanes = {lane["project"]: lane for lane in filtered["swimlanes"]}
+                for project, ids in expected["ids"].items():
+                    self.assertEqual(lanes[project]["total"], len(ids))
+
+                # The portfolio total and the seven column counts re-sum over the
+                # matched set; filteredUser names the subject.
+                self.assertEqual(filtered["total"], expected["total"])
+                self.assertEqual(
+                    sum(c["count"] for c in filtered["columns"]), expected["total"]
+                )
+                self.assertEqual(filtered["filteredUser"], person_key)
+
+                # No card carrying another person's key survives in any lane.
+                surviving_keys = {
+                    card["personKey"]
+                    for lane in filtered["swimlanes"]
+                    for column in lane["columns"]
+                    for card in column["issues"]
+                }
+                self.assertTrue(surviving_keys <= {person_key})
+
+
 class _CleanTenantClient:
     """A per-tenant read port that returns a fixed issue list and closes once."""
 
