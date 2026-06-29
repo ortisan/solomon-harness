@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -348,6 +349,28 @@ class TestComposePortfolio(unittest.TestCase):
         self.assertEqual(portfolio["total"], column_total + portfolio["unmapped"])
         self.assertEqual(portfolio["aggregateStatus"], 207)
 
+    def test_compose_portfolio_raises_when_reconciliation_is_violated(self):
+        """The critical reconciliation guard fires: an OK result whose board total
+        does not match its column counts plus unmapped raises RuntimeError instead
+        of silently composing a portfolio whose totals do not add up."""
+        broken = {
+            "project": "alpha",
+            "status": "OK",
+            "board": {
+                "project": "alpha",
+                "columns": [
+                    {"name": name, "count": 0, "issues": []}
+                    for name in SEVEN_COLUMNS
+                ],
+                # total claims 99 while the columns sum to 0 and unmapped is 0.
+                "total": 99,
+                "unmapped": 0,
+            },
+        }
+
+        with self.assertRaises(RuntimeError):
+            cockpit_read.compose_portfolio([broken])
+
 
 class _CleanTenantClient:
     """A per-tenant read port that returns a fixed issue list and closes once."""
@@ -622,8 +645,14 @@ class TestPortfolioPayload(unittest.TestCase):
         sorted order), emits a deterministic overflow notice, excludes the same
         26th project on every load, and totals over the 25 shown."""
         names = [f"proj-{index:02d}" for index in range(26)]
+        # Shuffle the discovery order so the cap is proven to run on the sorted
+        # set: a cap-before-sort bug would keep a different 25 than sorted(names),
+        # which a pre-sorted source would hide. A fixed seed keeps it repeatable.
+        discovery_order = list(names)
+        random.Random(20260629).shuffle(discovery_order)
         issues = {
-            name: [{"github_id": f"{name}-1", "status": "Backlog"}] for name in names
+            name: [{"github_id": f"{name}-1", "status": "Backlog"}]
+            for name in discovery_order
         }
 
         def factory():
