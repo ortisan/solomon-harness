@@ -71,6 +71,14 @@ list and invite a free-text reply. Lead with the recommended option first and ke
 options mutually exclusive. Prefer this over an open prose question: discrete, numbered
 choices keep the user's context focused and prevent dispersion.
 
+This applies to the **closing "next step" recommendation of every turn**, not only the
+big branching choices. Never end a report with prose the user must copy (for example
+"run `/solomon-start 5` or `/solomon-loop`"): present the candidate next actions as the
+enumerated menu itself — in Claude Code an AskUserQuestion the user clicks — so advancing
+the lifecycle costs one selection, not a copy-paste. The same holds for every small
+"proceed / retry / push-or-PR" confirmation. A turn that ends by offering what to do next
+without an enumerated, selectable menu is a defect.
+
 ## Implementation mode (automatic or manual)
 
 `/solomon-start` asks, before any code is written, whether the change is implemented
