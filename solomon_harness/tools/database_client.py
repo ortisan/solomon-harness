@@ -2086,15 +2086,20 @@ class DatabaseClient:
 
         "Open" is a non-terminal predicate (ADR-0006), not the literal
         status='open' filter no lifecycle step writes: a row is open when its
-        status is not one of the terminal literals (closed/done/Done). The
-        terminal set is bound as a query parameter on both backends, never
+        status is not one of the terminal literals (closed/done/Done). A row with
+        no status is non-terminal too (is_terminal(None) is False), so a NULL/NONE
+        status is kept, matching digest.build_digest; a bare ``NOT IN`` would drop
+        it. The terminal set is bound as a query parameter on both backends, never
         string-formatted, so the predicate carries no injection surface.
 
         Returns:
             A list of dictionaries containing the non-terminal issues.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM issues WHERE status NOT IN $terminal"
+            query = (
+                "SELECT * FROM issues "
+                "WHERE status IS NONE OR status IS NULL OR status NOT IN $terminal"
+            )
             try:
                 res = self._run_surreal(query, {"terminal": list(TERMINAL_STATUSES)})
                 return self._extract_list(res)
@@ -2107,7 +2112,9 @@ class DatabaseClient:
                 )
         else:
             placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
-            query = f"SELECT * FROM issues WHERE status NOT IN ({placeholders})"
+            query = (
+                f"SELECT * FROM issues WHERE status IS NULL OR status NOT IN ({placeholders})"
+            )
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
@@ -2158,9 +2165,9 @@ class DatabaseClient:
     def list_issues(self) -> List[Dict[str, Any]]:
         """Retrieves every issue for this tenant regardless of status.
 
-        Read-only. Unlike get_open_issues (status='open' only), this returns all
-        issues including Done, so the cockpit board can render the full seven
-        columns. No row is created or mutated.
+        Read-only. Unlike get_open_issues (the non-terminal rows only), this returns
+        all issues including the terminal/Done ones, so the cockpit board can render
+        the full seven columns. No row is created or mutated.
         """
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues"

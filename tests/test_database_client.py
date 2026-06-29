@@ -738,6 +738,41 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIn("NOT IN", captured["query"])
         self.assertEqual(captured["params"], {"terminal": list(TERMINAL_STATUSES)})
 
+    def test_get_open_issues_keeps_null_status_rows_sqlite(self):
+        """A row with no status is non-terminal and kept by get_open_issues, matching
+        is_terminal(None) being False and digest.build_digest, so the two consumers
+        agree on null-status rows. A bare SQL NOT IN would drop a NULL row."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("n1", "No status", "feature", None, None)
+        client.log_issue("t1", "Closed", "feature", "closed", None)
+
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        client.close()
+        self.assertIn("n1", open_ids)
+        self.assertNotIn("t1", open_ids)
+
+    def test_get_open_issues_surreal_query_tolerates_null_status(self):
+        """On SurrealDB the open predicate keeps NULL/NONE-status rows (consistent
+        with is_terminal(None) being False), still binding the terminal set as a
+        parameter rather than string-formatting it (STRIDE)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.backend = "surrealdb"
+        captured = {}
+
+        def fake_run(query, params=None):
+            captured["query"] = query
+            captured["params"] = params
+            return []
+
+        client._run_surreal = fake_run
+        client.get_open_issues()
+        client.backend = "sqlite"
+        client.close()
+
+        self.assertIn("NOT IN", captured["query"])
+        self.assertIn("NONE", captured["query"].upper())
+        self.assertEqual(captured["params"], {"terminal": list(TERMINAL_STATUSES)})
+
     def test_status_vocabulary_helpers(self):
         """normalize_status and is_terminal agree on the canonical vocabulary."""
         self.assertEqual(normalize_status("In Progress"), "in_progress")
