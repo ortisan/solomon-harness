@@ -18,12 +18,16 @@ const COLUMNS = [
 ];
 
 const ALL_PROJECTS = "";
+const ALL_USERS = "";
+// The reserved subject for issues with no assignee, mirrored from the composer.
+const UNASSIGNED_USER = "unassigned";
 
 interface Issue {
   github_id: string;
   title: string;
   type_: string;
   status: string;
+  personKey?: string;
 }
 
 interface BoardColumn {
@@ -63,6 +67,7 @@ interface Portfolio {
   aggregateStatus: number;
   overflow: number;
   notice: string | null;
+  filteredUser?: string;
 }
 
 type DashboardData = Dashboard | Portfolio;
@@ -73,6 +78,37 @@ function isPortfolio(data: DashboardData): data is Portfolio {
 
 function fallbackColumns(): BoardColumn[] {
   return COLUMNS.map((name) => ({ name, count: 0, issues: [] }));
+}
+
+// The people surfaced by one portfolio load: the personKeys across its
+// swimlanes plus the reserved unassigned subject, deduped and sorted. A filtered
+// load carries only the matched person, so this is read from an unfiltered load
+// and persisted, never re-derived from the already-narrowed response.
+function collectUsers(portfolio: Portfolio): string[] {
+  const keys = new Set<string>([UNASSIGNED_USER]);
+  for (const lane of portfolio.swimlanes) {
+    for (const column of lane.columns) {
+      for (const issue of column.issues) {
+        if (issue.personKey) {
+          keys.add(issue.personKey);
+        }
+      }
+    }
+  }
+  return Array.from(keys).sort();
+}
+
+// The filter's option set: the persisted full user list unioned with the
+// currently selected user. The union guarantees the controlled <select> value
+// always has a matching <option> (even a hand-crafted ?user= that matches zero
+// issues), so the selector never collapses to the filtered person and switching
+// directly from one user to another stays possible.
+function userFilterOptions(allUsers: string[], selectedUser: string): string[] {
+  const keys = new Set<string>(allUsers);
+  if (selectedUser) {
+    keys.add(selectedUser);
+  }
+  return Array.from(keys).sort();
 }
 
 function BoardColumns({ columns }: { columns: BoardColumn[] }) {
@@ -129,8 +165,36 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function Swimlane({ lane }: { lane: SwimlaneData }) {
-  const degraded = lane.status !== "OK";
+function SwimlaneBody({
+  lane,
+  filteredUser,
+}: {
+  lane: SwimlaneData;
+  filteredUser?: string;
+}) {
+  // A degraded tenant carries no issue rows, so only its badge renders.
+  if (lane.status !== "OK") {
+    return null;
+  }
+  // Under an active filter, an OK lane with no matching card stays present with
+  // an explicit per-lane affordance rather than vanishing (narrow, not hide).
+  if (filteredUser && lane.total === 0) {
+    return (
+      <p className="swimlane-empty text-muted" role="status">
+        0 issues for {filteredUser}
+      </p>
+    );
+  }
+  return <BoardColumns columns={lane.columns} />;
+}
+
+function Swimlane({
+  lane,
+  filteredUser,
+}: {
+  lane: SwimlaneData;
+  filteredUser?: string;
+}) {
   return (
     <section className="swimlane" data-testid="swimlane" aria-label={lane.project}>
       <header className="swimlane-header">
@@ -138,13 +202,16 @@ function Swimlane({ lane }: { lane: SwimlaneData }) {
         <StatusBadge status={lane.status} />
         <span className="swimlane-total">{lane.total}</span>
       </header>
-      {/* A degraded tenant carries no issue rows, so only its badge renders. */}
-      {degraded ? null : <BoardColumns columns={lane.columns} />}
+      <SwimlaneBody lane={lane} filteredUser={filteredUser} />
     </section>
   );
 }
 
 function PortfolioView({ portfolio }: { portfolio: Portfolio }) {
+  const filteredUser = portfolio.filteredUser;
+  // A filter that matched nobody anywhere gets one explicit cross-project empty
+  // state naming the subject and the number of lanes scanned.
+  const emptyUnderFilter = Boolean(filteredUser) && portfolio.total === 0;
   return (
     <div className="portfolio">
       <div className="portfolio-summary">
@@ -156,10 +223,16 @@ function PortfolioView({ portfolio }: { portfolio: Portfolio }) {
             {portfolio.notice}
           </p>
         )}
+        {emptyUnderFilter && (
+          <p className="text-warning" role="status">
+            No issues for {filteredUser} across {portfolio.swimlanes.length}{" "}
+            projects
+          </p>
+        )}
       </div>
       <div className="swimlanes">
         {portfolio.swimlanes.map((lane) => (
-          <Swimlane key={lane.project} lane={lane} />
+          <Swimlane key={lane.project} lane={lane} filteredUser={filteredUser} />
         ))}
       </div>
     </div>
@@ -181,6 +254,7 @@ function SingleBoardView({ board }: { board?: Board }) {
 
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [allUsers, setAllUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -189,18 +263,29 @@ export default function Home() {
     // Load once on mount; the selector triggers subsequent loads.
   }, []);
 
-  async function load(project?: string) {
+  async function load(project?: string, user?: string) {
     setLoading(true);
     try {
-      const url = project
-        ? `/api/dashboard?project=${encodeURIComponent(project)}`
-        : "/api/dashboard";
+      const params = new URLSearchParams();
+      if (project) {
+        params.set("project", project);
+      }
+      if (user) {
+        params.set("user", user);
+      }
+      const query = params.toString();
+      const url = query ? `/api/dashboard?${query}` : "/api/dashboard";
       const res = await fetch(url);
       const json = await res.json();
       if (json?.error) {
         throw new Error(json.error);
       }
       setData(json as DashboardData);
+      // Refresh the persisted user list only from an unfiltered portfolio load,
+      // so filtering to one person never collapses the selector to that person.
+      if (isPortfolio(json) && !json.filteredUser) {
+        setAllUsers(collectUsers(json));
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load the board");
@@ -214,6 +299,8 @@ export default function Home() {
   const projects =
     dashboard?.projects ?? portfolio?.swimlanes.map((s) => s.project) ?? [];
   const selectedProject = dashboard?.selectedProject ?? ALL_PROJECTS;
+  const selectedUser = portfolio?.filteredUser ?? ALL_USERS;
+  const userOptions = userFilterOptions(allUsers, selectedUser);
 
   return (
     <div className="app-container">
@@ -238,6 +325,22 @@ export default function Home() {
               {projects.map((project) => (
                 <option key={project} value={project}>
                   {project}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="repo-title">
+            <span>User:</span>
+            <select
+              aria-label="User"
+              className="select-input"
+              value={selectedUser}
+              onChange={(event) => void load(undefined, event.target.value)}
+            >
+              <option value={ALL_USERS}>All users</option>
+              {userOptions.map((user) => (
+                <option key={user} value={user}>
+                  {user}
                 </option>
               ))}
             </select>
