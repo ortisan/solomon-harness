@@ -280,6 +280,97 @@ class TestSkillContract(unittest.TestCase):
             )
 
 
+class TestKeywords(_RepoRootTestCase):
+    def test_frozen_keyword_list_registered(self):
+        validator = _load_validator()
+        self.assertIn("legacy_modernizer.md", validator.REQUIRED_KEYWORDS)
+        self.assertEqual(
+            validator.REQUIRED_KEYWORDS["legacy_modernizer.md"],
+            FROZEN_KEYWORDS,
+            "the registered keyword list must equal the frozen ordered list",
+        )
+
+    def test_profile_contains_every_required_keyword(self):
+        low = _read(PROFILE_REL).lower()
+        for keyword in FROZEN_KEYWORDS:
+            self.assertIn(
+                keyword.lower(),
+                low,
+                f"profile is missing required keyword {keyword!r}",
+            )
+
+
+class TestRealProfilePasses(_RepoRootTestCase):
+    def test_real_profile_passes(self):
+        validator = _load_validator()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = validator.validate_agent_file(PROFILE_REL, FROZEN_KEYWORDS)
+        out = buf.getvalue()
+        self.assertTrue(result, f"validate_agent_file returned False:\n{out}")
+        self.assertNotIn("Error:", out)
+
+
+class TestFailurePaths(_RepoRootTestCase):
+    def _run(self, func):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = func()
+        return result, buf.getvalue()
+
+    def _temp_file(self, content):
+        fd, path = tempfile.mkstemp(suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def test_missing_keyword_message(self):
+        validator = _load_validator()
+        token = "Nonexistent-Keyword-XYZ"
+        result, out = self._run(
+            lambda: validator.validate_agent_file(PROFILE_REL, FROZEN_KEYWORDS + [token])
+        )
+        self.assertFalse(result)
+        self.assertIn(
+            f"Error: Required keyword/phrase '{token}' not found in {PROFILE_REL}.",
+            out,
+        )
+
+    def test_emoji_message(self):
+        validator = _load_validator()
+        char = "\U0001f600"
+        path = self._temp_file(f"Plain text {char} more text\n")
+        result, out = self._run(lambda: validator.validate_agent_file(path, []))
+        self.assertFalse(result)
+        self.assertIn(
+            f"Error: Emoji or icon '{char}' found in {path}. Emojis are strictly prohibited.",
+            out,
+        )
+
+    def test_cliche_message(self):
+        validator = _load_validator()
+        path = self._temp_file("We leverage this approach to ship faster.\n")
+        result, out = self._run(lambda: validator.validate_agent_file(path, []))
+        self.assertFalse(result)
+        self.assertIn(f"Error: AI cliche 'leverage' found in {path}.", out)
+
+    def test_whole_tree_failure_footer(self):
+        from unittest import mock
+
+        validator = _load_validator()
+        with mock.patch.object(
+            validator, "REQUIRED_KEYWORDS", {"zzz_missing.md": ["x"]}
+        ):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as ctx:
+                    validator.main()
+        out = buf.getvalue()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("\nAgent profile validation failed.", out)
+
+
 class TestHumanizer(unittest.TestCase):
     def test_new_files_have_no_emoji_or_cliche(self):
         validator = _load_validator()
