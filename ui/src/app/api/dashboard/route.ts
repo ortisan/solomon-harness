@@ -16,6 +16,9 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 const tracer = trace.getTracer("solomon_harness.cockpit_dashboard_route");
 
+export const cache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL_MS = 5000;
+
 function pythonBin(rootDir: string): string {
   return process.platform === "win32"
     ? path.join(rootDir, ".venv", "Scripts", "python.exe")
@@ -52,7 +55,10 @@ function readBridge(
         timeout: SUBPROCESS_TIMEOUT_MS,
         maxBuffer: MAX_OUTPUT_BYTES,
       },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
+        if (stderr) {
+          process.stderr.write(stderr);
+        }
         if (error) {
           reject(error);
           return;
@@ -82,17 +88,28 @@ export async function GET(request: Request): Promise<Response> {
         boardArgs.push("--project", requested);
       }
 
-      // The requested project is passed as a single argv element if provided.
-      // The Python composer validates it against the discovered allowlist and returns
-      // found:false for an unknown (or injection) value, which maps to 404 here.
-      const board = JSON.parse(
-        await readBridge(
-          bin,
-          boardArgs,
-          rootDir,
-          env,
-        ),
-      );
+      // Check cache to avoid DoS via Python process spawning.
+      const cacheKey = requested;
+      const cached = cache.get(cacheKey);
+      const now = Date.now();
+      let board: any;
+
+      if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+        board = cached.data;
+      } else {
+        // The requested project is passed as a single argv element if provided.
+        // The Python composer validates it against the discovered allowlist and returns
+        // found:false for an unknown (or injection) value, which maps to 404 here.
+        board = JSON.parse(
+          await readBridge(
+            bin,
+            boardArgs,
+            rootDir,
+            env,
+          ),
+        );
+        cache.set(cacheKey, { data: board, timestamp: now });
+      }
 
       const projects: string[] = board.projects;
       const selectedProject: string = board.selectedProject;

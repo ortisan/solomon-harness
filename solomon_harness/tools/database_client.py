@@ -11,7 +11,7 @@ import hashlib
 import re
 import uuid
 from contextlib import contextmanager
-from typing import Generator, Any, Dict, List, Optional, Union
+from typing import Generator, Any, Dict, List, Optional, Union, ClassVar
 
 
 class SpectronFallbackClient:
@@ -175,6 +175,54 @@ def _resilient(method):
     return wrapper
 
 
+class TenantDatabaseReader:
+    """Specialized reader for tenant database queries to avoid god-object (SRP) violation in DatabaseClient."""
+
+    def __init__(self, client: "DatabaseClient") -> None:
+        self._client = client
+
+    def list_databases(self) -> List[str]:
+        if self._client.backend == "surrealdb":
+            try:
+                res = self._client.db.query("INFO FOR NS")
+                info: Any = res
+                if isinstance(info, list) and info:
+                    head = info[0]
+                    info = head.get("result", head) if isinstance(head, dict) else head
+                databases = info.get("databases", {}) if isinstance(info, dict) else {}
+                if isinstance(databases, dict):
+                    return sorted(databases.keys())
+                return sorted(str(d) for d in databases)
+            except Exception as e:
+                logging.error(f"Failed to list databases from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list databases from SurrealDB: {e}")
+        return [_resolve_database(self._client._configured_database, self._client._project_root)]
+
+    def use_tenant(self, database: str) -> None:
+        if self._client.backend == "surrealdb" and self._client.db is not None:
+            self._client.db.use(self._client._namespace, database)
+
+    def list_issues(self) -> List[Dict[str, Any]]:
+        if self._client.backend == "surrealdb":
+            query = "SELECT * FROM issues"
+            try:
+                res = self._client.db.query(query)
+                return self._client._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list issues from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list issues from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM issues ORDER BY created_at"
+            try:
+                with self._client._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query)
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list issues: {e}")
+                raise RuntimeError(f"Failed to list issues: {e}")
+
+
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
@@ -183,6 +231,7 @@ class DatabaseClient:
     db_path: Optional[str]
     busy_timeout_seconds: float
     harness_dir: str
+    _schema_initialized_backends: ClassVar[Dict[str, bool]] = {}
 
     def __init__(
         self,
@@ -327,20 +376,23 @@ class DatabaseClient:
 
                 if self._connect_surreal():
                     try:
-                        # Initialize SurrealDB tables. IF NOT EXISTS makes this
-                        # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
-                        init_query = (
-                            "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;"
-                        )
-                        self.db.query(init_query)
+                        cache_key = f"surrealdb:{url}:{namespace}:{database}"
+                        if cache_key not in DatabaseClient._schema_initialized_backends:
+                            # Initialize SurrealDB tables. IF NOT EXISTS makes this
+                            # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
+                            init_query = (
+                                "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
+                                "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;"
+                            )
+                            self.db.query(init_query)
+                            DatabaseClient._schema_initialized_backends[cache_key] = True
                         self.backend = "surrealdb"
 
                         # Initialize Spectron if URL and API Key are configured
@@ -426,6 +478,11 @@ class DatabaseClient:
 
     def _init_sqlite_db(self) -> None:
         """Creates the required SQLite tables if they do not already exist."""
+        db_file = os.path.abspath(self.db_path or self._resolve_sqlite_path())
+        cache_key = f"sqlite:{db_file}"
+        if cache_key in DatabaseClient._schema_initialized_backends:
+            return
+
         queries = [
             """
             CREATE TABLE IF NOT EXISTS decisions (
@@ -532,6 +589,7 @@ class DatabaseClient:
                 for query in queries:
                     cursor.execute(query)
                 conn.commit()
+            DatabaseClient._schema_initialized_backends[cache_key] = True
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
@@ -2047,21 +2105,7 @@ class DatabaseClient:
         the single resolvable tenant for this workspace, derived from the config
         or the git remote. No row is created or mutated on either path.
         """
-        if self.backend == "surrealdb":
-            try:
-                res = self.db.query("INFO FOR NS")
-                info: Any = res
-                if isinstance(info, list) and info:
-                    head = info[0]
-                    info = head.get("result", head) if isinstance(head, dict) else head
-                databases = info.get("databases", {}) if isinstance(info, dict) else {}
-                if isinstance(databases, dict):
-                    return sorted(databases.keys())
-                return sorted(str(d) for d in databases)
-            except Exception as e:
-                logging.error(f"Failed to list databases from SurrealDB: {e}")
-                raise RuntimeError(f"Failed to list databases from SurrealDB: {e}")
-        return [_resolve_database(self._configured_database, self._project_root)]
+        return TenantDatabaseReader(self).list_databases()
 
     def use_tenant(self, database: str) -> None:
         """Re-scope the open connection to a tenant database (read-only).
@@ -2074,8 +2118,7 @@ class DatabaseClient:
         SQLite fallback: a no-op, because a SQLite workspace resolves to a single
         tenant and the allowlist only ever yields that one name.
         """
-        if self.backend == "surrealdb" and self.db is not None:
-            self.db.use(self._namespace, database)
+        TenantDatabaseReader(self).use_tenant(database)
 
     def list_issues(self) -> List[Dict[str, Any]]:
         """Retrieves every issue for this tenant regardless of status.
@@ -2084,24 +2127,7 @@ class DatabaseClient:
         issues including Done, so the cockpit board can render the full seven
         columns. No row is created or mutated.
         """
-        if self.backend == "surrealdb":
-            query = "SELECT * FROM issues"
-            try:
-                res = self.db.query(query)
-                return self._extract_list(res)
-            except Exception as e:
-                logging.error(f"Failed to list issues from SurrealDB: {e}")
-                raise RuntimeError(f"Failed to list issues from SurrealDB: {e}")
-        else:
-            query = "SELECT * FROM issues ORDER BY created_at"
-            try:
-                with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(query)
-                    return [dict(row) for row in cursor.fetchall()]
-            except sqlite3.Error as e:
-                logging.error(f"Failed to list issues: {e}")
-                raise RuntimeError(f"Failed to list issues: {e}")
+        return TenantDatabaseReader(self).list_issues()
 
     @_resilient
     def get_latest_activity(self) -> Optional[Dict[str, Any]]:

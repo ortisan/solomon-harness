@@ -23,6 +23,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "pytest>=7.0",
+    "import-linter>=2.0",
 ]
 
 [tool.uv]
@@ -39,4 +40,16 @@ ignore_missing_imports = true
 
 [tool.setuptools]
 packages = ["solomon_harness"]
+
+[tool.importlinter]
+root_package = "solomon_harness"
+
+[[tool.importlinter.contracts]]
+name = "Entrypoint layer coupling"
+type = "layers"
+layers = [
+    "solomon_harness.cli",
+    "solomon_harness.workflows",
+    "solomon_harness.tools",
+]
 

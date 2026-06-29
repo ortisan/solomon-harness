@@ -83,6 +83,7 @@ function get(project?: string) {
 describe("dashboard read route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    routeModule.cache.clear();
     wireBridge();
   });
 
@@ -137,11 +138,61 @@ describe("dashboard read route", () => {
     expect(body.board.found).toBe(true);
     expect(body.projects).toEqual(KNOWN_TENANTS);
   });
+
+  it("caches board responses for 5 seconds to prevent DoS", async () => {
+    const project = "caching-test";
+    KNOWN_TENANTS.push(project);
+    try {
+      const res1 = await get(project);
+      expect(res1.status).toBe(200);
+      
+      const res2 = await get(project);
+      expect(res2.status).toBe(200);
+      
+      const boardCalls = vi
+        .mocked(execFile)
+        .mock.calls.filter((c) => (c[1] as string[]).includes("board") && (c[1] as string[]).includes(project));
+      expect(boardCalls.length).toBe(1);
+    } finally {
+      KNOWN_TENANTS.pop();
+    }
+  });
+
+  it("writes subprocess stderr to process.stderr to prevent trace discard", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    
+    vi.mocked(execFile).mockImplementationOnce(((
+      _file: string,
+      args: string[],
+      _options: unknown,
+      callback: (err: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(
+        null,
+        JSON.stringify({
+          project: "alpha",
+          found: true,
+          columns: emptyColumns(),
+          total: 0,
+          unmapped: 0,
+          projects: KNOWN_TENANTS,
+          selectedProject: "alpha",
+        }),
+        "mock trace span logs to stderr",
+      );
+      return {} as never;
+    }) as never);
+
+    await get("alpha");
+    expect(stderrSpy).toHaveBeenCalledWith("mock trace span logs to stderr");
+    stderrSpy.mockRestore();
+  });
 });
 
 describe("dashboard route tracing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    routeModule.cache.clear();
     spanExporter.reset();
     wireBridge();
   });
@@ -173,6 +224,7 @@ describe("dashboard route tracing", () => {
   });
 
   it("records the exception, sets ERROR, and returns a generic 500 on failure", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const secret = "ENOENT spawn /opt/secret/python";
     vi.mocked(execFile).mockImplementation(((
       _file: string,
@@ -197,5 +249,6 @@ describe("dashboard route tracing", () => {
     expect(span).toBeDefined();
     expect(span!.status.code).toBe(SpanStatusCode.ERROR);
     expect(span!.events.some((e) => e.name === "exception")).toBe(true);
+    errorSpy.mockRestore();
   });
 });
