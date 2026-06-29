@@ -24,18 +24,36 @@ from typing import Any, Dict, List, Optional
 # lowest-level module); importing it here keeps github.py and cockpit_read.py from
 # re-declaring the names and drifting (ADR-0006). database_client takes no
 # dependency on this module, so this import direction carries no cycle.
-from solomon_harness.tools.database_client import BOARD_COLUMNS
+# normalize_person_key lives in the same adapter (ADR-0012): the person key is
+# normalized on write at this capture seam, below every read consumer.
+from solomon_harness.tools.database_client import BOARD_COLUMNS, normalize_person_key
 
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
+
+# Wall-clock ceiling for any single gh subprocess. The merge path now routes
+# through gh (record_terminal_status -> capture_issue_assignee -> _gh), so an
+# unbounded gh that hangs would block the merge; a timeout degrades it to a
+# failed call instead (the assignee then reads back as unassigned).
+GH_TIMEOUT_SECONDS = 15
 
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
     """Run a gh command and return {'ok', 'data'|'stdout', 'error'}."""
     try:
-        proc = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GH_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError:
         return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
+    except subprocess.TimeoutExpired:
+        # A fixed message, never str(exc): treat a hung gh as a failed call so the
+        # caller degrades gracefully instead of blocking or raising.
+        return {"ok": False, "error": f"gh command timed out after {GH_TIMEOUT_SECONDS}s."}
     if proc.returncode != 0:
         return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
     out = proc.stdout.strip()
@@ -290,6 +308,43 @@ def record_transition(issue_number, column) -> None:
         pass
 
 
+def capture_issue_assignee(issue_number) -> Optional[str]:
+    """Capture an issue's GitHub assignee as the canonical person key (ADR-0012).
+
+    Reads the assignees at sync/write time (epic #44 forbids a live read at query
+    time) via ``gh issue view <n> --json assignees``, defensively extracts the
+    first assignee's email and login from the GitHub JSON here (this capture site
+    owns the source shape), and maps those two scalars through
+    :func:`normalize_person_key`. PII-minimal: only the normalized key is derived;
+    name, avatar, and other profile fields are never read out.
+
+    Best-effort: a gh failure, an unparseable shape, or any other error is caught,
+    logged by exception type only (never ``str(exc)``, which can leak internals),
+    and yields None (the unassigned key). It MUST NOT raise on the merge path.
+    """
+    try:
+        res = _gh(
+            ["issue", "view", str(issue_number), "--json", "assignees"],
+            parse_json=True,
+        )
+        if not res.get("ok"):
+            return None
+        assignees = (res.get("data") or {}).get("assignees") or []
+        if not assignees:
+            return None
+        first = assignees[0]
+        email = first.get("email") if isinstance(first, dict) else None
+        login = first.get("login") if isinstance(first, dict) else None
+        return normalize_person_key(email, login)
+    except Exception as exc:  # noqa: BLE001 - best-effort; never break the sync path
+        logging.warning(
+            "assignee capture for issue %s failed: %s",
+            issue_number,
+            type(exc).__name__,
+        )
+        return None
+
+
 def record_terminal_status(issue_number) -> None:
     """Write the delivered issue's terminal status through to the project memory.
 
@@ -315,12 +370,17 @@ def record_terminal_status(issue_number) -> None:
             row = db.get_issue(github_id)
             if row is None or is_terminal(row.get("status")):
                 return
+            # Preserve an assignee already captured on the row; only when it is
+            # absent capture it fresh from GitHub (the person key, ADR-0012). The
+            # capture is best-effort and never raises, so it cannot break the merge.
+            assignee = row.get("assignee") or capture_issue_assignee(issue_number)
             db.log_issue(
                 github_id,
                 row.get("title"),
                 row.get("type_"),
                 "closed",
                 row.get("milestone_id"),
+                assignee=assignee,
             )
     except Exception as exc:  # noqa: BLE001 - never break the merge critical path
         # Log the exception type, not str(exc): a backend error message can carry
