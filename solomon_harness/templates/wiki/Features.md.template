@@ -1,0 +1,33 @@
+# Technical Overview & Feature Groups
+
+This document groups the engineering capabilities of **{{PROJECT_NAME}}** into cohesive value-driven feature groups.
+
+---
+
+## 1. Autonomous Development Engine
+
+This feature group manages the implementation lifecycle using strict validation gates and Test-Driven Development (TDD) principles.
+
+* **Structured Planning (`PLAN.md`):** Requires a plan defining scope, changes, edge cases, and UAT checkpoints before implementation begins.
+* **TDD Loop (Red-Green-Refactor):** Automates test creation, code writing, and refactoring to guarantee no syntax errors or failing logic reach production.
+* **QA & Mock Isolation:** Isolates third-party services via mocks to ensure unit/integration tests can run cleanly and reliably offline or in CI.
+
+---
+
+## 2. Stateful Memory & Context Retention
+
+This feature group prevents context drift across sessions and maintains a permanent record of the project's state.
+
+* **Dual-Backend Persistence:** Uses SurrealDB for local graph operations with an automatic, zero-setup SQLite file fallback.
+* **Architectural Decision Records (ADRs):** Technical agreements are indexed in the database so that agents conform to architectural constraints.
+* **Tenancy Isolation:** Keeps multiple repositories isolated on the same machine using remote-derived namespaces in the database.
+
+---
+
+## 3. GitHub Integration & Release Engineering
+
+This feature group handles integration with your GitHub boards and automates the release lifecycle.
+
+* **Kanban Sync:** Automatically moves issues across status columns as work moves from Conception to Done.
+* **Conventional SemVer Bumping:** Bumps project versions and updates the changelog based on squash commit logs.
+* **Wiki Sync:** Publishes repository documentation (from `docs/wiki/`) directly to the remote GitHub wiki.
