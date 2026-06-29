@@ -1,49 +1,53 @@
-# Plan: feat(agents): add educational_psychologist specialist agent
+# Plan: add pytest to dev extras so uv run pytest works
 
-- Issue: #68 https://github.com/ortisan/solomon-harness/issues/68
-- Branch: feature/add-educational-psychologist
+Refs #31 #41
 
-## Problem Statement
-The harness roster currently lacks a specialist covering psychopedagogy or the learning sciences. Any learning-facing project driven by the harness has no dedicated expert to consult. We need to introduce an `educational_psychologist` agent whose skills are grounded in established, evidence-based methodologies.
+## Problem statement
 
-## Proposed Change
-1. Create folder structure `agents/educational_psychologist/` with `persona.md`, `agents/educational_psychologist.md`, `.agent/config.json`, and 9 skills under `skills/`.
-2. Register the agent in `scripts/validate-agents.py`.
-3. Add the agent to `agents/AGENTS.md`.
-4. Create test suite `tests/test_educational_psychologist.py` to cover agent validations.
+Running `uv run pytest` is currently not supported because `pytest` is declared in `optional-dependencies.dev` instead of the default development groups, and also lacks a configured `pythonpath` for module collection, resulting in a `ModuleNotFoundError` during imports.
 
-## Target Files
-- `agents/educational_psychologist/persona.md`
-- `agents/educational_psychologist/agents/educational_psychologist.md`
-- `agents/educational_psychologist/.agent/config.json`
-- `agents/educational_psychologist/skills/cognitive_load_theory.md`
-- `agents/educational_psychologist/skills/retrieval_practice.md`
-- `agents/educational_psychologist/skills/distributed_practice.md`
-- `agents/educational_psychologist/skills/dual_coding.md`
-- `agents/educational_psychologist/skills/backward_design.md`
-- `agents/educational_psychologist/skills/evidence_based_sourcing.md`
-- `agents/educational_psychologist/skills/definition_of_done.md`
-- `agents/educational_psychologist/skills/common_pitfalls.md`
-- `agents/educational_psychologist/skills/scope_and_non_negotiables.md`
-- `scripts/validate-agents.py`
-- `agents/AGENTS.md`
-- `tests/test_educational_psychologist.py`
+## Proposed changes
 
-## Edge Cases & STRIDE
-- Platitude detection: The manual gate must reject generalist advice.
-- Verification script `scripts/check-skill-depth.py` must run and exit 0 for this agent.
-- STRIDE: No input validation required since these are static markdown/config files, but we must verify that no code execution is introduced in active skills and no untrusted markdown injection occurs.
+1. **Update `pyproject.toml` dependencies**:
+   - Move or add `ruff`, `mypy`, and `pytest` to `[tool.uv.dev-dependencies]`.
+   - Add `[tool.pytest.ini_options]` with `pythonpath = ["."]` to the root of `pyproject.toml`.
+2. **Sync dependencies**:
+   - Run `uv sync` to update the virtual environment.
+3. **Verify collection and execution**:
+   - Execute `uv run pytest` to ensure tests are collected and pass without path/import errors.
 
-## TDD Loop Breakdown
-1. **Step 1 (Red)**: Add tests to `tests/test_educational_psychologist.py` validating that the folder structure, config format, and allow-list attributions are checked. Run and fail.
-2. **Step 2 (Green)**: Implement `agents/educational_psychologist/` directory and files, including the 9 skills with allow-list attributions and 600+ word counts. Run tests to pass.
-3. **Step 3 (Red)**: Write a test asserting that `scripts/validate-agents.py` checks `educational_psychologist.md`. Run and fail.
-4. **Step 4 (Green)**: Register the agent in `scripts/validate-agents.py` and run `scripts/document-skills.py`. Run tests to pass.
-5. **Step 5 (Red/Green)**: Run `scripts/check-skill-depth.py` on the agent and ensure it passes, refactoring any skills that do not clear the depth gate.
+## Target files
 
-## Verification Criteria
-- `python scripts/check-skill-depth.py educational_psychologist` exits 0.
-- `python scripts/validate-agents.py` exits 0.
-- `python scripts/document-skills.py` exits 0.
-- `solomon-harness compile` exits 0.
-- `python -m unittest tests.test_educational_psychologist` passes.
+- `pyproject.toml`
+
+## Edge cases as observable outcomes
+
+- **Missing pythonpath**: If `pythonpath = ["."]` is absent, running `uv run pytest` will fail during collection with `ModuleNotFoundError: No module named 'solomon_harness'`.
+- **Missing dev extra sync**: If dependencies remain under optional dev extras without syncing them as default dev dependencies, running `uv run pytest` will report "Failed to spawn: pytest".
+
+## TDD breakdown
+
+### Step 1: Add pytest configuration to `pyproject.toml`
+- **Goal**: Configure pytest pythonpath.
+- **Action**: Add `[tool.pytest.ini_options] pythonpath = ["."]` to `pyproject.toml`.
+- **Commit**: `chore(testing): configure pytest pythonpath`
+
+### Step 2: Transition dev dependencies to default dev-dependencies
+- **Goal**: Make pytest available by default.
+- **Action**: Add `ruff`, `mypy`, and `pytest` to `[tool.uv.dev-dependencies]` block and update optional dev dependencies.
+- **Commit**: `chore(testing): add pytest to default dev-dependencies`
+
+### Step 3: Run uv sync and verify pytest runs
+- **Goal**: Confirm all tests pass under pytest.
+- **Action**: Execute `uv sync` followed by `uv run pytest`.
+- **Commit**: `test(testing): verify test suite runs successfully under pytest`
+
+## STRIDE notes
+
+- **Security Boundary**: No network or external input boundaries are modified by this chore. STRIDE threat model is not impacted.
+
+## Verification criteria
+
+1. Running `uv run pytest` collects all tests and exits 0.
+2. No `PYTHONPATH=.` environment prefix is required to invoke pytest.
+3. `uv run python scripts/validate-agents.py` exits 0.
