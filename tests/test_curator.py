@@ -104,3 +104,84 @@ class TestSweep(unittest.TestCase):
         result = curator.sweep_fleet("baseline", analyzer, self.db, self.root)
         self.assertEqual(len(result.proposals), 0)
         self.assertEqual(len(result.needs_evidence), 0)
+
+    def test_sweep_reads_persona_and_skills(self):
+        # Create persona.md and skills for the qa agent
+        qa_dir = os.path.join(self.root, "agents", "qa")
+        
+        with open(os.path.join(qa_dir, "persona.md"), "w", encoding="utf-8") as f:
+            f.write("QA Persona details")
+            
+        skills_dir = os.path.join(qa_dir, "skills")
+        os.makedirs(skills_dir)
+        with open(os.path.join(skills_dir, "test_skill.md"), "w", encoding="utf-8") as f:
+            f.write("QA Skill details")
+            
+        # Write a non-markdown file to ensure it's ignored
+        with open(os.path.join(skills_dir, "config.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+
+        captured_content = None
+        def analyzer(agent_name, catalog_desc, baseline):
+            nonlocal captured_content
+            if agent_name == "qa":
+                captured_content = catalog_desc
+                return curator.DriftMatch(
+                    agent="qa",
+                    drift_description="Drift found",
+                    sources=["source1", "source2"],
+                    rationale="rationale"
+                )
+            return None
+
+        result = curator.sweep_fleet("baseline", analyzer, self.db, self.root)
+        self.assertEqual(len(result.proposals), 1)
+        self.assertIn("The QA Specialist.", captured_content)
+        self.assertIn("QA Persona details", captured_content)
+        self.assertIn("QA Skill details", captured_content)
+        self.assertNotIn("{}", captured_content)
+
+    def test_sweep_with_zero_sources_goes_to_needs_evidence(self):
+        def analyzer(agent_name, catalog_desc, baseline):
+            if agent_name == "qa":
+                return curator.DriftMatch(
+                    agent="qa",
+                    drift_description="Drift with zero sources",
+                    sources=[],
+                    rationale="No sources"
+                )
+            return None
+
+        result = curator.sweep_fleet("baseline", analyzer, self.db, self.root)
+        self.assertEqual(len(result.proposals), 0)
+        self.assertEqual(len(result.needs_evidence), 1)
+        self.assertEqual(result.needs_evidence[0]["agent"], "qa")
+        self.assertEqual(result.needs_evidence[0]["drift_description"], "Drift with zero sources")
+        self.assertEqual(len(self.db.decisions), 0)
+
+    def test_sweep_missing_agents_dir_returns_empty(self):
+        empty_root = os.path.join(self.root, "non_existent")
+        def analyzer(agent_name, catalog_desc, baseline):
+            return None
+        result = curator.sweep_fleet("baseline", analyzer, self.db, empty_root)
+        self.assertEqual(len(result.proposals), 0)
+        self.assertEqual(len(result.needs_evidence), 0)
+
+    def test_sweep_db_returns_none_decision_id(self):
+        class NullMockDBClient:
+            def log_decision(self, *args, **kwargs):
+                return None
+
+        def analyzer(agent_name, catalog_desc, baseline):
+            if agent_name == "qa":
+                return curator.DriftMatch(
+                    agent="qa",
+                    drift_description="Drift found",
+                    sources=["source1", "source2"],
+                    rationale="rationale"
+                )
+            return None
+
+        result = curator.sweep_fleet("baseline", analyzer, NullMockDBClient(), self.root)
+        self.assertEqual(len(result.proposals), 1)
+        self.assertIsNone(result.proposals[0].decision_id)

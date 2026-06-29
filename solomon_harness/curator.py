@@ -58,8 +58,9 @@ def sweep_fleet(
         skills_dir = os.path.join(agent_dir, "skills")
         if os.path.isdir(skills_dir):
             for skill_name in sorted(os.listdir(skills_dir)):
-                if skill_name.endswith(".md"):
-                    with open(os.path.join(skills_dir, skill_name), "r", encoding="utf-8") as f:
+                skill_path = os.path.join(skills_dir, skill_name)
+                if skill_name.endswith(".md") and os.path.isfile(skill_path):
+                    with open(skill_path, "r", encoding="utf-8") as f:
                         content_parts.append(f.read())
                         
         agent_content = "\n\n".join(content_parts)
