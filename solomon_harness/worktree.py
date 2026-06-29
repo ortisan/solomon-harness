@@ -144,7 +144,7 @@ def _branch_exists(repo_root: str, branch: str) -> bool:
     return proc.returncode == 0
 
 
-def ensure_worktree(repo_root: str, branch: str, base: str = "develop") -> str:
+def ensure_worktree(repo_root: str, branch: str, base: str = "main") -> str:
     """Create or locate the worktree for ``branch``; return its absolute path.
 
     Idempotent: when the worktree already exists on the expected branch, no
@@ -197,7 +197,7 @@ def ensure_worktree(repo_root: str, branch: str, base: str = "develop") -> str:
     return target
 
 
-def cli_worktree(repo_root: str, branch: str, base: str = "develop") -> int:
+def cli_worktree(repo_root: str, branch: str, base: str = "main") -> int:
     """CLI wrapper: print the worktree path (exit 0) or a diagnostic (non-zero)."""
     try:
         path = ensure_worktree(repo_root, branch, base=base)
