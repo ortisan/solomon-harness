@@ -592,6 +592,26 @@ class TestDatabaseClient(unittest.TestCase):
             {"gh-1": "Backlog", "gh-2": "In Progress", "gh-3": "Done"},
         )
 
+    def test_list_databases_is_read_only(self):
+        """list_databases discovers the tenant(s) without mutating the store.
+
+        On the SQLite fallback it returns the single resolvable tenant; the call
+        must create or change no row.
+        """
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("gh-1", "Item", "feature", "Backlog", None)
+        before = client.list_issues()
+
+        tenants = client.list_databases()
+
+        after = client.list_issues()
+        client.close()
+
+        self.assertIsInstance(tenants, list)
+        self.assertGreaterEqual(len(tenants), 1)
+        self.assertTrue(all(isinstance(t, str) for t in tenants))
+        self.assertEqual(before, after)
+
     def test_delete_memory_sqlite(self):
         """delete_memory removes a key so get_memory returns None afterwards."""
         client = DatabaseClient(db_path=self.sqlite_db_path)

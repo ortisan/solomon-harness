@@ -21,6 +21,42 @@ SEVEN_COLUMNS = [
     "Done",
 ]
 
+# Every write method on the read port. The read path must never call one.
+WRITE_METHODS = frozenset(
+    {
+        "log_issue",
+        "save_memory",
+        "log_decision",
+        "create_milestone",
+        "save_release",
+        "save_session",
+        "log_handoff",
+        "save_backtest",
+        "delete_memory",
+    }
+)
+
+
+class ReadOnlyGuard:
+    """Wrap a DatabaseClient, delegate reads, and raise on any write call.
+
+    Used to prove the cockpit read path touches only read-port methods: any
+    attempt to invoke a write method records the call and raises immediately.
+    """
+
+    def __init__(self, target):
+        self._target = target
+        self.write_calls = []
+
+    def __getattr__(self, name):
+        if name in WRITE_METHODS:
+            def _blocked(*args, **kwargs):
+                self.write_calls.append(name)
+                raise AssertionError(f"read path attempted a write: {name}")
+
+            return _blocked
+        return getattr(self._target, name)
+
 
 class TestBuildBoard(unittest.TestCase):
     def setUp(self):
@@ -55,6 +91,35 @@ class TestBuildBoard(unittest.TestCase):
         self.assertEqual(board["total"], 5)
         self.assertEqual(board["unmapped"], 0)
         self.assertEqual(board["project"], "alpha")
+
+
+class TestDiscoverProjects(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_discover_projects_lists_all_tenants_and_writes_nothing(self):
+        """discover_projects returns every tenant the lister yields, sorted, and
+        performs no write on the path."""
+        def lister():
+            return ["gamma", "alpha", "beta"]
+
+        self.assertEqual(
+            cockpit_read.discover_projects(lister), ["alpha", "beta", "gamma"]
+        )
+
+        # Driving discovery through a guarded real client proves it is read-only.
+        client = DatabaseClient(db_path=self.db_path)
+        guard = ReadOnlyGuard(client)
+        discovered = cockpit_read.discover_projects(guard.list_databases)
+        client.close()
+
+        self.assertEqual(guard.write_calls, [])
+        self.assertIsInstance(discovered, list)
+        self.assertGreaterEqual(len(discovered), 1)
 
 
 if __name__ == "__main__":

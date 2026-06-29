@@ -141,6 +141,11 @@ class DatabaseClient:
         provider = db_config.get("provider")
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
+        # Retained for read-only tenant discovery (list_databases). On the SQLite
+        # fallback the resolvable tenant is derived from these, not from the store.
+        self._project_root = project_root
+        self._configured_database = db_config.get("database")
+
         # An explicit db_path forces the SQLite backend (used for test isolation and
         # eval sandboxes), regardless of the configured provider.
         if provider == "surrealdb" and self.db_path is None:
@@ -1279,6 +1284,29 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")
+
+    def list_databases(self) -> List[str]:
+        """List the harness-managed tenant database names (read-only).
+
+        SurrealDB: discover tenants via ``INFO FOR NS``. SQLite fallback: return
+        the single resolvable tenant for this workspace, derived from the config
+        or the git remote. No row is created or mutated on either path.
+        """
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query("INFO FOR NS")
+                info: Any = res
+                if isinstance(info, list) and info:
+                    head = info[0]
+                    info = head.get("result", head) if isinstance(head, dict) else head
+                databases = info.get("databases", {}) if isinstance(info, dict) else {}
+                if isinstance(databases, dict):
+                    return sorted(databases.keys())
+                return sorted(str(d) for d in databases)
+            except Exception as e:
+                logging.error(f"Failed to list databases from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list databases from SurrealDB: {e}")
+        return [_resolve_database(self._configured_database, self._project_root)]
 
     def list_issues(self) -> List[Dict[str, Any]]:
         """Retrieves every issue for this tenant regardless of status.

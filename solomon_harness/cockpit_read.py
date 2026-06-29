@@ -8,7 +8,7 @@ that bridges to this composer over a non-shell subprocess; the cross-tenant
 aggregation and the 207/403 partial-render contract are slice 1b (#59).
 """
 
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 # The canonical delivery-board columns, in fixed left-to-right order, matching
 # docs/solomon-workflow.md (Ideas -> Backlog -> Ready -> In Progress ->
@@ -56,3 +56,14 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
         "total": len(issues),
         "unmapped": len(issues) - mapped,
     }
+
+
+def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
+    """List the harness-managed tenants on this machine, sorted, read-only.
+
+    Takes the read port's tenant lister (e.g. ``DatabaseClient.list_databases``)
+    rather than a concrete client, so the composer never names infrastructure and
+    the discovery source can be swapped without touching this code. It only reads:
+    nothing is created and no tenant is seeded.
+    """
+    return sorted(list_databases())
