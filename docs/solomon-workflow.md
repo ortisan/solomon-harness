@@ -66,6 +66,77 @@ enumerated-options style above (Automatic, recommended and first; Manual; Other)
   the prompt — it defaults to Automatic and prints
   `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
 
+## Deliver and release
+
+`/solomon-release` (sre, software_engineer) takes an approved, merged change from
+`QA` to `Done` and, when a release is due, drives the tag through CI. The full,
+canonical standard is `docs/release-policy.md` (decision recorded in
+`docs/adr/0004-milestone-gated-releases.md`); this section is the operational
+summary the workflow follows.
+
+**Release criterion — milestone-gated, never per-PR.** A tag is cut only when a
+GitHub milestone reaches 0 open issues with CI green on `main`. Merging a single PR
+closes its issue and burns down its milestone; it never cuts a release. Every issue
+rolls up to exactly one milestone:
+
+- An **epic** milestone is titled with its SemVer minor (`v0.4.0`, `v0.5.0`) — the
+  title *is* the version; closing it (`open_issues == 0`, CI green) cuts the MINOR.
+- A **theme / hardening** milestone is titled by theme (`memory-durability`,
+  `test-ci-hardening`, `worktree-lifecycle`); closing it cuts a PATCH whose version
+  is computed at cut time. `/solomon-refine` creates the milestone and assigns every
+  Ready child; a parentless bug or chore goes to the nearest theme milestone.
+
+An on-demand escape valve, `solomon-harness release prep`, may cut a PATCH for an
+accumulated batch without waiting for a milestone to fully close.
+
+**Version — computed, never hand-picked.** The bump is derived from the
+Conventional Commits in `git log <last-tag>..main --first-parent` (highest wins).
+Pre-1.0 (current `0.x`): a window with any `feat` or a `BREAKING CHANGE` bumps the
+MINOR; otherwise `fix`/`perf`/`refactor`/`revert` bumps the PATCH; a window of only
+`chore`/`docs`/`ci`/`test`/`style`/`build` is non-releasable (no tag). Post-1.0:
+`BREAKING CHANGE` → MAJOR, `feat` → MINOR, `fix`/`perf` → PATCH. A published tag is
+immutable — never moved; a bad release is superseded by the next PATCH (a revert PR
+that ships forward), never by re-tagging.
+
+**Branch model — trunk-only.** Slices squash-merge into `main`; there is no
+`develop` branch and no long-lived `release/*` or `hotfix/*` branch. The only
+release branch is the ephemeral `chore/release-vX.Y.Z` prep branch, which lives
+minutes: `solomon-harness release prep` opens a PR carrying the `pyproject` version
+bump and the new `CHANGELOG.md` section, commits `chore(release): vX.Y.Z`, then
+stops. The human merges that PR — that merge **is** the release gate — and the
+branch is deleted.
+
+**Tag and publish — CI is the single owner.** On the prep-PR merge, the `main` push
+carries the `chore(release): vX.Y.Z` commit; the release workflow creates and pushes
+the annotated tag and publishes (`draft: false`) the GitHub Release with the
+CHANGELOG section as its notes. There is no manual `gh release create`. CI pushes
+only the tag (tags are not branch-protected) using the default `GITHUB_TOKEN` with
+`contents: write` — no PAT, and CI never pushes a commit to protected `main`.
+
+**Fail-closed gate.** `solomon-harness release check` asserts that the tag, the
+`pyproject` version, and the top `CHANGELOG.md` heading (Keep a Changelog, dated
+today) all agree, that the tag does not already exist, and that tests and `ruff` are
+green; it exits non-zero on any mismatch, and CI enforces it on every
+`chore/release-*` PR. Humans never hand-edit `pyproject.version` or add a CHANGELOG
+heading — `release prep` writes them, and a CI check rejects any non-release PR that
+touches them, which structurally prevents three-way version drift.
+
+**Library readiness gate.** Because the harness is distributed as an immutable git
+tag and GitHub Release of the source tree — not a running service and not published
+to PyPI — the SLO-burn / canary / blue-green / on-call production-readiness review
+does not apply. The release gate is a library readiness check: tests and `ruff`
+green on `main`, `python -c "import solomon_harness"` succeeds, the
+`solomon-harness` console script runs, and `release check` passes. The one kernel
+carried over from progressive delivery is reversibility: immutable, never-moved
+tags; rollback as a revert PR that auto-ships the next patch; and
+backward-compatible expand/contract migrations for the SurrealDB / SQLite memory
+store.
+
+The CLI surface for this stage is `solomon-harness release plan | prep | check`:
+`plan` is read-only and headless-safe (the loop may *propose* a release with it);
+`prep` opens the prep PR and stops, never merging; `check` is the read-only
+fail-closed gate.
+
 ## GitHub conventions
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
