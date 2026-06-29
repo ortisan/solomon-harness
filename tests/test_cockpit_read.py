@@ -299,6 +299,54 @@ class TestComposePortfolio(unittest.TestCase):
         self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
 
 
+    def test_compose_portfolio_degraded_carry_status_no_rows_and_207(self):
+        """A mix of OK + UNREACHABLE + FORBIDDEN yields degraded swimlanes that
+        carry their status and no issue rows; the FORBIDDEN swimlane carries
+        httpStatus 403; the portfolio total sums OK projects only; and the
+        aggregateStatus is 207 (Multi-Status)."""
+        alpha_issues = [
+            {"github_id": "a1", "status": "Backlog"},
+            {"github_id": "a2", "status": "In Progress"},
+            {"github_id": "a3", "status": "Done"},
+        ]
+        results = [
+            _ok_result("alpha", alpha_issues),
+            {"project": "beta", "status": "UNREACHABLE", "board": None},
+            {"project": "gamma", "status": "FORBIDDEN", "board": None},
+        ]
+
+        portfolio = cockpit_read.compose_portfolio(results)
+
+        lanes = {s["project"]: s for s in portfolio["swimlanes"]}
+        self.assertEqual(
+            [s["project"] for s in portfolio["swimlanes"]],
+            ["alpha", "beta", "gamma"],
+        )
+
+        # The degraded lanes carry their status and seven columns but no rows.
+        self.assertEqual(lanes["beta"]["status"], "UNREACHABLE")
+        self.assertEqual(lanes["gamma"]["status"], "FORBIDDEN")
+        for project in ("beta", "gamma"):
+            self.assertEqual(
+                [c["name"] for c in lanes[project]["columns"]], SEVEN_COLUMNS
+            )
+            self.assertTrue(all(c["count"] == 0 for c in lanes[project]["columns"]))
+            self.assertEqual(
+                [i for c in lanes[project]["columns"] for i in c["issues"]], []
+            )
+            self.assertEqual(lanes[project]["total"], 0)
+
+        # FORBIDDEN carries the per-project 403; UNREACHABLE carries no upgrade.
+        self.assertEqual(lanes["gamma"]["httpStatus"], 403)
+        self.assertNotIn("httpStatus", lanes["beta"])
+
+        # The total is over OK projects only, and the aggregate is 207.
+        self.assertEqual(portfolio["total"], 3)
+        column_total = sum(c["count"] for c in portfolio["columns"])
+        self.assertEqual(portfolio["total"], column_total + portfolio["unmapped"])
+        self.assertEqual(portfolio["aggregateStatus"], 207)
+
+
 class TestBoardPayloadTenantTargeting(unittest.TestCase):
     def test_board_payload_reads_selected_tenant_not_host(self):
         """board_payload binds the selected tenant before reading, so two

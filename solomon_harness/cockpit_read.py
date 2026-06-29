@@ -89,6 +89,11 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
         }
 
 
+def _zero_columns() -> List[Dict[str, Any]]:
+    """Return the seven board columns at count zero with no issues."""
+    return [{"name": name, "count": 0, "issues": []} for name in BOARD_COLUMNS]
+
+
 def empty_board(project: str) -> Dict[str, Any]:
     """Return the seven columns at count zero for ``project``.
 
@@ -97,7 +102,7 @@ def empty_board(project: str) -> Dict[str, Any]:
     """
     return {
         "project": project,
-        "columns": [{"name": n, "count": 0, "issues": []} for n in BOARD_COLUMNS],
+        "columns": _zero_columns(),
         "total": 0,
         "unmapped": 0,
     }
@@ -113,6 +118,32 @@ def _ok_swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
         "total": board["total"],
         "unmapped": board["unmapped"],
     }
+
+
+def _degraded_swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a degraded swimlane that carries its status and no issue rows.
+
+    Both UNREACHABLE and FORBIDDEN render the seven column headers at count 0 so
+    the lane is visible, but neither carries any issue data (information
+    disclosure mitigation). FORBIDDEN additionally stamps the per-project 403.
+    """
+    swimlane = {
+        "project": result["project"],
+        "status": result["status"],
+        "columns": _zero_columns(),
+        "total": 0,
+        "unmapped": 0,
+    }
+    if result["status"] == STATUS_FORBIDDEN:
+        swimlane["httpStatus"] = FORBIDDEN_HTTP_STATUS
+    return swimlane
+
+
+def _swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the swimlane for one per-project outcome, OK or degraded."""
+    if result["status"] == STATUS_OK:
+        return _ok_swimlane(result)
+    return _degraded_swimlane(result)
 
 
 def _portfolio_columns(swimlanes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -148,7 +179,7 @@ def compose_portfolio(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     (``total == sum(column counts) + unmapped``), and sets ``aggregateStatus`` to
     200 when every project is ``OK`` else 207 (Multi-Status). No threads or I/O.
     """
-    swimlanes = [_ok_swimlane(result) for result in results]
+    swimlanes = [_swimlane(result) for result in results]
     columns = _portfolio_columns(swimlanes)
     total = sum(swimlane["total"] for swimlane in swimlanes)
     unmapped = sum(swimlane["unmapped"] for swimlane in swimlanes)
