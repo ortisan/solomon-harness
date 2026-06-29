@@ -93,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - run: pipx run uv sync --extra dev
-      - run: uv run solomon-harness release check     # fail-closed gate, again, in CI
+      - run: uv run python -m solomon_harness.cli release check     # fail-closed gate, again, in CI
       - name: Tag and publish
         env: { GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         run: |
