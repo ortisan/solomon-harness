@@ -32,7 +32,7 @@ class SpectronFallbackClient:
 
     def remember(self, fact: str, scope: Optional[List[str]] = None) -> Any:
         url = f"{self.endpoint}/api/v1/{self.context}/facts"
-        payload = {"fact": fact}
+        payload: Dict[str, Any] = {"fact": fact}
         if scope:
             payload["scope"] = scope
         resp = self.session.post(url, json=payload, timeout=self.timeout)
@@ -41,7 +41,7 @@ class SpectronFallbackClient:
 
     def recall(self, query: str, scope: Optional[List[str]] = None) -> Any:
         url = f"{self.endpoint}/api/v1/{self.context}/query"
-        payload = {"query": query}
+        payload: Dict[str, Any] = {"query": query}
         if scope:
             payload["scope"] = scope
         resp = self.session.post(url, json=payload, timeout=self.timeout)
@@ -273,6 +273,15 @@ class DatabaseClient:
         provider = db_config.get("provider")
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
+        # Retained for read-only tenant discovery (list_databases). On the SQLite
+        # fallback the resolvable tenant is derived from these, not from the store.
+        self._project_root = project_root
+        self._configured_database = db_config.get("database")
+        # The SurrealDB namespace that holds every tenant database. Stored so the
+        # read-only use_tenant() accessor can rebind the connection scope to the
+        # selected tenant with the same parameterized SDK bind the constructor uses.
+        self._namespace = db_config.get("namespace", "solomon")
+
         # An explicit db_path forces the SQLite backend (used for test isolation and
         # eval sandboxes), regardless of the configured provider.
         if provider == "surrealdb" and self.db_path is None:
@@ -301,7 +310,7 @@ class DatabaseClient:
             creds_ok = bool(username and password)
 
             if has_surrealdb and Surreal is not None and creds_ok:
-                namespace = db_config.get("namespace", "solomon")
+                namespace = self._namespace
                 database = _resolve_database(db_config.get("database"), project_root)
 
                 # Capture the params so _connect_surreal can rebuild the handle
@@ -2030,6 +2039,69 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")
+
+    def list_databases(self) -> List[str]:
+        """List the harness-managed tenant database names (read-only).
+
+        SurrealDB: discover tenants via ``INFO FOR NS``. SQLite fallback: return
+        the single resolvable tenant for this workspace, derived from the config
+        or the git remote. No row is created or mutated on either path.
+        """
+        if self.backend == "surrealdb":
+            try:
+                res = self.db.query("INFO FOR NS")
+                info: Any = res
+                if isinstance(info, list) and info:
+                    head = info[0]
+                    info = head.get("result", head) if isinstance(head, dict) else head
+                databases = info.get("databases", {}) if isinstance(info, dict) else {}
+                if isinstance(databases, dict):
+                    return sorted(databases.keys())
+                return sorted(str(d) for d in databases)
+            except Exception as e:
+                logging.error(f"Failed to list databases from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list databases from SurrealDB: {e}")
+        return [_resolve_database(self._configured_database, self._project_root)]
+
+    def use_tenant(self, database: str) -> None:
+        """Re-scope the open connection to a tenant database (read-only).
+
+        SurrealDB: rebind the connection scope with the SDK's parameterized
+        ``use(namespace, database)`` call, the same bind the constructor uses.
+        It carries no SQL and performs no write, and binds exactly one database,
+        so per-tenant isolation (ADR-0002) holds by construction. Callers must
+        pass a name already validated against the discovered-tenant allowlist.
+        SQLite fallback: a no-op, because a SQLite workspace resolves to a single
+        tenant and the allowlist only ever yields that one name.
+        """
+        if self.backend == "surrealdb" and self.db is not None:
+            self.db.use(self._namespace, database)
+
+    def list_issues(self) -> List[Dict[str, Any]]:
+        """Retrieves every issue for this tenant regardless of status.
+
+        Read-only. Unlike get_open_issues (status='open' only), this returns all
+        issues including Done, so the cockpit board can render the full seven
+        columns. No row is created or mutated.
+        """
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM issues"
+            try:
+                res = self.db.query(query)
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list issues from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list issues from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM issues ORDER BY created_at"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query)
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list issues: {e}")
+                raise RuntimeError(f"Failed to list issues: {e}")
 
     @_resilient
     def get_latest_activity(self) -> Optional[Dict[str, Any]]:
