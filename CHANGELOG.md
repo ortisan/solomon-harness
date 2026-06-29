@@ -2,6 +2,19 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.4.0] - 2026-06-28
+
+### Fixed
+- The memory client now survives a mid-session SurrealDB connection drop: it reconnects once (bounded, so a half-open socket can never hang) and otherwise falls back to SQLite and re-dispatches to each method's SQLite branch, instead of raising forever (#37). This is the durable fix for the v0.3.0-release incident where a recreated SurrealDB container silently lost writes.
+- Reads no longer mask a broken connection: `get_latest_activity` reconnects/falls back or raises a distinct connection error rather than silently returning `None` (a truly empty store still returns `None`) (#37).
+- Connection loss is classified by exception type (not loose message substrings), so a genuine query/data error never triggers a spurious reconnect or fallback (#37).
+
+### Added
+- Write-through markdown mirror: every memory write is also written to a human-readable `.solomon/memory-mirror/<kind>/<id>.md` (frontmatter `id, kind, created_at, synced`), and a write never raises solely because the DB is down (#35).
+- Idempotent `reconcile()` (client-minted id + UPSERT) replays unsynced records to SurrealDB on recovery; it runs automatically at memory-up / session start (best-effort, bounded) and on demand via the new `solomon-harness memory sync` command (#35).
+- `healthcheck` surfaces the count of pending (unsynced) memory records (#35).
+- ADR-0002 records the memory-resilience model (reconnect-then-fallback + write-through mirror + reconcile).
+
 ## [0.3.1] - 2026-06-28
 
 ### Changed
