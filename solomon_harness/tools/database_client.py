@@ -14,6 +14,75 @@ from contextlib import contextmanager
 from typing import Generator, Any, Dict, List, Optional, Union
 
 
+# ---------------------------------------------------------------------------
+# Canonical issue-status vocabulary (ADR-0006).
+#
+# One source of truth for the status token stored on an issue, so the
+# normalize-on-write rule, the open/terminal predicate, and the cockpit's
+# column mapping cannot drift apart. Board display names and casing aliases
+# collapse to one canonical token per logical status; reads stay tolerant of
+# legacy values (expand/contract, no destructive rewrite).
+# ---------------------------------------------------------------------------
+
+# Lowercased board display name / alias -> canonical token. A status not listed
+# here (Ideas, Backlog, Ready, the legacy literal open) passes through unchanged.
+_STATUS_ALIASES = {
+    "in progress": "in_progress",
+    "in_progress": "in_progress",
+    "code review": "code_review",
+    "code_review": "code_review",
+    "qa": "qa",
+    "done": "closed",
+    "closed": "closed",
+}
+
+# Stored literals treated as terminal (delivered). New writes normalize to
+# "closed"; "done" and "Done" remain so legacy rows written before normalization
+# are still excluded by the open predicate. Bound as query parameters, never
+# string-formatted, so the predicate carries no injection surface (STRIDE).
+TERMINAL_STATUSES = ("closed", "done", "Done")
+
+# Canonical token -> delivery-board display column, for the cockpit read side.
+STATUS_DISPLAY_COLUMNS = {
+    "Ideas": "Ideas",
+    "Backlog": "Backlog",
+    "Ready": "Ready",
+    "in_progress": "In Progress",
+    "code_review": "Code Review",
+    "qa": "QA",
+    "closed": "Done",
+}
+
+# The delivery-board display columns in fixed left-to-right order. This is the one
+# canonical definition of the column names: it is derived from STATUS_DISPLAY_COLUMNS
+# (insertion order Ideas -> Backlog -> Ready -> In Progress -> Code Review -> QA ->
+# Done) so the column list can never drift from the status vocabulary. github.py and
+# cockpit_read.py import this constant rather than re-declaring it (ADR-0006).
+BOARD_COLUMNS: List[str] = list(STATUS_DISPLAY_COLUMNS.values())
+
+
+def normalize_status(status: Optional[str]) -> Optional[str]:
+    """Map a board display name or casing alias to its canonical memory token.
+
+    The canonical tokens are in_progress, code_review, qa and the terminal
+    closed; Ideas, Backlog, Ready and the legacy literal open pass through
+    unchanged. None passes through so an unset status is never invented.
+    """
+    if status is None:
+        return None
+    return _STATUS_ALIASES.get(str(status).strip().lower(), status)
+
+
+def is_terminal(status: Optional[str]) -> bool:
+    """True when a status is terminal (delivered) under the canonical vocabulary.
+
+    Normalizes first, then tests membership in the terminal-literal set, so every
+    spelling of a delivered status (closed, done, Done, the board's Done) is
+    classified terminal while open work is not.
+    """
+    return normalize_status(status) in TERMINAL_STATUSES
+
+
 class SpectronFallbackClient:
     """Fallback client for Spectron REST API when the python package doesn't export it."""
 
@@ -1496,14 +1565,16 @@ class DatabaseClient:
             github_id: Numeric or string ID of the GitHub issue.
             title: Title of the issue.
             type_: Type of issue (e.g., bug, feature, refactor).
-            status: Status (e.g., open, closed).
+            status: Status (e.g., open, closed). Normalized to one canonical token
+                per logical status on write (ADR-0006), so no two rows differ only
+                by casing for the same status.
             milestone_id: Associated milestone ID in the database.
         """
         fields = {
             "github_id": github_id,
             "title": title,
             "type_": type_,
-            "status": status,
+            "status": normalize_status(status),
             "milestone_id": milestone_id,
         }
         # github_id is already a stable id, reused for the RecordID and filename.
@@ -2013,15 +2084,26 @@ class DatabaseClient:
 
     @_resilient
     def get_open_issues(self) -> List[Dict[str, Any]]:
-        """Retrieves all open issues.
+        """Retrieves the open issues, defined as every non-terminal row.
+
+        "Open" is a non-terminal predicate (ADR-0006), not the literal
+        status='open' filter no lifecycle step writes: a row is open when its
+        status is not one of the terminal literals (closed/done/Done). A row with
+        no status is non-terminal too (is_terminal(None) is False), so a NULL/NONE
+        status is kept, matching digest.build_digest; a bare ``NOT IN`` would drop
+        it. The terminal set is bound as a query parameter on both backends, never
+        string-formatted, so the predicate carries no injection surface.
 
         Returns:
-            A list of dictionaries containing open issues.
+            A list of dictionaries containing the non-terminal issues.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM issues WHERE status = 'open'"
+            query = (
+                "SELECT * FROM issues "
+                "WHERE status IS NONE OR status IS NULL OR status NOT IN $terminal"
+            )
             try:
-                res = self._run_surreal(query)
+                res = self._run_surreal(query, {"terminal": list(TERMINAL_STATUSES)})
                 return self._extract_list(res)
             except _ConnectionLost:
                 raise
@@ -2031,11 +2113,14 @@ class DatabaseClient:
                     f"Failed to retrieve open issues from SurrealDB: {e}"
                 )
         else:
-            query = "SELECT * FROM issues WHERE status = 'open'"
+            placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
+            query = (
+                f"SELECT * FROM issues WHERE status IS NULL OR status NOT IN ({placeholders})"
+            )
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query)
+                    cursor.execute(query, tuple(TERMINAL_STATUSES))
                     rows = cursor.fetchall()
                     return [dict(row) for row in rows]
             except sqlite3.Error as e:
@@ -2082,9 +2167,9 @@ class DatabaseClient:
     def list_issues(self) -> List[Dict[str, Any]]:
         """Retrieves every issue for this tenant regardless of status.
 
-        Read-only. Unlike get_open_issues (status='open' only), this returns all
-        issues including Done, so the cockpit board can render the full seven
-        columns. No row is created or mutated.
+        Read-only. Unlike get_open_issues (the non-terminal rows only), this returns
+        all issues including the terminal/Done ones, so the cockpit board can render
+        the full seven columns. No row is created or mutated.
         """
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues"
