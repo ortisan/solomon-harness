@@ -16,6 +16,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Mapping,
     Optional,
     Protocol,
     Union,
@@ -147,6 +148,54 @@ def is_terminal(status: Optional[str]) -> bool:
     classified terminal while open work is not.
     """
     return normalize_status(status) in TERMINAL_STATUSES
+
+
+# ---------------------------------------------------------------------------
+# Canonical person key (ADR-0012).
+#
+# The cross-tenant subject of an issue. Like normalize_status, it is normalized
+# on write and lives here, below every consumer, so the key cannot drift across
+# the cockpit, digest, and evals. An email is preferred because it is stable
+# across projects and tools; a handle is namespaced gh:<login> so it can never
+# collide with an email; a null/empty assignee reads back as "unassigned".
+# ---------------------------------------------------------------------------
+
+# Reserved query token for an issue with no person key. Never a valid concrete
+# key: every real key is an email or a gh: handle, so no assignee normalizes to it.
+UNASSIGNED_PERSON_KEY = "unassigned"
+
+
+def normalize_person_key(assignee: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """Map a GitHub assignee object to the canonical, cross-tenant person key.
+
+    Implements the ADR-0012 identity contract. Total and deterministic: it never
+    raises and has no side effects. A non-empty, ``@``-bearing email wins,
+    lowercased and trimmed, because an email is the same string across projects
+    and tools. Otherwise a non-empty login yields ``gh:<lowercased-login>``; the
+    ``gh:`` namespace has no ``@``, so a handle key can never collide with an
+    email key. A null, non-mapping, or empty assignee (no usable email and no
+    login) yields None, which reads back under the reserved ``unassigned``
+    pseudo-key via :func:`person_key_or_unassigned`.
+    """
+    if not isinstance(assignee, Mapping):
+        return None
+    email = str(assignee.get("email") or "").strip().lower()
+    if email and "@" in email:
+        return email
+    login = str(assignee.get("login") or "").strip().lower()
+    if login:
+        return f"gh:{login}"
+    return None
+
+
+def person_key_or_unassigned(key: Optional[str]) -> str:
+    """Map a stored person key (or None) to a queryable subject token.
+
+    A null key reads back as the reserved ``unassigned`` pseudo-key, so the
+    "unassigned" subject lives in one named, tested place rather than being
+    re-derived by every read consumer.
+    """
+    return key if key is not None else UNASSIGNED_PERSON_KEY
 
 
 class SpectronFallbackClient:
