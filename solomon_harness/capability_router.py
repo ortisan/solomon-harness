@@ -1,0 +1,138 @@
+"""Route a free-text demand to the best-fit existing agent, or report a capability gap.
+
+Slice A of the practice_curator capability-broker (ADR-0003). This module is READ-ONLY:
+it loads the agent catalog and constructs a verdict; it never writes anything, opens no
+network socket, and instantiates no model. The demand->agent match is supplied by an
+injected matcher port (the host LLM in production, a deterministic stub in tests), so the
+core stays deterministic and unit-testable.
+
+The verdict is either a RouteVerdict (an existing agent serves the demand) or a
+GapVerdict naming the missing capability and the suggested next action (adapt a skill into
+the nearest agent, or create a new agent). The gap verdict pre-wires the acquisition
+slices (#47 adapt, #48/#49 create).
+"""
+
+import os
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from solomon_harness.agent_selection import _discover_agents
+
+ADAPT_SKILL = "adapt_skill"
+CREATE_AGENT = "create_agent"
+
+
+class CatalogError(Exception):
+    """The agent catalog could not be read or is empty; routing fails closed."""
+
+
+@dataclass(frozen=True)
+class Agent:
+    """One catalog entry: an agent name and its one-line role description."""
+
+    name: str
+    description: str
+
+
+@dataclass(frozen=True)
+class Match:
+    """What an injected matcher returns; the core turns it into a verdict.
+
+    ``agent`` set -> a route. ``agent`` None -> a gap: ``nearest_agent`` set means the
+    demand maps to an existing agent that only lacks a skill (adapt); ``nearest_agent``
+    None means no agent fits (create).
+    """
+
+    agent: Optional[str] = None
+    rationale: str = ""
+    alternatives: List[str] = field(default_factory=list)
+    missing_capability: Optional[str] = None
+    nearest_agent: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RouteVerdict:
+    agent: str
+    rationale: str
+    alternatives: List[str] = field(default_factory=list)
+    kind: str = "route"
+
+
+@dataclass(frozen=True)
+class GapVerdict:
+    missing_capability: str
+    suggested_action: str
+    rationale: str
+    nearest_agent: Optional[str] = None
+    kind: str = "gap"
+
+
+def _default_workspace_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _role_description(role_path: str) -> str:
+    """First non-heading, non-empty line of a role file (its advertised summary)."""
+    try:
+        with open(role_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    return stripped
+    except OSError:
+        return ""
+    return ""
+
+
+def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
+    """Load the agent catalog read-only: every agent with a role file, sorted by name.
+
+    Raises CatalogError when the agents directory is missing or holds no discoverable
+    agent, so the caller fails closed instead of routing against an empty catalog.
+    """
+    root = workspace_root or _default_workspace_root()
+    names = _discover_agents(root)
+    if not names:
+        raise CatalogError(f"no agents discovered under {os.path.join(root, 'agents')}")
+    catalog = []
+    for name in sorted(names):
+        role = os.path.join(root, "agents", name, "agents", f"{name}.md")
+        catalog.append(Agent(name=name, description=_role_description(role)))
+    return catalog
+
+
+def route(demand, matcher, workspace_root: Optional[str] = None):
+    """Resolve ``demand`` against the catalog into a RouteVerdict or a GapVerdict.
+
+    ``matcher(demand, catalog) -> Match`` is the only match path (host LLM in production,
+    a stub in tests); this function performs no network or model call and writes nothing.
+    Deterministic given a fixed matcher and catalog. Fails closed (CatalogError) on an
+    unreadable or empty catalog.
+    """
+    if not demand or not str(demand).strip():
+        raise ValueError("demand must be a non-empty string")
+    catalog = load_catalog(workspace_root)
+    names = {a.name for a in catalog}
+
+    match = matcher(demand, catalog)
+
+    if match.agent is not None:
+        if match.agent not in names:
+            raise CatalogError(
+                f"matcher returned agent '{match.agent}' that is not in the catalog"
+            )
+        rationale = (match.rationale or "").strip().splitlines()[0] if match.rationale else ""
+        alternatives = [a for a in match.alternatives if a in names and a != match.agent]
+        return RouteVerdict(agent=match.agent, rationale=rationale, alternatives=alternatives)
+
+    # Gap: a missing capability must be named so the acquisition slices can act.
+    if not match.missing_capability:
+        raise ValueError("a gap match must name the missing_capability")
+    nearest = match.nearest_agent if match.nearest_agent in names else None
+    suggested = ADAPT_SKILL if nearest else CREATE_AGENT
+    return GapVerdict(
+        missing_capability=match.missing_capability,
+        suggested_action=suggested,
+        rationale=(match.rationale or "").strip(),
+        nearest_agent=nearest,
+    )
