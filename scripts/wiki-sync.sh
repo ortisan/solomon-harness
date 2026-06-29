@@ -67,6 +67,60 @@ fi
 
 echo "Resolved wiki remote URL: $WIKI_URL"
 
+# --- Wiki initialization detection (no-browser degrade floor, issue #117) ------
+# GitHub creates the <repo>.wiki.git content repo only after the first wiki page
+# is saved through the web UI, and exposes no API for that first page. Probe the
+# remote for refs under a short timeout BEFORE any clone or push. This is the
+# observable gate: an uninitialized wiki must terminate in an actionable message,
+# never a raw clone/push error. The probe runs no browser action and never blocks
+# on input, so a headless or CI invocation degrades deterministically.
+WIKI_LSREMOTE_TIMEOUT="${WIKI_SYNC_LSREMOTE_TIMEOUT:-10}"
+
+# Derive the human web URL of the first-page editor the operator must open. Work
+# from the repo remote (not the .wiki.git form) and normalize the common SSH and
+# https shapes to an https URL.
+WEB_REPO="${REMOTE_URL%.git}"
+if [[ "$WEB_REPO" =~ ^git@([^:]+):(.+)$ ]]; then
+  WEB_REPO="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+elif [[ "$WEB_REPO" =~ ^ssh://git@(.+)$ ]]; then
+  WEB_REPO="https://${BASH_REMATCH[1]}"
+fi
+WIKI_NEW_URL="${WEB_REPO}/wiki/_new"
+
+# Resolve a portable timeout wrapper: GNU coreutils `timeout` or homebrew
+# `gtimeout`. Without one the probe cannot be bounded, so detection is treated as
+# inconclusive below rather than risking an indefinite hang.
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+fi
+
+# Probe for heads. Capture the status without tripping `set -e`, and suppress git
+# stderr so a raw remote error never reaches the operator on this path.
+set +e
+if [[ -n "$TIMEOUT_BIN" ]]; then
+  WIKI_REFS=$("$TIMEOUT_BIN" "$WIKI_LSREMOTE_TIMEOUT" git ls-remote --heads "$WIKI_URL" 2>/dev/null)
+  LSREMOTE_STATUS=$?
+else
+  WIKI_REFS=""
+  LSREMOTE_STATUS=124
+fi
+set -e
+
+if [[ -z "$WIKI_REFS" ]]; then
+  echo "Error: the GitHub wiki has not been initialized." >&2
+  echo "GitHub creates the wiki content repository ($WIKI_URL) only after the" >&2
+  echo "first page is saved through the web UI, and exposes no API for that page." >&2
+  echo "Initialize it once: open" >&2
+  echo "  ${WIKI_NEW_URL}" >&2
+  echo "and save a page (any content), then re-run the wiki step to publish docs." >&2
+  exit 4
+fi
+
+echo "Wiki content repository detected. Proceeding to sync."
+
 # Create a temporary directory in workspace
 TEMP_PARENT="${REPO_ROOT}/tmp"
 mkdir -p "$TEMP_PARENT"
