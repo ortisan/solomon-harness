@@ -171,6 +171,19 @@ class TestReconcileTrackingRows(unittest.TestCase):
         self.assertEqual(client.get_issue("100")["status"], "in_progress")
         client.close()
 
+    def test_skips_and_logs_row_with_no_parent(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("R-07", "RAID with no number", "raid", "in_progress", None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = cli.reconcile_tracking_rows(client, {})
+        self.assertEqual(result["skipped_no_parent"], 1)
+        self.assertEqual(result["closed"], 0)
+        # Left open, never guessed; the unparseable slug is named on stderr.
+        self.assertEqual(client.get_issue("R-07")["status"], "in_progress")
+        self.assertIn("R-07", err.getvalue())
+        client.close()
+
 
 class TestFetchGhIssueStates(unittest.TestCase):
     def test_validates_number_and_state_as_data(self):

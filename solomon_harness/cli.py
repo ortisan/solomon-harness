@@ -427,6 +427,11 @@ def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = F
         parent = recover_parent(github_id, row.get("title"))
         if parent is None:
             skipped_no_parent += 1
+            print(
+                f"warning: tracking row {github_id!r} has no recoverable parent "
+                "number; left open.",
+                file=sys.stderr,
+            )
             continue
         if not resolved_map.get(parent):
             continue
