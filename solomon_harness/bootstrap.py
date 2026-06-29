@@ -301,6 +301,8 @@ def scaffold_agents(workspace_root: str) -> None:
     main_src = os.path.join(template_dir, "main.py")
     config_src = os.path.join(template_dir, ".agent", "config.json")
 
+    print(f"DEBUG: main_src={main_src} exists={os.path.isfile(main_src)}")
+
     for name in sorted(os.listdir(agents_dir)):
         agent_dir = os.path.join(agents_dir, name)
         if not os.path.isfile(os.path.join(agent_dir, "agents", f"{name}.md")):
@@ -384,55 +386,70 @@ This skill covers the {name} role's duties.
     agents_md_path = os.path.join(agents_dir, "AGENTS.md")
     if os.path.isfile(agents_md_path):
         with open(agents_md_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            content = f.read()
 
-        header_idx = -1
-        for i, line in enumerate(lines):
-            if line.strip().startswith("## The specialist agents"):
-                header_idx = i
-                break
+        pattern = r"(## The specialist agents\n+)([\s\S]*)"
+        match = re.search(pattern, content)
+        if match:
+            heading = match.group(1)
+            list_content = match.group(2)
 
-        if header_idx != -1:
-            bullet_start = -1
-            bullet_end = -1
-            agent_bullets = {}
-
-            for i in range(header_idx + 1, len(lines)):
-                line = lines[i]
-                stripped = line.strip()
-                if stripped.startswith("##") or stripped.startswith("#"):
-                    break
-
-                match = re.match(r"^\s*-\s*`([a-z0-9_]+)`\s*—\s*(.*)", stripped)
-                if match:
-                    if bullet_start == -1:
-                        bullet_start = i
-                    bullet_end = i
-                    agent_bullets[match.group(1)] = stripped
+            lines = list_content.splitlines()
+            agent_lines = []
+            other_lines = []
+            in_list = True
+            for line in lines:
+                if in_list and (line.strip().startswith("- `") or not line.strip()):
+                    if line.strip():
+                        agent_lines.append(line.strip())
+                else:
+                    in_list = False
+                    other_lines.append(line)
 
             formatted_desc = description
             if formatted_desc:
                 formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
 
-            agent_bullets[name] = f"- `{name}` — {formatted_desc}"
+            new_line = f"- `{name}` — {formatted_desc}"
+            agent_lines.append(new_line)
 
-            sorted_names = sorted(agent_bullets.keys())
-            new_bullets = [agent_bullets[k] + "\n" for k in sorted_names]
+            def extract_name(l):
+                m = re.search(r"- `([^`]+)`", l)
+                return m.group(1) if m else l
 
-            if bullet_start != -1:
-                lines[bullet_start:bullet_end + 1] = new_bullets
+            seen = set()
+            unique_agent_lines = []
+            for line in sorted(agent_lines, key=extract_name):
+                n_ = extract_name(line)
+                if n_ not in seen:
+                    seen.add(n_)
+                    unique_agent_lines.append(line)
+
+            new_list_content = "\n".join(unique_agent_lines)
+            if other_lines:
+                while other_lines and not other_lines[0].strip():
+                    other_lines.pop(0)
+                new_list_content += "\n\n" + "\n".join(other_lines)
             else:
-                insert_idx = len(lines)
-                for i in range(header_idx + 1, len(lines)):
-                    if lines[i].strip().startswith("#"):
-                        insert_idx = i
-                        break
-                while insert_idx > header_idx + 1 and not lines[insert_idx - 1].strip():
-                    insert_idx -= 1
-                lines.insert(insert_idx, "\n" + "".join(new_bullets))
+                new_list_content += "\n"
 
+            new_content = content[:match.start()] + "## The specialist agents\n\n" + new_list_content
             with open(agents_md_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
+                f.write(new_content)
+
+    # Run document-skills script to compile the new agent's skills
+    doc_skills_script = os.path.join(workspace_root, "scripts", "document-skills.py")
+    if os.path.isfile(doc_skills_script):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, doc_skills_script], cwd=workspace_root, check=True)
+
+    # Run generate-integrations script to compile Claude agents and Gemini commands
+    gen_integrations_script = os.path.join(workspace_root, "scripts", "generate-integrations.py")
+    if os.path.isfile(gen_integrations_script):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, gen_integrations_script], cwd=workspace_root, check=True)
 
 
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:

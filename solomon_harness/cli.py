@@ -10,6 +10,8 @@ import os
 import sys
 from typing import Optional, List
 
+from solomon_harness.bootstrap import scaffold_new_agent
+
 
 def _subagent_description(filepath: str) -> str:
     """Return a one-line description for a generated subagent file.
@@ -565,6 +567,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     agents_subparsers.add_parser("help", help="Display usage instructions")
     show_parser = agents_subparsers.add_parser("show", help="Show specific agent profile")
     show_parser.add_argument("agent_name", type=str, help="Agent name")
+    
+    scaffold_parser = agents_subparsers.add_parser("scaffold", help="Scaffold a new specialist agent")
+    scaffold_parser.add_argument("agent_name", type=str, help="Agent name")
+    scaffold_parser.add_argument("--description", type=str, required=True, help="Agent description")
 
     args = parser.parse_args(argv)
 
@@ -746,11 +752,21 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
             except Exception as e:
                 print(f"Error reading subagent: {e}", file=sys.stderr)
                 sys.exit(1)
+        elif args.agents_command == "scaffold":
+            if not args.agent_name:
+                print("Error: Subcommand 'scaffold' requires an agent name.", file=sys.stderr)
+                sys.exit(1)
+            try:
+                scaffold_new_agent(workspace_root, args.agent_name, args.description)
+                print(f"Agent '{args.agent_name}' scaffolded and registered successfully.")
+            except Exception as e:
+                print(f"Error scaffolding agent: {e}", file=sys.stderr)
+                sys.exit(1)
         elif args.agents_command == "help":
-            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            print("Usage: solomon-harness agents [list|show <agent_name>|scaffold <agent_name> --description <desc>]")
             sys.exit(0)
         else:
-            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            print("Usage: solomon-harness agents [list|show <agent_name>|scaffold <agent_name> --description <desc>]")
             sys.exit(1)
     else:
         parser.print_help()

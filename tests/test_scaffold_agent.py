@@ -8,9 +8,15 @@ from solomon_harness.bootstrap import scaffold_new_agent
 
 class TestScaffoldAgent(unittest.TestCase):
     def setUp(self):
+        self.real_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.tmp_dir = tempfile.mkdtemp()
         self.agents_dir = os.path.join(self.tmp_dir, "agents")
         os.makedirs(self.agents_dir, exist_ok=True)
+        # Copy scripts directory so we can run them hermetically
+        shutil.copytree(
+            os.path.join(self.real_root, "scripts"),
+            os.path.join(self.tmp_dir, "scripts")
+        )
         # Create an AGENTS.md file mock
         with open(os.path.join(self.agents_dir, "AGENTS.md"), "w", encoding="utf-8") as f:
             f.write("# solomon-harness — Agent Rules and Definitions\n\n## The specialist agents\n\n")
@@ -93,6 +99,40 @@ class TestScaffoldAgent(unittest.TestCase):
         with open(agents_md_path, "r", encoding="utf-8") as f:
             content = f.read()
         self.assertEqual(content.count("- `alpha_agent`"), 1)
+
+    def test_scaffold_compiles_agent(self):
+        # We need templates directory in self.tmp_dir for compile step
+        shutil.copytree(
+            os.path.join(self.real_root, "solomon_harness", "templates"),
+            os.path.join(self.tmp_dir, "solomon_harness", "templates")
+        )
+
+        scaffold_new_agent(self.tmp_dir, "test_compiled_agent", "To compile test")
+
+        # 1. Check skill is documented in the agent's profile file
+        profile_path = os.path.join(self.tmp_dir, "agents", "test_compiled_agent", "agents", "test_compiled_agent.md")
+        self.assertTrue(os.path.isfile(profile_path))
+        with open(profile_path, "r", encoding="utf-8") as f:
+            profile_content = f.read()
+        
+        # document-skills.py appends ## Active Skills
+        self.assertIn("## Active Skills", profile_content)
+        self.assertIn("scope_and_mandate", profile_content)
+
+        # 2. Check compiled integration in .claude/agents/
+        compiled_path = os.path.join(self.tmp_dir, ".claude", "agents", "test_compiled_agent.md")
+        self.assertTrue(os.path.isfile(compiled_path))
+        with open(compiled_path, "r", encoding="utf-8") as f:
+            compiled_content = f.read()
+        self.assertIn("description: To compile test", compiled_content)
+
+    def test_scaffold_cli_command(self):
+        from unittest.mock import patch
+        from solomon_harness import cli
+
+        with patch("solomon_harness.cli.scaffold_new_agent") as mock_scaffold:
+            cli.main(harness_dir=self.tmp_dir, argv=["agents", "scaffold", "cli_agent", "--description", "CLI desc"])
+            mock_scaffold.assert_called_once_with(self.tmp_dir, "cli_agent", "CLI desc")
 
 
 if __name__ == "__main__":
