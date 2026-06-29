@@ -182,5 +182,31 @@ class TestBootstrapAgent(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Technical-Documentation.md")))
 
 
+class TestInitWikiHint(unittest.TestCase):
+    """The init flow detects an uninitialized GitHub wiki and only hints; it must
+    never bootstrap it, since init commonly runs non-interactive."""
+
+    def test_init_hints_on_zero_refs_and_never_bootstraps(self):
+        import contextlib
+        import io
+
+        from solomon_harness.bootstrap import hint_uninitialized_wiki
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = hint_uninitialized_wiki(
+                "/ws",
+                "git@github.com:o/r.git",
+                wiki_enabled_checker=lambda _ws: True,
+                refs_checker=lambda url, timeout=10.0: False,
+            )
+        out = buf.getvalue()
+
+        # Detect-and-hint: it names the manual web step and returns nothing. There
+        # is no bootstrapper parameter or browser path, so it cannot bootstrap.
+        self.assertIsNone(result)
+        self.assertIn("https://github.com/o/r/wiki/_new", out)
+
+
 if __name__ == "__main__":
     unittest.main()

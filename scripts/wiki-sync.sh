@@ -65,7 +65,46 @@ else
   WIKI_URL="${REMOTE_URL}.wiki.git"
 fi
 
-echo "Resolved wiki remote URL: $WIKI_URL"
+# Strip any user:secret@ userinfo from a URL before echoing it, so a token
+# embedded in a remote cannot leak into the logs. Leaves scp-style git@host:path
+# remotes (no `//`) untouched, since that user is not a secret.
+strip_userinfo() {
+  local url="$1"
+  if [[ "$url" == *"://"* ]]; then
+    local scheme="${url%%://*}"
+    local rest="${url#*://}"
+    local authority="${rest%%/*}"
+    local path="${rest#"$authority"}"
+    [[ "$authority" == *"@"* ]] && authority="${authority##*@}"
+    printf '%s' "${scheme}://${authority}${path}"
+  else
+    printf '%s' "$url"
+  fi
+}
+
+echo "Resolved wiki remote URL: $(strip_userinfo "$WIKI_URL")"
+
+# --- Wiki initialization detection (no-browser degrade floor, issue #117) ------
+# GitHub creates the <repo>.wiki.git content repo only after the first wiki page
+# is saved through the web UI, and exposes no API for that first page. Detection
+# -- the ls-remote ref probe, its ~10s timeout, the actionable message, and the
+# exit code -- lives in solomon_harness.wiki_bootstrap so the harness and this
+# script share one source; call it here rather than re-deriving it. It runs no
+# browser action and never blocks on input, so a headless or CI invocation
+# degrades deterministically with exit 4 and surfaces no raw git error. The
+# timeout is read from WIKI_SYNC_LSREMOTE_TIMEOUT. REPO_ROOT carries the bundled
+# solomon_harness package in an installed project; PYTHON pins the interpreter
+# when set.
+set +e
+PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+  "${PYTHON:-python3}" -m solomon_harness.wiki_bootstrap detect "$REMOTE_URL"
+DETECT_STATUS=$?
+set -e
+if [[ "$DETECT_STATUS" -ne 0 ]]; then
+  exit "$DETECT_STATUS"
+fi
+
+echo "Wiki content repository detected. Proceeding to sync."
 
 # Create a temporary directory in workspace
 TEMP_PARENT="${REPO_ROOT}/tmp"
@@ -81,20 +120,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Clone the wiki repository
+# Clone the wiki repository. Detection above already exited 4 on an uninitialized
+# wiki, so the remote is known to carry refs here; a clone failure is a genuine
+# error (network or permissions), not an uninitialized wiki, so there is no
+# local-init-then-push fallback to attempt.
 echo "Cloning wiki repository..."
-INITIALIZED_FRESH=false
 if ! git clone "$WIKI_URL" "$TEMP_DIR" 2>/dev/null; then
-  echo "Warning: Failed to clone wiki repository from $WIKI_URL. It might be uninitialized." >&2
-  echo "Attempting to initialize a fresh wiki repository locally..." >&2
-  
-  # Ensure TEMP_DIR exists and initialize git in it
-  mkdir -p "$TEMP_DIR"
-  cd "$TEMP_DIR"
-  git init -b main
-  git remote add origin "$WIKI_URL"
-  INITIALIZED_FRESH=true
-  cd "$REPO_ROOT"
+  echo "Error: Failed to clone the wiki repository." >&2
+  exit 3
 fi
 
 # Sync markdown files (flat structure)
@@ -117,7 +150,7 @@ fi
 git add .
 
 # Check if there are any changes to commit
-if [[ "$INITIALIZED_FRESH" = "false" ]] && git diff --quiet && git diff --staged --quiet; then
+if git diff --quiet && git diff --staged --quiet; then
   echo "No changes detected. Wiki is already up-to-date."
   exit 0
 fi
@@ -126,16 +159,9 @@ echo "Committing changes..."
 git commit -m "sync: update wiki pages from repository docs"
 
 echo "Pushing changes..."
-if [[ "$INITIALIZED_FRESH" = "true" ]]; then
-  if ! git push -u origin main; then
-    echo "Error: Failed to push changes to initialize wiki remote" >&2
-    exit 3
-  fi
-else
-  if ! git push origin HEAD; then
-    echo "Error: Failed to push changes to wiki remote" >&2
-    exit 3
-  fi
+if ! git push origin HEAD; then
+  echo "Error: Failed to push changes to wiki remote" >&2
+  exit 3
 fi
 
 echo "Wiki synchronized successfully."

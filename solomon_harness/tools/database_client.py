@@ -162,6 +162,54 @@ def is_github_issue(github_id: Optional[str]) -> bool:
     return s.isdigit() and s.isascii()
 
 
+# ---------------------------------------------------------------------------
+# Canonical person key (ADR-0012).
+#
+# The cross-tenant subject of an issue. Like normalize_status, it is normalized
+# on write and lives here, below every consumer, so the key cannot drift across
+# the cockpit, digest, and evals. An email is preferred because it is stable
+# across projects and tools; a handle is namespaced gh:<login> so it can never
+# collide with an email; a null/empty assignee reads back as "unassigned".
+# ---------------------------------------------------------------------------
+
+# Reserved query token for an issue with no person key. Never a valid concrete
+# key: every real key is an email or a gh: handle, so no assignee normalizes to it.
+UNASSIGNED_PERSON_KEY = "unassigned"
+
+
+def normalize_person_key(email: Optional[str], login: Optional[str]) -> Optional[str]:
+    """Map an email and a login to the canonical, cross-tenant person key.
+
+    Implements the ADR-0012 identity contract at its normative scalar seam: the
+    caller (the github.py capture site) extracts the email and login from the
+    GitHub assignee JSON, so this function stays free of any source shape. Total
+    and deterministic: it never raises and has no side effects. A non-empty,
+    ``@``-bearing email wins, lowercased and trimmed, because an email is the same
+    string across projects and tools. Otherwise a non-empty login yields
+    ``gh:<lowercased-login>``; the ``gh:`` namespace has no ``@``, so a handle key
+    can never collide with an email key. When neither yields a usable value the
+    result is None, which reads back under the reserved ``unassigned`` pseudo-key
+    via :func:`person_key_or_unassigned`.
+    """
+    normalized_email = str(email or "").strip().lower()
+    if normalized_email and "@" in normalized_email:
+        return normalized_email
+    normalized_login = str(login or "").strip().lower()
+    if normalized_login:
+        return f"gh:{normalized_login}"
+    return None
+
+
+def person_key_or_unassigned(key: Optional[str]) -> str:
+    """Map a stored person key (or None) to a queryable subject token.
+
+    A null key reads back as the reserved ``unassigned`` pseudo-key, so the
+    "unassigned" subject lives in one named, tested place rather than being
+    re-derived by every read consumer.
+    """
+    return key if key is not None else UNASSIGNED_PERSON_KEY
+
+
 class SpectronFallbackClient:
     """Fallback client for Spectron REST API when the python package doesn't export it."""
 
@@ -649,6 +697,7 @@ class DatabaseClient:
                 type_ TEXT,
                 status TEXT,
                 milestone_id INTEGER,
+                assignee TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (milestone_id) REFERENCES milestones (id)
             );
@@ -729,10 +778,36 @@ class DatabaseClient:
                 cursor = conn.cursor()
                 for query in queries:
                     cursor.execute(query)
+                self._ensure_issue_assignee_column(conn)
                 conn.commit()
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
+
+    @staticmethod
+    def _ensure_issue_assignee_column(conn: sqlite3.Connection) -> None:
+        """Add the nullable assignee column to a pre-migration issues table (#118).
+
+        Expand/contract and idempotent: guarded by a PRAGMA table_info check, so a
+        store created before the column gains it additively (no destructive rewrite
+        of existing rows, which keep assignee NULL), while a fresh store whose
+        CREATE TABLE already declared the column skips the ALTER.
+
+        Concurrency-safe on the shared multi-agent store: two simultaneous
+        first-opens can both pass the PRAGMA guard before either ALTERs, so the
+        losing ALTER raises ``OperationalError: duplicate column name``. That means
+        a concurrent open already added the column, so it is treated as
+        already-migrated; any other OperationalError is a real failure and
+        propagates.
+        """
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
+        if "assignee" in existing:
+            return
+        try:
+            conn.execute("ALTER TABLE issues ADD COLUMN assignee TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def _resolve_sqlite_path(self) -> str:
         """Resolve the SQLite store path.
@@ -1703,6 +1778,7 @@ class DatabaseClient:
         type_: str,
         status: str,
         milestone_id: Optional[Union[str, int]],
+        assignee: Optional[str] = None,
     ) -> None:
         """Logs a GitHub issue.
 
@@ -1714,6 +1790,10 @@ class DatabaseClient:
                 per logical status on write (ADR-0006), so no two rows differ only
                 by casing for the same status.
             milestone_id: Associated milestone ID in the database.
+            assignee: Optional canonical person key (ADR-0012), already normalized
+                by ``normalize_person_key`` at the capture seam. Additive sixth
+                parameter defaulting to None, so every existing 5-arg caller is
+                unchanged and stores ``assignee`` NULL, read back as ``unassigned``.
         """
         fields = {
             "github_id": github_id,
@@ -1721,6 +1801,7 @@ class DatabaseClient:
             "type_": type_,
             "status": normalize_status(status),
             "milestone_id": milestone_id,
+            "assignee": assignee,
         }
         # github_id is already a stable id, reused for the RecordID and filename.
         self._write_through("issue", github_id, fields, self._db_log_issue)
@@ -1736,6 +1817,7 @@ class DatabaseClient:
                 type_: $type_,
                 status: $status,
                 milestone_id: $milestone_id,
+                assignee: $assignee,
                 created_at: time::now()
             };
             """
@@ -1745,17 +1827,23 @@ class DatabaseClient:
             except _ConnectionLost:
                 raise
             except Exception as e:
-                logging.error(f"Failed to log issue in SurrealDB: {e}")
+                # Log the exception type and record id, never str(e): the issue row
+                # carries the person key (an email when public), so a backend error
+                # string must not leak it into logs (STRIDE: information disclosure).
+                logging.error(
+                    "Failed to log issue %s in SurrealDB: %s", record_id, type(e).__name__
+                )
                 raise RuntimeError(f"Failed to log issue in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO issues (github_id, title, type_, status, milestone_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO issues (github_id, title, type_, status, milestone_id, assignee)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(github_id) DO UPDATE SET
                 title=excluded.title,
                 type_=excluded.type_,
                 status=excluded.status,
-                milestone_id=excluded.milestone_id
+                milestone_id=excluded.milestone_id,
+                assignee=excluded.assignee
             """
             try:
                 with self._sqlite_conn() as conn:
@@ -1767,11 +1855,15 @@ class DatabaseClient:
                             fields["type_"],
                             fields["status"],
                             fields["milestone_id"],
+                            fields["assignee"],
                         ),
                     )
                     conn.commit()
             except sqlite3.Error as e:
-                logging.error(f"Failed to log issue: {e}")
+                # Type and record id only, never str(e): the row carries the person
+                # key, so a backend error string must not leak it (STRIDE: info
+                # disclosure).
+                logging.error("Failed to log issue %s: %s", record_id, type(e).__name__)
                 raise RuntimeError(f"Failed to log issue: {e}")
 
     def save_backtest(
