@@ -185,3 +185,91 @@ class TestSweep(unittest.TestCase):
         result = curator.sweep_fleet("baseline", analyzer, NullMockDBClient(), self.root)
         self.assertEqual(len(result.proposals), 1)
         self.assertIsNone(result.proposals[0].decision_id)
+
+
+class TestApplyProposal(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="curator-apply-")
+        import subprocess
+        subprocess.run(["git", "init", "-b", "main"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.root, check=True)
+        
+        # Create agents directory and qa agent
+        _write_agent(self.root, "qa", "The QA Specialist.")
+        
+        # Create a dummy AGENTS.md
+        agents_dir = os.path.join(self.root, "agents")
+        os.makedirs(agents_dir, exist_ok=True)
+        with open(os.path.join(self.root, "agents", "AGENTS.md"), "w", encoding="utf-8") as f:
+            f.write("# Shared Rules\n- strict TDD is required for all changes.\n- do not use duplicate rules.")
+            
+        # Initial commit so git checkout -b doesn't fail on empty repo
+        with open(os.path.join(self.root, "dummy.txt"), "w") as f:
+            f.write("dummy")
+        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-m", "initial commit"], cwd=self.root, check=True)
+        
+        self.proposal = curator.Proposal(
+            agent="qa",
+            drift_description="Implement some new qa check",
+            sources=("source1", "source2"),
+            rationale="we need this",
+            decision_id="123"
+        )
+        
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+        
+    def test_apply_proposal_requires_two_sources(self):
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="Implement check",
+            sources=("source1",),
+            rationale="we need this"
+        )
+        with self.assertRaisesRegex(ValueError, "evidence regressed"):
+            curator.apply_proposal(p, lambda ad: None, self.root)
+            
+    def test_apply_proposal_requires_valid_single_agent(self):
+        p = curator.Proposal(
+            agent="invalid_agent",
+            drift_description="Implement check",
+            sources=("source1", "source2"),
+            rationale="we need this"
+        )
+        with self.assertRaisesRegex(ValueError, "targets multiple or invalid agent"):
+            curator.apply_proposal(p, lambda ad: None, self.root)
+            
+    def test_apply_proposal_guards_against_restated_rules(self):
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="We need strict TDD is required for all changes, which is a rule",
+            sources=("source1", "source2"),
+            rationale="we need this"
+        )
+        with self.assertRaisesRegex(ValueError, "restates shared rules"):
+            curator.apply_proposal(p, lambda ad: None, self.root)
+            
+    def test_apply_proposal_executes_branching_and_committing(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+                
+        def gh_runner(args):
+            return MockCompletedProcess()
+            
+        def edit_callback(agent_dir):
+            skill_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skill_dir, exist_ok=True)
+            with open(os.path.join(skill_dir, "new_skill.md"), "w", encoding="utf-8") as f:
+                f.write("New skill content")
+                
+        pr_url = curator.apply_proposal(self.proposal, edit_callback, self.root, gh_runner=gh_runner)
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/123")
+        
+        # Verify git branch exists
+        import subprocess
+        proc = subprocess.run(["git", "branch", "--show-current"], cwd=self.root, capture_output=True, text=True, check=True)
+        self.assertTrue(proc.stdout.strip().startswith("feature/implement-some-new-qa-check"))
+
