@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from opentelemetry import trace
@@ -1388,6 +1389,155 @@ class TestReadOnlyContract(unittest.TestCase):
             guard.log_issue("x", "title", "feature", "Backlog", None)
         self.assertEqual(guard.write_calls, ["log_issue"])
         client.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-user velocity (issue #55, slice 3a).
+#
+# Frozen clock for every velocity test: T_NOW is naive local time, matching the
+# naive ISO strings record_transition writes for entered_at. The three windows
+# start at T_NOW - {7, 14, 30} days.
+# ---------------------------------------------------------------------------
+
+T_NOW = datetime(2026, 6, 29, 12, 0, 0)
+
+
+def _done_history(entered_at):
+    """A one-entry board_history that records a Done transition at entered_at."""
+    return [{"column": "Done", "entered_at": entered_at}]
+
+
+class _VelocityTenantClient:
+    """A per-tenant read port that answers list_issues and board_history reads.
+
+    list_issues returns the fixed issue list; get_memory answers a
+    board_history:<github_id> key from the supplied history map (None when the
+    issue has no tracked history). Read-only: no write method exists.
+    """
+
+    def __init__(self, issues, history_by_id=None):
+        self._issues = issues
+        self._history = dict(history_by_id or {})
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        return list(self._issues)
+
+    def get_memory(self, key):
+        prefix = "board_history:"
+        if not key.startswith(prefix):
+            return None
+        history = self._history.get(key[len(prefix):])
+        return json.dumps(history) if history is not None else None
+
+    def close(self):
+        pass
+
+
+class TestCountTenantVelocity(unittest.TestCase):
+    def _tenant(self):
+        """One tenant whose board_history exercises every window boundary.
+
+        alice has nine Done transitions laid out so the count is 3 / 7 / 9 over
+        the 7 / 14 / 30-day windows, plus two Done-column issues with no tracked
+        history (the excluded affordance). carol's single Done sits exactly on
+        the 14-day lower bound (inclusive); dave's single Done is one second
+        before it (excluded). bob is an assignee with no in-window Done (a
+        present zero-throughput subject). Two null-assignee Done issues fall
+        under the reserved unassigned bucket.
+        """
+        alice_done = {
+            # Inside the 7-day window (>= 2026-06-22T12:00:00): three.
+            "al1": "2026-06-29T10:00:00",
+            "al2": "2026-06-25T09:00:00",
+            "al3": "2026-06-22T12:00:00",  # exactly the 7-day lower bound
+            # Inside 14 but outside 7 (>= 2026-06-15T12:00:00): four more.
+            "al4": "2026-06-21T08:00:00",
+            "al5": "2026-06-18T15:00:00",
+            "al6": "2026-06-16T11:00:00",
+            "al7": "2026-06-15T12:00:00",  # exactly the 14-day lower bound
+            # Inside 30 but outside 14 (>= 2026-05-30T12:00:00): two more.
+            "al8": "2026-06-10T09:00:00",
+            "al9": "2026-06-01T09:00:00",
+        }
+        issues = [
+            {"github_id": gid, "status": "closed", "assignee": "alice@example.com"}
+            for gid in alice_done
+        ]
+        history = {gid: _done_history(ts) for gid, ts in alice_done.items()}
+
+        # Two alice issues sit in the Done column with no tracked history: they
+        # are excluded from the count and reported, never silently dropped.
+        issues += [
+            {"github_id": "al-x1", "status": "closed", "assignee": "alice@example.com"},
+            {"github_id": "al-x2", "status": "Done", "assignee": "alice@example.com"},
+        ]
+
+        # carol: one Done exactly on the 14-day lower bound (inclusive -> 1).
+        issues.append(
+            {"github_id": "ca1", "status": "closed", "assignee": "carol@example.com"}
+        )
+        history["ca1"] = _done_history("2026-06-15T12:00:00")
+
+        # dave: one Done one second before the 14-day bound (excluded -> 0).
+        issues.append(
+            {"github_id": "da1", "status": "closed", "assignee": "dave@example.com"}
+        )
+        history["da1"] = _done_history("2026-06-15T11:59:59")
+
+        # bob: an assignee with no in-window Done (zero throughput, still a row).
+        issues.append(
+            {"github_id": "bo1", "status": "Backlog", "assignee": "gh:bob"}
+        )
+
+        # Two unassigned Done issues inside the window -> the unassigned bucket.
+        issues += [
+            {"github_id": "un1", "status": "closed", "assignee": None},
+            {"github_id": "un2", "status": "closed", "assignee": None},
+        ]
+        history["un1"] = _done_history("2026-06-24T09:00:00")
+        history["un2"] = _done_history("2026-06-20T09:00:00")
+
+        return _VelocityTenantClient(issues, history)
+
+    def test_count_tenant_velocity_counts_done_in_window_per_person(self):
+        """count_tenant_velocity counts, per canonical person key, the issues
+        whose board_history Done transition entered the window; the lower bound
+        is inclusive and one second before it is excluded; a null assignee falls
+        under the unassigned bucket; a zero-throughput assignee is still a
+        present row; and Done-column issues with no tracked history are reported
+        as excluded without ever entering the count."""
+        counts = cockpit_read.count_tenant_velocity(
+            self._tenant(), "alpha", now=T_NOW, days=14
+        )
+
+        # alice: seven Done in the 14-day window; her two history-less Done
+        # issues are excluded, not counted.
+        self.assertEqual(counts["alice@example.com"]["count"], 7)
+        self.assertEqual(counts["alice@example.com"]["excluded"], 2)
+
+        # The 14-day lower bound is inclusive (carol) and -1s is out (dave).
+        self.assertEqual(counts["carol@example.com"]["count"], 1)
+        self.assertEqual(counts["dave@example.com"]["count"], 0)
+
+        # A null assignee buckets under the reserved unassigned key, not merged.
+        self.assertEqual(counts["unassigned"]["count"], 2)
+
+        # A zero-throughput assignee is present with count 0 (not dropped).
+        self.assertIn("gh:bob", counts)
+        self.assertEqual(counts["gh:bob"]["count"], 0)
+
+    def test_count_tenant_velocity_selects_the_window(self):
+        """The same fixture yields 3 / 7 / 9 for alice across the 7 / 14 / 30-day
+        windows, so the window bound (now - days) drives the count."""
+        for days, expected in ((7, 3), (14, 7), (30, 9)):
+            with self.subTest(days=days):
+                counts = cockpit_read.count_tenant_velocity(
+                    self._tenant(), "alpha", now=T_NOW, days=days
+                )
+                self.assertEqual(counts["alice@example.com"]["count"], expected)
 
 
 if __name__ == "__main__":

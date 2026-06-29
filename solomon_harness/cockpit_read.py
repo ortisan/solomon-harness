@@ -14,6 +14,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from opentelemetry import trace
@@ -278,6 +279,136 @@ def filter_portfolio(payload: Dict[str, Any], person_key: str) -> Dict[str, Any]
         "unmapped": unmapped,
         "filteredUser": person_key,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-user velocity (issue #55, slice 3a; ADR-0002 amendment).
+#
+# Velocity reads board_history, the real board transitions captured by
+# github.record_transition, not the created_at approximation. Each issue's Done
+# transition (the entry whose column maps to the Done display column) carries a
+# naive local-time ISO entered_at; a delivery counts when that timestamp falls
+# inside the selected window. Counts are keyed on the stored canonical person key
+# (ADR-0012) and never re-derived. compose_velocity sums the per-person counts
+# across tenants (compose-never-join): a tenant's rows never meet another's.
+# ---------------------------------------------------------------------------
+
+# The delivery-board Done display column. A board_history entry or an issue
+# status counts as delivered only when it maps to this column.
+DONE_COLUMN = "Done"
+
+# The memory-key prefix github.record_transition writes the per-card timeline
+# under: board_history:<github_id> -> JSON list of {column, entered_at}.
+BOARD_HISTORY_PREFIX = "board_history:"
+
+
+def _is_done(value: Optional[str]) -> bool:
+    """Report whether a stored status or transition column maps to Done.
+
+    Routes the value through the shared status vocabulary (ADR-0006) so every
+    spelling of delivered (closed, done, Done) resolves to the one Done display
+    column. A null value is never delivered.
+    """
+    if value is None:
+        return False
+    normalized = normalize_status(value)
+    if normalized is None:
+        return False
+    return STATUS_DISPLAY_COLUMNS.get(normalized) == DONE_COLUMN
+
+
+def _parse_naive(entered_at: Any) -> Optional[datetime]:
+    """Parse a board_history entered_at into a naive datetime, or None.
+
+    entered_at is a naive local-time ISO string (no offset; see
+    record_transition), so it parses onto the same clock basis the window bounds
+    use. A non-string or unparseable value yields None so a malformed entry is
+    skipped, never crashing the read. A timezone-tagged value (not the contract,
+    but defended against) is coerced to naive so the comparison stays single-basis.
+    """
+    if not isinstance(entered_at, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(entered_at)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+
+
+def _in_window(entered: datetime, now: datetime, days: int) -> bool:
+    """Report whether entered falls inside the [now - days, now] window.
+
+    Both bounds and entered are naive datetimes compared on one clock basis. The
+    lower bound is inclusive, so a Done exactly at now - days counts.
+    """
+    return now - timedelta(days=days) <= entered <= now
+
+
+def _load_board_history(client: Any, github_id: Optional[str]) -> List[Dict[str, Any]]:
+    """Read one issue's board_history list through the read port, defensively.
+
+    Returns an empty list for a missing id, a missing entry, or a value that is
+    not a JSON list, so a thin or malformed history degrades to "no tracked
+    transitions" rather than raising.
+    """
+    if not github_id:
+        return []
+    raw = client.get_memory(f"{BOARD_HISTORY_PREFIX}{github_id}")
+    if not raw:
+        return []
+    try:
+        history = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return history if isinstance(history, list) else []
+
+
+def _latest_done_entered_at(history: List[Dict[str, Any]]) -> Optional[datetime]:
+    """Return the latest Done-transition timestamp in a board_history, or None.
+
+    Takes the max entered_at across the entries whose column maps to Done, so a
+    card delivered, reopened, and re-delivered keys on its latest delivery. None
+    when the card has no parseable Done transition at all.
+    """
+    done_times = [
+        parsed
+        for entry in history
+        if isinstance(entry, dict) and _is_done(entry.get("column"))
+        for parsed in (_parse_naive(entry.get("entered_at")),)
+        if parsed is not None
+    ]
+    return max(done_times) if done_times else None
+
+
+def count_tenant_velocity(
+    client: Any, project: str, now: datetime, days: int
+) -> Dict[str, Dict[str, Any]]:
+    """Count one tenant's in-window deliveries per canonical person key (read-only).
+
+    For each issue, resolves the subject through ``person_key_or_unassigned`` over
+    the stored assignee (ADR-0012; a null assignee buckets under ``unassigned``)
+    and reads its ``board_history``. An issue whose latest Done transition entered
+    the ``[now - days, now]`` window adds one to that person's ``count`` and its
+    timestamp to ``doneAt`` (the per-person in-window set slice 3b buckets per
+    day). An issue currently in the Done column with no tracked Done transition is
+    surfaced under ``excluded`` (the coverage affordance) and never counted, so
+    the number is auditable rather than silently low. Every assignee is a present
+    subject, so a zero-throughput person still has a row. The return is keyed by
+    person; ``compose_velocity`` is handed these counts, never rows.
+    """
+    counts: Dict[str, Dict[str, Any]] = {}
+    for issue in client.list_issues():
+        person = person_key_or_unassigned(issue.get("assignee"))
+        bucket = counts.setdefault(person, {"count": 0, "excluded": 0, "doneAt": []})
+        done_at = _latest_done_entered_at(
+            _load_board_history(client, issue.get("github_id"))
+        )
+        if done_at is not None and _in_window(done_at, now, days):
+            bucket["count"] += 1
+            bucket["doneAt"].append(done_at.isoformat(timespec="seconds"))
+        elif done_at is None and _is_done(issue.get("status")):
+            bucket["excluded"] += 1
+    return counts
 
 
 def _is_permission_failure(error: Exception) -> bool:
