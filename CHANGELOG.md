@@ -2,6 +2,17 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.5.0] - 2026-06-28
+
+### Added
+- capability-broker routing + gap detection (slice A of #43) (#84)
+- loop-engineering safety floor (#45)
+- research_analyst specialist — valuation and research playbook (slice 1) (#82)
+- milestone-gated release standard on trunk (#69)
+
+### Fixed
+- support custom TOML slash commands in Antigravity TUI (#89)
+
 ## [0.4.0] - 2026-06-28
 
 ### Fixed
