@@ -227,18 +227,19 @@ tag, no moved Release.
 
 ## End-to-end runbook
 
-For an epic milestone `v0.4.0` reaching zero open issues with CI green:
+For an epic milestone `v0.5.0` reaching zero open issues with CI green (v0.4.0 already
+shipped the memory-resilience release, so the cockpit epic is the next minor):
 
-1. `solomon-harness release plan` — confirms target `v0.4.0` milestone, computes the
-   bump from `<last-tag>..main --first-parent`, prints `v0.4.0` and the CHANGELOG
+1. `solomon-harness release plan` — confirms target `v0.5.0` milestone, computes the
+   bump from `<last-tag>..main --first-parent`, prints `v0.5.0` and the CHANGELOG
    section. Safe to have proposed by the loop.
-2. `solomon-harness release prep` — opens `chore/release-v0.4.0` with the
-   `pyproject.toml` bump and the CHANGELOG section, commit `chore(release): v0.4.0`.
+2. `solomon-harness release prep` — opens `chore/release-v0.5.0` with the
+   `pyproject.toml` bump and the CHANGELOG section, commit `chore(release): v0.5.0`.
 3. CI on the PR runs `release check` (version == tag == CHANGELOG, tag absent, tests +
    ruff green) and the non-release-PR guard.
 4. The human merges the prep PR into `main`. That is the release authorization.
 5. The release workflow triggers on the `main` push, creates and pushes the annotated
-   `v0.4.0` tag with `GITHUB_TOKEN`, and publishes the GitHub Release from the CHANGELOG
+   `v0.5.0` tag with `GITHUB_TOKEN`, and publishes the GitHub Release from the CHANGELOG
    section.
 6. The ephemeral branch is deleted; the milestone is closed; the release is recorded in
    project memory via `save_release`.
