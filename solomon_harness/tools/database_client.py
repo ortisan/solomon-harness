@@ -347,10 +347,23 @@ class DatabaseClient:
         self.backend = "sqlite"
         self.db = None
         self.spectron = None
-        self.db_path = db_path
-        # The explicit db_path argument (kept distinct from the resolved store path)
+
+        # Resolve custom path from constructor or env var. Either forces SQLite.
+        env_db = os.environ.get("HARNESS_DB_PATH")
+        resolved_path = db_path or env_db
+        if resolved_path:
+            if os.path.isdir(resolved_path):
+                raise ValueError(
+                    f"HARNESS_DB_PATH / db_path must be a file, not a directory: {resolved_path}"
+                )
+            self.db_path = os.path.abspath(resolved_path)
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        else:
+            self.db_path = None
+
+        # The explicit db_path argument or env_db (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
-        self._db_path_param = db_path
+        self._db_path_param = self.db_path
 
         # SurrealDB connection params captured so the connection can be rebuilt
         # mid-session after a drop, not only at construction (issue #37).

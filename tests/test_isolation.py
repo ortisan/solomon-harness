@@ -5,6 +5,7 @@ must ignore leaked GIT_* env (so the suite passes inside a worktree/hook), and t
 SQLite memory path must be overridable so tests never touch the real project DB.
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -52,6 +53,36 @@ class TestDbPathIsolation(unittest.TestCase):
                 with DatabaseClient(harness_dir=tmp) as db:
                     db.save_memory("iso-key", "iso-value", "test")
                 self.assertTrue(os.path.isfile(dbfile))
+            finally:
+                if saved is None:
+                    os.environ.pop("HARNESS_DB_PATH", None)
+                else:
+                    os.environ["HARNESS_DB_PATH"] = saved
+
+    def test_database_client_forces_sqlite_with_harness_db_path_even_if_surreal_configured(self):
+        """Even if the config specifies provider='surrealdb', setting HARNESS_DB_PATH
+        must force the SQLite backend and guarantee database isolation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            # Write a config that specifies surrealdb provider
+            agent_dir = os.path.join(tmp, ".agent")
+            os.makedirs(agent_dir, exist_ok=True)
+            with open(os.path.join(agent_dir, "config.json"), "w") as f:
+                json.dump({
+                    "database": {
+                        "provider": "surrealdb",
+                        "url": "ws://localhost:8099/rpc",
+                        "namespace": "solomon",
+                        "database": "test-db"
+                    }
+                }, f)
+
+            dbfile = os.path.join(tmp, "long_term", "iso_surreal.db")
+            saved = os.environ.get("HARNESS_DB_PATH")
+            os.environ["HARNESS_DB_PATH"] = dbfile
+            try:
+                with DatabaseClient(harness_dir=tmp) as db:
+                    self.assertEqual(db.backend, "sqlite")
+                    self.assertEqual(db.db_path, dbfile)
             finally:
                 if saved is None:
                     os.environ.pop("HARNESS_DB_PATH", None)
