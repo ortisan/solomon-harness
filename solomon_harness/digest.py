@@ -12,6 +12,8 @@ import json
 import subprocess
 from typing import Any, Dict, List, Optional
 
+from solomon_harness.tools.database_client import is_terminal
+
 _MAX_LIST = 5
 
 
@@ -69,7 +71,11 @@ def build_digest(
             f"{r.get('status')} ({r.get('created_at', '')})"
         )
 
-    issues = open_issues or []
+    # Defensive terminal filter (ADR-0006): get_open_issues already excludes
+    # delivered work, but the digest must never render a terminal row even if
+    # handed a stale list, so it drops closed/done/Done here through the shared
+    # predicate. A row with no status is not terminal and is kept.
+    issues = [i for i in (open_issues or []) if not is_terminal(i.get("status"))]
     lines.append(f"Open issues: {len(issues)}")
     for i in issues[:_MAX_LIST]:
         lines.append(f"  - [{i.get('github_id')}] {i.get('title')}")
