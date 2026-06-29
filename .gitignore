@@ -28,6 +28,11 @@ build/
 # Local lifecycle state: handoff contract artifacts written between workflow stages
 .solomon/
 
+# Per-branch planning artifact: PLAN.md is written locally by /solomon-start for
+# the branch in flight, not shared source. Tracking it made every concurrent
+# branch rewrite and collide on it, so it is local state, never committed.
+PLAN.md
+
 # Git Worktrees
 ui-worktree/
 
