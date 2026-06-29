@@ -6,6 +6,7 @@ point, open work, the last loop run, PRs awaiting review) and points at
 that stays the canonical prose ladder in the loop command.
 """
 
+import re
 import unittest
 
 from solomon_harness import digest
@@ -74,6 +75,30 @@ class TestBuildDigest(unittest.TestCase):
         self.assertNotIn("[b]", text)
         self.assertNotIn("[c]", text)
         self.assertNotIn("[d]", text)
+
+    def test_open_issues_buckets_are_digits_only_and_sum_to_total(self):
+        """The GitHub bucket counts a numeric id only (not a composite id sharing
+        its digits, not a terminal row), and github + tracking always sums to the
+        rendered non-terminal total -- segregating, never dropping a row (#116)."""
+        issues = [
+            {"github_id": "116", "title": "Real issue"},
+            {"github_id": "116-R-01", "title": "Shares digits, not a GitHub issue"},
+            {"github_id": "bug-x", "title": "Slug tracking"},
+            {"github_id": "", "title": "Empty tracking"},
+            {"github_id": "999", "title": "Terminal numeric", "status": "closed"},
+        ]
+        text = "\n".join(
+            digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=None)
+        )
+        match = re.search(r"Open issues: (\d+) GitHub issues, (\d+) tracking items", text)
+        self.assertIsNotNone(match)
+        github_count, tracking_count = int(match.group(1)), int(match.group(2))
+        self.assertEqual(github_count, 1)  # only 116, not 116-R-01, not terminal 999
+        self.assertEqual(tracking_count, 3)  # 116-R-01, bug-x, empty
+        # No-deletion: the two buckets sum to the non-terminal total (4), and the
+        # terminal numeric 999 leaks into neither bucket nor the rendered list.
+        self.assertEqual(github_count + tracking_count, 4)
+        self.assertNotIn("999", text)
 
     def test_open_issue_list_is_capped(self):
         many = [{"github_id": f"i{i}", "title": f"T{i}"} for i in range(9)]
