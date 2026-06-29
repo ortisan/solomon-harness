@@ -109,6 +109,16 @@ else
 fi
 set -e
 
+if [[ "$LSREMOTE_STATUS" -eq 124 || "$LSREMOTE_STATUS" -eq 137 ]]; then
+  echo "Error: could not determine whether the GitHub wiki is initialized." >&2
+  echo "Detection was inconclusive (network or timeout): the wiki content" >&2
+  echo "repository ($WIKI_URL) did not respond within ${WIKI_LSREMOTE_TIMEOUT}s." >&2
+  echo "If the wiki has never been opened, initialize it once: open" >&2
+  echo "  ${WIKI_NEW_URL}" >&2
+  echo "and save a page (any content), then re-run the wiki step." >&2
+  exit 4
+fi
+
 if [[ -z "$WIKI_REFS" ]]; then
   echo "Error: the GitHub wiki has not been initialized." >&2
   echo "GitHub creates the wiki content repository ($WIKI_URL) only after the" >&2

@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -105,6 +106,26 @@ class WikiSyncFixture(unittest.TestCase):
         )
         return out.stdout.strip()
 
+    def _install_git_shim_sleeping_on(self, subcommand, seconds=30):
+        # A git PATH shim that hangs on one subcommand and delegates everything
+        # else to the real git, so the script's own git calls still work while the
+        # ls-remote probe stalls. Used to drive the detection-timeout path.
+        real_git = shutil.which("git")
+        shim_dir = os.path.join(self.root, "binshim")
+        os.makedirs(shim_dir, exist_ok=True)
+        shim = os.path.join(shim_dir, "git")
+        with open(shim, "w", encoding="utf-8") as f:
+            f.write(
+                "#!/bin/sh\n"
+                f'if [ "$1" = "{subcommand}" ]; then\n'
+                f"  sleep {seconds}\n"
+                "  exit 0\n"
+                "fi\n"
+                f'exec "{real_git}" "$@"\n'
+            )
+        os.chmod(shim, 0o755)
+        return shim_dir
+
     def _run(self, extra_env=None, timeout=120):
         env = {k: v for k, v in os.environ.items() if k not in _GIT_LEAK_VARS}
         env["GIT_TERMINAL_PROMPT"] = "0"
@@ -179,6 +200,33 @@ class TestWikiSyncNoOp(WikiSyncFixture):
             text=True,
         ).stdout
         self.assertIn("Home.md", tree)
+
+
+class TestWikiSyncDetectionTimeout(WikiSyncFixture):
+    """Step 3 (DETECTION TIMEOUT): when ls-remote does not return within the
+    timeout the script exits 4 within roughly that bound, reports detection as
+    inconclusive, names the same manual step, and surfaces no raw git error."""
+
+    def test_ls_remote_hang_exits_4_within_bound_with_inconclusive_message(self):
+        # Point at a plausible wiki URL; the shim makes ls-remote hang regardless.
+        self._set_wiki_remote(os.path.join(self.root, "remote.wiki.git"))
+        shim_dir = self._install_git_shim_sleeping_on("ls-remote", seconds=30)
+        env = {
+            "PATH": shim_dir + os.pathsep + os.environ["PATH"],
+            "WIKI_SYNC_LSREMOTE_TIMEOUT": "2",
+        }
+
+        started = time.monotonic()
+        result = self._run(extra_env=env)
+        elapsed = time.monotonic() - started
+        out = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 4, out)
+        self.assertLess(elapsed, 15, f"detection did not bound the hang: {elapsed:.1f}s")
+        self.assertIn("inconclusive", out.lower())
+        self.assertIn("wiki/_new", out)
+        self.assertNotIn("fatal:", out)
+        self.assertNotIn("has not been initialized", out)
 
 
 if __name__ == "__main__":
