@@ -26,7 +26,7 @@ class TestBuildDigest(unittest.TestCase):
         text = "\n".join(lines)
         self.assertIn("review PR #27", text)
         self.assertIn("/solomon-start 42 -> ok", text)
-        self.assertIn("Open issues: 2", text)
+        self.assertIn("Open issues: 0 GitHub issues, 2 tracking items", text)
         self.assertIn("PRs awaiting review: 1", text)  # only #31: not draft, not approved
         self.assertIn("#31", text)
         self.assertNotIn("#32", text)  # drafts excluded
@@ -36,9 +36,23 @@ class TestBuildDigest(unittest.TestCase):
     def test_empty_digest_degrades_cleanly(self):
         text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=None))
         self.assertIn("no prior activity", text)
-        self.assertIn("Open issues: 0", text)
+        self.assertIn("Open issues: 0 GitHub issues, 0 tracking items", text)
         self.assertIn("gh unavailable", text)
         self.assertIn("run /solomon-loop", text)
+
+    def test_open_issues_line_splits_github_and_tracking(self):
+        """The Open issues line reports two figures: real GitHub issues (numeric id)
+        and tracking items (composite/empty id), never one conflated total (#116)."""
+        issues = [
+            {"github_id": "116", "title": "Real issue"},
+            {"github_id": "116-R-01", "title": "RAID follow-up"},
+            {"github_id": "", "title": "Tracking item"},
+        ]
+        text = "\n".join(
+            digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=None)
+        )
+        self.assertIn("Open issues: 1 GitHub issues, 2 tracking items", text)
+        self.assertNotIn("Open issues: 3", text)  # never a conflated single total
 
     def test_terminal_issues_excluded_from_count_and_list(self):
         """build_digest defensively drops terminal rows (closed/done/Done) from
@@ -54,7 +68,7 @@ class TestBuildDigest(unittest.TestCase):
         text = "\n".join(
             digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=None)
         )
-        self.assertIn("Open issues: 2", text)
+        self.assertIn("Open issues: 0 GitHub issues, 2 tracking items", text)
         self.assertIn("[a]", text)
         self.assertIn("[e]", text)
         self.assertNotIn("[b]", text)
@@ -64,7 +78,7 @@ class TestBuildDigest(unittest.TestCase):
     def test_open_issue_list_is_capped(self):
         many = [{"github_id": f"i{i}", "title": f"T{i}"} for i in range(9)]
         text = "\n".join(digest.build_digest(resume=None, open_issues=many, last_loop_run=None, prs=[]))
-        self.assertIn("Open issues: 9", text)
+        self.assertIn("Open issues: 0 GitHub issues, 9 tracking items", text)
         self.assertIn("and 4 more", text)  # 5 shown, 4 elided
 
     def test_gather_digest_uses_db_without_github(self):
@@ -81,7 +95,7 @@ class TestBuildDigest(unittest.TestCase):
         text = "\n".join(digest.gather_digest(".", FakeDB(), fetch_github=False))
         self.assertIn("Resume:", text)
         self.assertIn("Last loop:", text)
-        self.assertIn("Open issues: 1", text)
+        self.assertIn("Open issues: 0 GitHub issues, 1 tracking items", text)
 
     def test_gather_digest_survives_a_broken_db(self):
         class BrokenDB:
