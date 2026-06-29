@@ -24,7 +24,9 @@ from typing import Any, Dict, List, Optional
 # lowest-level module); importing it here keeps github.py and cockpit_read.py from
 # re-declaring the names and drifting (ADR-0006). database_client takes no
 # dependency on this module, so this import direction carries no cycle.
-from solomon_harness.tools.database_client import BOARD_COLUMNS
+# normalize_person_key lives in the same adapter (ADR-0012): the person key is
+# normalized on write at this capture seam, below every read consumer.
+from solomon_harness.tools.database_client import BOARD_COLUMNS, normalize_person_key
 
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
@@ -290,6 +292,38 @@ def record_transition(issue_number, column) -> None:
         pass
 
 
+def capture_issue_assignee(issue_number) -> Optional[str]:
+    """Capture an issue's GitHub assignee as the canonical person key (ADR-0012).
+
+    Reads the assignees at sync/write time (epic #44 forbids a live read at query
+    time) via ``gh issue view <n> --json assignees`` and maps the first assignee
+    through :func:`normalize_person_key`. PII-minimal: only the normalized key is
+    derived; name, avatar, and other profile fields are never read out.
+
+    Best-effort: a gh failure, an unparseable shape, or any other error is caught,
+    logged by exception type only (never ``str(exc)``, which can leak internals),
+    and yields None (the unassigned key). It MUST NOT raise on the merge path.
+    """
+    try:
+        res = _gh(
+            ["issue", "view", str(issue_number), "--json", "assignees"],
+            parse_json=True,
+        )
+        if not res.get("ok"):
+            return None
+        assignees = (res.get("data") or {}).get("assignees") or []
+        if not assignees:
+            return None
+        return normalize_person_key(assignees[0])
+    except Exception as exc:  # noqa: BLE001 - best-effort; never break the sync path
+        logging.warning(
+            "assignee capture for issue %s failed: %s",
+            issue_number,
+            type(exc).__name__,
+        )
+        return None
+
+
 def record_terminal_status(issue_number) -> None:
     """Write the delivered issue's terminal status through to the project memory.
 
@@ -315,12 +349,17 @@ def record_terminal_status(issue_number) -> None:
             row = db.get_issue(github_id)
             if row is None or is_terminal(row.get("status")):
                 return
+            # Preserve an assignee already captured on the row; only when it is
+            # absent capture it fresh from GitHub (the person key, ADR-0012). The
+            # capture is best-effort and never raises, so it cannot break the merge.
+            assignee = row.get("assignee") or capture_issue_assignee(issue_number)
             db.log_issue(
                 github_id,
                 row.get("title"),
                 row.get("type_"),
                 "closed",
                 row.get("milestone_id"),
+                assignee=assignee,
             )
     except Exception as exc:  # noqa: BLE001 - never break the merge critical path
         # Log the exception type, not str(exc): a backend error message can carry

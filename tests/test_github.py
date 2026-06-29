@@ -173,7 +173,9 @@ class TestRecordTerminalStatus(unittest.TestCase):
     # against a permissive bare MagicMock.
     def test_writes_one_closed_preserving_fields(self):
         """A non-terminal row is read then written once as closed, preserving the
-        title, type and milestone (read-modify-write through the 5-arg log_issue)."""
+        title, type, milestone and the already-captured assignee (read-modify-write
+        through log_issue). An assignee already on the row is preserved without a
+        fresh GitHub capture (the capture short-circuits)."""
         fake_db = create_autospec(DatabaseClient, instance=True)
         fake_db.get_issue.return_value = {
             "github_id": "34",
@@ -181,14 +183,21 @@ class TestRecordTerminalStatus(unittest.TestCase):
             "type_": "bug",
             "status": "code_review",
             "milestone_id": "m1",
+            "assignee": "alice@example.com",
         }
-        with patch(
-            "solomon_harness.tools.database_client.DatabaseClient",
-            return_value=_fake_db_cm(fake_db),
+        with (
+            patch("solomon_harness.github._gh") as gh,
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=_fake_db_cm(fake_db),
+            ),
         ):
             github.record_terminal_status(34)
         fake_db.get_issue.assert_called_once_with("34")
-        fake_db.log_issue.assert_called_once_with("34", "Deliver the thing", "bug", "closed", "m1")
+        fake_db.log_issue.assert_called_once_with(
+            "34", "Deliver the thing", "bug", "closed", "m1", assignee="alice@example.com"
+        )
+        gh.assert_not_called()  # an already-captured key is preserved, not re-fetched
 
     def test_already_terminal_row_triggers_no_write(self):
         """An already-terminal row is idempotent: no log_issue write occurs."""
@@ -241,6 +250,7 @@ class TestRecordTerminalStatus(unittest.TestCase):
             "type_": "bug",
             "status": "in_progress",
             "milestone_id": None,
+            "assignee": "gh:bob",
         }
         fake_db.log_issue.side_effect = RuntimeError("write failed")
         with patch(
@@ -255,16 +265,143 @@ class TestRecordTerminalStatus(unittest.TestCase):
         self.assertNotIn("write failed", joined)  # the message is not
 
 
+class TestCaptureIssueAssignee(unittest.TestCase):
+    """capture_issue_assignee maps the first GitHub assignee to the person key and
+    is best-effort: it never raises on the write-through path."""
+
+    def test_capture_never_raises_on_gh_failure(self):
+        """A failing gh call yields None (the unassigned key) and never raises, so a
+        slow or failing GitHub never breaks the merge/write-through path."""
+        with patch(
+            "solomon_harness.github._gh",
+            return_value={"ok": False, "error": "gh exploded"},
+        ):
+            self.assertIsNone(github.capture_issue_assignee(7))
+
+    def test_malformed_assignee_warns_type_only_and_does_not_raise(self):
+        """A failure while normalizing a malformed assignee is caught: capture
+        returns None, logs a warning carrying the exception type only (never
+        str(exc), which can leak internals), and never raises (STRIDE: information
+        disclosure)."""
+        gh_res = {"ok": True, "data": {"assignees": [{"login": "bob"}]}}
+        with (
+            patch("solomon_harness.github._gh", return_value=gh_res),
+            patch(
+                "solomon_harness.github.normalize_person_key",
+                side_effect=RuntimeError("backend internals"),
+            ),
+        ):
+            with self.assertLogs(level="WARNING") as cm:
+                captured = github.capture_issue_assignee(7)  # must not raise
+        self.assertIsNone(captured)
+        joined = "\n".join(cm.output)
+        self.assertIn("RuntimeError", joined)  # the exception type is logged
+        self.assertNotIn("backend internals", joined)  # the message is not
+
+
+class TestSyncCapturesAssignee(unittest.TestCase):
+    """The terminal write-through captures the GitHub assignee fresh when the memory
+    row has none, normalizing it on write into log_issue."""
+
+    def _row(self, **overrides):
+        row = {
+            "github_id": "34",
+            "title": "T",
+            "type_": "bug",
+            "status": "code_review",
+            "milestone_id": "m1",
+            "assignee": None,
+        }
+        row.update(overrides)
+        return row
+
+    def _record(self, issue_number, gh_res, fake_db):
+        with (
+            patch("solomon_harness.github._gh", return_value=gh_res),
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=_fake_db_cm(fake_db),
+            ),
+        ):
+            github.record_terminal_status(issue_number)
+
+    def test_sync_captures_email_assignee(self):
+        """An email assignee is captured and the normalized email key is passed."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(github_id="34")
+        gh_res = {
+            "ok": True,
+            "data": {"assignees": [{"login": "alice", "email": "Alice@Example.com"}]},
+        }
+        self._record(34, gh_res, fake_db)
+        fake_db.log_issue.assert_called_once_with(
+            "34", "T", "bug", "closed", "m1", assignee="alice@example.com"
+        )
+
+    def test_sync_unassigned_passes_null(self):
+        """An empty assignees list passes assignee=None through log_issue."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(github_id="8", milestone_id=None)
+        gh_res = {"ok": True, "data": {"assignees": []}}
+        self._record(8, gh_res, fake_db)
+        fake_db.log_issue.assert_called_once_with(
+            "8", "T", "bug", "closed", None, assignee=None
+        )
+
+    def test_sync_captures_handle_only_assignee(self):
+        """A handle-only assignee (email absent or private) becomes gh:<login>."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(github_id="9", milestone_id=None)
+        gh_res = {"ok": True, "data": {"assignees": [{"login": "Bob"}]}}
+        self._record(9, gh_res, fake_db)
+        fake_db.log_issue.assert_called_once_with(
+            "9", "T", "bug", "closed", None, assignee="gh:bob"
+        )
+
+    def test_only_person_key_persisted_not_profile(self):
+        """Only the normalized key reaches log_issue: no name, avatar, or other
+        profile field from the GitHub assignee is passed or stored (PII)."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(github_id="5", milestone_id=None)
+        gh_res = {
+            "ok": True,
+            "data": {
+                "assignees": [
+                    {
+                        "login": "alice",
+                        "email": "alice@example.com",
+                        "name": "Alice Anderson",
+                        "avatarUrl": "https://example.com/a.png",
+                    }
+                ]
+            },
+        }
+        self._record(5, gh_res, fake_db)
+        args, kwargs = fake_db.log_issue.call_args
+        self.assertEqual(kwargs.get("assignee"), "alice@example.com")
+        # No profile field crosses into the store: only the key is passed.
+        passed = repr(args) + repr(kwargs)
+        self.assertNotIn("Alice Anderson", passed)
+        self.assertNotIn("avatarUrl", passed)
+        self.assertNotIn("example.com/a.png", passed)
+
+
 class TestRecordTerminalStatusRealStore(unittest.TestCase):
     def test_persists_closed_against_a_real_store(self):
         """A real DatabaseClient (not a wholesale mock) is opened and exercises real
         backend selection: record_terminal_status reads the seeded row and persists
-        status=closed, preserving the title, type and milestone."""
+        status=closed, preserving the title, type and milestone. The seeded row has
+        no assignee and GitHub returns none, so it stays unassigned. _gh is stubbed
+        so the capture stays hermetic (no real subprocess)."""
         with tempfile.TemporaryDirectory() as tmp:
             with patch("os.getcwd", return_value=tmp):
                 with DatabaseClient(harness_dir=tmp) as db:
                     db.log_issue("77", "Deliver feature", "feature", "code_review", "mile-7")
-                github.record_terminal_status(77)
+                with patch(
+                    "solomon_harness.github._gh",
+                    return_value={"ok": True, "data": {"assignees": []}},
+                ):
+                    github.record_terminal_status(77)
                 with DatabaseClient(harness_dir=tmp) as db:
                     row = db.get_issue("77")
                     open_ids = {i["github_id"] for i in db.get_open_issues()}
@@ -272,6 +409,7 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         self.assertEqual(row["title"], "Deliver feature")
         self.assertEqual(row["type_"], "feature")
         self.assertEqual(str(row["milestone_id"]), "mile-7")
+        self.assertIsNone(row["assignee"])
         self.assertNotIn("77", open_ids)
 
 
