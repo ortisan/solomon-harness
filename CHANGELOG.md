@@ -2,6 +2,12 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.9.0] - 2026-06-29
+
+### Added
+- multi-model SurrealDB and structural spec-audit fixes (#119)
+- fetch and adapt an external skill with SHA pinning and security guards (#99)
+
 ## [0.8.0] - 2026-06-29
 
 ### Added
