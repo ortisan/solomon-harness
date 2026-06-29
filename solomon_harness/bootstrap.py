@@ -319,6 +319,122 @@ def scaffold_agents(workspace_root: str) -> None:
                 f.write(content)
 
 
+def scaffold_new_agent(workspace_root: str, name: str, description: str) -> None:
+    """Scaffold a new agent directory from templates (create-only)."""
+    import re
+    if not re.match(r"^[a-z0-9_]+$", name):
+        raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    agents_dir = os.path.join(workspace_root, "agents")
+    agent_dir = os.path.join(agents_dir, name)
+    real_agents_dir = os.path.realpath(agents_dir)
+    real_agent_dir = os.path.realpath(agent_dir)
+
+    # Confinement check
+    if not real_agent_dir.startswith(real_agents_dir + os.sep) and real_agent_dir != real_agents_dir:
+        raise ValueError("Path confinement violation: agent folder must be inside agents/")
+
+    if os.path.exists(real_agent_dir):
+        print(f"Agent '{name}' already exists. Skipping scaffolding.")
+        return
+
+    # Create directories
+    os.makedirs(os.path.join(real_agent_dir, "agents"), exist_ok=True)
+    os.makedirs(os.path.join(real_agent_dir, "skills"), exist_ok=True)
+
+    # Write persona.md
+    title = name.replace("_", " ").title()
+    persona_content = f"""# {title} Persona
+
+{description}
+
+This agent is the {name} brain for solomon-harness. It reasons within the shared rules in agents/AGENTS.md and its contract in agents/{name}/agents/{name}.md, applies the skills in agents/{name}/skills/, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
+"""
+    with open(os.path.join(real_agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+        f.write(persona_content)
+
+    # Write role file
+    role_content = f"""# {title} Profile
+
+{description}
+
+## Core Duties
+- Adhere strictly to the Git Flow branching guidelines, utilizing feature/* or bugfix/* branches.
+- Commit all code and documentation changes using Conventional Commits rules.
+"""
+    with open(os.path.join(real_agent_dir, "agents", f"{name}.md"), "w", encoding="utf-8") as f:
+        f.write(role_content)
+
+    # Write scope_and_mandate.md skill
+    skill_content = f"""# {title} Best Practices
+
+Reference standard for the {name} specialist.
+
+## Scope and mandate
+
+This skill covers the {name} role's duties.
+"""
+    with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
+        f.write(skill_content)
+
+    # Copy main.py and config.json via scaffold_agents
+    scaffold_agents(workspace_root)
+
+    # Register in agents/AGENTS.md
+    agents_md_path = os.path.join(agents_dir, "AGENTS.md")
+    if os.path.isfile(agents_md_path):
+        with open(agents_md_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        header_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith("## The specialist agents"):
+                header_idx = i
+                break
+
+        if header_idx != -1:
+            bullet_start = -1
+            bullet_end = -1
+            agent_bullets = {}
+
+            for i in range(header_idx + 1, len(lines)):
+                line = lines[i]
+                stripped = line.strip()
+                if stripped.startswith("##") or stripped.startswith("#"):
+                    break
+
+                match = re.match(r"^\s*-\s*`([a-z0-9_]+)`\s*—\s*(.*)", stripped)
+                if match:
+                    if bullet_start == -1:
+                        bullet_start = i
+                    bullet_end = i
+                    agent_bullets[match.group(1)] = stripped
+
+            formatted_desc = description
+            if formatted_desc:
+                formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
+
+            agent_bullets[name] = f"- `{name}` — {formatted_desc}"
+
+            sorted_names = sorted(agent_bullets.keys())
+            new_bullets = [agent_bullets[k] + "\n" for k in sorted_names]
+
+            if bullet_start != -1:
+                lines[bullet_start:bullet_end + 1] = new_bullets
+            else:
+                insert_idx = len(lines)
+                for i in range(header_idx + 1, len(lines)):
+                    if lines[i].strip().startswith("#"):
+                        insert_idx = i
+                        break
+                while insert_idx > header_idx + 1 and not lines[insert_idx - 1].strip():
+                    insert_idx -= 1
+                lines.insert(insert_idx, "\n" + "".join(new_bullets))
+
+            with open(agents_md_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+
+
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:
     """Initializes the agent harness workspace in workspace_root.
 
