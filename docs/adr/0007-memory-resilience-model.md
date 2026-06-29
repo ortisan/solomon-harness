@@ -1,4 +1,4 @@
-# ADR-0002: Memory resilience model — reconnect-then-fallback and a write-through mirror
+# ADR-0007: Memory resilience model — reconnect-then-fallback and a write-through mirror
 
 - Status: accepted
 - Date: 2026-06-28

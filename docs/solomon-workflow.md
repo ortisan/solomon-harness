@@ -26,6 +26,23 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 The board and helpers live in `solomon_harness/github.py`. Create the board once
 with `ensure_project_board`; move cards with `set_issue_status`.
 
+### Board columns mapped to lifecycle stages
+
+The board columns above are the operational surface a card moves across; the named
+delivery lifecycle is `Backlog -> Refinement -> Implementation -> Tests -> Review ->
+Release -> Milestone`. They are not one-to-one — a column is where a card sits, a
+stage is what the work is doing — so this table reconciles them:
+
+| Board column | Lifecycle stage(s) |
+| --- | --- |
+| `Ideas` | Discovery (pre-Backlog); an idea graduates to a Definition of Ready and a Definition of Done at Refinement |
+| `Backlog` | Backlog (captured, not yet refined) |
+| `Ready` | Refinement complete (Definition of Ready met) |
+| `In Progress` | Implementation and Tests (the TDD Red/Green/Refactor loop writes the covering tests here) |
+| `Code Review` | Review (the software_architect code-review gate) |
+| `QA` | Tests and Review verification (the qa and security gates; acceptance criteria and the Definition of Done are checked) |
+| `Done` | Release and Milestone (the tag is cut when the milestone closes with 0 open issues and CI green) |
+
 ## The loop and session resumption
 
 `/solomon-loop` is the orchestrator. It scans the project memory and the board to
@@ -33,6 +50,11 @@ find where work stopped, then proposes the single best next step — one of the
 workflows above — and runs it on confirmation. It advances one stage per
 invocation: when work is in flight it proposes development, review, or release;
 when nothing is in progress it proposes creating a feature, bug, or refinement.
+
+The loop is host-orchestrated and human-gated, not fully autonomous: no code
+decides the next stage — the host tool (Claude Code or the Gemini CLI) runs these
+markdown prompts — and the merge, release, and move-to-Done gates always require a
+human.
 
 At the start of every Claude Code or Gemini CLI session, the harness surfaces the
 project status (latest activity and open issues) through a SessionStart hook that

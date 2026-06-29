@@ -30,3 +30,19 @@ assignees: []
 
 ## Security/Performance Impact
 <!-- Does this issue expose any vulnerabilities, leak resources, or degrade latency/throughput? -->
+
+## Acceptance Criteria
+<!-- Observable conditions the fix must meet, as Given/When/Then: the repro scenario now passes and no adjacent behavior regresses. -->
+- [ ] Given/When/Then for the corrected behavior
+
+## Definition of Ready
+<!-- Refinement gate before the fix starts: the repro is deterministic, severity/priority assigned, suspected area scoped. -->
+- [ ] Reproduction is deterministic
+- [ ] Severity and priority assigned
+- [ ] Suspected area scoped
+
+## Definition of Done
+<!-- Close gate enforced at review and release: red-then-green regression test, fix merged with CI green, no new failures. -->
+- [ ] Failing regression test added (red) then passing (green)
+- [ ] Fix merged with CI green
+- [ ] No new failures introduced

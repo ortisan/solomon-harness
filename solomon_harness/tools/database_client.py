@@ -11,7 +11,73 @@ import hashlib
 import re
 import uuid
 from contextlib import contextmanager
-from typing import Generator, Any, Dict, List, Optional, Union
+from typing import (
+    Generator,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
+
+
+# Dimensionality of the default memory embedding. Must match the HNSW vector
+# index DEFINEd on the ``memory`` table (DIMENSION 256) and the HashingEmbedder.
+EMBEDDING_DIM = 256
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """A text-to-vector embedder: anything with ``embed(text) -> list[float]``.
+
+    The contract is intentionally narrow so a real semantic model (sentence
+    transformers, an API embedder, etc.) can be dropped in to replace the default
+    lexical embedder without touching the database client.
+    """
+
+    def embed(self, text: str) -> List[float]:
+        ...
+
+
+class HashingEmbedder:
+    """A dependency-free LEXICAL embedder using the feature-hashing trick.
+
+    Each token of the text is hashed into one of ``dim`` buckets with a signed
+    contribution, and the accumulated vector is L2-normalized. Two texts land near
+    each other in cosine space when they SHARE TOKENS, not when they are
+    semantically related: this is lexical overlap, not meaning. It is the safe
+    default because it needs no model download and no third-party dependency. For
+    true semantic similarity, pass a model-backed object exposing the same
+    ``embed(text) -> list[float]`` method to :class:`DatabaseClient`.
+    """
+
+    _TOKEN = re.compile(r"[a-z0-9]+")
+
+    def __init__(self, dim: int = EMBEDDING_DIM) -> None:
+        self.dim = dim
+
+    def embed(self, text: str) -> List[float]:
+        """Return the L2-normalized feature-hash vector for ``text``.
+
+        An empty or token-less text yields the all-zero vector; cosine distance to
+        a zero vector is undefined, so callers should treat an empty query as a
+        no-op rather than a search.
+        """
+        vec = [0.0] * self.dim
+        for token in self._TOKEN.findall((text or "").lower()):
+            digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+            h = int.from_bytes(digest, "big")
+            bucket = h % self.dim
+            # A second, independent bit of the hash sets the sign so that frequent
+            # collisions cancel on average instead of always reinforcing.
+            sign = 1.0 if (h // self.dim) % 2 == 0 else -1.0
+            vec[bucket] += sign
+        norm = sum(v * v for v in vec) ** 0.5
+        if norm > 0.0:
+            vec = [v / norm for v in vec]
+        return vec
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +324,7 @@ class DatabaseClient:
         db_path: Optional[str] = None,
         harness_dir: Optional[str] = None,
         mirror_root: Optional[str] = None,
+        embedder: Optional[Embedder] = None,
     ) -> None:
         """Initializes the database client and selects the appropriate backend.
 
@@ -269,7 +336,14 @@ class DatabaseClient:
             mirror_root: Optional override for the write-through Markdown mirror root
                 (issue #35). Defaults to ``<repo>/.solomon/memory-mirror``; tests point
                 it at a temp directory so they never touch the real project's state.
+            embedder: Optional text embedder used to vectorize memory entries for
+                semantic search. Defaults to :class:`HashingEmbedder`, a dependency-free
+                lexical embedder; pass a model-backed embedder for true semantic search.
         """
+        # The embedder that vectorizes memory for the HNSW vector index. The default
+        # is lexical (token overlap), swappable for a real semantic model.
+        self._embedder: Embedder = embedder or HashingEmbedder()
+
         self.backend = "sqlite"
         self.db = None
         self.spectron = None
@@ -398,6 +472,11 @@ class DatabaseClient:
                     try:
                         # Initialize SurrealDB tables. IF NOT EXISTS makes this
                         # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
+                        # SurrealDB is used as a true multi-model store: relational
+                        # tables with indexes, graph RELATION edges, a timeseries
+                        # metrics table, and an HNSW vector index for semantic memory.
+                        # Every DEFINE is IF NOT EXISTS (idempotent) and SCHEMALESS, so
+                        # it never rejects the existing string-typed writes.
                         init_query = (
                             "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
                             "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
@@ -407,7 +486,29 @@ class DatabaseClient:
                             "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
                             "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
                             "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;"
+                            "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS metrics SCHEMALESS; "
+                            # Graph: typed RELATION edge tables.
+                            "DEFINE TABLE IF NOT EXISTS blocks TYPE RELATION; "
+                            "DEFINE TABLE IF NOT EXISTS supersedes TYPE RELATION; "
+                            "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION; "
+                            "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION; "
+                            "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION; "
+                            # Relational: indexes for the hot lookups. github_id is the
+                            # record key, so it is unique by construction.
+                            "DEFINE INDEX IF NOT EXISTS issues_github_id "
+                            "ON issues FIELDS github_id UNIQUE; "
+                            "DEFINE INDEX IF NOT EXISTS issues_status "
+                            "ON issues FIELDS status; "
+                            "DEFINE INDEX IF NOT EXISTS decisions_created_at "
+                            "ON decisions FIELDS created_at; "
+                            # Timeseries: composite index on (name, time) for metrics.
+                            "DEFINE INDEX IF NOT EXISTS metrics_name_time "
+                            "ON metrics FIELDS name, time; "
+                            # Vector: HNSW index over the 256-dim memory embedding.
+                            "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+                            f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
+                            "DIST COSINE TYPE F32;"
                         )
                         self.db.query(init_query)
                         self.backend = "surrealdb"
@@ -595,6 +696,19 @@ class DatabaseClient:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
+            # Timeseries metrics, mirrored on the SQLite fallback so recorded
+            # statistics survive a backend outage. ``tags`` holds JSON, ``time`` an
+            # ISO-8601 string; the composite index matches the SurrealDB layout.
+            """
+            CREATE TABLE IF NOT EXISTS metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                value REAL,
+                tags TEXT,
+                time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS metrics_name_time ON metrics (name, time);",
         ]
 
         try:
@@ -811,7 +925,14 @@ class DatabaseClient:
 
     @staticmethod
     def _parse_rid(id_value: Union[str, int, None]) -> Any:
-        """Turn a 'table:id' string (or RecordID) into a RecordID for querying."""
+        """Turn a 'table:id' string (or RecordID) into a RecordID for querying.
+
+        SurrealDB v3.x renders a complex record key wrapped in display delimiters
+        (angle brackets ``decisions:⟨abc-123⟩`` or backticks); these are not part
+        of the binary key, so they are stripped before the RecordID is rebuilt.
+        Without this, a get-by-id of a minted complex key never matches the stored
+        record and silently returns None.
+        """
         if id_value is None:
             return None
         if type(id_value).__name__ == "RecordID":
@@ -821,6 +942,11 @@ class DatabaseClient:
             from surrealdb import RecordID
 
             table, _, rid = s.partition(":")
+            rid = rid.strip()
+            if len(rid) >= 2 and rid[0] == "⟨" and rid[-1] == "⟩":
+                rid = rid[1:-1]
+            elif len(rid) >= 2 and rid[0] == "`" and rid[-1] == "`":
+                rid = rid[1:-1]
             return RecordID(table, rid)
         return s
 
@@ -1220,12 +1346,17 @@ class DatabaseClient:
                     logging.warning(f"Failed to save memory in Spectron: {e}")
 
             # Upsert by a deterministic record id derived from the key, so
-            # re-saving the same key updates in place.
+            # re-saving the same key updates in place. The embedding is computed
+            # here (not stored in the durability mirror) so the vector index stays
+            # additive: existing get_memory reads and the mirror format are
+            # unchanged, and a record without an embedding is simply not indexed.
+            embedding = self._embedder.embed(f"{key} {value}")
             query = """
             UPSERT $id CONTENT {
                 key: $key,
                 value: $value,
                 category: $category,
+                embedding: $embedding,
                 updated_at: time::now()
             };
             """
@@ -1234,6 +1365,7 @@ class DatabaseClient:
                 "key": key,
                 "value": value,
                 "category": category,
+                "embedding": embedding,
             }
             try:
                 self._run_surreal(query, params)
@@ -2415,6 +2547,385 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to list handoffs: {e}")
                 raise RuntimeError(f"Failed to list handoffs: {e}")
+
+    # ----------------------------------------------------------------------
+    # Multi-model SurrealDB: graph, timeseries, and vector.
+    #
+    # SurrealDB is used as a true multi-model store. The relational tables and
+    # their indexes live in the init block; the methods below add the graph
+    # (RELATE edges + traversals), timeseries (the metrics table and bucketed
+    # aggregation), and vector (HNSW KNN over memory embeddings) models. The graph
+    # and vector models have no SQLite equivalent and raise on the fallback
+    # backend; record_metric/query_metric also work on SQLite so statistics
+    # survive an outage.
+    # ----------------------------------------------------------------------
+
+    # The graph RELATION edge tables DEFINEd in the init block. The generic
+    # ``relate`` accepts any safe identifier, but only these are pre-defined.
+    _RELATION_EDGES = ("blocks", "supersedes", "contains", "produced", "addresses")
+    _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # Time buckets accepted by SurrealDB's ``time::group`` that floor cleanly.
+    # ``week`` is excluded: it returns a null bucket on v3.x.
+    _TS_BUCKETS = ("minute", "hour", "day", "month", "year")
+    _METRIC_AGGS = {
+        "count": "count()",
+        "mean": "math::mean(value)",
+        "sum": "math::sum(value)",
+        "min": "math::min(value)",
+        "max": "math::max(value)",
+    }
+
+    def _require_surreal(self, feature: str) -> None:
+        """Guard a SurrealDB-only model, raising a clear error on the fallback."""
+        if self.backend != "surrealdb":
+            raise RuntimeError(f"{feature} requires the SurrealDB backend")
+
+    @classmethod
+    def _safe_ident(cls, name: str, what: str = "identifier") -> str:
+        """Validate an interpolated identifier (edge or field name) against injection."""
+        if not cls._IDENT.match(str(name)):
+            raise ValueError(f"unsafe {what}: {name!r}")
+        return str(name)
+
+    @classmethod
+    def _as_rid(cls, table: str, value: Any) -> Any:
+        """Coerce ``value`` into a RecordID in ``table``.
+
+        Accepts a RecordID, a full ``table:key`` string (as the public save methods
+        return), or a bare natural key (a github_id, session_id, or minted id).
+
+        SurrealDB wraps a complex record id in angle-bracket delimiters (U+27E8 and
+        U+27E9), or backticks, when it stringifies it (e.g. a minted decision id);
+        those delimiters are stripped so the rebuilt RecordID matches the stored
+        record instead of a literally-bracketed key. The actual binary key is never
+        bracketed. :meth:`_parse_rid` applies the same stripping for ``table:key``
+        inputs; this method additionally accepts a bare natural key with no table
+        prefix, which the graph helpers pass.
+        """
+        if type(value).__name__ == "RecordID":
+            return value
+        s = str(value)
+        if ":" in s:
+            tbl, _, key = s.partition(":")
+            key = key.strip()
+            if len(key) >= 2 and key[0] == "⟨" and key[-1] == "⟩":
+                key = key[1:-1]
+            elif len(key) >= 2 and key[0] == "`" and key[-1] == "`":
+                key = key[1:-1]
+            return cls._rid(tbl, key)
+        return cls._rid(table, value)
+
+    @staticmethod
+    def _coerce_dt(at: Any) -> Optional[datetime.datetime]:
+        """Coerce a datetime or ISO-8601 string into a timezone-aware datetime."""
+        if at is None:
+            return None
+        if isinstance(at, datetime.datetime):
+            return at
+        return datetime.datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+
+    @classmethod
+    def _coerce_dt_iso(cls, at: Any) -> Optional[str]:
+        """Coerce a datetime or ISO string into an ISO-8601 string (SQLite storage)."""
+        dt = cls._coerce_dt(at)
+        return dt.isoformat() if dt else None
+
+    # --- Graph ---------------------------------------------------------------
+
+    @_resilient
+    def relate(self, edge: str, from_id: Any, to_id: Any, **fields: Any) -> Optional[str]:
+        """Create a graph edge ``from_id -[edge]-> to_id`` and return its record id.
+
+        ``from_id``/``to_id`` are RecordIDs or ``table:key`` strings (the typed
+        helpers below build them from natural keys). Extra keyword fields are stored
+        on the edge record. SurrealDB-only.
+        """
+        self._require_surreal("graph relations")
+        edge = self._safe_ident(edge, "edge name")
+        params: Dict[str, Any] = {"rel_from": self._parse_rid(from_id), "rel_to": self._parse_rid(to_id)}
+        if fields:
+            assignments = []
+            for key, val in fields.items():
+                self._safe_ident(key, "edge field")
+                assignments.append(f"{key} = ${key}")
+                params[key] = val
+            query = f"RELATE $rel_from->{edge}->$rel_to SET {', '.join(assignments)};"
+        else:
+            query = f"RELATE $rel_from->{edge}->$rel_to;"
+        res = self._run_surreal(query, params)
+        return self._extract_id(res)
+
+    def _traverse(self, rid: Any, path: str) -> List[Dict[str, Any]]:
+        """Return the distinct target records of a one-hop traversal from ``rid``.
+
+        ``path`` is a fixed internal traversal idiom (e.g. ``->blocks->issues``),
+        never caller input. Records are deduplicated and normalized.
+        """
+        self._require_surreal("graph traversal")
+        query = f"SELECT array::distinct({path}.*) AS items FROM $node;"
+        res = self._run_surreal(query, {"node": rid})
+        items = self._extract_field(res, "items") or []
+        return [self._normalize(r) for r in items if isinstance(r, dict)]
+
+    def block_issue(self, blocker_github_id: Any, blocked_github_id: Any, reason: Optional[str] = None) -> Optional[str]:
+        """Record that one issue blocks another (issue -[blocks]-> issue)."""
+        fields = {"reason": reason} if reason else {}
+        return self.relate(
+            "blocks", self._rid("issues", blocker_github_id), self._rid("issues", blocked_github_id), **fields
+        )
+
+    def supersede_decision(self, new_decision_id: Any, old_decision_id: Any, reason: Optional[str] = None) -> Optional[str]:
+        """Record that a newer decision supersedes an older one (decision -[supersedes]-> decision)."""
+        fields = {"reason": reason} if reason else {}
+        return self.relate(
+            "supersedes", self._as_rid("decisions", new_decision_id), self._as_rid("decisions", old_decision_id), **fields
+        )
+
+    def assign_issue_to_milestone(self, milestone_id: Any, github_id: Any) -> Optional[str]:
+        """Place an issue under a milestone (milestone -[contains]-> issue)."""
+        return self.relate("contains", self._as_rid("milestones", milestone_id), self._rid("issues", github_id))
+
+    def link_session_handoff(self, session_id: Any, handoff_id: Any) -> Optional[str]:
+        """Record that a session produced a handoff (session -[produced]-> handoff)."""
+        return self.relate("produced", self._as_rid("sessions", session_id), self._as_rid("handoffs", handoff_id))
+
+    def decision_addresses_issue(self, decision_id: Any, github_id: Any) -> Optional[str]:
+        """Record that a decision addresses an issue (decision -[addresses]-> issue)."""
+        return self.relate("addresses", self._as_rid("decisions", decision_id), self._rid("issues", github_id))
+
+    @_resilient
+    def issues_blocking(self, github_id: Any) -> List[Dict[str, Any]]:
+        """Issues that THIS issue blocks (outgoing ``->blocks->``)."""
+        return self._traverse(self._rid("issues", github_id), "->blocks->issues")
+
+    @_resilient
+    def issues_blocked_by(self, github_id: Any) -> List[Dict[str, Any]]:
+        """Issues that block THIS issue (incoming ``<-blocks<-``)."""
+        return self._traverse(self._rid("issues", github_id), "<-blocks<-issues")
+
+    @_resilient
+    def milestone_issues(self, milestone_id: Any) -> List[Dict[str, Any]]:
+        """Issues contained by a milestone (``->contains->``)."""
+        return self._traverse(self._as_rid("milestones", milestone_id), "->contains->issues")
+
+    @_resilient
+    def supersedes_chain(self, decision_id: Any) -> List[Dict[str, Any]]:
+        """The transitive chain of decisions a decision supersedes, nearest first.
+
+        Walks ``->supersedes->decisions`` breadth-first with a visited guard, so a
+        cyclic graph terminates instead of looping forever.
+        """
+        self._require_surreal("graph traversal")
+        chain: List[Dict[str, Any]] = []
+        seen = set()
+        frontier = [self._as_rid("decisions", decision_id)]
+        while frontier:
+            current = frontier.pop(0)
+            for rec in self._traverse(current, "->supersedes->decisions"):
+                rid = str(rec.get("id"))
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                chain.append(rec)
+                frontier.append(self._as_rid("decisions", rid))
+        return chain
+
+    # --- Timeseries ----------------------------------------------------------
+
+    @_resilient
+    def record_metric(self, name: str, value: float, tags: Optional[Dict[str, Any]] = None, at: Any = None) -> Union[str, int, None]:
+        """Append one timeseries metric point (name, value, tags, time).
+
+        Works on BOTH backends so statistics survive a SQLite fallback. ``at`` is an
+        optional datetime or ISO-8601 string; it defaults to the current time.
+        """
+        tags = tags or {}
+        if self.backend == "surrealdb":
+            if at is None:
+                query = "CREATE metrics CONTENT {name: $name, value: $value, tags: $tags, time: time::now()};"
+                params: Dict[str, Any] = {"name": name, "value": float(value), "tags": tags}
+            else:
+                query = "CREATE metrics CONTENT {name: $name, value: $value, tags: $tags, time: $time};"
+                params = {"name": name, "value": float(value), "tags": tags, "time": self._coerce_dt(at)}
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_id(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to record metric in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to record metric in SurrealDB: {e}")
+        else:
+            ts = self._coerce_dt_iso(at)
+            if ts is None:
+                query = "INSERT INTO metrics (name, value, tags) VALUES (?, ?, ?)"
+                args: tuple = (name, float(value), json.dumps(tags))
+            else:
+                query = "INSERT INTO metrics (name, value, tags, time) VALUES (?, ?, ?, ?)"
+                args = (name, float(value), json.dumps(tags), ts)
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, args)
+                    conn.commit()
+                    return cursor.lastrowid
+            except sqlite3.Error as e:
+                logging.error(f"Failed to record metric: {e}")
+                raise RuntimeError(f"Failed to record metric: {e}")
+
+    @_resilient
+    def query_metric(self, name: str, since: Any = None, until: Any = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Return metric points for ``name``, most recent first.
+
+        Works on both backends. ``since``/``until`` bound the sample time
+        (inclusive); each is a datetime or ISO-8601 string.
+        """
+        if self.backend == "surrealdb":
+            clauses = ["name = $name"]
+            params: Dict[str, Any] = {"name": name}
+            if since is not None:
+                clauses.append("time >= $since")
+                params["since"] = self._coerce_dt(since)
+            if until is not None:
+                clauses.append("time <= $until")
+                params["until"] = self._coerce_dt(until)
+            where = " AND ".join(clauses)
+            query = f"SELECT * FROM metrics WHERE {where} ORDER BY time DESC LIMIT {int(limit)};"
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_list(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to query metric in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to query metric in SurrealDB: {e}")
+        else:
+            clauses = ["name = ?"]
+            args: List[Any] = [name]
+            if since is not None:
+                clauses.append("time >= ?")
+                args.append(self._coerce_dt_iso(since))
+            if until is not None:
+                clauses.append("time <= ?")
+                args.append(self._coerce_dt_iso(until))
+            where = " AND ".join(clauses)
+            query = f"SELECT name, value, tags, time FROM metrics WHERE {where} ORDER BY time DESC LIMIT ?"
+            args.append(int(limit))
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, args)
+                    rows = [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to query metric: {e}")
+                raise RuntimeError(f"Failed to query metric: {e}")
+            for row in rows:
+                if row.get("tags"):
+                    try:
+                        row["tags"] = json.loads(row["tags"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return rows
+
+    @_resilient
+    def aggregate_metric(self, name: str, bucket: str = "day", agg: str = "count", since: Any = None) -> List[Dict[str, Any]]:
+        """Aggregate a metric into time buckets (SurrealDB-only).
+
+        ``bucket`` is one of ``minute|hour|day|month|year``; ``agg`` is one of
+        ``count|mean|sum|min|max``. Returns ``[{"bucket", "value"}, ...]`` sorted by
+        bucket. Uses SurrealDB ``time::group`` bucketing.
+        """
+        self._require_surreal("metric aggregation")
+        if bucket not in self._TS_BUCKETS:
+            raise ValueError(f"unsupported bucket: {bucket!r}")
+        if agg not in self._METRIC_AGGS:
+            raise ValueError(f"unsupported aggregation: {agg!r}")
+        agg_expr = self._METRIC_AGGS[agg]
+        params: Dict[str, Any] = {"name": name, "bucket": bucket}
+        since_clause = ""
+        if since is not None:
+            since_clause = "AND time >= $since "
+            params["since"] = self._coerce_dt(since)
+        query = (
+            f"SELECT time::group(time, $bucket) AS bucket, {agg_expr} AS value "
+            f"FROM metrics WHERE name = $name {since_clause}GROUP BY bucket;"
+        )
+        res = self._run_surreal(query, params)
+        rows = self._extract_list(res)
+        rows.sort(key=lambda r: str(r.get("bucket")))
+        return rows
+
+    @_resilient
+    def loop_run_throughput(self, bucket: str = "day", since: Any = None) -> List[Dict[str, Any]]:
+        """Loop-run counts per time bucket over the loop_runs ledger (SurrealDB-only)."""
+        self._require_surreal("loop-run aggregation")
+        if bucket not in self._TS_BUCKETS:
+            raise ValueError(f"unsupported bucket: {bucket!r}")
+        params: Dict[str, Any] = {"bucket": bucket}
+        where = ""
+        if since is not None:
+            where = "WHERE created_at >= $since "
+            params["since"] = self._coerce_dt(since)
+        query = (
+            f"SELECT time::group(created_at, $bucket) AS bucket, count() AS count "
+            f"FROM loop_runs {where}GROUP BY bucket;"
+        )
+        res = self._run_surreal(query, params)
+        rows = self._extract_list(res)
+        rows.sort(key=lambda r: str(r.get("bucket")))
+        return rows
+
+    @_resilient
+    def loop_run_failure_rate(self, since: Any = None) -> Dict[str, Any]:
+        """Failure rate of loop runs (SurrealDB-only).
+
+        Returns ``{"total", "failures", "failure_rate"}`` where ``failure_rate`` is
+        ``failures / total`` (0.0 when there are no runs). A run counts as a failure
+        when its ``status`` is ``failure``.
+        """
+        self._require_surreal("loop-run aggregation")
+        params: Dict[str, Any] = {}
+        where = ""
+        if since is not None:
+            where = "WHERE created_at >= $since "
+            params["since"] = self._coerce_dt(since)
+        query = (
+            f"SELECT count() AS total, count(status = 'failure') AS failures "
+            f"FROM loop_runs {where}GROUP ALL;"
+        )
+        res = self._run_surreal(query, params)
+        rec = self._extract_record(res) or {}
+        total = rec.get("total", 0) or 0
+        failures = rec.get("failures", 0) or 0
+        rate = (failures / total) if total else 0.0
+        return {"total": total, "failures": failures, "failure_rate": rate}
+
+    # --- Vector --------------------------------------------------------------
+
+    @_resilient
+    def semantic_search(self, query: str, k: int = 5, category: Optional[str] = None, ef: int = 64) -> List[Dict[str, Any]]:
+        """Return the ``k`` memory entries nearest to ``query`` (SurrealDB-only).
+
+        Nearness is cosine distance over the stored embedding via the HNSW index
+        and SurrealDB's ``<|k, EF|>`` KNN operator (``ef`` is the search breadth).
+        With the default :class:`HashingEmbedder` this is LEXICAL nearness (shared
+        tokens), not semantic; swap in a model-backed embedder for true meaning.
+        Results are ``[{"key", "value", "category", "distance"}, ...]`` nearest first.
+        """
+        self._require_surreal("semantic search")
+        q_vec = self._embedder.embed(query)
+        params: Dict[str, Any] = {"q": q_vec}
+        cat_clause = ""
+        if category is not None:
+            cat_clause = "category = $category AND "
+            params["category"] = category
+        knn = f"<|{int(k)},{int(ef)}|>"
+        sql = (
+            f"SELECT key, value, category, vector::distance::knn() AS distance "
+            f"FROM memory WHERE {cat_clause}embedding {knn} $q ORDER BY distance;"
+        )
+        res = self._run_surreal(sql, params)
+        return self._extract_list(res)
 
     def close(self) -> None:
         """Closes the database client and any open connections."""

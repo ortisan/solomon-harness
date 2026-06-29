@@ -156,6 +156,106 @@ def build_server() -> Any:
         """Return the most recent session or handoff, for resume."""
         return service.get_latest_activity()
 
+    @server.tool()
+    def relate(
+        edge: str, from_id: str, to_id: str, fields: Optional[dict] = None
+    ) -> dict:
+        """Create a graph edge from_id -[edge]-> to_id (SurrealDB-only)."""
+        return service.relate(edge, from_id, to_id, **(fields or {}))
+
+    @server.tool()
+    def block_issue(
+        blocker_github_id: str, blocked_github_id: str, reason: Optional[str] = None
+    ) -> dict:
+        """Record that one issue blocks another (SurrealDB-only)."""
+        return service.block_issue(blocker_github_id, blocked_github_id, reason)
+
+    @server.tool()
+    def supersede_decision(
+        new_decision_id: str, old_decision_id: str, reason: Optional[str] = None
+    ) -> dict:
+        """Record that a newer decision supersedes an older one (SurrealDB-only)."""
+        return service.supersede_decision(new_decision_id, old_decision_id, reason)
+
+    @server.tool()
+    def assign_issue_to_milestone(milestone_id: str, github_id: str) -> dict:
+        """Place an issue under a milestone (SurrealDB-only)."""
+        return service.assign_issue_to_milestone(milestone_id, github_id)
+
+    @server.tool()
+    def link_session_handoff(session_id: str, handoff_id: str) -> dict:
+        """Record that a session produced a handoff (SurrealDB-only)."""
+        return service.link_session_handoff(session_id, handoff_id)
+
+    @server.tool()
+    def decision_addresses_issue(decision_id: str, github_id: str) -> dict:
+        """Record that a decision addresses an issue (SurrealDB-only)."""
+        return service.decision_addresses_issue(decision_id, github_id)
+
+    @server.tool()
+    def issues_blocking(github_id: str) -> dict:
+        """List the issues that this issue blocks (SurrealDB-only)."""
+        return service.issues_blocking(github_id)
+
+    @server.tool()
+    def issues_blocked_by(github_id: str) -> dict:
+        """List the issues that block this issue (SurrealDB-only)."""
+        return service.issues_blocked_by(github_id)
+
+    @server.tool()
+    def milestone_issues(milestone_id: str) -> dict:
+        """List the issues contained by a milestone (SurrealDB-only)."""
+        return service.milestone_issues(milestone_id)
+
+    @server.tool()
+    def supersedes_chain(decision_id: str) -> dict:
+        """List the chain of decisions a decision supersedes, nearest first (SurrealDB-only)."""
+        return service.supersedes_chain(decision_id)
+
+    @server.tool()
+    def record_metric(
+        name: str,
+        value: float,
+        tags: Optional[dict] = None,
+        at: Optional[str] = None,
+    ) -> dict:
+        """Append one timeseries metric point (works on both backends)."""
+        return service.record_metric(name, value, tags, at)
+
+    @server.tool()
+    def query_metric(
+        name: str,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict:
+        """Return metric points for a name, most recent first (works on both backends)."""
+        return service.query_metric(name, since, until, limit)
+
+    @server.tool()
+    def aggregate_metric(
+        name: str, bucket: str = "day", agg: str = "count", since: Optional[str] = None
+    ) -> dict:
+        """Aggregate a metric into time buckets (SurrealDB-only)."""
+        return service.aggregate_metric(name, bucket, agg, since)
+
+    @server.tool()
+    def loop_run_throughput(bucket: str = "day", since: Optional[str] = None) -> dict:
+        """Loop-run counts per time bucket (SurrealDB-only)."""
+        return service.loop_run_throughput(bucket, since)
+
+    @server.tool()
+    def loop_run_failure_rate(since: Optional[str] = None) -> dict:
+        """Failure rate of loop runs as total, failures, and rate (SurrealDB-only)."""
+        return service.loop_run_failure_rate(since)
+
+    @server.tool()
+    def semantic_search(
+        query: str, k: int = 5, category: Optional[str] = None, ef: int = 64
+    ) -> dict:
+        """Return the k memory entries nearest to a query (SurrealDB-only)."""
+        return service.semantic_search(query, k, category, ef)
+
     return server
 
 
