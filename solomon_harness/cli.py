@@ -295,6 +295,12 @@ def handle_log(workspace_root: str, last: int) -> None:
         print(line)
 
 
+# Upper bound on the issues a single `gh issue list` returns. When the result hits
+# this cap the listing may be truncated, so reconcile warns instead of silently
+# missing closed issues beyond it.
+_GH_ISSUE_LIMIT = 1000
+
+
 def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     """Read every issue's GitHub state via gh, validated as data, never interpolated.
 
@@ -311,7 +317,7 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
 
     try:
         proc = subprocess.run(
-            ["gh", "issue", "list", "--state", "all", "--limit", "1000",
+            ["gh", "issue", "list", "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
         )
@@ -325,6 +331,13 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
         raw = _json.loads(proc.stdout or "[]")
     except _json.JSONDecodeError as exc:
         raise RuntimeError(f"could not parse gh JSON output: {exc}") from exc
+
+    if isinstance(raw, list) and len(raw) >= _GH_ISSUE_LIMIT:
+        print(
+            f"warning: gh returned the {_GH_ISSUE_LIMIT}-issue cap; the listing may "
+            "be truncated, so reconcile could miss closed issues beyond it.",
+            file=sys.stderr,
+        )
 
     states: List[dict] = []
     for item in raw if isinstance(raw, list) else []:

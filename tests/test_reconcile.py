@@ -121,6 +121,41 @@ class TestFetchGhIssueStates(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 cli._fetch_gh_issue_states(".")
 
+    def test_gh_not_found_raises_runtime_error(self):
+        """A missing gh binary surfaces as RuntimeError, so the caller reports it
+        rather than silently repairing nothing."""
+        with patch("subprocess.run", side_effect=FileNotFoundError()):
+            with self.assertRaises(RuntimeError):
+                cli._fetch_gh_issue_states(".")
+
+    def test_malformed_json_raises_runtime_error(self):
+        """Non-JSON gh output is a parse failure, not an empty result set."""
+        with patch("subprocess.run", return_value=_Proc(0, "not json {")):
+            with self.assertRaises(RuntimeError):
+                cli._fetch_gh_issue_states(".")
+
+    def test_non_dict_array_element_is_skipped(self):
+        """A non-dict element in the gh array is treated as data and skipped, not
+        trusted or coerced (STRIDE)."""
+        payload = json.dumps([{"number": 6, "state": "CLOSED"}, "garbage", 42, None])
+        with patch("subprocess.run", return_value=_Proc(0, payload)):
+            states = cli._fetch_gh_issue_states(".")
+        self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
+
+    def test_warns_when_gh_returns_the_issue_cap(self):
+        """When gh returns exactly the --limit cap, reconcile may miss closed issues
+        beyond it, so the truncation is surfaced on stderr instead of hidden."""
+        payload = json.dumps([{"number": 1, "state": "OPEN"}, {"number": 2, "state": "CLOSED"}])
+        err = io.StringIO()
+        with (
+            patch.object(cli, "_GH_ISSUE_LIMIT", 2),
+            patch("subprocess.run", return_value=_Proc(0, payload)),
+            contextlib.redirect_stderr(err),
+        ):
+            states = cli._fetch_gh_issue_states(".")
+        self.assertIn("cap", err.getvalue())
+        self.assertEqual(len(states), 2)
+
 
 class _FakeSqliteClient:
     """A fake memory client reporting the SQLite-fallback backend.
@@ -169,6 +204,121 @@ class TestReconcileBackendGuard(unittest.TestCase):
             cli.handle_reconcile("/workspace", dry_run=False)
         self.assertIn("SQLite fallback", err.getvalue())
         self.assertEqual(fake.writes, [])
+
+
+class _ShareStoreProxy:
+    """Report the shared-store backend so handle_reconcile's guard proceeds, while
+    persisting to a real SQLite temp DB.
+
+    The backend guard skips on a SQLite fallback (ADR-0006 RAID R1), which would
+    otherwise stop the success path from ever running under test. This proxy lets
+    the whole command path execute end to end against a real store, with no live
+    SurrealDB, by delegating every read and write to the inner real client.
+    """
+
+    backend = "surrealdb"
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_issue(self, github_id):
+        return self._inner.get_issue(github_id)
+
+    def log_issue(self, *args, **kwargs):
+        return self._inner.log_issue(*args, **kwargs)
+
+    def get_open_issues(self):
+        return self._inner.get_open_issues()
+
+
+class TestHandleReconcileEndToEnd(unittest.TestCase):
+    """The reconcile command path against a real store with a mocked gh subprocess."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+        self.inner = DatabaseClient(db_path=self.db_path)
+        self.inner.log_issue("6", "Stale closed", "bug", "in_progress", None)
+        self.inner.log_issue("100", "Still open", "feature", "in_progress", None)
+        self.proxy = _ShareStoreProxy(self.inner)
+
+    def tearDown(self):
+        self.inner.close()
+        self.temp_dir.cleanup()
+
+    def _gh_payload(self):
+        return json.dumps(
+            [{"number": 6, "state": "CLOSED"}, {"number": 100, "state": "OPEN"}]
+        )
+
+    def test_main_dispatch_dry_run_reports_without_writing(self):
+        """cli.main(["reconcile", "--dry-run", ...]) dispatches to the command, which
+        reports the would-repair ids and writes nothing."""
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.main(harness_dir=self.temp_dir.name, argv=["reconcile", "--dry-run"])
+        self.assertIn("would be set to closed", out.getvalue())
+        self.assertIn("#6", out.getvalue())
+        # Nothing written on a dry run.
+        self.assertEqual(self.inner.get_issue("6")["status"], "in_progress")
+
+    def test_real_run_repairs_then_second_run_reports_zero(self):
+        """A real run sets the GitHub-CLOSED row to closed and leaves the open row
+        untouched; an immediate second run repairs nothing (idempotent)."""
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("1 issue(s) set to closed", out.getvalue())
+        self.assertEqual(self.inner.get_issue("6")["status"], "closed")
+        self.assertEqual(self.inner.get_issue("100")["status"], "in_progress")
+
+        out2 = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out2),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("0 issue(s) set to closed", out2.getvalue())
+
+    def test_gh_failure_exits_nonzero(self):
+        """A gh failure on the (non-SQLite) success path exits non-zero and reports."""
+        err = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(1, "", "gh boom")),
+            contextlib.redirect_stderr(err),
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("reconcile failed", err.getvalue())
 
 
 if __name__ == "__main__":
