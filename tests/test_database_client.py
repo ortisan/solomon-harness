@@ -771,6 +771,30 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIn("n1", open_ids)
         self.assertNotIn("t1", open_ids)
 
+    def test_get_open_issues_annotates_github_vs_tracking(self):
+        """get_open_issues annotates each non-terminal row with a derived
+        is_github_issue boolean, so a numeric GitHub id (116) is True while a
+        composite RAID slug (116-R-01) and an empty id are tracking (False). The
+        annotation is additive: it never changes which rows are returned."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            conn.executemany(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("116", "Numeric GitHub issue", "feature", "in_progress", None),
+                    ("116-R-01", "RAID follow-up", "task", "open", None),
+                    ("", "Empty id tracking", "task", None, None),
+                ],
+            )
+            conn.commit()
+
+        annotated = {row["github_id"]: row["is_github_issue"] for row in client.get_open_issues()}
+        client.close()
+        self.assertIs(annotated["116"], True)
+        self.assertIs(annotated["116-R-01"], False)
+        self.assertIs(annotated[""], False)
+
     def test_get_open_issues_surreal_query_tolerates_null_status(self):
         """On SurrealDB the open predicate keeps NULL/NONE-status rows (consistent
         with is_terminal(None) being False), still binding the terminal set as a

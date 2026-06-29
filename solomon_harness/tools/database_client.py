@@ -2227,6 +2227,18 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
 
+    @staticmethod
+    def _annotate_issue_bucket(row: Dict[str, Any]) -> Dict[str, Any]:
+        """Add the derived ``is_github_issue`` bucket flag to an issue row in place.
+
+        Purely additive (#116): the row's stored fields are untouched and the set of
+        rows returned is unchanged; callers gain a derived view field so they can
+        segregate real GitHub issues from tracking items without re-parsing
+        ``github_id``. No DB row is written, deleted, or mutated.
+        """
+        row["is_github_issue"] = is_github_issue(row.get("github_id"))
+        return row
+
     @_resilient
     def get_open_issues(self) -> List[Dict[str, Any]]:
         """Retrieves the open issues, defined as every non-terminal row.
@@ -2249,7 +2261,7 @@ class DatabaseClient:
             )
             try:
                 res = self._run_surreal(query, {"terminal": list(TERMINAL_STATUSES)})
-                return self._extract_list(res)
+                return [self._annotate_issue_bucket(row) for row in self._extract_list(res)]
             except _ConnectionLost:
                 raise
             except Exception as e:
@@ -2267,7 +2279,7 @@ class DatabaseClient:
                     cursor = conn.cursor()
                     cursor.execute(query, tuple(TERMINAL_STATUSES))
                     rows = cursor.fetchall()
-                    return [dict(row) for row in rows]
+                    return [self._annotate_issue_bucket(dict(row)) for row in rows]
             except sqlite3.Error as e:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")
