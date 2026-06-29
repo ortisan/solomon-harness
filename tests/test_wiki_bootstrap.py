@@ -12,11 +12,15 @@ from these tests, which inject fakes and a fake ref-checker instead.
 import contextlib
 import io
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
+from solomon_harness import cli
 from solomon_harness.bootstrap import hint_uninitialized_wiki
 from solomon_harness.wiki_bootstrap import (
     Tier,
+    WikiBootstrapResult,
     bootstrap_wiki,
     choose_tier,
     resolve_web_wiki_url,
@@ -431,6 +435,77 @@ class TestBootstrapWiki(unittest.TestCase):
         self.assertTrue(result.proceed)
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(probe.calls, [], "no remote must not trigger a network probe")
+
+
+class TestWikiCliWiring(unittest.TestCase):
+    """The ``wiki`` command bootstraps before the existing refresh: it degrades
+    (exit 4) on an unpublishable wiki and passes through to the refresh on a no-op.
+    The orchestration itself is covered above; these tests pin the wiring only."""
+
+    DEGRADE_MESSAGE = (
+        "Error: the GitHub wiki has not been initialized.\n"
+        "Initialize it once: open\n"
+        "  https://github.com/o/r/wiki/_new\n"
+        "and save a page, then re-run the wiki step."
+    )
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.harness_dir = self._tmp.name
+
+    def _patch_metadata(self):
+        return patch(
+            "solomon_harness.bootstrap.get_project_metadata",
+            return_value=("proj", "https://github.com/o/r.git", "Python"),
+        )
+
+    def test_degrade_through_cli_exits_4_and_skips_the_refresh(self):
+        captured = {}
+
+        def _fake_bootstrap(git_remote, **kwargs):
+            captured.update(kwargs)
+            return WikiBootstrapResult(Tier.DEGRADE, False, 4, self.DEGRADE_MESSAGE)
+
+        index = MagicMock()
+        err = io.StringIO()
+        with (
+            self._patch_metadata(),
+            patch("solomon_harness.wiki_bootstrap.bootstrap_wiki", side_effect=_fake_bootstrap),
+            patch("solomon_harness.bootstrap.index_codebase", index),
+            patch("solomon_harness.bootstrap.write_code_overview", MagicMock()),
+            contextlib.redirect_stderr(err),
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                cli.main(harness_dir=self.harness_dir, argv=["wiki"])
+        self.assertEqual(ctx.exception.code, 4)
+        self.assertIn("/wiki/_new", err.getvalue())
+        self.assertIn("not been initialized", err.getvalue())
+        self.assertNotIn("Repository not found", err.getvalue())
+        index.assert_not_called()
+        # The plain CLI path must never inject a concrete browser bootstrapper.
+        self.assertIsNone(captured.get("bootstrapper"))
+        self.assertIn("interactive", captured)
+
+    def test_noop_passthrough_runs_the_existing_refresh(self):
+        def _fake_bootstrap(git_remote, **kwargs):
+            return WikiBootstrapResult(Tier.NOOP, True, 0, "")
+
+        index = MagicMock()
+        overview = MagicMock(return_value="/x/docs/wiki/Code-Overview.md")
+        out = io.StringIO()
+        with (
+            self._patch_metadata(),
+            patch("solomon_harness.wiki_bootstrap.bootstrap_wiki", side_effect=_fake_bootstrap),
+            patch("solomon_harness.bootstrap.index_codebase", index),
+            patch("solomon_harness.bootstrap.write_code_overview", overview),
+            patch("solomon_harness.tools.database_client.DatabaseClient"),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.main(harness_dir=self.harness_dir, argv=["wiki"])
+        index.assert_called_once()
+        overview.assert_called_once()
+        self.assertIn("Updated code-overview wiki page", out.getvalue())
 
 
 if __name__ == "__main__":
