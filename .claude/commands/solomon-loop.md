@@ -32,26 +32,26 @@ If `$ARGUMENTS` names a specific issue or PR, evaluate that item and pick its ne
 
 ## 3. Propose as an enumerated decision card, confirm, run
 
-Present the next step as a decision card, not an open prose question — discrete,
-numbered choices keep the user's context focused (see "Interaction style" in
-`docs/solomon-workflow.md`):
+Present the next step and execution options as a decision card with the following numbered options:
+1. **Single Step (Recommended)**: Run the single recommended next workflow stage ($RECOMMENDED_CMD).
+2. **Autonomous Mode**: Enter autonomous execution, pulling and implementing all ready, in-progress, and reviewable tasks on the board. The loop will run stages (such as start, review) sequentially and automatically without prompting the user for confirmation on each step. It will only stop when all eligible tasks are completed or blocked by the human-gated Release stage.
+3. **Other**: Free-text entry.
 
-- In two to four lines, summarize where things stopped and what is in flight. You
-  can read `solomon-harness log` for the recent loop / decision / handoff trail.
-- Offer the single recommended next step first, then any genuinely credible
-  alternatives the ladder surfaced, as numbered options whose last entry is always
-  "Other" (a free-text answer). Each option is the exact `/solomon-*` command and
-  its target. In Claude Code use the AskUserQuestion tool; in the Gemini CLI
-  present the numbered list and invite a free-text reply.
-- Wait for the pick. Outward-facing actions (creating issues or PRs, merging,
-  releasing) always require an explicit go-ahead.
-- On the pick, run that workflow by following its command file
-  `.claude/commands/solomon-<stage>.md` and delegating to its driving agents.
-  Advance one stage per invocation; re-run `/solomon-loop` to continue.
+- If the user selects Option 1 (Single Step):
+  - Run the recommended workflow stage by following its command file `.claude/commands/solomon-<stage>.md` or executing `uv run python -m solomon_harness.cli dev <stage> [args]`.
+  - Advance one stage, record the run/decision, and exit.
+
+- If the user selects Option 2 (Autonomous Mode):
+  - Enter an autonomous loop. In each iteration:
+    1. Scan the current board and database state.
+    2. Determine the next step using the "Decide the next step" rules.
+    3. If the next step is `release` (permanently human-gated), or if no more tasks can be progressed, break the loop, notify the user, and report the final status.
+    4. Otherwise, execute the workflow stage headless (e.g. by running `uv run python -m solomon_harness.cli dev <stage> [args]`), or run the workflow logic directly.
+    5. Save the decision and loop run to memory.
+  - Present a final summary of all tasks implemented and reviewed.
 
 ## 4. Record
 
 - `mcp__solomon-memory__save_decision` — the loop's recommendation and the chosen action, so the next session resumes from it.
 - `mcp__solomon-memory__log_handoff` — when the chosen workflow hands off to the next stage.
 
-Never advance more than one stage without checking in. The loop proposes; the user decides.
