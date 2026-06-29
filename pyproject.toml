@@ -42,4 +42,5 @@ packages = ["solomon_harness"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
 
