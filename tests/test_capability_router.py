@@ -80,7 +80,7 @@ class TestRoute(CapabilityRouterTestBase):
 
     def test_route_to_unknown_agent_fails_closed(self):
         matcher = _StubMatcher(cr.Match(agent="ghost", rationale="nope"))
-        with self.assertRaises(cr.CatalogError):
+        with self.assertRaises(cr.MatcherContractError):
             cr.route("do a thing", matcher, self.root)
 
     def test_whitespace_only_rationale_does_not_crash(self):
@@ -95,6 +95,20 @@ class TestRoute(CapabilityRouterTestBase):
         )
         verdict = cr.route("do a thing", matcher, self.root)
         self.assertEqual(verdict.alternatives, ("security",))
+
+    def test_alternatives_preserves_order(self):
+        matcher = _StubMatcher(
+            cr.Match(agent="qa", rationale="r", alternatives=["security", "software_engineer"])
+        )
+        verdict = cr.route("do a thing", matcher, self.root)
+        self.assertEqual(verdict.alternatives, ("security", "software_engineer"))
+        
+        matcher_rev = _StubMatcher(
+            cr.Match(agent="qa", rationale="r", alternatives=["software_engineer", "security"])
+        )
+        verdict_rev = cr.route("do a thing", matcher_rev, self.root)
+        self.assertEqual(verdict_rev.alternatives, ("software_engineer", "security"))
+
 
 
 class TestCatalog(CapabilityRouterTestBase):
@@ -114,6 +128,46 @@ class TestCatalog(CapabilityRouterTestBase):
         by_name = {a.name: a.description for a in catalog}
         self.assertIn("blankrole", by_name)
         self.assertEqual(by_name["blankrole"], "")
+
+    def test_role_file_with_giant_line_is_read_capped(self):
+        role_dir = os.path.join(self.root, "agents", "giantline", "agents")
+        os.makedirs(role_dir)
+        giant_desc = "A" * 20000
+        with open(os.path.join(role_dir, "giantline.md"), "w", encoding="utf-8") as f:
+            f.write(f"# giantline\n\n{giant_desc}\n")
+        catalog = cr.load_catalog(self.root)
+        by_name = {a.name: a.description for a in catalog}
+        self.assertIn("giantline", by_name)
+        # It should cap at 8192 bytes/chars
+        self.assertEqual(len(by_name["giantline"]), 8192)
+
+    def test_symlink_role_file_rejected(self):
+        role_dir = os.path.join(self.root, "agents", "symlinked_agent", "agents")
+        os.makedirs(role_dir)
+        target_file = os.path.join(self.root, "target.md")
+        with open(target_file, "w", encoding="utf-8") as f:
+            f.write("# symlinked_agent\n\nsome description\n")
+        symlink_file = os.path.join(role_dir, "symlinked_agent.md")
+        os.symlink(target_file, symlink_file)
+        with self.assertRaises(cr.CatalogError):
+            cr.load_catalog(self.root)
+
+    def test_path_confinement_violation_rejected(self):
+        role_dir = os.path.join(self.root, "agents", "evil_agent", "agents")
+        os.makedirs(role_dir)
+        outside_dir = tempfile.mkdtemp(prefix="outside-")
+        try:
+            outside_role = os.path.join(outside_dir, "evil_agent.md")
+            with open(outside_role, "w", encoding="utf-8") as f:
+                f.write("# evil_agent\n\ndescription\n")
+            os.rmdir(role_dir)
+            os.symlink(outside_dir, role_dir)
+            with self.assertRaises(cr.CatalogError):
+                cr.load_catalog(self.root)
+        finally:
+            shutil.rmtree(outside_dir, ignore_errors=True)
+
+
 
 
 class TestGap(CapabilityRouterTestBase):
@@ -179,6 +233,38 @@ class TestInvariants(CapabilityRouterTestBase):
         before = _tree_digest(self.agents_dir)
         cr.load_catalog(self.root)
         self.assertEqual(_tree_digest(self.agents_dir), before)
+
+    def test_capability_router_is_isolated_and_read_only(self):
+        import ast
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "solomon_harness", "capability_router.py"))
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+            tree = ast.parse(content)
+        allowed_roots = {"os", "dataclasses", "typing", "solomon_harness", "sys", "Union", "List", "Optional", "Callable", "Tuple"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    self.assertIn(root, allowed_roots, f"Import of module '{alias.name}' is forbidden in capability_router")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    root = node.module.split(".")[0]
+                    self.assertIn(root, allowed_roots, f"Import from module '{node.module}' is forbidden in capability_router")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    if len(node.args) >= 2:
+                        mode_node = node.args[1]
+                        if isinstance(mode_node, ast.Constant):
+                            mode = mode_node.value
+                            self.assertNotIn(mode, {"w", "wb", "a", "ab", "w+", "wb+", "a+", "ab+"}, f"Opening file with mode '{mode}' is forbidden")
+                    for kw in node.keywords:
+                        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                            mode = kw.value.value
+                            self.assertNotIn(mode, {"w", "wb", "a", "ab", "w+", "wb+", "a+", "ab+"}, f"Opening file with mode '{mode}' is forbidden")
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "write":
+                    self.fail("Calling .write() is forbidden in capability_router")
+
 
 
 if __name__ == "__main__":
