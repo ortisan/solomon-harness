@@ -132,6 +132,20 @@ REQUIRED_KEYWORDS = {
         "Git Flow",
         "Conventional Commits",
     ],
+    "ux_designer.md": [
+        "UX Designer",
+        "user research",
+        "information architecture",
+        "interaction design",
+        "design system",
+        "design tokens",
+        "WCAG 2.2",
+        "accessibility",
+        "usability",
+        "frontend agent",
+        "Git Flow",
+        "Conventional Commits",
+    ],
     "sre.md": [
         "SRE Specialist",
         "high availability",
@@ -199,13 +213,6 @@ REQUIRED_KEYWORDS = {
         "SQL",
         "big data",
         "visualization",
-    ],
-    "data_science.md": [
-        "Data Scientist",
-        "predictive",
-        "statistical",
-        "didactically",
-        "cross-validation",
     ],
 }
 

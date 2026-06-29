@@ -1,76 +1,55 @@
-# PLAN — Issue #18: practice_curator agent definition + cited audit of one delivery
+# PLAN — Issue #42: loop-engineering safety floor (single-driver lock, portable gate, run-log, session digest)
 
-Slice 1/4 of epic #16. Branch: `feature/practice-curator-agent-definition` (worktree `../sh-18`, based on `main`; no `develop` branch exists).
+Branch: `feature/loop-safety-floor` (based on `main`; no `develop` branch exists). Phase 0 of the loop-engineering roadmap in `docs/loop-engineering.md`. This PLAN documents work already implemented on the branch and now delivered to review.
 
 ## Problem statement
 
-The fleet has no `practice_curator` agent, and nothing can take a delivered artifact and benchmark it against the current state of the art with cited evidence. This slice creates the agent definition and its first capability — a sourced gap report on one delivery — as the foundation the other three slices build on. See #18 (acceptance criteria) and the epic #16.
+Loop engineering turns the harness into a system that advances work on a cadence. Run on a cadence, two drivers on one repository corrupt shared state: a documented incident saw two `/solomon-loop` drivers produce premature merges that bypassed the human review gate, flip `core.bare=true`, and leave a stray `core.worktree` in the shared config (the residual git-config mode is tracked separately in #38). A safe cadence requires that exactly one driver mutate a repository at a time and that merge/release stays human-gated. See #42 acceptance criteria.
 
 ## Proposed change and the boundary it touches
 
-Add one new specialist agent under `agents/practice_curator/`, following the exact module pattern of the existing agents (persona, profile, skills, `.agent/config.json`), then regenerate the auto-managed artifacts (Active Skills block, host-tool integrations) and register the agent in the central index. No production runtime code changes; the agent's behavior is expressed as skill guidance the host tool follows. The boundary touched is the agent-definition surface and its generated integrations — not the memory client, CLI logic, or GitHub layer.
+Add a single-driver safety floor enforced in the portable `run_stage` seam (so it binds both Claude Code and the Gemini CLI), backed by an advisory lock anchored at the git common directory, an autonomy policy that keeps merge/release permanently human-gated, and an auditable run-log. The boundary touched is the harness run seam (`workflows.py`), the memory client (a new `loop_runs` ledger), and two new single-concern modules (`loop_lock.py`, `loop_log.py`), plus a session digest. No change to the agent definitions or the GitHub layer; the host tool remains the model loop (constraint C1 — the reverted self-hosted LLM loop must not return).
 
 ## Target files (diff fence)
 
-New (hand-authored):
-- `agents/practice_curator/persona.md`
-- `agents/practice_curator/agents/practice_curator.md` (profile / role)
-- `agents/practice_curator/.agent/config.json`
-- `agents/practice_curator/skills/auditing_delivered_work.md`
-- `agents/practice_curator/skills/sourcing_the_state_of_the_art.md`
-- `agents/practice_curator/skills/benchmarking_across_domains.md`
-- `agents/practice_curator/skills/scope_and_non_negotiables.md`
-- `tests/test_practice_curator.py`
+New:
+- `solomon_harness/loop_lock.py` — advisory single-driver lock (JSON lockfile at the git common dir, TTL/heartbeat staleness, dead-pid reclaim).
+- `solomon_harness/loop_log.py` — render the chronological run/decision/handoff feed.
+- `solomon_harness/digest.py` — session-start board digest + enumerated resume card.
+- `tests/test_loop_lock.py`, `tests/test_loop_run.py`, `tests/test_digest.py`.
 
-Edited (hand):
-- `agents/AGENTS.md` — add the `practice_curator` line to "The specialist agents" index.
-- `scripts/validate-agents.py` — add a `practice_curator.md` entry to `REQUIRED_KEYWORDS`.
+Edited:
+- `solomon_harness/workflows.py` — portable gate in `run_stage`: acquire/release the lock for `LOCKED_STAGES` (loop/start/review/release), autonomy policy (L1 report-only, L2 allows start, L3 still blocks release), kill-switch.
+- `solomon_harness/tools/database_client.py` — `loop_runs` ledger (`save_loop_run`/`list_loop_runs`).
+- `solomon_harness/cli.py` — `solomon-harness log`, `loop-lock status|release`.
+- `.claude/settings.json` — PreToolUse `loop-guard` hook (defense-in-depth, fails open).
+- `docs/loop-engineering.md`, `docs/solomon-workflow.md`, `.claude/commands/solomon-loop.md`, `.gemini/commands/solomon-loop.toml`, `README.md`.
 
-Generated (by tooling, not hand-edited):
-- `agents/practice_curator/agents/practice_curator.md` Active Skills block — `scripts/document-skills.py`.
-- `agents/practice_curator/main.py` — scaffolded by `cli compile` if missing (standard thin entrypoint).
-- `.claude/agents/practice_curator.md` and `.gemini/commands/*.toml` — `cli compile` / `generate-integrations.py`.
+## Edge cases (observable outcomes)
 
-Out of scope (later slices): fleet-wide sweep (#19), editing/PR-ing other agents (#20), autonomous trigger (#21), any auto-merge.
+- A second driver on any linked worktree is refused while a live driver holds the lock (one lockfile at the common dir).
+- A stale lock (heartbeat past the 1800s TTL, or a dead pid on the same host) is reclaimed automatically by the next driver.
+- The concurrency guard is the lockfile, never a run-log row count — under the per-worktree SQLite fallback a cross-worktree count is invisible.
+- `release` is refused even at the highest autonomy level; the kill-switch blocks every mutating stage until cleared.
+- The session digest degrades cleanly when the DB is unreachable or empty (never blocks session start).
 
-## Skills to author (each >= 600 words, with `## Common pitfalls` + `## Definition of done`, naming concrete standards)
+## TDD breakdown (red/green, one commit each — as delivered)
 
-1. `auditing_delivered_work` — how to turn one delivered artifact (a merged PR/diff) into a gap report: read the diff, identify the practice areas it touches, compare against the sourced baseline, and emit findings. States the negative space explicitly: the audit never modifies any other `agents/<name>/` file. Defines the "no gap found" output and the "insufficient evidence" bucket.
-2. `sourcing_the_state_of_the_art` — how to find, date, and judge a source credible; the rule of >= 2 dated, credible sources per cited practice; the credibility test (primary/standards-body/peer-reviewed/maintained-project over blog hearsay); record via `save_decision`. This skill is the control for risk R1 (`risk-16-sota-sourcing`).
-3. `benchmarking_across_domains` — what "state of the art" means in each of the four target fields, with named references: software engineering, software architecture, ML/DRL engineering, and quantitative trading. Names concrete standards/frameworks per field with versions.
-4. `scope_and_non_negotiables` — the guardrails for the whole epic: reviewed via the `/solomon` lifecycle, never blind or bulk edits, <= 1 target agent per proposal/PR, human approval before any merge; senior-engineer tone, no emojis/AI filler.
-
-## Edge cases (as observable outcomes)
-
-- A delivery with no gap → the audit guidance yields an explicit "no gap found" and emits no proposal (asserted by a string check in the audit skill).
-- A claimed practice with < 2 dated sources → omitted from recommendations and listed under "insufficient evidence" (string check in the sourcing skill).
-- A skill below the depth bar (< 600 words, or missing a required section) → `tests/test_practice_curator.py` fails.
-- The agent missing from `agents/AGENTS.md` or from `.claude/agents/` → `tests/test_integrations.py` fails.
-
-## TDD breakdown (red / green, one commit each, `Refs #18`)
-
-1. RED — `test: add practice_curator structure and depth checks`. Add `tests/test_practice_curator.py`: agent dir + four files exist; profile lists every skill; each skill >= 600 words and contains both required sections; the audit skill states it does not modify other agents; the sourcing skill states the >= 2-sources rule. Run → fails (no agent).
-2. GREEN — `feat(agents): add practice_curator definition and skills`. Author persona, profile, config, and the four skills; run `document-skills.py` to fill the Active Skills block. Run `test_practice_curator` → green; `test_integrations` now red (not indexed / no subagent).
-3. GREEN — `feat(agents): index practice_curator and validate its profile`. Add the index line to `agents/AGENTS.md`; add the `REQUIRED_KEYWORDS` entry in `validate-agents.py`. Run `validate-agents.py` → practice_curator valid.
-4. GREEN — `chore(agents): compile practice_curator host-tool integrations`. Run `uv run python -m solomon_harness.cli compile` (scaffolds `main.py`, generates `.claude/agents/practice_curator.md` and `.gemini` mirrors). Run `test_integrations` → green.
-5. REFACTOR/verify — run the targeted suite, tidy wording, confirm no emojis/cliches.
+1. `loop_lock`: lock path anchors at the git common dir across linked worktrees; non-git dir falls back to `.solomon`. (`test_loop_lock`)
+2. `loop_lock`: held lock blocks a second acquirer; stale-by-TTL and dead-pid locks are reclaimed.
+3. `loop_runs` ledger: save and list newest-first with a cap. (`test_loop_run`)
+4. run-log feed: merge runs/decisions/handoffs newest-first and render each kind. (`test_loop_run`)
+5. `run_stage`: mutating stage acquires/releases the lock; a foreign lock blocks it; non-mutating stage ignores it. (`test_workflows`)
+6. autonomy policy: L1 blocks mutation, L2 allows start, L3 still blocks release, kill-switch blocks everything. (`test_workflows`)
+7. session digest: full/empty/broken-DB/capped-issue-list. (`test_digest`)
 
 ## STRIDE notes
 
-No new code path handling untrusted input, no auth/data/datastore change — markdown + config only. The one forward-looking surface is that the audit will, in a later slice, fetch external sources at runtime (SSRF / source-poisoning / prompt-injection-from-fetched-content). That is out of scope for #18 (no runtime fetch is implemented here); the `sourcing_the_state_of_the_art` skill records the credibility/dating requirement that mitigates source-poisoning, and the runtime-fetch threat model is deferred to the slice that implements the trigger (#21), to be flagged for the security agent then.
+This change is a concurrency-control and authorization surface. Tampering/Elevation: the lock bounds *who* may drive; merge/release remain human-gated so automation cannot self-approve. Denial of service: a crashed driver must not wedge the repo — hence TTL/dead-pid reclaim and `loop-lock release`. Auditability: the lockfile holder and the `loop_runs` ledger are plain/readable so a human can see who drove and when.
 
-## ADR evaluation
+## Verification criteria
 
-Not architecturally significant: adding a specialist agent follows the existing, documented module pattern with no new dependency, datastore, public contract, or data-model change, and it is trivially reversible (delete the directory + the index line + regenerate). No ADR. This will be restated in the PR body.
-
-## Verification criteria (objectively checkable)
-
-- `python -m unittest tests.test_practice_curator` passes.
-- `python -m unittest tests.test_integrations tests.test_document_skills` passes (agent indexed, subagent generated, Gemini mirrors present, document-skills unchanged).
-- `python scripts/validate-agents.py` exits 0 and reports `practice_curator.md is valid`.
-- `uv run python -m solomon_harness.cli compile` runs clean; `.claude/agents/practice_curator.md` exists and names `practice_curator`.
-- Each of the four skills is >= 600 words and has both `## Common pitfalls` and `## Definition of done`; the profile's Active Skills block lists all four.
-
-## Known environment caveat
-
-The pre-commit hook runs the full suite, which (per the open `bug-test-isolation` issue and the PR #17 notes) indexes the real memory DB and fails two environment-sensitive tests inside a git worktree (`test_home`, `test_bootstrap` kanban). Commits here are markdown/test/config only; if the hook blocks on those unrelated failures, commit with `--no-verify` after running the targeted suite above green, and note it in the PR. This is a pre-existing harness issue, not a regression from #18.
+- `uv run python -m unittest tests.test_loop_lock tests.test_loop_run tests.test_digest tests.test_workflows` is green (38 tests pass).
+- `solomon-harness loop-lock status` reports the holder/staleness; `solomon-harness log` renders the feed.
+- ADR-0001 records the single-driver concurrency decision and is linked in the PR.
+- Merge/release still require explicit human approval.
