@@ -377,6 +377,25 @@ class TestMultiModelLive(unittest.TestCase):
             os.environ.pop("HARNESS_MIRROR_ROOT", None)
             self.temp_dir.cleanup()
 
+    # --- get-by-id round-trips (regression: complex-id delimiter strip) ---
+
+    def test_get_decision_round_trip_on_surreal(self):
+        # SurrealDB v3.x renders a minted complex key wrapped in angle brackets;
+        # _parse_rid must strip them so a get-by-id matches the stored record
+        # instead of returning None.
+        decision_id = self.client.log_decision(
+            "title", "rationale", "outcome", "author", "main", "sha1234"
+        )
+        fetched = self.client.get_decision(decision_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched["title"], "title")
+
+    def test_get_milestone_round_trip_on_surreal(self):
+        milestone_id = self.client.create_milestone("M1", "desc", "2026-07-01", "active")
+        fetched = self.client.get_milestone(milestone_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched["title"], "M1")
+
     # --- relational ---
 
     def test_relational_indexes_are_defined(self):

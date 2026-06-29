@@ -925,7 +925,14 @@ class DatabaseClient:
 
     @staticmethod
     def _parse_rid(id_value: Union[str, int, None]) -> Any:
-        """Turn a 'table:id' string (or RecordID) into a RecordID for querying."""
+        """Turn a 'table:id' string (or RecordID) into a RecordID for querying.
+
+        SurrealDB v3.x renders a complex record key wrapped in display delimiters
+        (angle brackets ``decisions:⟨abc-123⟩`` or backticks); these are not part
+        of the binary key, so they are stripped before the RecordID is rebuilt.
+        Without this, a get-by-id of a minted complex key never matches the stored
+        record and silently returns None.
+        """
         if id_value is None:
             return None
         if type(id_value).__name__ == "RecordID":
@@ -935,6 +942,11 @@ class DatabaseClient:
             from surrealdb import RecordID
 
             table, _, rid = s.partition(":")
+            rid = rid.strip()
+            if len(rid) >= 2 and rid[0] == "⟨" and rid[-1] == "⟩":
+                rid = rid[1:-1]
+            elif len(rid) >= 2 and rid[0] == "`" and rid[-1] == "`":
+                rid = rid[1:-1]
             return RecordID(table, rid)
         return s
 
@@ -2586,7 +2598,9 @@ class DatabaseClient:
         U+27E9), or backticks, when it stringifies it (e.g. a minted decision id);
         those delimiters are stripped so the rebuilt RecordID matches the stored
         record instead of a literally-bracketed key. The actual binary key is never
-        bracketed. The shared :meth:`_parse_rid` is left untouched.
+        bracketed. :meth:`_parse_rid` applies the same stripping for ``table:key``
+        inputs; this method additionally accepts a bare natural key with no table
+        prefix, which the graph helpers pass.
         """
         if type(value).__name__ == "RecordID":
             return value
