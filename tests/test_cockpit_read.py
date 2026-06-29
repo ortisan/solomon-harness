@@ -1,9 +1,12 @@
+import contextlib
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -239,6 +242,47 @@ class TestBoardPayloadTenantTargeting(unittest.TestCase):
             fake.calls.index(("use_tenant", "alpha")),
             fake.calls.index("list_issues"),
         )
+
+
+class TestBoardPayloadRejection(unittest.TestCase):
+    def _binds(self, calls):
+        return [c for c in calls if isinstance(c, tuple) and c[0] == "use_tenant"]
+
+    def test_board_payload_rejects_unknown_and_injection_without_reading(self):
+        """An unknown or shell-injection project is rejected before any rebind
+        or read: board_payload returns the all-zero empty board flagged
+        found False, and neither use_tenant nor list_issues is called. The CLI
+        prints the same found:false payload for the Node bridge."""
+        for bad in ("ghost", "alpha; rm -rf ~"):
+            fake = FakeTenantClient(
+                {"alpha": [{"github_id": "a1", "status": "Backlog"}]}
+            )
+            payload = cockpit_read.board_payload(bad, client_factory=lambda: fake)
+
+            self.assertFalse(payload["found"])
+            self.assertEqual(payload["project"], bad)
+            self.assertEqual(payload["total"], 0)
+            self.assertEqual(
+                [c["name"] for c in payload["columns"]], SEVEN_COLUMNS
+            )
+            self.assertTrue(all(c["count"] == 0 for c in payload["columns"]))
+            # The rejected request never rebinds a tenant or reads its issues.
+            self.assertEqual(self._binds(fake.calls), [])
+            self.assertNotIn("list_issues", fake.calls)
+
+        # The CLI surfaces the same rejection: found:false JSON, no read.
+        fake = FakeTenantClient({"alpha": [{"github_id": "a1", "status": "Backlog"}]})
+        out = io.StringIO()
+        with patch("solomon_harness.cockpit_read.DatabaseClient", return_value=fake):
+            with contextlib.redirect_stdout(out):
+                rc = cockpit_read.main(["board", "--project", "ghost"])
+
+        self.assertEqual(rc, 0)
+        printed = json.loads(out.getvalue())
+        self.assertFalse(printed["found"])
+        self.assertEqual(printed["project"], "ghost")
+        self.assertEqual(self._binds(fake.calls), [])
+        self.assertNotIn("list_issues", fake.calls)
 
 
 class TestReadPathInstrumentation(unittest.TestCase):
