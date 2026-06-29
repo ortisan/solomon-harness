@@ -4,6 +4,7 @@ A running log of delivered issues, newest first. Versions are cut per release; s
 
 | Date | Issue | Title | Version | PR |
 | --- | --- | --- | --- | --- |
+| 2026-06-29 | [#130](https://github.com/ortisan/solomon-harness/issues/130) | feat(workflow): check memory for pending tasks and output options card on session start | v0.10.0 | [#130](https://github.com/ortisan/solomon-harness/pull/130) |
 | 2026-06-29 | [#53](https://github.com/ortisan/solomon-harness/issues/53) | feat(ui): cockpit foundation — SPA shell + read API + single-project board | v0.7.0 | [#77](https://github.com/ortisan/solomon-harness/pull/77) |
 | 2026-06-29 | [#19](https://github.com/ortisan/solomon-harness/issues/19) | feat(agents): practice_curator — fleet sweep emitting one bounded proposal per agent | v0.7.0 | [#95](https://github.com/ortisan/solomon-harness/pull/95) |
 | 2026-06-29 | [#68](https://github.com/ortisan/solomon-harness/issues/68) | feat(agents): add educational_psychologist specialist agent | v0.6.0 | [#93](https://github.com/ortisan/solomon-harness/pull/93) |
