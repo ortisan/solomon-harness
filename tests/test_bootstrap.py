@@ -241,6 +241,21 @@ class TestBootstrapAgent(unittest.TestCase):
             settings_recovered = json.load(f)
         self.assertIn("hooks", settings_recovered)
 
+        # Trigger general read exception to cover lines 556-558
+        from unittest.mock import patch
+        import builtins
+        real_open = builtins.open
+        def mock_open_fn(file, *args, **kwargs):
+            if str(file).endswith(os.path.join(".gemini", "settings.json")):
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if "w" not in mode:
+                    raise PermissionError("no read access")
+            return real_open(file, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=mock_open_fn):
+            # Run bootstrap_project again; it should log warning and return early without raising
+            bootstrap_project(self.workspace_dir, non_interactive=True)
+
 
 class TestInitWikiHint(unittest.TestCase):
     """The init flow detects an uninitialized GitHub wiki and only hints; it must

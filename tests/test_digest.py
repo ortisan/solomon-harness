@@ -178,6 +178,52 @@ class TestBuildDigest(unittest.TestCase):
             res = digest._best_effort_prs(".")
             self.assertIsNone(res)
 
+    def test_safe_id_edge_cases(self):
+        self.assertIsNone(digest._safe_id(None))
+        self.assertIsNone(digest._safe_id("invalid; rm -rf /"))
+        self.assertEqual(digest._safe_id("123-abc_def"), "123-abc_def")
+
+    def test_sanitize_title_none(self):
+        self.assertEqual(digest._sanitize_title(None), "")
+
+    def test_digest_shows_resume_start_active_with_hash(self):
+        resume = {"type": "session", "agent": "qa", "task": "start #123", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-start 123", text)
+
+    def test_digest_shows_resume_start_active_with_word_issue(self):
+        resume = {"type": "session", "agent": "qa", "task": "start issue 456", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-start 456", text)
+
+    def test_digest_option_command_mappings(self):
+        # We test backlog -> refine, ideas -> issue, ready -> start, and code_review -> review
+        # To make sure they are in the first 3 options, we split into two runs
+        issues = [
+            {"github_id": "11", "title": "backlog issue", "status": "backlog"},
+            {"github_id": "12", "title": "ideas issue", "status": "ideas"},
+            {"github_id": "13", "title": "ready issue", "status": "ready"},
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-refine 11", text)
+        self.assertIn("/solomon-issue 12", text)
+        self.assertIn("/solomon-start 13", text)
+
+        issues2 = [
+            {"github_id": "14", "title": "code review issue", "status": "code_review"},
+            {"github_id": "15", "title": "qa issue", "status": "qa"},
+        ]
+        text2 = "\n".join(digest.build_digest(resume=None, open_issues=issues2, last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-review 14", text2)
+        self.assertIn("/solomon-review 15", text2)
+
+    def test_digest_sanitizes_github_id(self):
+        issues = [
+            {"github_id": "bad\x1bid", "title": "issue title", "status": "backlog"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("- [badid] issue title", text)
+
 
 if __name__ == "__main__":
     unittest.main()

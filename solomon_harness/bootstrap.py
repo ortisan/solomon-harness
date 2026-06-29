@@ -493,6 +493,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         except Exception:
             pass
     else:
+        try:
+            os.chmod(claude_settings_path, 0o600)
+        except Exception:
+            pass
         print("Keeping existing .claude/settings.json.")
 
     # 3.5 Generate .gemini/settings.json only when it does not already exist.
@@ -555,45 +559,50 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                 settings = {}
             except Exception as exc:
                 print(f"WARNING: failed to read local settings file at {gemini_settings_path} ({exc}). Hooks not merged.")
-                return
+                settings = None
         
-        hooks = settings.setdefault("hooks", {})
-        
-        # Merge SessionStart
-        session_start = hooks.setdefault("SessionStart", [])
-        existing_ss = json.dumps(session_start)
-        updated = False
-        if "solomon_harness.cli memory-up" not in existing_ss:
-            session_start.append({
-                "hooks": [
-                    {"type": "command", "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"},
-                    {"type": "command", "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"},
-                ]
-            })
-            updated = True
+        if settings is not None:
+            hooks = settings.setdefault("hooks", {})
+            
+            # Merge SessionStart
+            session_start = hooks.setdefault("SessionStart", [])
+            existing_ss = json.dumps(session_start)
+            updated = False
+            if "solomon_harness.cli memory-up" not in existing_ss:
+                session_start.append({
+                    "hooks": [
+                        {"type": "command", "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"},
+                        {"type": "command", "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"},
+                    ]
+                })
+                updated = True
 
-        # Merge PreToolUse
-        pre_tool_use = hooks.setdefault("PreToolUse", [])
-        existing_ptu = json.dumps(pre_tool_use)
-        if "solomon_harness.cli loop-guard" not in existing_ptu:
-            pre_tool_use.append({
-                "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-                "hooks": [
-                    {"type": "command", "command": "uv run python -m solomon_harness.cli loop-guard"}
-                ]
-            })
-            updated = True
+            # Merge PreToolUse
+            pre_tool_use = hooks.setdefault("PreToolUse", [])
+            existing_ptu = json.dumps(pre_tool_use)
+            if "solomon_harness.cli loop-guard" not in existing_ptu:
+                pre_tool_use.append({
+                    "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+                    "hooks": [
+                        {"type": "command", "command": "uv run python -m solomon_harness.cli loop-guard"}
+                    ]
+                })
+                updated = True
 
-        if updated:
-            with open(gemini_settings_path, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2)
-            try:
-                os.chmod(gemini_settings_path, 0o600)
-            except Exception:
-                pass
-            print("Merged hooks into existing .gemini/settings.json.")
-        else:
-            print("Keeping existing .gemini/settings.json (hooks already present).")
+            if updated:
+                with open(gemini_settings_path, "w", encoding="utf-8") as f:
+                    json.dump(settings, f, indent=2)
+                try:
+                    os.chmod(gemini_settings_path, 0o600)
+                except Exception:
+                    pass
+                print("Merged hooks into existing .gemini/settings.json.")
+            else:
+                try:
+                    os.chmod(gemini_settings_path, 0o600)
+                except Exception:
+                    pass
+                print("Keeping existing .gemini/settings.json (hooks already present).")
 
     # Resolve templates directory (bundled inside the package or root fallback)
     package_dir = os.path.dirname(os.path.abspath(__file__))

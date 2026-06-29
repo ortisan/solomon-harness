@@ -67,6 +67,10 @@ def _merge_session_start_hook(settings_path: str) -> bool:
     # Already installed? Look for our memory-up command anywhere in SessionStart.
     existing = json.dumps(session_start)
     if "solomon_harness.cli memory-up" in existing:
+        try:
+            os.chmod(settings_path, 0o600)
+        except Exception:
+            pass
         return False
 
     session_start.append({

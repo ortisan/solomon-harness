@@ -103,7 +103,7 @@ def build_digest(
     issues = [i for i in (open_issues or []) if not is_terminal(i.get("status"))]
     lines.append(f"Open issues: {len(issues)}")
     for i in issues[:_MAX_LIST]:
-        lines.append(f"  - [{i.get('github_id')}] {_sanitize_title(i.get('title'))}")
+        lines.append(f"  - [{_sanitize_title(i.get('github_id'))}] {_sanitize_title(i.get('title'))}")
     if len(issues) > _MAX_LIST:
         lines.append(f"  ... and {len(issues) - _MAX_LIST} more")
 
@@ -226,7 +226,7 @@ def build_digest(
     if non_pending_issues:
         lines.append("GitHub Open Issues:")
         for i in non_pending_issues[:_MAX_LIST]:
-            lines.append(f"  - [{i.get('github_id')}] {_sanitize_title(i.get('title'))} ({i.get('status') or 'Backlog'})")
+            lines.append(f"  - [{_sanitize_title(i.get('github_id'))}] {_sanitize_title(i.get('title'))} ({i.get('status') or 'Backlog'})")
         if len(non_pending_issues) > _MAX_LIST:
             lines.append(f"  ... and {len(non_pending_issues) - _MAX_LIST} more")
 
@@ -237,7 +237,16 @@ def build_digest(
             status = str(i.get("status")).lower()
             issue_id = _safe_id(i.get("github_id"))
             if issue_id:
-                cmd = f"/solomon-refine {issue_id}" if status == "backlog" else f"/solomon-issue {issue_id}"
+                if status == "backlog":
+                    cmd = f"/solomon-refine {issue_id}"
+                elif status in ("ideas", "idea"):
+                    cmd = f"/solomon-issue {issue_id}"
+                elif status in ("ready", "in_progress", "in progress"):
+                    cmd = f"/solomon-start {issue_id}"
+                elif status in ("code_review", "code review", "qa"):
+                    cmd = f"/solomon-review {issue_id}"
+                else:
+                    cmd = f"/solomon-issue {issue_id}"
                 lines.append(f"  {option_idx}. Refine/Start Issue #{issue_id}: {cmd}")
                 option_idx += 1
 
