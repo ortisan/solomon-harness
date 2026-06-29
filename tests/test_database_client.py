@@ -353,7 +353,44 @@ class TestDatabaseClient(unittest.TestCase):
             self.assertIsNotNone(handoff)
             self.assertEqual(handoff["sender"], "sender")
 
-            # 11. Close client / context manager
+            # 11. list_databases reads tenant names from INFO FOR NS, sorted.
+            mock_surreal_instance.query.reset_mock()
+            mock_surreal_instance.query.return_value = [
+                {
+                    "databases": {
+                        "beta": "DEFINE DATABASE beta",
+                        "alpha": "DEFINE DATABASE alpha",
+                    }
+                }
+            ]
+            self.assertEqual(client.list_databases(), ["alpha", "beta"])
+
+            # A missing/empty databases map yields no tenants, not an error.
+            mock_surreal_instance.query.reset_mock()
+            mock_surreal_instance.query.return_value = [{"tables": {}}]
+            self.assertEqual(client.list_databases(), [])
+
+            # 12. list_issues returns every row including Done (not just open).
+            mock_surreal_instance.query.reset_mock()
+            mock_surreal_instance.query.return_value = [
+                [
+                    {"github_id": "gh-1", "status": "Backlog"},
+                    {"github_id": "gh-2", "status": "Done"},
+                ]
+            ]
+            issues = client.list_issues()
+            self.assertEqual(
+                {i["github_id"]: i["status"] for i in issues},
+                {"gh-1": "Backlog", "gh-2": "Done"},
+            )
+
+            # 13. use_tenant re-scopes the open connection to the selected tenant
+            # via the SDK's parameterized bind (read-only, no SQL, one database).
+            mock_surreal_instance.use.reset_mock()
+            client.use_tenant("beta")
+            mock_surreal_instance.use.assert_called_once_with("solomon", "beta")
+
+            # 14. Close client / context manager
             client.close()
             mock_surreal_instance.close.assert_called_once()
 
@@ -579,6 +616,46 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertEqual(len(releases), 2)
         self.assertEqual({r["version"] for r in releases}, {"v1.0.0", "v1.1.0"})
         client.close()
+
+    def test_list_issues_returns_all_statuses_including_done(self):
+        """list_issues returns every issue regardless of status, including Done.
+
+        get_open_issues only returns status='open', but the cockpit board must
+        render the full seven columns, so the read port needs an all-status read.
+        """
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("gh-1", "Backlog item", "feature", "Backlog", None)
+        client.log_issue("gh-2", "Active item", "feature", "In Progress", None)
+        client.log_issue("gh-3", "Shipped item", "feature", "Done", None)
+
+        issues = client.list_issues()
+        client.close()
+
+        by_id = {i["github_id"]: i["status"] for i in issues}
+        self.assertEqual(
+            by_id,
+            {"gh-1": "Backlog", "gh-2": "In Progress", "gh-3": "Done"},
+        )
+
+    def test_list_databases_is_read_only(self):
+        """list_databases discovers the tenant(s) without mutating the store.
+
+        On the SQLite fallback it returns the single resolvable tenant; the call
+        must create or change no row.
+        """
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("gh-1", "Item", "feature", "Backlog", None)
+        before = client.list_issues()
+
+        tenants = client.list_databases()
+
+        after = client.list_issues()
+        client.close()
+
+        self.assertIsInstance(tenants, list)
+        self.assertGreaterEqual(len(tenants), 1)
+        self.assertTrue(all(isinstance(t, str) for t in tenants))
+        self.assertEqual(before, after)
 
     def test_delete_memory_sqlite(self):
         """delete_memory removes a key so get_memory returns None afterwards."""

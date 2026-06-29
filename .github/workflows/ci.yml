@@ -35,5 +35,35 @@ jobs:
       - name: Lint with ruff
         run: uv run ruff check solomon_harness tests
 
-      - name: Run the test suite
-        run: uv run python -m unittest discover -s tests
+      - name: Typecheck with mypy
+        run: uv run mypy solomon_harness tests
+
+      - name: Run Python test suite
+        run: uv run pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'ui/package-lock.json'
+
+      - name: Install Node dependencies
+        run: |
+          cd ui
+          npm ci
+
+      - name: Lint Next.js app
+        run: |
+          cd ui
+          npm run lint
+
+      - name: Typecheck and Build Next.js app
+        run: |
+          cd ui
+          npm run build
+
+      - name: Run Next.js test suite
+        run: |
+          cd ui
+          npm run test
