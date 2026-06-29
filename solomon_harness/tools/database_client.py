@@ -685,6 +685,7 @@ class DatabaseClient:
                 type_ TEXT,
                 status TEXT,
                 milestone_id INTEGER,
+                assignee TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (milestone_id) REFERENCES milestones (id)
             );
@@ -765,10 +766,24 @@ class DatabaseClient:
                 cursor = conn.cursor()
                 for query in queries:
                     cursor.execute(query)
+                self._ensure_issue_assignee_column(conn)
                 conn.commit()
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
+
+    @staticmethod
+    def _ensure_issue_assignee_column(conn: sqlite3.Connection) -> None:
+        """Add the nullable assignee column to a pre-migration issues table (#118).
+
+        Expand/contract and idempotent: guarded by a PRAGMA table_info check, so a
+        store created before the column gains it additively (no destructive rewrite
+        of existing rows, which keep assignee NULL), while a fresh store whose
+        CREATE TABLE already declared the column skips the ALTER.
+        """
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
+        if "assignee" not in existing:
+            conn.execute("ALTER TABLE issues ADD COLUMN assignee TEXT")
 
     def _resolve_sqlite_path(self) -> str:
         """Resolve the SQLite store path.
@@ -1739,6 +1754,7 @@ class DatabaseClient:
         type_: str,
         status: str,
         milestone_id: Optional[Union[str, int]],
+        assignee: Optional[str] = None,
     ) -> None:
         """Logs a GitHub issue.
 
@@ -1750,6 +1766,10 @@ class DatabaseClient:
                 per logical status on write (ADR-0006), so no two rows differ only
                 by casing for the same status.
             milestone_id: Associated milestone ID in the database.
+            assignee: Optional canonical person key (ADR-0012), already normalized
+                by ``normalize_person_key`` at the capture seam. Additive sixth
+                parameter defaulting to None, so every existing 5-arg caller is
+                unchanged and stores ``assignee`` NULL, read back as ``unassigned``.
         """
         fields = {
             "github_id": github_id,
@@ -1757,6 +1777,7 @@ class DatabaseClient:
             "type_": type_,
             "status": normalize_status(status),
             "milestone_id": milestone_id,
+            "assignee": assignee,
         }
         # github_id is already a stable id, reused for the RecordID and filename.
         self._write_through("issue", github_id, fields, self._db_log_issue)
@@ -1772,6 +1793,7 @@ class DatabaseClient:
                 type_: $type_,
                 status: $status,
                 milestone_id: $milestone_id,
+                assignee: $assignee,
                 created_at: time::now()
             };
             """
@@ -1785,13 +1807,14 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to log issue in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO issues (github_id, title, type_, status, milestone_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO issues (github_id, title, type_, status, milestone_id, assignee)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(github_id) DO UPDATE SET
                 title=excluded.title,
                 type_=excluded.type_,
                 status=excluded.status,
-                milestone_id=excluded.milestone_id
+                milestone_id=excluded.milestone_id,
+                assignee=excluded.assignee
             """
             try:
                 with self._sqlite_conn() as conn:
@@ -1803,6 +1826,7 @@ class DatabaseClient:
                             fields["type_"],
                             fields["status"],
                             fields["milestone_id"],
+                            fields["assignee"],
                         ),
                     )
                     conn.commit()

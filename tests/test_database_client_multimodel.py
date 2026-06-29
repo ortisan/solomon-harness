@@ -427,6 +427,18 @@ class TestMultiModelLive(unittest.TestCase):
         # An issue with no edges traverses to an empty list, not an error.
         self.assertEqual(self.client.issues_blocking("2"), [])
 
+    def test_log_issue_persists_and_reads_back_assignee(self):
+        """The canonical person key round-trips through the live SurrealDB issue
+        UPSERT, and a 5-arg write (no assignee) reads back with no key set."""
+        self.client.log_issue(
+            "a1", "Assigned", "feature", "open", None, assignee="alice@example.com"
+        )
+        self.client.log_issue("a2", "Unassigned", "feature", "open", None)
+        assigned = self.client.get_issue("a1")
+        unassigned = self.client.get_issue("a2")
+        self.assertEqual(assigned["assignee"], "alice@example.com")
+        self.assertIsNone(unassigned.get("assignee"))
+
     def test_supersedes_chain_is_transitive(self):
         d1 = self.client.log_decision("oldest", "r", "o", "a", "main", "s1")
         d2 = self.client.log_decision("middle", "r", "o", "a", "main", "s2")

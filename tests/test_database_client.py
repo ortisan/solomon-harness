@@ -19,6 +19,7 @@ from solomon_harness.tools.database_client import (  # noqa: E402
     _resolve_database,
     is_terminal,
     normalize_status,
+    person_key_or_unassigned,
 )
 
 
@@ -717,6 +718,74 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertEqual(len(ids), len(priors))  # one UPSERT row per id, no duplicates
         self.assertEqual(len(set(ids)), len(priors))
         self.assertEqual(open_ids & set(ids), set())
+
+    def test_sqlite_stores_and_reads_assignee(self):
+        """log_issue persists the canonical person key and get_issue reads it back
+        on SQLite (the additive sixth parameter)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue(
+            "a1", "Assigned", "feature", "open", None, assignee="alice@example.com"
+        )
+        issue = client.get_issue("a1")
+        client.close()
+        self.assertEqual(issue["assignee"], "alice@example.com")
+
+    def test_five_arg_log_issue_stores_null_assignee(self):
+        """An existing 5-arg log_issue caller keeps working unchanged and stores
+        assignee=None (the additive parameter never breaks the old signature)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("five", "No assignee arg", "feature", "open", None)
+        issue = client.get_issue("five")
+        client.close()
+        self.assertIsNone(issue["assignee"])
+
+    def test_pre_migration_row_reads_back_unassigned(self):
+        """A row written into an issues table that predates the assignee column
+        reads back, after the additive ALTER TABLE migration, with assignee None
+        and queryable as unassigned, with no error and no row rewrite."""
+        db_path = os.path.join(self.temp_dir.name, "premigration.db")
+        # Simulate a pre-migration store: a legacy issues table with no assignee.
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE issues ("
+                "github_id TEXT PRIMARY KEY, title TEXT NOT NULL, type_ TEXT, "
+                "status TEXT, milestone_id INTEGER, "
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("old1", "Legacy issue", "bug", "open", None),
+            )
+            conn.commit()
+        # Opening the client runs the idempotent, additive assignee migration.
+        client = DatabaseClient(db_path=db_path)
+        issue = client.get_issue("old1")
+        client.close()
+        self.assertIsNone(issue["assignee"])
+        self.assertEqual(person_key_or_unassigned(issue["assignee"]), "unassigned")
+
+    def test_surreal_upsert_includes_assignee_field(self):
+        """On SurrealDB the issue UPSERT CONTENT carries the assignee as a bound
+        parameter, additively to the existing fields (mocked _run_surreal)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.backend = "surrealdb"
+        captured = {}
+
+        def fake_run(query, params=None):
+            captured["query"] = query
+            captured["params"] = params
+            return []
+
+        client._run_surreal = fake_run
+        client.log_issue(
+            "a1", "Assigned", "feature", "open", None, assignee="alice@example.com"
+        )
+        client.backend = "sqlite"
+        client.close()
+
+        self.assertIn("assignee: $assignee", captured["query"])
+        self.assertEqual(captured["params"]["assignee"], "alice@example.com")
 
     def test_get_open_issues_surreal_uses_parameterized_not_in(self):
         """On SurrealDB the open predicate is a parameterized NOT IN over the
