@@ -572,6 +572,26 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertEqual({r["version"] for r in releases}, {"v1.0.0", "v1.1.0"})
         client.close()
 
+    def test_list_issues_returns_all_statuses_including_done(self):
+        """list_issues returns every issue regardless of status, including Done.
+
+        get_open_issues only returns status='open', but the cockpit board must
+        render the full seven columns, so the read port needs an all-status read.
+        """
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("gh-1", "Backlog item", "feature", "Backlog", None)
+        client.log_issue("gh-2", "Active item", "feature", "In Progress", None)
+        client.log_issue("gh-3", "Shipped item", "feature", "Done", None)
+
+        issues = client.list_issues()
+        client.close()
+
+        by_id = {i["github_id"]: i["status"] for i in issues}
+        self.assertEqual(
+            by_id,
+            {"gh-1": "Backlog", "gh-2": "In Progress", "gh-3": "Done"},
+        )
+
     def test_delete_memory_sqlite(self):
         """delete_memory removes a key so get_memory returns None afterwards."""
         client = DatabaseClient(db_path=self.sqlite_db_path)

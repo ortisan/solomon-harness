@@ -1280,6 +1280,32 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")
 
+    def list_issues(self) -> List[Dict[str, Any]]:
+        """Retrieves every issue for this tenant regardless of status.
+
+        Read-only. Unlike get_open_issues (status='open' only), this returns all
+        issues including Done, so the cockpit board can render the full seven
+        columns. No row is created or mutated.
+        """
+        if self.backend == "surrealdb":
+            query = "SELECT * FROM issues"
+            try:
+                res = self.db.query(query)
+                return self._extract_list(res)
+            except Exception as e:
+                logging.error(f"Failed to list issues from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to list issues from SurrealDB: {e}")
+        else:
+            query = "SELECT * FROM issues ORDER BY created_at"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query)
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to list issues: {e}")
+                raise RuntimeError(f"Failed to list issues: {e}")
+
     def get_latest_activity(self) -> Optional[Dict[str, Any]]:
         """Retrieves the most recent entry from the handoffs or sessions table.
 
