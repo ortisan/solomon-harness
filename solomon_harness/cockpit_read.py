@@ -411,6 +411,59 @@ def count_tenant_velocity(
     return counts
 
 
+def compose_velocity(tenant_results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compose per-tenant velocity counts into one per-person payload (pure).
+
+    Sums each person's count across the OK tenants — compose-never-join: it is
+    handed per-person counts tagged with their tenant, never issue rows, so a
+    tenant's rows never meet another's and isolation holds by construction. One
+    row per person carries the summed count, the per-tenant breakdown (only the
+    tenants where the person delivered), the summed ``excluded`` coverage gap, and
+    the aggregated in-window ``doneAt`` set (slice 3b). A degraded (non-OK) tenant
+    carries no counts and moves no figure, but because it could have held
+    deliveries for any person, every row is flagged ``partial`` with the degraded
+    tenant name(s) and ``aggregateStatus`` becomes 207: the figure is the
+    reachable subtotal, never presented as complete. Rows are sorted by person key
+    for a deterministic render.
+    """
+    degraded = [result["project"] for result in tenant_results if result["status"] != STATUS_OK]
+    ok_results = [result for result in tenant_results if result["status"] == STATUS_OK]
+    people = sorted({person for result in ok_results for person in result["velocity"]})
+
+    rows: List[Dict[str, Any]] = []
+    for person in people:
+        per_tenant: Dict[str, int] = {}
+        count = 0
+        excluded = 0
+        done_at: List[str] = []
+        for result in ok_results:
+            figures = result["velocity"].get(person)
+            if figures is None:
+                continue
+            if figures["count"]:
+                per_tenant[result["project"]] = figures["count"]
+            count += figures["count"]
+            excluded += figures["excluded"]
+            done_at.extend(figures["doneAt"])
+        rows.append(
+            {
+                "personKey": person,
+                "count": count,
+                "perTenant": per_tenant,
+                "excluded": excluded,
+                "doneAt": sorted(done_at),
+                "partial": bool(degraded),
+                "partialTenants": list(degraded),
+            }
+        )
+
+    return {
+        "rows": rows,
+        "aggregateStatus": AGGREGATE_OK if not degraded else AGGREGATE_MULTI_STATUS,
+        "degraded": degraded,
+    }
+
+
 def _is_permission_failure(error: Exception) -> bool:
     """Report whether a read failure reads as an access denial (FORBIDDEN)."""
     message = str(error).lower()

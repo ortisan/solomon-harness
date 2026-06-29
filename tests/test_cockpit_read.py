@@ -1540,5 +1540,75 @@ class TestCountTenantVelocity(unittest.TestCase):
                 self.assertEqual(counts["alice@example.com"]["count"], expected)
 
 
+def _ok_velocity(project, velocity):
+    """An OK per-tenant velocity result carrying that tenant's per-person counts."""
+    return {"project": project, "status": "OK", "velocity": velocity}
+
+
+class TestComposeVelocity(unittest.TestCase):
+    def test_compose_velocity_sums_per_person_across_tenants(self):
+        """compose_velocity sums each person's per-tenant counts into one row:
+        alice appears once reading 7 (4 alpha + 3 beta) with perTenant
+        {alpha:4, beta:3}; a person's perTenant lists only the tenants where they
+        delivered; aggregateStatus is 200 when every tenant is OK; and no person
+        is duplicated as a separate per-tenant subject."""
+        results = [
+            _ok_velocity(
+                "alpha",
+                {
+                    "alice@example.com": {
+                        "count": 4,
+                        "excluded": 1,
+                        "doneAt": [
+                            "2026-06-28T10:00:00",
+                            "2026-06-27T10:00:00",
+                            "2026-06-26T10:00:00",
+                            "2026-06-25T10:00:00",
+                        ],
+                    },
+                    "gh:bob": {"count": 1, "excluded": 0, "doneAt": ["2026-06-24T10:00:00"]},
+                },
+            ),
+            _ok_velocity(
+                "beta",
+                {
+                    "alice@example.com": {
+                        "count": 3,
+                        "excluded": 0,
+                        "doneAt": [
+                            "2026-06-23T10:00:00",
+                            "2026-06-22T10:00:00",
+                            "2026-06-21T10:00:00",
+                        ],
+                    },
+                    "gh:bob": {"count": 0, "excluded": 0, "doneAt": []},
+                },
+            ),
+        ]
+
+        payload = cockpit_read.compose_velocity(results)
+
+        self.assertEqual(payload["aggregateStatus"], 200)
+        self.assertEqual(payload["degraded"], [])
+
+        rows = {row["personKey"]: row for row in payload["rows"]}
+        # alice once, summed across tenants, with the per-tenant breakdown.
+        person_keys = [row["personKey"] for row in payload["rows"]]
+        self.assertEqual(person_keys.count("alice@example.com"), 1)
+        self.assertEqual(rows["alice@example.com"]["count"], 7)
+        self.assertEqual(
+            rows["alice@example.com"]["perTenant"], {"alpha": 4, "beta": 3}
+        )
+        self.assertEqual(rows["alice@example.com"]["excluded"], 1)
+        # No degraded tenant, so no figure is partial.
+        self.assertFalse(rows["alice@example.com"]["partial"])
+        self.assertEqual(rows["alice@example.com"]["partialTenants"], [])
+
+        # bob appears once; perTenant lists only the tenant he delivered in.
+        self.assertEqual(person_keys.count("gh:bob"), 1)
+        self.assertEqual(rows["gh:bob"]["count"], 1)
+        self.assertEqual(rows["gh:bob"]["perTenant"], {"alpha": 1})
+
+
 if __name__ == "__main__":
     unittest.main()
