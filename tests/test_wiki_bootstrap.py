@@ -122,6 +122,10 @@ class TestResolveWebWikiUrl(unittest.TestCase):
             "git@github.com:o/r.git": "https://github.com/o/r/wiki/_new",
             "ssh://git@github.com/o/r.git": "https://github.com/o/r/wiki/_new",
             "https://github.com/o/r.wiki.git": "https://github.com/o/r/wiki/_new",
+            # A bare .wiki suffix must be stripped symmetrically with
+            # resolve_wiki_clone_url, so it does not yield .../r.wiki/wiki/_new.
+            "https://github.com/o/r.wiki": "https://github.com/o/r/wiki/_new",
+            "git@github.com:o/r.wiki": "https://github.com/o/r/wiki/_new",
         }
         for remote, expected in cases.items():
             self.assertEqual(resolve_web_wiki_url(remote), expected, remote)

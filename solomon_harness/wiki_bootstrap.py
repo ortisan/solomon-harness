@@ -114,6 +114,10 @@ def resolve_web_wiki_url(remote_url: str) -> str | None:
         url = url[: -len(".wiki.git")]
     elif url.endswith(".git"):
         url = url[: -len(".git")]
+    elif url.endswith(".wiki"):
+        # A bare .wiki remote is stripped symmetrically with
+        # resolve_wiki_clone_url, so it does not yield .../r.wiki/wiki/_new.
+        url = url[: -len(".wiki")]
     if url.startswith("git@"):
         host, _, path = url[len("git@") :].partition(":")
         url = f"https://{host}/{path}"
@@ -363,7 +367,11 @@ def bootstrap_wiki(
         return WikiBootstrapResult(
             tier, proceed=False, exit_code=4, message=_degrade_message(clone_url, web_url, refs)
         )
-    if tier is Tier.AUTOMATE and bootstrapper is not None:
+    if tier is Tier.AUTOMATE:
+        # choose_tier returns AUTOMATE only when a browser was injected and
+        # authenticated, so a bootstrapper is guaranteed present here; the assert
+        # documents that invariant and narrows the type for the call below.
+        assert bootstrapper is not None
         bootstrapper.create_first_page(web_url)
         return _verify(tier, clone_url, web_url, refs_checker, timeout)
 
