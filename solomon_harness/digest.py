@@ -12,7 +12,7 @@ import json
 import subprocess
 from typing import Any, Dict, List, Optional
 
-from solomon_harness.tools.database_client import is_terminal
+from solomon_harness.tools.database_client import is_github_issue, is_terminal
 
 _MAX_LIST = 5
 
@@ -76,7 +76,13 @@ def build_digest(
     # handed a stale list, so it drops closed/done/Done here through the shared
     # predicate. A row with no status is not terminal and is kept.
     issues = [i for i in (open_issues or []) if not is_terminal(i.get("status"))]
-    lines.append(f"Open issues: {len(issues)}")
+    # Report real GitHub issues (numeric id) apart from RAID/follow-up tracking
+    # items (composite or empty id) so the resume line never conflates the two
+    # under one inflated number (#116). The split is digits-only, via the single
+    # is_github_issue classifier; the two figures always sum to len(issues).
+    g = sum(1 for i in issues if is_github_issue(i.get("github_id")))
+    t = len(issues) - g
+    lines.append(f"Open issues: {g} GitHub issues, {t} tracking items")
     for i in issues[:_MAX_LIST]:
         lines.append(f"  - [{i.get('github_id')}] {i.get('title')}")
     if len(issues) > _MAX_LIST:
