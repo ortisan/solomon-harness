@@ -1,6 +1,6 @@
-# ADR-0003: legacy_modernizer — a delegation-only, one-step-per-run migration-planning contract
+# ADR-0005: legacy_modernizer — a delegation-only, one-step-per-run migration-planning contract
 
-- Status: proposed
+- Status: Proposed
 - Date: 2026-06-28
 - Deciders: software_architect, product_owner, scrum_master (NFR-bar owners security, observability, qa as content confirmers)
 - Issue: #70 (first slice of modernization epic #72; constrains follow-ups #74, #75)
@@ -69,7 +69,7 @@ Chosen A2 + B2 + C2 + D2, expressed as the migration-planning contract below.
   and grep-able, and makes an out-of-set requirement an explicit held/flagged signal rather
   than a silent mis-assignment to an unknown or empty delegate.
 - **D2 over D1.** The architectural artifact is the contract text itself, authored in THIS
-  slice. Recording the boundary now (Status: proposed, a human accepts at review) gives the
+  slice. Recording the boundary now (Status: Proposed, a human accepts at review) gives the
   downstream runtime slices a reviewed constraint to be checked against, consistent with
   ADR-0001 recording the `/solomon-start` contract at the point it was established, not the
   point it was first executed. Deferring would freeze the contract text in this slice's
