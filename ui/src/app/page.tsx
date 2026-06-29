@@ -80,8 +80,10 @@ function fallbackColumns(): BoardColumn[] {
   return COLUMNS.map((name) => ({ name, count: 0, issues: [] }));
 }
 
-// The people offered by the user filter: the personKeys surfaced across the
-// loaded swimlanes plus the reserved unassigned subject, deduped and sorted.
+// The people surfaced by one portfolio load: the personKeys across its
+// swimlanes plus the reserved unassigned subject, deduped and sorted. A filtered
+// load carries only the matched person, so this is read from an unfiltered load
+// and persisted, never re-derived from the already-narrowed response.
 function collectUsers(portfolio: Portfolio): string[] {
   const keys = new Set<string>([UNASSIGNED_USER]);
   for (const lane of portfolio.swimlanes) {
@@ -92,6 +94,19 @@ function collectUsers(portfolio: Portfolio): string[] {
         }
       }
     }
+  }
+  return Array.from(keys).sort();
+}
+
+// The filter's option set: the persisted full user list unioned with the
+// currently selected user. The union guarantees the controlled <select> value
+// always has a matching <option> (even a hand-crafted ?user= that matches zero
+// issues), so the selector never collapses to the filtered person and switching
+// directly from one user to another stays possible.
+function userFilterOptions(allUsers: string[], selectedUser: string): string[] {
+  const keys = new Set<string>(allUsers);
+  if (selectedUser) {
+    keys.add(selectedUser);
   }
   return Array.from(keys).sort();
 }
@@ -239,6 +254,7 @@ function SingleBoardView({ board }: { board?: Board }) {
 
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [allUsers, setAllUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -265,6 +281,11 @@ export default function Home() {
         throw new Error(json.error);
       }
       setData(json as DashboardData);
+      // Refresh the persisted user list only from an unfiltered portfolio load,
+      // so filtering to one person never collapses the selector to that person.
+      if (isPortfolio(json) && !json.filteredUser) {
+        setAllUsers(collectUsers(json));
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load the board");
@@ -278,8 +299,8 @@ export default function Home() {
   const projects =
     dashboard?.projects ?? portfolio?.swimlanes.map((s) => s.project) ?? [];
   const selectedProject = dashboard?.selectedProject ?? ALL_PROJECTS;
-  const userOptions = portfolio ? collectUsers(portfolio) : [];
   const selectedUser = portfolio?.filteredUser ?? ALL_USERS;
+  const userOptions = userFilterOptions(allUsers, selectedUser);
 
   return (
     <div className="app-container">

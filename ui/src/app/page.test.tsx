@@ -309,9 +309,91 @@ describe("cockpit cross-user filter", () => {
     expect(screen.getByRole("heading", { name: "gamma" })).toBeInTheDocument();
     // alice's five cards render across alpha and beta.
     expect(screen.getAllByTestId("issue-card")).toHaveLength(5);
+    // The portfolio total reflects the filtered set, not the unfiltered board.
+    expect(screen.getByTestId("portfolio-total")).toHaveTextContent("5");
     // The empty matched lane shows a per-lane affordance naming the user.
     expect(
       screen.getByText(/0 issues for alice@example.com/i),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps every user selectable after filtering and switches directly between users", async () => {
+    // The server filters: an unfiltered load carries both people, while a
+    // ?user=alice load carries only alice's cards (bob's lane is now empty).
+    const unfiltered = portfolioPayload([
+      okSwimlane("alpha", { Backlog: [personIssue("a1", "alice@example.com")] }),
+      okSwimlane("beta", { Done: [personIssue("b1", "bob@example.com")] }),
+    ]);
+    const aliceOnly = portfolioPayload(
+      [
+        okSwimlane("alpha", { Backlog: [personIssue("a1", "alice@example.com")] }),
+        okSwimlane("beta", {}),
+      ],
+      { filteredUser: "alice@example.com" },
+    );
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () => (String(url).includes("user=") ? aliceOnly : unfiltered),
+      }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<Home />);
+
+    // After the unfiltered load both people are options.
+    const userSelect = (await screen.findByLabelText("User")) as HTMLSelectElement;
+    expect(
+      screen.getByRole("option", { name: "alice@example.com" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "bob@example.com" }),
+    ).toBeInTheDocument();
+
+    // Filtering to alice narrows the response to alice-only, yet bob stays a
+    // selectable option because the option set is the persisted unfiltered list.
+    fireEvent.change(userSelect, { target: { value: "alice@example.com" } });
+    await waitFor(() =>
+      expect(screen.getByText(/0 issues for alice@example.com/i)).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("option", { name: "alice@example.com" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "bob@example.com" }),
+    ).toBeInTheDocument();
+
+    // Switching straight from alice to bob (no reset to All users) re-fetches
+    // with ?user=bob.
+    fireEvent.change(userSelect, { target: { value: "bob@example.com" } });
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.some((url) => url.includes("user=bob%40example.com"))).toBe(true);
+    });
+  });
+
+  it("renders a matching option and the empty state for a filtered user with zero issues", async () => {
+    // A hand-crafted ?user=carol lands directly on a filtered payload: carol
+    // matches nobody, so she surfaces in no card yet is the controlled value.
+    mockFetch(
+      portfolioPayload(
+        [okSwimlane("alpha", {}), okSwimlane("beta", {})],
+        { filteredUser: "carol@example.com", total: 0 },
+      ),
+    );
+
+    render(<Home />);
+
+    // The controlled select value has a matching option, so there is no missing
+    // -option mismatch even though carol appears in no loaded card.
+    const userSelect = (await screen.findByLabelText("User")) as HTMLSelectElement;
+    expect(userSelect.value).toBe("carol@example.com");
+    expect(
+      screen.getByRole("option", { name: "carol@example.com" }),
+    ).toBeInTheDocument();
+    // The cross-project empty state still renders cleanly.
+    expect(
+      screen.getByText(/no issues for carol@example.com across 2 projects/i),
     ).toBeInTheDocument();
   });
 
