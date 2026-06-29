@@ -765,6 +765,42 @@ class TestPortfolioPayload(unittest.TestCase):
         self.assertTrue(all(s["status"] == "OK" for s in payload["swimlanes"]))
         self.assertEqual(payload["total"], 6)
 
+    def test_portfolio_payload_no_cross_tenant_leak_through_the_fan_out(self):
+        """Driving the real portfolio_payload/_fan_out with per-tenant distinct,
+        identifiable ids, each swimlane carries exactly its own tenant's id set and
+        the sets are pairwise disjoint. A mis-bind that returned one tenant's rows
+        for every lane would fail here, where the cap test (names and counts only)
+        would not, because the leak only shows in the per-row identities."""
+        issues = {
+            "alpha": [{"github_id": f"a{n}", "status": "Backlog"} for n in range(1, 6)],
+            "beta": [{"github_id": f"b{n}", "status": "Ready"} for n in range(1, 5)],
+            "gamma": [{"github_id": f"g{n}", "status": "Done"} for n in range(1, 7)],
+        }
+
+        def factory():
+            return FakeTenantClient(issues)
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory)
+
+        ids_by_project = {
+            lane["project"]: {
+                issue["github_id"]
+                for column in lane["columns"]
+                for issue in column["issues"]
+            }
+            for lane in payload["swimlanes"]
+        }
+        # Each lane carries exactly its own tenant's ids, bound per worker.
+        self.assertEqual(ids_by_project["alpha"], {"a1", "a2", "a3", "a4", "a5"})
+        self.assertEqual(ids_by_project["beta"], {"b1", "b2", "b3", "b4"})
+        self.assertEqual(
+            ids_by_project["gamma"], {"g1", "g2", "g3", "g4", "g5", "g6"}
+        )
+        # Pairwise disjoint: no tenant's row appears under another lane.
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["beta"], set())
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["gamma"], set())
+        self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
+
 
 class TestPortfolioCli(unittest.TestCase):
     def setUp(self):
