@@ -1665,5 +1665,115 @@ class TestComposeVelocity(unittest.TestCase):
         self.assertEqual(alice["partialTenants"], ["gamma"])
 
 
+class _VelocityFanoutClient:
+    """A multi-tenant read port for the velocity fan-out.
+
+    list_issues and get_memory both answer for whichever tenant use_tenant last
+    bound, so a mis-bind (reading the wrong tenant's history) would surface as a
+    wrong attribution. Records the ordered call sequence so a test can assert the
+    bind happens before the read. Read-only: no write method exists.
+    """
+
+    def __init__(self, by_tenant):
+        self._by_tenant = by_tenant
+        self._bound = None
+        self.calls = []
+
+    def list_databases(self):
+        self.calls.append("list_databases")
+        return list(self._by_tenant.keys())
+
+    def use_tenant(self, database):
+        self.calls.append(("use_tenant", database))
+        self._bound = database
+
+    def list_issues(self):
+        self.calls.append("list_issues")
+        return list(self._by_tenant.get(self._bound, {}).get("issues", []))
+
+    def get_memory(self, key):
+        self.calls.append(("get_memory", key))
+        prefix = "board_history:"
+        if not key.startswith(prefix):
+            return None
+        history = self._by_tenant.get(self._bound, {}).get("history", {}).get(
+            key[len(prefix):]
+        )
+        return json.dumps(history) if history is not None else None
+
+    def close(self):
+        self.calls.append("close")
+
+
+def _alice_tenant(github_prefix, timestamps):
+    """A tenant fixture where alice delivered once per supplied in-window date."""
+    issues = [
+        {"github_id": f"{github_prefix}{index}", "status": "closed", "assignee": "alice@example.com"}
+        for index, _ in enumerate(timestamps)
+    ]
+    history = {
+        f"{github_prefix}{index}": _done_history(ts)
+        for index, ts in enumerate(timestamps)
+    }
+    return {"issues": issues, "history": history}
+
+
+class TestVelocityPayload(unittest.TestCase):
+    def test_velocity_payload_reads_each_tenant_in_isolation_and_writes_nothing(self):
+        """velocity_payload fans out over the tenants, reading each through its
+        own client bound via use_tenant before the read, composes the per-person
+        counts, and issues zero writes. Driving every tenant through a
+        ReadOnlyGuard records no write call; alice's figure is the per-tenant sum
+        with the correct breakdown, proving the lanes are composed never joined."""
+        data = {
+            "alpha": _alice_tenant(
+                "a",
+                ["2026-06-28T10:00:00", "2026-06-27T10:00:00", "2026-06-26T10:00:00", "2026-06-25T10:00:00"],
+            ),
+            "beta": _alice_tenant(
+                "b", ["2026-06-24T10:00:00", "2026-06-23T10:00:00", "2026-06-22T10:00:00"]
+            ),
+            "gamma": _alice_tenant("g", ["2026-06-21T10:00:00", "2026-06-20T10:00:00"]),
+        }
+        guards = []
+
+        def factory():
+            guard = ReadOnlyGuard(_VelocityFanoutClient(data))
+            guards.append(guard)
+            return guard
+
+        payload = cockpit_read.velocity_payload(
+            14, now=T_NOW, client_factory=factory
+        )
+
+        # Every tenant read through the velocity path issued zero writes.
+        self.assertGreaterEqual(len(guards), 4)
+        for guard in guards:
+            self.assertEqual(guard.write_calls, [])
+
+        # The aggregate is all-OK; alice's figure sums the three tenants with the
+        # per-tenant breakdown (composed, never joined).
+        self.assertEqual(payload["aggregateStatus"], 200)
+        rows = {row["personKey"]: row for row in payload["rows"]}
+        self.assertEqual(rows["alice@example.com"]["count"], 9)
+        self.assertEqual(
+            rows["alice@example.com"]["perTenant"], {"alpha": 4, "beta": 3, "gamma": 2}
+        )
+        self.assertEqual(payload["window"], 14)
+
+        # Each per-tenant client bound its tenant before reading its issues.
+        read_guards = [g for g in guards if "list_issues" in g._target.calls]
+        self.assertEqual(len(read_guards), 3)
+        for guard in read_guards:
+            calls = guard._target.calls
+            first_read = calls.index("list_issues")
+            bound_before = [
+                index
+                for index, call in enumerate(calls)
+                if isinstance(call, tuple) and call[0] == "use_tenant" and index < first_read
+            ]
+            self.assertTrue(bound_before, f"read before bind: {calls}")
+
+
 if __name__ == "__main__":
     unittest.main()

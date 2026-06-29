@@ -15,7 +15,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -491,6 +491,34 @@ def _read_tenant_board(
         client.close()
 
 
+def _classify_tenant_read(
+    worker: Callable[[], Any], timeout: float
+) -> Tuple[str, Any]:
+    """Run one per-tenant read worker bounded by ``timeout`` and classify it.
+
+    Returns ``(status, value)``: ``(OK, value)`` on a clean read; ``(FORBIDDEN,
+    None)`` on a ``PermissionError`` or a permission-pattern failure (at connect
+    or read); ``(UNREACHABLE, None)`` on a read past ``timeout`` or any other
+    failure. The worker owns and closes its own client, so a timed-out worker is
+    abandoned (not joined) and the outer path never closes a client mid-read.
+    Shared by every per-tenant read (board, velocity) so the bounding,
+    classification, and close discipline live in one place.
+    """
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        value = pool.submit(worker).result(timeout=timeout)
+    except PermissionError:
+        return STATUS_FORBIDDEN, None
+    except FuturesTimeoutError:
+        return STATUS_UNREACHABLE, None
+    except Exception as error:
+        return (STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE), None
+    else:
+        return STATUS_OK, value
+    finally:
+        pool.shutdown(wait=False)
+
+
 def read_tenant_swimlane(
     project: str,
     client_factory: Callable[[], Any],
@@ -510,21 +538,51 @@ def read_tenant_swimlane(
     when its read returns; the outer path never closes a client mid-read. The
     result is the ``compose_portfolio`` input element.
     """
-    pool = ThreadPoolExecutor(max_workers=1)
+    status, board = _classify_tenant_read(
+        lambda: _read_tenant_board(client_factory, project), timeout
+    )
+    return {"project": project, "status": status, "board": board}
+
+
+def _read_tenant_velocity_counts(
+    client_factory: Callable[[], Any], project: str, now: datetime, days: int
+) -> Dict[str, Dict[str, Any]]:
+    """Own one tenant's whole velocity read inside the timed worker.
+
+    Mirrors ``_read_tenant_board``: create the client, bind the tenant, count its
+    in-window deliveries, and close in a ``finally``, so a connect-phase failure
+    or hang is bounded by the per-project timeout and the worker always closes its
+    own client.
+    """
+    client = client_factory()
     try:
-        future = pool.submit(_read_tenant_board, client_factory, project)
-        board = future.result(timeout=timeout)
-    except PermissionError:
-        return {"project": project, "status": STATUS_FORBIDDEN, "board": None}
-    except FuturesTimeoutError:
-        return {"project": project, "status": STATUS_UNREACHABLE, "board": None}
-    except Exception as error:
-        status = STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE
-        return {"project": project, "status": status, "board": None}
-    else:
-        return {"project": project, "status": STATUS_OK, "board": board}
+        client.use_tenant(project)
+        return count_tenant_velocity(client, project, now, days)
     finally:
-        pool.shutdown(wait=False)
+        client.close()
+
+
+def read_tenant_velocity(
+    project: str,
+    client_factory: Callable[[], Any],
+    now: datetime,
+    days: int,
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Read one tenant's velocity counts and classify the outcome.
+
+    Mirrors ``read_tenant_swimlane``: the entire per-tenant lifecycle runs inside
+    a single bounded worker, so per-tenant isolation (ADR-0002) holds by
+    construction. A clean read returns ``OK`` with the per-person counts; a
+    permission failure returns ``FORBIDDEN``; a timeout or any other failure
+    returns ``UNREACHABLE``. A degraded result carries no counts (``velocity``
+    is ``None``). The result is the ``compose_velocity`` input element.
+    """
+    status, velocity = _classify_tenant_read(
+        lambda: _read_tenant_velocity_counts(client_factory, project, now, days),
+        timeout,
+    )
+    return {"project": project, "status": status, "velocity": velocity}
 
 
 def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
@@ -599,24 +657,22 @@ def _overflow_notice(count: int) -> Optional[str]:
 
 def _fan_out(
     projects: Sequence[str],
-    client_factory: Callable[[], Any],
+    read_one: Callable[[str], Dict[str, Any]],
     max_workers: int,
-    timeout: float,
 ) -> List[Dict[str, Any]]:
     """Read the projects in parallel under a bounded pool, preserving their order.
 
-    Each project is read by ``read_tenant_swimlane`` with its own fresh client, so
-    no connection is shared across workers. The results are returned in the input
-    (sorted) order regardless of completion order, so the render is deterministic.
+    Each project is read by ``read_one`` (the board or velocity per-tenant read),
+    which opens its own fresh client, so no connection is shared across workers.
+    The results are returned in the input (sorted) order regardless of completion
+    order, so the render is deterministic. This owns only the bounded parallelism;
+    which per-tenant read runs is the caller's choice.
     """
     if not projects:
         return []
     results: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(read_tenant_swimlane, project, client_factory, timeout): project
-            for project in projects
-        }
+        futures = {pool.submit(read_one, project): project for project in projects}
         for future, project in futures.items():
             results[project] = future.result()
     return [results[project] for project in projects]
@@ -653,7 +709,11 @@ def portfolio_payload(
         shown = list(available[:max_projects])
         overflow_count = len(available) - len(shown)
 
-        results = _fan_out(shown, factory, max_workers, timeout)
+        results = _fan_out(
+            shown,
+            lambda project: read_tenant_swimlane(project, factory, timeout),
+            max_workers,
+        )
         payload = compose_portfolio(results)
         payload["overflow"] = overflow_count
         payload["notice"] = _overflow_notice(overflow_count)
@@ -670,6 +730,53 @@ def portfolio_payload(
             "cockpit.project_statuses",
             [f"{s['project']}:{s['status']}" for s in payload["swimlanes"]],
         )
+        return payload
+
+
+def velocity_payload(
+    window: int,
+    now: Optional[datetime] = None,
+    harness_dir: Optional[str] = None,
+    client_factory: Optional[Callable[[], Any]] = None,
+    max_projects: int = MAX_PROJECTS,
+    max_workers: int = MAX_FANOUT_WORKERS,
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Build the cross-tenant per-user velocity payload by fanning out (read-only).
+
+    Discovers the sorted tenant set, caps it at ``max_projects``, fans the capped
+    set out under a bounded pool with a per-project read timeout, and composes the
+    per-tenant per-person counts into one payload through ``compose_velocity``.
+    Each tenant is read by its own fresh client bound via ``use_tenant``, so
+    isolation (ADR-0002) holds by construction and the compose sums counts, never
+    rows (compose-never-join). ``window`` is the selected day span (the route
+    enforces the {7, 14, 30} set); ``now`` is injected so the window compute is
+    deterministic in tests and defaults to the wall clock in production. The read
+    is wrapped in a ``cockpit.velocity`` span for the audit trace. Read-only:
+    every tenant is read through the read port and nothing is joined or written.
+
+    ``client_factory`` lets a test inject fakes; by default each call opens a
+    fresh ``DatabaseClient`` for the harness directory.
+    """
+    factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
+    current = now if now is not None else datetime.now()
+    with _tracer.start_as_current_span("cockpit.velocity") as span:
+        available = _discover_with(factory)
+        shown = list(available[:max_projects])
+
+        results = _fan_out(
+            shown,
+            lambda project: read_tenant_velocity(project, factory, current, window, timeout),
+            max_workers,
+        )
+        payload = compose_velocity(results)
+        payload["window"] = window
+
+        span.set_attribute("cockpit.project_count", len(available))
+        span.set_attribute("cockpit.shown_count", len(shown))
+        span.set_attribute("cockpit.window_days", window)
+        span.set_attribute("cockpit.aggregate_status", payload["aggregateStatus"])
+        span.set_attribute("cockpit.degraded", list(payload["degraded"]))
         return payload
 
 
