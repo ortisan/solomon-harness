@@ -184,5 +184,41 @@ class TestReadPathInstrumentation(unittest.TestCase):
         self.assertTrue(board["found"])
 
 
+class TestReadOnlyContract(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_read_path_issues_only_read_operations(self):
+        """A full board build and discovery, driven through a proxy that raises
+        on any write, completes using read-port reads only."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("b1", "Backlog one", "feature", "Backlog", None)
+        client.log_issue("d1", "Done one", "feature", "Done", None)
+        guard = ReadOnlyGuard(client)
+
+        board = cockpit_read.build_board(guard, "alpha")
+        projects = cockpit_read.discover_projects(guard.list_databases)
+        client.close()
+
+        self.assertEqual(guard.write_calls, [])
+        self.assertEqual(board["total"], 2)
+        self.assertEqual(board["unmapped"], 0)
+        self.assertIsInstance(projects, list)
+
+    def test_guard_raises_on_any_write(self):
+        """The guard has teeth: a write through it raises, so the read-only
+        contract test above cannot be a false positive."""
+        client = DatabaseClient(db_path=self.db_path)
+        guard = ReadOnlyGuard(client)
+        with self.assertRaises(AssertionError):
+            guard.log_issue("x", "title", "feature", "Backlog", None)
+        self.assertEqual(guard.write_calls, ["log_issue"])
+        client.close()
+
+
 if __name__ == "__main__":
     unittest.main()
