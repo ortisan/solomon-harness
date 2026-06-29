@@ -37,6 +37,10 @@ Steps:
 4. Add a Definition of Ready checklist and a rough estimate (scrum_master): INVEST
    check, testable acceptance criteria, dependencies/assumptions with owners,
    non-functional numbers stated, and an engineering size (story points or t-shirt).
+   Also state the issue's **Definition of Done** — the conditions that close it
+   (every acceptance criterion met with covering tests, reviewed and merged with CI
+   green, docs updated) — which `/solomon-review` and `/solomon-release` enforce as
+   the close gate.
 
 5. Map dependencies and risks as a RAID block (scrum_master): Risks (5x5
    probability×impact with response + owner), Assumptions (validation owner +

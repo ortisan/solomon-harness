@@ -32,6 +32,16 @@ Steps:
    - **Regression test required** — an explicit note that the fix is not closeable
      until a failing test reproducing this bug exists and then passes
      (TDD: red before green).
+   - **Acceptance criteria** — the observable conditions the fix must meet, as
+     `Given/When/Then`: the repro scenario now passes and no adjacent behavior
+     regresses.
+   - **Definition of Ready** — the repro is deterministic, severity and priority are
+     assigned, and the suspected area is scoped; `/solomon-refine` completes any gaps
+     before the fix starts.
+   - **Definition of Done** — the failing regression test exists and then passes, the
+     fix is merged with CI green, and no new failures appear; the bug is not closeable
+     until its Definition of Done holds. `/solomon-review` and `/solomon-release`
+     enforce it.
 2. If repro steps, environment, or severity are missing and cannot be inferred,
    ask the user the minimum questions needed rather than inventing details.
 3. Ensure the board exists once: `uv run python -m solomon_harness.github ensure-board`.

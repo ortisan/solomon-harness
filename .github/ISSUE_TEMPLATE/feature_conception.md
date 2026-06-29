@@ -17,6 +17,21 @@ assignees: []
 - [ ] Requirement 1
 - [ ] Requirement 2
 
+## Definition of Ready
+<!-- Refinement gate before work starts: INVEST met, acceptance criteria testable, dependencies/assumptions owned, non-functional numbers stated, sized by engineering. -->
+- [ ] INVEST met (independent, negotiable, valuable, estimable, small, testable)
+- [ ] Acceptance criteria are testable
+- [ ] Dependencies and assumptions have owners
+- [ ] Non-functional constraints stated with numbers
+- [ ] Sized by engineering
+
+## Definition of Done
+<!-- Close gate enforced at review and release: every acceptance criterion met with covering tests, reviewed and merged with CI green, docs updated. -->
+- [ ] Every acceptance criterion demonstrably met
+- [ ] Covering tests added and green
+- [ ] Reviewed and merged with CI green
+- [ ] Documentation updated
+
 ## Proposed Architecture
 <!-- Describe how this feature will be integrated. Include components, data flow, API changes, and database modifications if any. -->
 

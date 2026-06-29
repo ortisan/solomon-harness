@@ -44,7 +44,7 @@ All notable changes to solomon-harness are recorded here. The format follows Kee
 - Write-through markdown mirror: every memory write is also written to a human-readable `.solomon/memory-mirror/<kind>/<id>.md` (frontmatter `id, kind, created_at, synced`), and a write never raises solely because the DB is down (#35).
 - Idempotent `reconcile()` (client-minted id + UPSERT) replays unsynced records to SurrealDB on recovery; it runs automatically at memory-up / session start (best-effort, bounded) and on demand via the new `solomon-harness memory sync` command (#35).
 - `healthcheck` surfaces the count of pending (unsynced) memory records (#35).
-- ADR-0002 records the memory-resilience model (reconnect-then-fallback + write-through mirror + reconcile).
+- ADR-0007 records the memory-resilience model (reconnect-then-fallback + write-through mirror + reconcile).
 
 ## [0.3.1] - 2026-06-28
 

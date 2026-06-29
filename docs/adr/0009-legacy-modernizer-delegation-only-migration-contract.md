@@ -1,4 +1,4 @@
-# ADR-0005: legacy_modernizer — a delegation-only, one-step-per-run migration-planning contract
+# ADR-0009: legacy_modernizer — a delegation-only, one-step-per-run migration-planning contract
 
 - Status: Accepted
 - Date: 2026-06-28

@@ -9,6 +9,11 @@ You are the orchestrator for the solomon delivery lifecycle. Read
 — and, on the user's confirmation, run — the single best next `/solomon-*`
 workflow. `$ARGUMENTS` may narrow the focus to a specific issue or PR.
 
+This loop is host-orchestrated and human-gated, not fully autonomous: no code
+decides the next stage — the host tool (Claude Code or the Gemini CLI) executes
+these markdown prompts and the specialist agents — and the merge, release, and
+move-to-Done gates always require a human.
+
 ## 1. Scan the current state
 
 Gather these and summarize them concisely:
@@ -34,7 +39,7 @@ If `$ARGUMENTS` names a specific issue or PR, evaluate that item and pick its ne
 
 Present the next step and execution options as a decision card with the following numbered options:
 1. **Single Step (Recommended)**: Run the single recommended next workflow stage ($RECOMMENDED_CMD).
-2. **Autonomous Mode**: Enter autonomous execution, pulling and implementing all ready, in-progress, and reviewable tasks on the board. The loop will run stages (such as start, review) sequentially and automatically without prompting the user for confirmation on each step. It will only stop when all eligible tasks are completed or blocked by the human-gated Release stage.
+2. **Autonomous Mode (host-orchestrated, human-gated)**: Advance every eligible ready, in-progress, and reviewable task on the board in sequence, running stages (such as start, review) without re-prompting on each step. This is host-orchestrated, not fully autonomous — the host tool runs each markdown stage in turn — and it stops at the first human-gated boundary: it never merges, releases, or moves a card to Done, and it halts when all eligible tasks are completed or blocked at the human-gated Release gate.
 3. **Other**: Free-text entry.
 
 - If the user selects Option 1 (Single Step):
