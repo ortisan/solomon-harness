@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from opentelemetry import trace
@@ -1773,6 +1773,38 @@ class TestVelocityPayload(unittest.TestCase):
                 if isinstance(call, tuple) and call[0] == "use_tenant" and index < first_read
             ]
             self.assertTrue(bound_before, f"read before bind: {calls}")
+
+
+class TestVelocityCli(unittest.TestCase):
+    def test_velocity_cli_outputs_velocity_json(self):
+        """main(["velocity", "--window", "14"]) prints the per-user velocity JSON
+        (rows, window, aggregateStatus) for the Node bridge, wiring the window
+        argument through to velocity_payload."""
+        # A delivery a minute ago is inside any window relative to the wall clock,
+        # so the row count is deterministic without injecting now into the CLI.
+        recent = (datetime.now() - timedelta(seconds=60)).isoformat(timespec="seconds")
+        data = {
+            "solo": {
+                "issues": [
+                    {"github_id": "s1", "status": "closed", "assignee": "alice@example.com"}
+                ],
+                "history": {"s1": _done_history(recent)},
+            }
+        }
+        out = io.StringIO()
+        with patch(
+            "solomon_harness.cockpit_read.DatabaseClient",
+            side_effect=lambda *args, **kwargs: _VelocityFanoutClient(data),
+        ):
+            with contextlib.redirect_stdout(out):
+                rc = cockpit_read.main(["velocity", "--window", "14"])
+
+        self.assertEqual(rc, 0)
+        printed = json.loads(out.getvalue())
+        self.assertEqual(printed["window"], 14)
+        self.assertEqual(printed["aggregateStatus"], 200)
+        rows = {row["personKey"]: row for row in printed["rows"]}
+        self.assertEqual(rows["alice@example.com"]["count"], 1)
 
 
 if __name__ == "__main__":

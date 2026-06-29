@@ -24,6 +24,11 @@ const HTTP_NOT_FOUND = 404;
 // issue rows. Mirrors the Python composer's STATUS_OK.
 const STATUS_OK = "OK";
 
+// The selectable velocity windows in days. A ?view=velocity request with a
+// window outside this set (or none) is the no-op: the board/portfolio path runs
+// unchanged. The set is fixed, so the window is always a numeric, inert argv.
+const VELOCITY_WINDOWS = [7, 14, 30];
+
 interface DegradableColumn {
   issues: unknown[];
   [key: string]: unknown;
@@ -38,6 +43,12 @@ interface PortfolioSwimlane {
 interface AggregatePortfolio {
   aggregateStatus: number;
   swimlanes: PortfolioSwimlane[];
+  [key: string]: unknown;
+}
+
+interface VelocityPayload {
+  aggregateStatus: number;
+  rows: unknown[];
   [key: string]: unknown;
 }
 
@@ -133,6 +144,29 @@ async function portfolioResponse(
   return Response.json(withoutDegradedRows(portfolio), { status });
 }
 
+// Velocity path (?view=velocity&window=N): bridge to the cross-tenant `velocity`
+// subcommand and map the composer's aggregateStatus straight to the HTTP status
+// (200 all-OK, else 207). The window is one of a fixed numeric set, so it is an
+// inert argv element under shell:false. The payload carries only per-person
+// counts and timestamps, never issue rows, so no degraded tenant's data can leak.
+async function velocityResponse(
+  bin: string,
+  rootDir: string,
+  env: NodeJS.ProcessEnv,
+  window: number,
+  span: Span,
+): Promise<Response> {
+  const args = ["-m", MODULE, "velocity", "--window", String(window)];
+  const velocity: VelocityPayload = JSON.parse(
+    await readBridge(bin, args, rootDir, env),
+  );
+  span.setAttribute("cockpit.aggregate_status", velocity.aggregateStatus);
+  span.setAttribute("cockpit.window_days", window);
+  const status =
+    velocity.aggregateStatus === HTTP_MULTI_STATUS ? HTTP_MULTI_STATUS : HTTP_OK;
+  return Response.json(velocity, { status });
+}
+
 // Single-project drill-down path (slice 1a): the requested project is passed as
 // one argv element. The Python composer validates it against the discovered
 // allowlist and returns found:false for an unknown (or injection) value, mapped
@@ -163,10 +197,19 @@ export async function GET(request: Request): Promise<Response> {
       const { searchParams } = new URL(request.url);
       const requested = searchParams.get("project") ?? "";
       const user = searchParams.get("user") ?? "";
+      const view = searchParams.get("view") ?? "";
+      const window = Number(searchParams.get("window") ?? "");
       span.setAttribute("cockpit.project", requested);
 
       // Propagate the active trace to the Python read path via the subprocess env.
       const env = withTraceparent(process.env, span);
+
+      // The velocity view renders the cross-tenant per-user throughput over a
+      // selected window. A window outside the fixed set (or absent) is the no-op:
+      // the request falls through to the unchanged board/portfolio path.
+      if (view === "velocity" && VELOCITY_WINDOWS.includes(window)) {
+        return await velocityResponse(bin, rootDir, env, window, span);
+      }
 
       // No project selected renders the cross-tenant portfolio (optionally
       // narrowed to one person); a selected project drills down into that one

@@ -785,8 +785,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
     board for one tenant; ``portfolio`` prints the cross-tenant aggregate board,
-    narrowed to one person key when ``--user <key>`` is given. Output is JSON on
-    stdout so the Next route can parse it.
+    narrowed to one person key when ``--user <key>`` is given; ``velocity --window
+    <days>`` prints the cross-tenant per-user velocity over the window. Output is
+    JSON on stdout so the Next route can parse it.
     """
     if "traceparent" in os.environ:
         from opentelemetry import trace
@@ -814,6 +815,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     portfolio_parser.add_argument(
         "--user", default=None, help="narrow the portfolio to one person key"
     )
+    velocity_parser = sub.add_parser(
+        "velocity", help="render the cross-tenant per-user velocity"
+    )
+    velocity_parser.add_argument(
+        "--window", type=int, required=True, help="the velocity window in days"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -829,6 +836,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             json.dumps(
                 portfolio_payload(harness_dir=args.harness_dir, person=args.user)
             )
+        )
+    elif args.command == "velocity":
+        print(
+            json.dumps(velocity_payload(args.window, harness_dir=args.harness_dir))
         )
     return 0
 
