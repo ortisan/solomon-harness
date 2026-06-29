@@ -14,6 +14,7 @@ CLI:
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -284,6 +285,39 @@ def record_transition(issue_number, column) -> None:
         pass
 
 
+def record_terminal_status(issue_number) -> None:
+    """Write the delivered issue's terminal status through to the project memory.
+
+    Fired on the Done board transition (the merge critical path) so the memory row
+    converges to GitHub the moment a card is delivered, instead of waiting for
+    reconcile. It read-modify-writes through the unchanged 5-arg log_issue (UPSERT
+    on github_id): it reads the current row and, only when that row exists and is
+    not already terminal, re-writes it as "closed" while preserving the title, type
+    and milestone. Best-effort and idempotent (ADR-0006): it MUST NOT raise on the
+    merge path, so any failure is caught and logged as a warning, leaving the row
+    at its pre-delivery value for reconcile to repair.
+    """
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient, is_terminal
+
+        github_id = str(issue_number)
+        with DatabaseClient(harness_dir=os.getcwd()) as db:
+            row = db.get_issue(github_id)
+            if row is None or is_terminal(row.get("status")):
+                return
+            db.log_issue(
+                github_id,
+                row.get("title"),
+                row.get("type_"),
+                "closed",
+                row.get("milestone_id"),
+            )
+    except Exception as exc:  # noqa: BLE001 - never break the merge critical path
+        logging.warning(
+            "terminal write-through for issue %s failed: %s", issue_number, exc
+        )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="solomon GitHub board helper")
     sub = parser.add_subparsers(dest="command")
@@ -331,6 +365,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = set_issue_status(args.issue, args.status, title=args.title)
         if result.get("ok"):
             record_transition(args.issue, args.status)
+            # On delivery (Done) also write the terminal status through to memory
+            # so memory-only consumers converge to GitHub immediately (ADR-0006).
+            if args.status == "Done":
+                record_terminal_status(args.issue)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
     else:
