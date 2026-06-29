@@ -181,6 +181,81 @@ class TestBootstrapAgent(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Business-Requirements.md")))
         self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Technical-Documentation.md")))
 
+    def test_bootstrap_gemini_settings_creation_and_merge(self):
+        from solomon_harness.bootstrap import bootstrap_project
+
+        # Run bootstrap_project directly
+        bootstrap_project(self.workspace_dir, non_interactive=True)
+        
+        # Verify .gemini/settings.json exists and has the correct hooks
+        gemini_settings_path = os.path.join(self.workspace_dir, ".gemini", "settings.json")
+        self.assertTrue(os.path.isfile(gemini_settings_path))
+        with open(gemini_settings_path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        
+        self.assertIn("hooks", settings)
+        self.assertIn("SessionStart", settings["hooks"])
+        self.assertIn("PreToolUse", settings["hooks"])
+        
+        # Verify permissions
+        self.assertIn("permissions", settings)
+        self.assertIn("command(git)", settings["permissions"]["allow"])
+
+        # Now, modify the file: remove PreToolUse to force merge PreToolUse
+        settings["permissions"]["allow"].append("command(dummy)")
+        settings["hooks"].pop("PreToolUse")
+        with open(gemini_settings_path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+            
+        # Run bootstrap_project again (covers merge PreToolUse)
+        bootstrap_project(self.workspace_dir, non_interactive=True)
+        
+        with open(gemini_settings_path, "r", encoding="utf-8") as f:
+            settings_merged = json.load(f)
+        self.assertIn("PreToolUse", settings_merged["hooks"])
+        self.assertIn("command(dummy)", settings_merged["permissions"]["allow"])
+
+        # Modify the file: remove SessionStart to force merge SessionStart
+        settings_merged["hooks"].pop("SessionStart")
+        with open(gemini_settings_path, "w", encoding="utf-8") as f:
+            json.dump(settings_merged, f, indent=2)
+
+        # Run bootstrap_project again (covers merge SessionStart)
+        bootstrap_project(self.workspace_dir, non_interactive=True)
+
+        with open(gemini_settings_path, "r", encoding="utf-8") as f:
+            settings_merged2 = json.load(f)
+        self.assertIn("SessionStart", settings_merged2["hooks"])
+
+        # Run bootstrap_project again with no changes (covers 578: updated is False)
+        bootstrap_project(self.workspace_dir, non_interactive=True)
+
+        # Write invalid/malformed JSON to test error handling (covers 543-544)
+        with open(gemini_settings_path, "w", encoding="utf-8") as f:
+            f.write("{invalid_json")
+
+        # Run bootstrap_project again (covers exception handling)
+        bootstrap_project(self.workspace_dir, non_interactive=True)
+        
+        with open(gemini_settings_path, "r", encoding="utf-8") as f:
+            settings_recovered = json.load(f)
+        self.assertIn("hooks", settings_recovered)
+
+        # Trigger general read exception to cover lines 556-558
+        from unittest.mock import patch
+        import builtins
+        real_open = builtins.open
+        def mock_open_fn(file, *args, **kwargs):
+            if str(file).endswith(os.path.join(".gemini", "settings.json")):
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if "w" not in mode:
+                    raise PermissionError("no read access")
+            return real_open(file, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=mock_open_fn):
+            # Run bootstrap_project again; it should log warning and return early without raising
+            bootstrap_project(self.workspace_dir, non_interactive=True)
+
 
 class TestInitWikiHint(unittest.TestCase):
     """The init flow detects an uninitialized GitHub wiki and only hints; it must

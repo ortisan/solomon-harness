@@ -31,15 +31,14 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("PRs awaiting review: 1", text)  # only #31: not draft, not approved
         self.assertIn("#31", text)
         self.assertNotIn("#32", text)  # drafts excluded
-        self.assertNotIn("#33", text)  # approved excluded
-        self.assertIn("run /solomon-loop", text)
+        self.assertIn("/solomon-release 33", text)
 
     def test_empty_digest_degrades_cleanly(self):
         text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=None))
         self.assertIn("no prior activity", text)
         self.assertIn("Open issues: 0 GitHub issues, 0 tracking items", text)
         self.assertIn("gh unavailable", text)
-        self.assertIn("run /solomon-loop", text)
+        self.assertIn("/solomon-idea", text)
 
     def test_open_issues_line_splits_github_and_tracking(self):
         """The Open issues line reports two figures: real GitHub issues (numeric id)
@@ -122,6 +121,42 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("Last loop:", text)
         self.assertIn("Open issues: 0 GitHub issues, 1 tracking items", text)
 
+    def test_build_digest_flags_sqlite_fallback(self):
+        """When memory is on the SQLite fallback (SurrealDB unreachable), the
+        digest must say so loudly, so fallback rows are never mistaken for the
+        canonical board state."""
+        text = "\n".join(
+            digest.build_digest(
+                resume=None, open_issues=[], last_loop_run=None, prs=None, backend="sqlite"
+            )
+        )
+        self.assertIn("SQLite fallback", text)
+        self.assertIn("may be stale", text)
+
+    def test_build_digest_no_banner_on_surreal(self):
+        text = "\n".join(
+            digest.build_digest(
+                resume=None, open_issues=[], last_loop_run=None, prs=None, backend="surrealdb"
+            )
+        )
+        self.assertNotIn("SQLite fallback", text)
+
+    def test_gather_digest_surfaces_sqlite_fallback(self):
+        class FallbackDB:
+            backend = "sqlite"
+
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return []
+
+            def list_loop_runs(self, n):
+                return []
+
+        text = "\n".join(digest.gather_digest(".", FallbackDB(), fetch_github=False))
+        self.assertIn("SQLite fallback", text)
+
     def test_gather_digest_survives_a_broken_db(self):
         class BrokenDB:
             def get_latest_activity(self):
@@ -135,7 +170,160 @@ class TestBuildDigest(unittest.TestCase):
 
         # A broken memory backend must not break session start.
         text = "\n".join(digest.gather_digest(".", BrokenDB(), fetch_github=False))
-        self.assertIn("run /solomon-loop", text)
+        self.assertIn("Options to proceed", text)
+
+    def test_digest_shows_pending_task_options(self):
+        # Case 1: Approved PR -> release
+        prs = [{"number": 12, "title": "fix auth", "reviewDecision": "APPROVED", "isDraft": False}]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=prs))
+        self.assertIn("We found a pending task: Release approved PR #12", text)
+        self.assertIn("1. Single Step (Recommended): Run /solomon-release 12", text)
+
+        # Case 2: Open PR awaiting review -> review
+        prs = [{"number": 15, "title": "add feature", "reviewDecision": "REVIEW_REQUIRED", "isDraft": False}]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=prs))
+        self.assertIn("We found a pending task: Review open PR #15", text)
+        self.assertIn("1. Single Step (Recommended): Run /solomon-review 15", text)
+
+    def test_digest_shows_no_pending_task_options(self):
+        # No pending tasks -> lists github open issues (ideas/backlog) and their refine/issue commands
+        issues = [
+            {"github_id": "45", "title": "fix login", "status": "backlog"},
+            {"github_id": "46", "title": "new profile", "status": "ideas"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("GitHub Open Issues:", text)
+        self.assertIn("Refine/Start Issue #45: /solomon-refine 45", text)
+        self.assertIn("Refine/Start Issue #46: /solomon-issue 46", text)
+        self.assertIn("Capture a new product idea: /solomon-idea", text)
+
+    def test_digest_shows_in_flight_review_qa(self):
+        issues = [
+            {"github_id": "100", "title": "review this", "status": "code_review"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("We found a pending task: Review/QA issue #100", text)
+        self.assertIn("/solomon-review 100", text)
+
+        issues = [
+            {"github_id": "101", "title": "qa this", "status": "qa"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("We found a pending task: Review/QA issue #101", text)
+        self.assertIn("/solomon-review 101", text)
+
+    def test_digest_shows_resume_start_active(self):
+        resume = {"type": "session", "agent": "qa", "task": "start 42", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("Resume last activity: qa is working on 'start 42'", text)
+        self.assertIn("/solomon-start 42", text)
+
+    def test_digest_shows_ready_issues(self):
+        issues = [
+            {"github_id": "200", "title": "ready to work", "status": "ready"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("We found a pending task: Start development on Ready issue #200", text)
+        self.assertIn("/solomon-start 200", text)
+
+    def test_best_effort_prs_success(self):
+        from unittest.mock import patch, MagicMock
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = '[{"number": 1, "title": "PR 1", "reviewDecision": "APPROVED", "isDraft": false}]'
+            mock_run.return_value = mock_proc
+            res = digest._best_effort_prs(".")
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["number"], 1)
+
+    def test_best_effort_prs_failure(self):
+        from unittest.mock import patch, MagicMock
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 1
+            mock_proc.stdout = ""
+            mock_run.return_value = mock_proc
+            res = digest._best_effort_prs(".")
+            self.assertIsNone(res)
+
+    def test_best_effort_prs_exception(self):
+        from unittest.mock import patch
+        with patch("subprocess.run", side_effect=RuntimeError("timeout")):
+            res = digest._best_effort_prs(".")
+            self.assertIsNone(res)
+
+    def test_safe_id_edge_cases(self):
+        self.assertIsNone(digest._safe_id(None))
+        self.assertIsNone(digest._safe_id("invalid; rm -rf /"))
+        self.assertEqual(digest._safe_id("123-abc_def"), "123-abc_def")
+
+    def test_sanitize_title_none(self):
+        self.assertEqual(digest._sanitize_title(None), "")
+
+    def test_digest_shows_resume_start_active_with_hash(self):
+        resume = {"type": "session", "agent": "qa", "task": "start #123", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-start 123", text)
+
+    def test_digest_shows_resume_start_active_with_word_issue(self):
+        resume = {"type": "session", "agent": "qa", "task": "start issue 456", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-start 456", text)
+
+    def test_digest_option_command_mappings(self):
+        # We test backlog -> refine, ideas -> issue, ready -> start, and code_review -> review
+        # To make sure they are in the first 3 options, we split into two runs
+        issues = [
+            {"github_id": "11", "title": "backlog issue", "status": "backlog"},
+            {"github_id": "12", "title": "ideas issue", "status": "ideas"},
+            {"github_id": "13", "title": "ready issue", "status": "ready"},
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-refine 11", text)
+        self.assertIn("/solomon-issue 12", text)
+        self.assertIn("/solomon-start 13", text)
+
+        issues2 = [
+            {"github_id": "14", "title": "code review issue", "status": "code_review"},
+            {"github_id": "15", "title": "qa issue", "status": "qa"},
+        ]
+        text2 = "\n".join(digest.build_digest(resume=None, open_issues=issues2, last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-review 14", text2)
+        self.assertIn("/solomon-review 15", text2)
+
+    def test_digest_sanitizes_github_id(self):
+        issues = [
+            {"github_id": "bad\x1bid", "title": "issue title", "status": "backlog"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("- [badid] issue title", text)
+
+    def test_run_with_timeout_distinguishes_immediate_failure_from_timeout(self):
+        import io
+        import time
+        from unittest.mock import patch
+        
+        # Test 1: Immediate failure (should NOT print warning to stderr)
+        def fail_immediately():
+            raise RuntimeError("DB failed")
+            
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            res = digest._run_with_timeout(fail_immediately, timeout=0.1, default="fallback")
+            self.assertEqual(res, "fallback")
+            self.assertEqual(stderr_capture.getvalue(), "")
+
+        # Test 2: Timeout/Hang (should print warning to stderr)
+        def hang_long():
+            time.sleep(0.5)
+            return "ok"
+            
+        stderr_capture2 = io.StringIO()
+        with patch("sys.stderr", stderr_capture2):
+            res2 = digest._run_with_timeout(hang_long, timeout=0.1, default="fallback")
+            self.assertEqual(res2, "fallback")
+            self.assertIn("timed out after 0.1 seconds", stderr_capture2.getvalue())
 
 
 if __name__ == "__main__":
