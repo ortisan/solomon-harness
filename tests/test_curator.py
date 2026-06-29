@@ -5,6 +5,8 @@ import unittest
 import hashlib
 import subprocess
 import json
+from unittest import mock
+from unittest.mock import MagicMock
 from solomon_harness import curator
 
 def _write_agent(root, name, description):
@@ -275,6 +277,163 @@ class TestApplyProposal(unittest.TestCase):
         proc = subprocess.run(["git", "branch", "--show-current"], cwd=self.root, capture_output=True, text=True, check=True)
         self.assertTrue(proc.stdout.strip().startswith("feature/implement-some-new-qa-check"))
 
+    def test_apply_proposal_adapt_skill_kind_triggers_security_reviewer(self):
+        # Fix 7: kind == "adapt_skill" is the structural trigger for the security
+        # reviewer, and it exempts the proposal from the >= 2 sources rule.
+        captured = []
+
+        def gh_runner(args):
+            captured.append(args)
+
+            class R:
+                stdout = "https://github.com/ortisan/solomon-harness/pull/1\n"
+
+            return R()
+
+        def edit_callback(agent_dir):
+            sd = os.path.join(agent_dir, "skills")
+            os.makedirs(sd, exist_ok=True)
+            with open(os.path.join(sd, "brokered.md"), "w", encoding="utf-8") as f:
+                f.write("content")
+
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="Add new capability foo",
+            sources=("one-source@deadbeef",),
+            rationale="r",
+            kind="adapt_skill",
+        )
+        curator.apply_proposal(p, edit_callback, self.root, gh_runner=gh_runner)
+        self.assertTrue(any("--reviewer" in a and "security" in a for a in captured))
+
+    def test_apply_proposal_without_kind_omits_security_reviewer(self):
+        # Fix 7: a non-broker proposal (kind is None) must not attach a reviewer
+        # even though its drift_description does not say "adapt skill".
+        captured = []
+
+        def gh_runner(args):
+            captured.append(args)
+
+            class R:
+                stdout = "https://github.com/ortisan/solomon-harness/pull/2\n"
+
+            return R()
+
+        def edit_callback(agent_dir):
+            sd = os.path.join(agent_dir, "skills")
+            os.makedirs(sd, exist_ok=True)
+            with open(os.path.join(sd, "brokered.md"), "w", encoding="utf-8") as f:
+                f.write("content")
+
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="Add new capability foo",
+            sources=("s1", "s2"),
+            rationale="r",
+        )
+        curator.apply_proposal(p, edit_callback, self.root, gh_runner=gh_runner)
+        self.assertFalse(any("--reviewer" in a for a in captured))
+
+
+class TestPinnedClone(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pinned-clone-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_pinned_clone_rejects_disallowed_url_scheme(self):
+        # Fix 5: ext::/fd:: transports are an RCE vector and must be rejected
+        # before any git invocation.
+        source = {"url": "ext::sh -c 'echo pwned'", "pin": "a" * 40}
+        with self.assertRaisesRegex(ValueError, "disallowed source URL scheme"):
+            curator._pinned_clone(source, os.path.join(self.tmpdir, "clone"))
+
+    def test_pinned_clone_rejects_non_full_sha_pin(self):
+        # Fix 5: short or branch pins enable --upload-pack= injection and are
+        # not reproducible; only a full 40/64-char hex SHA is accepted.
+        for bad_pin in ["main", "abc1234"]:
+            with self.subTest(pin=bad_pin):
+                source = {"url": "https://github.com/x/y", "pin": bad_pin}
+                with self.assertRaisesRegex(ValueError, "pin must be a full commit SHA"):
+                    curator._pinned_clone(source, os.path.join(self.tmpdir, "clone"))
+
+    def test_pinned_clone_raises_on_head_mismatch(self):
+        # Fix 4(a): if the checked-out HEAD differs from the recorded pin the
+        # clone is rejected. subprocess is mocked so rev-parse returns a wrong SHA.
+        pin = "a" * 40
+
+        def fake_run(cmd, *args, **kwargs):
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "b" * 40 if ("rev-parse" in cmd and "HEAD" in cmd) else ""
+            return m
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            with self.assertRaisesRegex(ValueError, "HEAD mismatch"):
+                curator._pinned_clone(
+                    {"url": "https://github.com/x/y", "pin": pin},
+                    os.path.join(self.tmpdir, "clone"),
+                )
+
+    def test_pinned_clone_checks_out_historical_non_tip_sha(self):
+        # Fix 4(a) positive: pinning to a real, non-tip historical full SHA
+        # fetches and checks out that exact commit and HEAD == pin holds.
+        src = os.path.join(self.tmpdir, "src")
+        os.makedirs(src)
+        subprocess.run(["git", "init", "-b", "main"], cwd=src, check=True)
+        subprocess.run(["git", "config", "user.name", "A"], cwd=src, check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=src, check=True)
+        subprocess.run(["git", "config", "uploadpack.allowReachableSHA1InWant", "true"], cwd=src, check=True)
+        subprocess.run(["git", "config", "uploadpack.allowAnySHA1InWant", "true"], cwd=src, check=True)
+
+        with open(os.path.join(src, "old.txt"), "w") as f:
+            f.write("old")
+        subprocess.run(["git", "add", "."], cwd=src, check=True)
+        subprocess.run(["git", "commit", "-m", "c1"], cwd=src, check=True)
+        rev1 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        with open(os.path.join(src, "new.txt"), "w") as f:
+            f.write("new")
+        subprocess.run(["git", "add", "."], cwd=src, check=True)
+        subprocess.run(["git", "commit", "-m", "c2"], cwd=src, check=True)
+        rev2 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        self.assertNotEqual(rev1, rev2)
+
+        dest = os.path.join(self.tmpdir, "clone")
+        curator._pinned_clone({"url": f"file://{src}", "pin": rev1}, dest)
+
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        self.assertEqual(head, rev1)
+        self.assertTrue(os.path.isfile(os.path.join(dest, "old.txt")))
+        self.assertFalse(os.path.isfile(os.path.join(dest, "new.txt")))
+
+
+class TestValidateAndInstallSkill(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="vis-")
+        os.makedirs(os.path.join(self.root, "agents"))
+        self.src = os.path.join(self.root, "src_skill.md")
+        with open(self.src, "w", encoding="utf-8") as f:
+            f.write("# Skill\n\ncontent")
+        self.skills_dir = os.path.join(self.root, "agents", "qa", "skills")
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_rejects_path_traversal_name(self):
+        # Fix 6: a name that escapes the skills directory must be rejected at entry.
+        for bad in ["../../evil", "a/b"]:
+            with self.subTest(name=bad):
+                with self.assertRaisesRegex(ValueError, "invalid skill name"):
+                    curator.validate_and_install_skill(self.src, self.skills_dir, bad, self.root)
+
 
 class TestBrokerAcquisition(unittest.TestCase):
     def setUp(self):
@@ -433,6 +592,125 @@ class TestBrokerAcquisition(unittest.TestCase):
         self.assertIn("examine", content)
         self.assertIn("## Common pitfalls", content)
         self.assertIn("## Definition of done", content)
+
+    def _commit_and_repin(self, msg):
+        subprocess.run(["git", "add", "."], cwd=self.src_git, check=True)
+        subprocess.run(["git", "commit", "-m", msg], cwd=self.src_git, check=True)
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.src_git, capture_output=True, text=True, check=True
+        )
+        new_pin = proc.stdout.strip()
+        self.sources_data["sources"][0]["pin"] = new_pin
+        with open(os.path.join(self.root, "skill-sources.json"), "w", encoding="utf-8") as f:
+            json.dump(self.sources_data, f)
+        return new_pin
+
+    def test_broker_skill_packaged_symlinked_directory_is_rejected(self):
+        # Fix 1: a symlinked directory inside a packaged skill must be rejected
+        # by the scan (os.walk would skip it) and copy nothing into the agent.
+        os.makedirs(os.path.join(self.src_git, "eviltarget", "scripts"), exist_ok=True)
+        with open(os.path.join(self.src_git, "eviltarget", "scripts", "run.sh"), "w") as f:
+            f.write("echo bad")
+        os.symlink("../eviltarget", os.path.join(self.src_git, "packaged", "scripts"))
+        self._commit_and_repin("add symlinked dir")
+
+        with self.assertRaisesRegex(ValueError, "Symlinks are rejected"):
+            curator.broker_skill(self.root, "mock-source", "packaged", "qa")
+
+        self.assertFalse(os.path.exists(os.path.join(self.root, "agents", "qa", "skills", "packaged")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".solomon", "quarantine", "packaged")))
+
+    def test_broker_skill_symlink_outside_source_tree_is_rejected(self):
+        # Fix 1: a symlink (even with an allowed .md extension) pointing outside
+        # the source tree must be rejected before any dereference or copy.
+        host_dir = tempfile.mkdtemp(prefix="host-")
+        self.addCleanup(shutil.rmtree, host_dir, True)
+        secret = os.path.join(host_dir, "secret.md")
+        with open(secret, "w") as f:
+            f.write("# secret\ntop secret")
+        os.symlink(secret, os.path.join(self.src_git, "packaged", "leak.md"))
+        self._commit_and_repin("add external symlink")
+
+        with self.assertRaisesRegex(ValueError, "Symlinks are rejected"):
+            curator.broker_skill(self.root, "mock-source", "packaged", "qa")
+
+        self.assertFalse(os.path.exists(os.path.join(self.root, "agents", "qa", "skills", "packaged")))
+
+    def test_broker_skill_packaged_non_executable_script_is_quarantined(self):
+        # Fix 2: a non-executable .py (mode 100644) is not on the inert allowlist
+        # and must be quarantined and rejected.
+        py_path = os.path.join(self.src_git, "packaged", "evil.py")
+        with open(py_path, "w") as f:
+            f.write("print('x')")
+        os.chmod(py_path, 0o644)
+        self._commit_and_repin("add evil.py")
+
+        with self.assertRaisesRegex(ValueError, "scripts/executables|disallowed file type"):
+            curator.broker_skill(self.root, "mock-source", "packaged", "qa")
+
+        quarantine_path = os.path.join(self.root, ".solomon", "quarantine", "packaged")
+        self.assertTrue(os.path.isdir(quarantine_path))
+        self.assertTrue(os.path.isfile(os.path.join(quarantine_path, "evil.py")))
+
+    def test_broker_skill_packaged_bat_file_is_rejected(self):
+        # Fix 2: a .bat is not on the inert allowlist and must be rejected.
+        with open(os.path.join(self.src_git, "packaged", "tool.bat"), "w") as f:
+            f.write("echo bad")
+        self._commit_and_repin("add bat")
+
+        with self.assertRaisesRegex(ValueError, "scripts/executables|disallowed file type"):
+            curator.broker_skill(self.root, "mock-source", "packaged", "qa")
+
+    def test_broker_skill_packaged_member_exceeds_size_cap(self):
+        # Fix 2: the 256 KiB cap fires for a packaged member file, not just standalone.
+        with open(os.path.join(self.src_git, "packaged", "big.txt"), "w") as f:
+            f.write("x" * 300000)
+        self._commit_and_repin("add big member")
+
+        with self.assertRaisesRegex(ValueError, "exceeds the 256 KiB cap"):
+            curator.broker_skill(self.root, "mock-source", "packaged", "qa")
+
+    def test_broker_skill_idempotent_reacquire(self):
+        # Fix 3 (#105): a second acquisition of the same skill must succeed,
+        # leave a single branch, and re-install cleanly.
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+
+        def gh_runner(args):
+            return MockCompletedProcess()
+
+        curator.broker_skill(self.root, "mock-source", "standalone", "qa", gh_runner=gh_runner)
+        url2 = curator.broker_skill(self.root, "mock-source", "standalone", "qa", gh_runner=gh_runner)
+        self.assertEqual(url2, "https://github.com/ortisan/solomon-harness/pull/123")
+
+        proc = subprocess.run(
+            ["git", "branch", "--list", "feature/adapt-skill-standalone-from-mock-source"],
+            cwd=self.root, capture_output=True, text=True, check=True,
+        )
+        branches = [b for b in proc.stdout.splitlines() if b.strip()]
+        self.assertEqual(len(branches), 1)
+
+        installed = os.path.join(self.root, "agents", "qa", "skills", "standalone.md")
+        self.assertTrue(os.path.isfile(installed))
+
+    def test_broker_skill_uses_genuine_provenance_not_baseline(self):
+        # Fix 7: the brokered proposal carries kind="adapt_skill" and a real
+        # provenance source (source@pin), never the synthetic "baseline" sentinel.
+        captured = {}
+
+        def fake_apply(proposal, edit_callback, workspace_root, gh_runner=None):
+            captured["proposal"] = proposal
+            return "https://example/pr/1"
+
+        with mock.patch.object(curator, "apply_proposal", side_effect=fake_apply):
+            url = curator.broker_skill(self.root, "mock-source", "standalone", "qa")
+
+        self.assertEqual(url, "https://example/pr/1")
+        proposal = captured["proposal"]
+        self.assertEqual(proposal.kind, "adapt_skill")
+        self.assertNotIn("baseline", proposal.sources)
+        self.assertEqual(proposal.sources, (f"mock-source@{self.pin}",))
 
 
 if __name__ == "__main__":

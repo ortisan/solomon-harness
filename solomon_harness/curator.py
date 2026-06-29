@@ -17,6 +17,7 @@ class Proposal:
     sources: Tuple[str, ...]
     rationale: str
     decision_id: Optional[str] = None
+    kind: Optional[str] = None
 
 @dataclass
 class SweepResult:
@@ -106,8 +107,9 @@ def apply_proposal(
     """Apply an accepted proposal to an agent by branching, editing, compiling, committing, and opening a draft PR."""
     root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    # Validation 1: sources >= 2
-    if len(proposal.sources) < 2:
+    # Validation 1: sources >= 2 (broker adapt_skill proposals carry genuine
+    # single-source provenance and are exempt).
+    if proposal.kind != "adapt_skill" and len(proposal.sources) < 2:
         raise ValueError("evidence regressed")
         
     # Validation 2: target exactly one agent
@@ -139,8 +141,17 @@ def apply_proposal(
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{actual_package_root}{os.path.pathsep}{root}"
     
-    # checkout branch
-    subprocess.run(["git", "checkout", "-b", branch_name], cwd=root, env=env, check=True)
+    # checkout branch idempotently: re-acquiring the same skill must not abort
+    # on an existing branch (#105). Force-reset (-B) is forbidden because it
+    # clobbers in-flight work, so detect the branch and reuse it instead.
+    branch_exists = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name}"],
+        cwd=root, env=env, capture_output=True,
+    ).returncode == 0
+    if branch_exists:
+        subprocess.run(["git", "checkout", branch_name], cwd=root, env=env, check=True)
+    else:
+        subprocess.run(["git", "checkout", "-b", branch_name], cwd=root, env=env, check=True)
     
     try:
         # edit agent files
@@ -155,16 +166,21 @@ def apply_proposal(
         # solomon compile
         subprocess.run([sys.executable, "-m", "solomon_harness.cli", "compile"], cwd=root, env=env, check=True)
         
-        # add and commit
+        # add and commit. On an idempotent re-run the reinstall produces no
+        # diff, so skip the commit rather than fail on an empty commit.
         subprocess.run(["git", "add", "."], cwd=root, env=env, check=True)
-        commit_msg = f"feat(agents): apply proposal for {proposal.agent} closes #{proposal.decision_id or ''}"
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=root, env=env, check=True)
-        
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=root, env=env, capture_output=True, text=True, check=True
+        )
+        if status.stdout.strip():
+            commit_msg = f"feat(agents): apply proposal for {proposal.agent} closes #{proposal.decision_id or ''}"
+            subprocess.run(["git", "commit", "-m", commit_msg], cwd=root, env=env, check=True)
+
         # gh pr create
         title = f"feat(agents): apply proposal for {proposal.agent}"
         body = f"Closes #{proposal.decision_id or ''}"
         gh_cmd = ["gh", "pr", "create", "--draft", "--base", "main", "--title", title, "--body", body]
-        if "adapt skill" in proposal.drift_description.lower():
+        if proposal.kind == "adapt_skill":
             gh_cmd.extend(["--reviewer", "security"])
         
         if gh_runner:
@@ -187,13 +203,20 @@ def apply_proposal(
 
 def _pinned_clone(source: dict, dest: str) -> None:
     import subprocess
+    import re
     url = source.get("url")
     pin = source.get("pin") or source.get("commit")
     if not url:
         raise ValueError("Source has no URL")
+    # Scheme allowlist blocks ext::/fd:: and other RCE transports.
+    if not url.startswith(("https://", "ssh://", "git@", "file://")):
+        raise ValueError("disallowed source URL scheme")
     if not pin:
         raise ValueError("SHA-pin mandatory (HEAD == recorded SHA; reject unpinned default-branch clone)")
-        
+    # A full hex SHA blocks --upload-pack= option injection and short/branch pins.
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", pin):
+        raise ValueError("pin must be a full commit SHA")
+
     os.makedirs(dest, exist_ok=True)
     subprocess.run(["git", "init", "-q", dest], check=True)
     subprocess.run(["git", "-C", dest, "remote", "add", "origin", url], check=True)
@@ -250,55 +273,93 @@ def adapt_skill_content(text: str, name: str) -> str:
     return text
 
 
+# Inert file types a packaged skill may contain. Anything else is treated as
+# active content and quarantined: an allowlist fails closed, unlike a denylist
+# that an attacker can sidestep with an unlisted extension.
+_ALLOWED_SKILL_EXTS = {
+    ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+    ".rst", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+}
+_SCRIPT_DIRS = {"scripts", "bin", "hooks", ".githooks"}
+_SKILL_SIZE_CAP = 256 * 1024
+
+
+def _quarantine_skill(src_dir: str, workspace_root: str, name: str, reason: str) -> None:
+    """Copy a rejected packaged skill to the quarantine area, then raise.
+
+    The copy preserves symlinks (symlinks=True) so quarantining never
+    dereferences a link out of the source tree.
+    """
+    import shutil
+    quarantine_root = os.path.join(workspace_root, ".solomon", "quarantine")
+    quarantine_path = os.path.join(quarantine_root, name)
+    if os.path.isdir(quarantine_path):
+        shutil.rmtree(quarantine_path)
+    os.makedirs(quarantine_root, exist_ok=True)
+    shutil.copytree(src_dir, quarantine_path, symlinks=True)
+    raise ValueError(f"{reason}. Quarantined at: {quarantine_path}")
+
+
+def _scan_packaged_skill(current_dir: str, src_dir: str, in_script_dir: bool, name: str, workspace_root: str) -> None:
+    """Recursively validate a packaged skill tree before it is copied.
+
+    Uses os.scandir, not os.walk: os.walk does not descend symlinked
+    directories, so files behind one are never scanned yet are still copied by
+    shutil.copytree, which dereferences them. This visits every entry at every
+    depth and rejects any symlink (file or directory) before it can be
+    followed, so the scan and the copy traverse the identical tree. Files are
+    held to the inert-type allowlist, the executable bit, the script-directory
+    denylist, and the size cap.
+    """
+    with os.scandir(current_dir) as entries:
+        for entry in sorted(entries, key=lambda e: e.name):
+            if entry.is_symlink():
+                raise ValueError("Symlinks are rejected")
+            if entry.is_dir(follow_symlinks=False):
+                child_in_script_dir = in_script_dir or entry.name in _SCRIPT_DIRS
+                _scan_packaged_skill(entry.path, src_dir, child_in_script_dir, name, workspace_root)
+                continue
+            stat = entry.stat(follow_symlinks=False)
+            if stat.st_size > _SKILL_SIZE_CAP:
+                raise ValueError(f"Skill file size exceeds the 256 KiB cap: {entry.path}")
+            if in_script_dir or (stat.st_mode & 0o111) != 0:
+                _quarantine_skill(src_dir, workspace_root, name, "Security risk: skill contains scripts/executables")
+            if os.path.splitext(entry.name)[1].lower() not in _ALLOWED_SKILL_EXTS:
+                _quarantine_skill(
+                    src_dir, workspace_root, name,
+                    f"Security risk: skill contains a disallowed file type: {entry.name}",
+                )
+
+
 def validate_and_install_skill(src_path: str, agent_skills_dir: str, name: str, workspace_root: str) -> str:
     import shutil
-    src_realpath = os.path.realpath(src_path)
+    # Reject a name that could escape the skills directory before it is joined
+    # into any path.
+    if os.path.isabs(name) or os.sep in name or "/" in name or ".." in name:
+        raise ValueError("invalid skill name")
+
     is_packaged = os.path.basename(src_path) == "SKILL.md"
     if is_packaged:
         target_path = os.path.join(agent_skills_dir, name)
     else:
         target_path = os.path.join(agent_skills_dir, f"{name}.md")
-        
+
     target_realpath = os.path.realpath(target_path)
     agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
-    if not target_realpath.startswith(agents_realpath):
+    if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
         raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
-        
+
     if os.path.islink(src_path) or os.path.islink(target_path):
         raise ValueError("Symlinks are rejected")
-        
+
     if is_packaged:
         src_dir = os.path.dirname(src_path)
-        for root_dir, _, filenames in os.walk(src_dir):
-            if os.path.islink(root_dir):
-                raise ValueError("Symlinks are rejected")
-            for filename in filenames:
-                filepath = os.path.join(root_dir, filename)
-                if os.path.islink(filepath):
-                    raise ValueError("Symlinks are rejected")
-                    
-                size = os.path.getsize(filepath)
-                if size > 256 * 1024:
-                    raise ValueError(f"Skill file size exceeds the 256 KiB cap: {filepath}")
-                    
-                rel_to_src = os.path.relpath(filepath, src_dir)
-                is_in_scripts = rel_to_src.startswith("scripts/") or "scripts" in rel_to_src.split(os.sep)
-                has_script_ext = any(filename.endswith(ext) for ext in [".sh", ".py", ".js", ".pl", ".rb", ".php", ".bin", ".exe"])
-                is_executable = (os.stat(filepath).st_mode & 0o111) != 0
-                
-                if is_in_scripts or has_script_ext or is_executable:
-                    quarantine_root = os.path.join(workspace_root, ".solomon", "quarantine")
-                    quarantine_path = os.path.join(quarantine_root, name)
-                    if os.path.isdir(quarantine_path):
-                        shutil.rmtree(quarantine_path)
-                    os.makedirs(quarantine_root, exist_ok=True)
-                    shutil.copytree(src_dir, quarantine_path)
-                    raise ValueError(f"Security risk: skill contains scripts/executables. Quarantined at: {quarantine_path}")
+        _scan_packaged_skill(src_dir, src_dir, False, name, workspace_root)
     else:
         size = os.path.getsize(src_path)
-        if size > 256 * 1024:
+        if size > _SKILL_SIZE_CAP:
             raise ValueError(f"Skill file size exceeds the 256 KiB cap: {src_path}")
-            
+
     os.makedirs(agent_skills_dir, exist_ok=True)
     if is_packaged:
         src_dir = os.path.dirname(src_path)
@@ -360,9 +421,10 @@ def broker_skill(
         proposal = Proposal(
             agent=agent_name,
             drift_description=f"Adapt skill {skill_name} from {source_name}",
-            sources=(source_name, "baseline"),
+            sources=(f"{source_name}@{source.get('pin')}",),
             rationale=f"Acquiring missing capability '{skill_name}' via broker",
-            decision_id=None
+            decision_id=None,
+            kind="adapt_skill",
         )
         return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
 
