@@ -4,9 +4,14 @@
 review command file (`.claude/commands/solomon-review.md`) is the single
 behavioral source for both Claude Code and the headless Gemini engine
 (`workflows.build_prompt` reads it directly), and `.gemini/commands/
-solomon-review.toml` is generated from it by `cli compile`. These tests fail if
-the draft->ready rule is dropped from the source or missing from the regenerated
-mirror, so an approving review can never again leave a PR stranded in draft.
+solomon-review.toml` is generated from it by `cli compile`.
+
+These tests assert the *actionable* instruction (`gh pr ready <args>`) is present
+in the source and in the regenerated mirror — anchored to the operative command,
+not the prose that merely mentions `gh pr ready`, so a partial edit that drops the
+run-line cannot pass. They guard the instruction text the host LLM executes; they
+cannot assert the runtime call itself, which is the inherent ceiling for a
+prompt artifact.
 """
 
 import os
@@ -22,10 +27,11 @@ class TestReviewMarksReady(unittest.TestCase):
         with open(REVIEW_MD, encoding="utf-8") as fh:
             body = fh.read()
         self.assertIn(
-            "gh pr ready",
+            "gh pr ready $ARGUMENTS",
             body,
-            "the /solomon-review command must run `gh pr ready` on approval so an "
-            "approved PR leaves draft (#114)",
+            "the /solomon-review command must run `gh pr ready $ARGUMENTS` on "
+            "approval so an approved PR leaves draft (#114); the operative run-line, "
+            "not just a prose mention of `gh pr ready`, must be present",
         )
 
     def test_gemini_mirror_carries_the_rule(self):
@@ -33,11 +39,12 @@ class TestReviewMarksReady(unittest.TestCase):
             self.skipTest("Gemini mirror not generated in this workspace")
         with open(REVIEW_TOML, encoding="utf-8") as fh:
             body = fh.read()
+        # generate-integrations.py rewrites $ARGUMENTS -> {{args}} in the mirror.
         self.assertIn(
-            "gh pr ready",
+            "gh pr ready {{args}}",
             body,
-            "the regenerated Gemini command mirror is stale; run `cli compile` "
-            "after editing the review command",
+            "the regenerated Gemini command mirror is stale or missing the run-line; "
+            "run `cli compile` after editing the review command",
         )
 
 
