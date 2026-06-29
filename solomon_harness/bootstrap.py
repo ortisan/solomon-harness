@@ -3,7 +3,7 @@ import json
 import shutil
 import datetime
 import subprocess
-from typing import Callable, List, Dict
+from typing import Callable, List, Dict, Any, Optional
 
 from solomon_harness.wiki_bootstrap import (
     is_github_remote,
@@ -549,7 +549,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             pass
     else:
         # If settings.json exists, merge the SessionStart and PreToolUse hooks into it.
-        settings = {}
+        settings: Optional[Dict[str, Any]] = {}
         if os.path.getsize(gemini_settings_path) > 0:
             try:
                 with open(gemini_settings_path, "r", encoding="utf-8") as f:
