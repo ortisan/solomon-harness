@@ -1,42 +1,44 @@
-# PLAN.md: chore(agents): capability-router hardening follow-ups
+# PLAN.md: feat(agents): practice_curator — agent definition and cited audit of one delivery
 
-Problem statement: Harden the capability-router module by implementing safety caps, path confinement/symlink rejection, import-graph/no-write fitness checks, distinct matcher contract error type, and order assertions (#85).
+Problem statement: The `practice_curator` agent does not exist yet. This slice creates the agent definition, profile, persona, config, and its first capability: a sourced gap report on one delivery with cited evidence (issue #18).
 
 ## Proposed changes
-- Introduce `MatcherContractError` in `solomon_harness/capability_router.py`.
-- Update `_role_description` to prevent unbounded memory read by reading at most 8192 bytes per readline call and handling line continuation.
-- Update `load_catalog` to resolve realpaths, ensure paths are confined within the `agents` folder, and reject symlink files/directories.
-- Raise `MatcherContractError` (instead of `CatalogError`) when the matcher returns an agent not in the catalog.
-- Write unit tests covering read-capping, path confinement, symlink rejection, the new error type, alternatives ordering, and module isolation/no-write fitness check.
+- Create the folder `agents/practice_curator/` with `persona.md`, profile `agents/practice_curator/agents/practice_curator.md`, `skills/`, and `.agent/config.json`.
+- Create skills: `auditing_delivered_work.md`, `sourcing_the_state_of_the_art.md`, `benchmarking_across_domains.md`, `scope_and_non_negotiables.md`.
+- Update `agents/AGENTS.md` to index `practice_curator`.
+- Regenerate Active Skills and compile host-tool integrations by running `cli compile` / `document-skills.py`.
 
 ## Target files
-- `solomon_harness/capability_router.py`
-- `tests/test_capability_router.py`
+- `agents/practice_curator/persona.md`
+- `agents/practice_curator/agents/practice_curator.md`
+- `agents/practice_curator/.agent/config.json`
+- `agents/practice_curator/skills/auditing_delivered_work.md`
+- `agents/practice_curator/skills/sourcing_the_state_of_the_art.md`
+- `agents/practice_curator/skills/benchmarking_across_domains.md`
+- `agents/practice_curator/skills/scope_and_non_negotiables.md`
+- `agents/AGENTS.md`
 
 ## Edge cases
-- Giant single-line role file (memory safety).
-- Directory traversal using symlink.
-- Matcher returning an agent not present in the catalog.
-- Alternatives containing invalid/valid agents in specific order.
-- Module attempting to import blacklisted libraries (e.g. requests, urllib, torch).
+- Empty or invalid PR/diff input for audit.
+- Sourcing a best practice with fewer than 2 dated sources (falls back to "insufficient evidence").
+- Attempting to edit other agent files (blocked/forbidden).
+- No gaps identified in a delivery (returns "no gap found").
 
 ## TDD breakdown
-1. **Red**: Write a test in `tests/test_capability_router.py` for giant single-line files and read capping.
-   **Green**: Update `_role_description` to read in chunks of 8192 bytes and handle line continuation.
-   *Commit: test: add read cap tests and implement readline capping*
-2. **Red**: Write a test for symlink rejection and path confinement.
-   **Green**: Update `load_catalog` to verify realpaths and reject symlinks using `os.path.islink`.
-   *Commit: test: add confinement/symlink tests and implement catalog protection*
-3. **Red**: Write a test asserting that `MatcherContractError` is raised when the matcher returns an invalid agent.
-   **Green**: Define `MatcherContractError` and raise it in `route`.
-   *Commit: test: add matcher contract error test and implement error type*
-4. **Red**: Write a test asserting that alternatives ordering is preserved.
-   **Green**: Verify alternatives tuple is constructed preserving order.
-   *Commit: test: add alternatives order assertion test*
-5. **Red**: Write a test parsing `solomon_harness/capability_router.py` AST to check imports (fitness check) and ensuring no write operations.
-   **Green**: Ensure AST validation test passes.
-   *Commit: test: add CI fitness check for module isolation*
+1. **Red**: Verify agent structure tests fail.
+   **Green**: Define basic agent structure (folder, persona, profile, config).
+   *Commit: feat(agents): define practice_curator agent structure Refs #18*
+2. **Red**: Verify depth and quality metrics tests fail on skills.
+   **Green**: Author skills `auditing_delivered_work.md`, `sourcing_the_state_of_the_art.md`, `benchmarking_across_domains.md`, `scope_and_non_negotiables.md` meeting >= 600 words, no cliches, required sections.
+   *Commit: feat(agents): author practice_curator skills Refs #18*
+3. **Red**: Index and compilation validation tests fail.
+   **Green**: Run compile, document-skills, and add practice_curator to `agents/AGENTS.md`.
+   *Commit: feat(agents): compile practice_curator agent integrations Refs #18*
+
+## STRIDE notes
+- **Spoofing/Elevation of Privilege**: No active scripts run dynamically in this slice; skills are purely descriptive/analytical instructions.
+- **Information Disclosure**: Audited artifacts are local repository diffs; no external secrets or environment variables are processed.
 
 ## Verification criteria
-- `PYTHONPATH=. uv run pytest tests/test_capability_router.py` passes.
-- All 387 tests pass.
+- `uv run pytest tests/test_practice_curator.py` passes.
+- All 700+ tests pass.
