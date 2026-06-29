@@ -141,7 +141,44 @@ class TestReport(unittest.TestCase):
             checks = hc.run_checks("/tmp")
         # The failing check is captured as a warn rather than propagating.
         self.assertTrue(any(c["status"] == hc.WARN for c in checks))
-        self.assertEqual(len(checks), 5)
+        self.assertEqual(len(checks), 6)
+
+
+class TestPendingReconcile(unittest.TestCase):
+    def _write_mirror(self, root, kind, name, synced):
+        directory = os.path.join(root, ".solomon", "memory-mirror", kind)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, f"{name}.md"), "w", encoding="utf-8") as f:
+            f.write(
+                f"---\nid: {name}\nkind: {kind}\n"
+                f"created_at: 2026-06-28T22:00:00+00:00\nsynced: {synced}\n---\n\n"
+                f"# {kind} record\n"
+            )
+
+    def test_counts_only_unsynced_mirror_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._write_mirror(d, "release", "r0", "false")
+            self._write_mirror(d, "release", "r1", "true")
+            self._write_mirror(d, "decision", "d0", "false")
+            self.assertEqual(hc.pending_reconcile_count(d), 2)
+            c = hc.check_pending_reconcile(d)
+            self.assertEqual(c["status"], hc.WARN)
+            self.assertIn("2", c["detail"])
+            self.assertIn("memory sync", c["fix"])
+
+    def test_zero_pending_when_no_mirror(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(hc.pending_reconcile_count(d), 0)
+            self.assertEqual(hc.check_pending_reconcile(d)["status"], hc.OK)
+
+    def test_run_checks_includes_pending_reconcile(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._write_mirror(d, "release", "r0", "false")
+            checks = hc.run_checks(d)
+        reconcile = [c for c in checks if c["name"] == "Memory reconcile"]
+        self.assertEqual(len(reconcile), 1)
+        self.assertEqual(reconcile[0]["status"], hc.WARN)
+        self.assertIn("1", reconcile[0]["detail"])
 
 
 if __name__ == "__main__":

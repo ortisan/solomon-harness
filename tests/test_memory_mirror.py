@@ -11,8 +11,10 @@ import glob
 import io
 import os
 import sys
+import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
@@ -270,6 +272,31 @@ class TestReconcile(MirrorTestBase):
     def test_reconcile_with_no_pending_is_noop(self):
         client = DatabaseClient(db_path=self.sqlite_db_path, mirror_root=self.mirror_root)
         self.assertEqual(client.reconcile(), {"synced": 0, "remaining": 0})
+
+
+class TestMemorySyncCLI(unittest.TestCase):
+    def test_memory_sync_runs_reconcile_and_reports_counts(self):
+        from solomon_harness import cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror_root = os.path.join(tmp, "mirror")
+            directory = os.path.join(mirror_root, "release")
+            os.makedirs(directory)
+            with open(os.path.join(directory, "release-1.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "---\nid: release-1\nkind: release\n"
+                    "created_at: 2026-06-28T22:00:00+00:00\nsynced: false\n---\n\n"
+                    '# release record\n\n```json\n{"version": "0.3.0"}\n```\n'
+                )
+            out = io.StringIO()
+            # No SurrealDB primary in this temp workspace, so reconcile reports the
+            # record as still pending; the CLI must run reconcile and print counts.
+            with patch.dict(os.environ, {"HARNESS_MIRROR_ROOT": mirror_root}):
+                with redirect_stdout(out):
+                    cli.main(harness_dir=tmp, argv=["memory", "sync"])
+        text = out.getvalue()
+        self.assertIn("0 reconciled", text)
+        self.assertIn("1 pending", text)
 
 
 if __name__ == "__main__":
