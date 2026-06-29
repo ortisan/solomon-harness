@@ -225,6 +225,107 @@ Each stage also persists the lifecycle facts to the project memory:
 - `save_session(session_id, agent_name, task, messages)` to checkpoint long work.
 - `get_open_issues` / `get_latest_activity` to resume where the team stopped.
 
+## Single-driver lock and the loop run-log
+
+Loop engineering turns the harness into a system that can advance work on a
+cadence, so two drivers must never act on one repository at once. A documented
+incident — two concurrent `/solomon-loop` drivers — produced premature merges
+that bypassed the review gate and flipped `core.bare=true` on a worktree. The
+safety floor prevents that by construction:
+
+- **Single-driver lock.** Before a stage that touches git/board state runs
+  (`loop`, `start`, `review`, `release`, and the `scan-arch` / `scan-dedup`
+  maintenance loops — and, at L3, every stage the policy's `requires_lock`
+  names), the headless runner acquires one advisory lock anchored at the git
+  *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of
+  the repository contends on the same file. A second driver is refused. The lock
+  is a plain JSON file (the holder is auditable). Staleness favors safety: a
+  **live process on the same host is never stale**, however long it has held the
+  lock, so a long-running stage is never reclaimed mid-run; only a dead same-host
+  pid, or a cross-host lock past the TTL (`DEFAULT_TTL_SECONDS = 1800`, since a
+  remote pid cannot be probed), is reclaimed. Implementation:
+  `solomon_harness/loop_lock.py`; the portable gate lives in `run_stage` so it
+  enforces on both Claude Code and the Gemini CLI. (`workflows.LOCKED_STAGES` is
+  the source of truth for the static set.)
+- **PreToolUse guard (Claude Code only).** A `loop-guard` hook in
+  `.claude/settings.json` blocks `git push` / `gh pr merge` while another live
+  driver holds the lock. It is defense-in-depth on top of the portable gate and
+  fails open — the run_stage gate, not the hook, is the enforcement of record.
+- **Recovery.** `solomon-harness loop-lock status` shows the current holder and
+  whether it is stale; `solomon-harness loop-lock release` clears a stuck lock
+  after a crash.
+- **Run-log.** Each driven stage appends one entry to the `loop_runs` ledger in
+  the project memory (the single source of truth). `solomon-harness log` renders
+  a read-only, chronological feed over loop runs, decisions and handoffs, so the
+  loop's own decisions are auditable. The concurrent-driver guard is the
+  lockfile, never a row count — under the SQLite fallback each worktree has its
+  own database, so a cross-worktree count would be invisible.
+
+Human approval before any merge or release is unchanged: the lock bounds *who*
+may drive, not *whether* a human approves. See `docs/loop-engineering.md` for the
+full adaptation roadmap.
+
+## Autonomy levels and the kill-switch
+
+How far the automation path (`solomon-harness dev <stage>` and any host-scheduled
+cadence) may act is one dial, set in the project's `.agent/config.json` `loop`
+block (overridable with `SOLOMON_LOOP_AUTONOMY`) and enforced in portable Python
+inside `run_stage` (`solomon_harness/loop_policy.py`), so it holds on both Claude
+Code and the Gemini CLI — not only in a Claude-only hook.
+
+```json
+"loop": { "autonomy": "L2", "maker_model": "...", "checker_model": "...",
+          "denylist": ["**/*.enc", "**/secrets/**"] }
+```
+
+- **human (default):** no restriction. A repository with no `loop` block behaves
+  exactly as before — the human is driving.
+- **L1 (report):** the loop may only scan and propose (`loop`); every mutating
+  stage is denied.
+- **L2 (assisted):** the loop may create work and open draft PRs (`idea`..`review`)
+  but never merge or release.
+- **L3 (unattended):** as L2, but may run on a cadence and only while it holds the
+  single-driver lock.
+
+Three rules no level can widen: **merge, release, and moving a card to Done are
+permanently human-gated**; an unknown/typo'd level **fails closed** (denied); and
+the **kill-switch** halts every stage at once. A blocked stage exits non-zero (3),
+never silently.
+
+- `solomon-harness loop-policy` — show the level, kill-switch state, denylist, and
+  the per-stage allow/deny table.
+- `solomon-harness loop-stop` / `loop-stop --clear` — engage or clear the
+  kill-switch (a sentinel beside the lock at the git common dir).
+
+The maker/checker split (a verifier on a *different* model than the maker) is
+declared in the same block and surfaced by `loop-policy`; it complements, and does
+not replace, the human `/solomon-review` gate.
+
+## Maintenance loops, notifications and budget
+
+Two standing maintenance loops give the harness a generative source of work — their
+input is the repository's current state, not a queued issue — bounded by the
+autonomy ladder, the single-driver lock, and the denylist:
+
+- `/solomon-scan-arch` (software_architect) — one architectural-drift finding per
+  run.
+- `/solomon-scan-dedup` (software_engineer) — one duplicated abstraction per run.
+
+Each acts on at most one finding and terminates at a **draft PR** routed to the
+unchanged `/solomon-review` gate (low-confidence findings go to `Ideas`/`Backlog`
+instead). They are `dev` stages, so a host scheduler can run them on a cadence and
+the autonomy policy gates them (allowed at L2/L3, denied at L1). Their contracts
+live in the agents' `architecture_scan_loop` / `duplication_scan_loop` skills.
+
+- **Notifications** (`solomon-harness notify`, `solomon_harness/notify.py`) are
+  outbound-only: status flows out to the console or a webhook
+  (`SOLOMON_NOTIFY_WEBHOOK`, never committed), but the only state-changing approval
+  path stays the human gh review. No inbound listener.
+- **Budget** (`solomon-harness loop-budget`, `solomon_harness/loop_budget.py`)
+  records each run's reported cost; when the daily ceiling
+  (`loop.daily_cost_ceiling_usd`) is reached, the automation path degrades to
+  report-only.
+
 ## ADR trigger
 
 `/solomon-start` and `/solomon-release` must evaluate whether the change is

@@ -105,29 +105,14 @@ def handle_run(harness_dir: str, task=None) -> None:
     with db_client as db:
         print(say("project status"))
 
-        try:
-            latest = db.get_latest_activity()
-            if latest:
-                print("\nResume point (latest activity):")
-                print(
-                    f"  {latest['type']} | {latest['agent']} | {latest['task']} | "
-                    f"{latest['status']} | {latest['timestamp']}"
-                )
-            else:
-                print("\nNo previous sessions or handoffs recorded yet.")
-        except Exception as e:
-            print(f"Warning: could not read latest activity: {e}", file=sys.stderr)
+        # One-screen board digest: resume point, open work, the last loop run,
+        # and PRs awaiting review. Facts only; the next step is decided by
+        # /solomon-loop, never computed here.
+        from solomon_harness.digest import gather_digest
 
-        try:
-            open_issues = db.get_open_issues()
-            if open_issues:
-                print("\nOpen issues:")
-                for issue in open_issues:
-                    print(f"  - [{issue['github_id']}] {issue['title']}")
-            else:
-                print("\nNo open issues.")
-        except Exception as e:
-            print(f"Warning: could not read open issues: {e}", file=sys.stderr)
+        print()
+        for line in gather_digest(harness_dir, db):
+            print(line)
 
         # Surface any pending initialization items (Docker down, memory on the
         # SQLite fallback, missing board scope, global install not run).
@@ -162,6 +147,153 @@ def handle_run(harness_dir: str, task=None) -> None:
         for name, desc in workflows:
             print(f"  {name:<21} {desc}")
         print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
+
+
+def handle_loop_lock(workspace_root: str, action: str) -> None:
+    """Inspect or clear the single-driver loop lock (recovery after a crash)."""
+    from solomon_harness.loop_lock import LoopLock
+
+    lock = LoopLock(workspace_root)
+    info = lock.read()
+
+    if action == "status":
+        if not info:
+            print(f"No loop lock held. ({lock.path})")
+            return
+        state = "STALE (reclaimable)" if lock.is_stale(info) else "live"
+        print(f"Loop lock: {lock.path}")
+        print(f"  session:   {info.get('session_id')}  pid: {info.get('pid')}  host: {info.get('host')}")
+        print(f"  stage:     {info.get('stage')}")
+        print(f"  acquired:  {info.get('acquired_at')}")
+        print(f"  heartbeat: {info.get('heartbeat_at')}")
+        print(f"  state:     {state}")
+        return
+
+    # release: force-remove for recovery, warning if a live foreign driver owns it.
+    if not info:
+        print("No loop lock to release.")
+        return
+    if info.get("session_id") != lock.session_id and not lock.is_stale(info):
+        print(
+            f"Warning: lock is held by a live driver (session {info.get('session_id')}, "
+            f"pid {info.get('pid')}). Removing anyway.",
+            file=sys.stderr,
+        )
+    try:
+        os.remove(lock.path)
+        print(f"Released loop lock at {lock.path}")
+    except FileNotFoundError:
+        print("No loop lock to release.")
+
+
+def handle_loop_stop(workspace_root: str, clear: bool) -> None:
+    """Kill-switch: halt all autonomous loop stages immediately, or clear it."""
+    from solomon_harness import loop_policy
+
+    if clear:
+        removed = loop_policy.clear_stop(workspace_root)
+        print("Loop kill-switch cleared." if removed else "No kill-switch was engaged.")
+    else:
+        path = loop_policy.write_stop(workspace_root)
+        print(
+            "Loop HALTED. Every autonomous stage is blocked until you clear it:\n"
+            "  solomon-harness loop-stop --clear\n"
+            f"  ({path})"
+        )
+
+
+def handle_loop_policy(workspace_root: str) -> None:
+    """Show the autonomy level, kill-switch state, denylist and per-stage gates."""
+    from solomon_harness.loop_policy import LoopPolicy
+
+    p = LoopPolicy.from_config(workspace_root)
+    print(f"Autonomy level: {p.level}")
+    print(f"Kill-switch:    {'ENGAGED' if p.is_halted() else 'clear'}")
+    print(f"Checker split:  {'ok' if p.checker_split_ok() else 'not configured (set maker_model/checker_model)'}")
+    print(f"Denylist ({len(p.denylist)}): {', '.join(p.denylist)}")
+    print("Stage gates:")
+    for stage in ["loop", "idea", "issue", "bug", "refine", "start", "review", "release"]:
+        d = p.decide_stage(stage)
+        verdict = "allow" if d.allowed else "DENY "
+        print(f"  {stage:<8} {verdict} {d.reason}")
+
+
+def handle_notify(workspace_root: str, message: str, event: str) -> None:
+    """Send one outbound status notification (console or webhook)."""
+    from solomon_harness import notify
+
+    if notify.send(workspace_root, event, message):
+        print("Notification sent.")
+    else:
+        print("No notifier configured (set SOLOMON_NOTIFY_WEBHOOK or a notify.mode in .agent/config.json).")
+
+
+def handle_loop_budget(workspace_root: str) -> None:
+    """Show today's autonomous-loop cost spend versus the configured ceiling."""
+    from solomon_harness import loop_budget
+    from solomon_harness.loop_policy import LoopPolicy
+
+    p = LoopPolicy.from_config(workspace_root)
+    spend = loop_budget.daily_spend(workspace_root)
+    ceiling = p.daily_cost_ceiling
+    print(f"Daily spend: ${spend:.4f}")
+    if ceiling:
+        status = "OVER -> report-only" if loop_budget.over_ceiling(workspace_root, ceiling) else "within budget"
+        print(f"Ceiling:     ${ceiling}  ({status})")
+    else:
+        print("Ceiling:     none configured (set loop.daily_cost_ceiling_usd)")
+    print(f"Ledger:      {loop_budget.ledger_path(workspace_root)}")
+
+
+def handle_loop_guard(workspace_root: str) -> None:
+    """PreToolUse hook: block unsafe tool calls under the loop's guardrails.
+
+    Blocks a `git push` / `gh pr merge` issued while another live driver holds the
+    lock, and a file-write tool (Edit/Write/MultiEdit) that targets a denylisted
+    path (so an autonomous run cannot edit `.agent/config.json` to widen itself).
+    Reads the Claude Code hook payload from stdin. Exits 2 to block (the message is
+    fed back to the model), 0 to allow. Fail-open: any error allows the tool,
+    because the portable enforcement of record is the run_stage gate, not this hook.
+    """
+    import json as _json
+
+    try:
+        raw = sys.stdin.read()
+        payload = _json.loads(raw) if raw.strip() else {}
+    except Exception:
+        sys.exit(0)
+
+    try:
+        from solomon_harness.loop_lock import LoopLock, guard_verdict
+        from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
+
+        lock = LoopLock(workspace_root, session_id=payload.get("session_id"))
+        block, reason = guard_verdict(payload, lock)
+        if not block:
+            block, reason = denied_write_verdict(payload, LoopPolicy.from_config(workspace_root))
+    except Exception:
+        sys.exit(0)
+
+    if block:
+        print(reason, file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0)
+
+
+def handle_log(workspace_root: str, last: int) -> None:
+    """Print the read-only loop activity feed over the project memory."""
+    from solomon_harness import loop_log
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    try:
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            entries = loop_log.gather_feed(db, last=last)
+    except Exception as e:
+        print(f"Error: could not read loop activity: {e}", file=sys.stderr)
+        sys.exit(1)
+    for line in loop_log.format_feed(entries):
+        print(line)
+
 
 def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
     """Parser setup and command dispatching.
@@ -212,6 +344,44 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
 
     subparsers.add_parser("healthcheck", help="Report runtime readiness and pending init items (Docker, memory, board, global install)")
+
+    loop_lock_parser = subparsers.add_parser(
+        "loop-lock", help="Inspect or clear the single-driver loop lock"
+    )
+    loop_lock_parser.add_argument(
+        "action", choices=["status", "release"], nargs="?", default="status",
+        help="status (default) shows the holder; release clears a stale or stuck lock",
+    )
+
+    log_parser = subparsers.add_parser(
+        "log", help="Show the loop activity feed (loop runs, decisions, handoffs)"
+    )
+    log_parser.add_argument("--last", type=int, default=20, help="How many recent entries to show")
+
+    subparsers.add_parser(
+        "loop-guard",
+        help="PreToolUse hook: block push/merge while another driver holds the loop lock (reads the hook payload on stdin)",
+    )
+
+    loop_stop_parser = subparsers.add_parser(
+        "loop-stop", help="Kill-switch: halt all autonomous loop stages immediately (or --clear)"
+    )
+    loop_stop_parser.add_argument("--clear", action="store_true", help="Clear the kill-switch")
+
+    subparsers.add_parser(
+        "loop-policy",
+        help="Show the autonomy level, kill-switch state, denylist and per-stage gates",
+    )
+
+    notify_parser = subparsers.add_parser(
+        "notify", help="Send an outbound status notification (console or webhook)"
+    )
+    notify_parser.add_argument("message", type=str, help="The message to send")
+    notify_parser.add_argument("--event", type=str, default="manual", help="Event label")
+
+    subparsers.add_parser(
+        "loop-budget", help="Show today's autonomous-loop cost spend versus the ceiling"
+    )
 
     dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
@@ -284,6 +454,20 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         checks = run_checks(workspace_root)
         print(format_report(checks))
         sys.exit(1 if any(c["status"] == "fail" for c in checks) else 0)
+    elif args.command == "loop-lock":
+        handle_loop_lock(workspace_root, args.action)
+    elif args.command == "loop-guard":
+        handle_loop_guard(workspace_root)
+    elif args.command == "loop-stop":
+        handle_loop_stop(workspace_root, args.clear)
+    elif args.command == "loop-policy":
+        handle_loop_policy(workspace_root)
+    elif args.command == "notify":
+        handle_notify(workspace_root, args.message, args.event)
+    elif args.command == "loop-budget":
+        handle_loop_budget(workspace_root)
+    elif args.command == "log":
+        handle_log(workspace_root, args.last)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
         sys.exit(run_stage(workspace_root, args.stage, args.dev_args))

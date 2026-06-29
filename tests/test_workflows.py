@@ -1,9 +1,22 @@
+import json
 import os
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from solomon_harness import workflows
+from solomon_harness import loop_lock
+from solomon_harness import loop_policy
+from solomon_harness import loop_budget
+from solomon_harness.loop_lock import LoopLock
+
+
+def _workspace_with_loop(stage, body, loop_block):
+    root = _workspace_with_command(stage, body)
+    os.makedirs(os.path.join(root, ".agent"), exist_ok=True)
+    with open(os.path.join(root, ".agent", "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"agent_name": "x", "loop": loop_block}, f)
+    return root
 
 
 def _workspace_with_command(stage: str, body: str) -> str:
@@ -50,6 +63,120 @@ class TestWorkflows(unittest.TestCase):
         args, kwargs = mock_run.call_args
         self.assertEqual(args[0], ["claude", "-p"])
         self.assertIn("Do work on 42", kwargs["input"])
+
+
+class TestRunStageDriverLock(unittest.TestCase):
+    """The portable single-driver gate lives in run_stage (both hosts run it)."""
+
+    def _foreign_live_lock(self, root):
+        # A live foreign lock: different session, this process's (alive) pid.
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="foreign-driver", pid=os.getpid()).acquire()
+        return path
+
+    def test_mutating_stage_is_blocked_when_a_foreign_lock_is_held(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+        self._foreign_live_lock(root)
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 1)
+        mock_run.assert_not_called()  # never reach the engine while another driver holds the lock
+
+    def test_mutating_stage_acquires_and_releases_the_lock(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        # The lock is released after the stage completes.
+        self.assertFalse(os.path.exists(loop_lock.resolve_lock_path(root)))
+
+    def test_non_mutating_stage_ignores_the_lock(self):
+        root = _workspace_with_command("idea", "---\nx\n---\nCapture $ARGUMENTS")
+        self._foreign_live_lock(root)
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
+        self.assertEqual(rc, 0)
+        mock_run.assert_called_once()  # idea creates no branch/merge, so it is not gated
+
+
+class TestRunStageAutonomyPolicy(unittest.TestCase):
+    """The portable governed-autonomy gate, enforced in run_stage on both hosts."""
+
+    def test_l1_blocks_a_mutating_stage(self):
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L1"})
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_release_is_blocked_even_at_l3(self):
+        root = _workspace_with_loop("release", "---\nx\n---\nShip $ARGUMENTS", {"autonomy": "L3"})
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "release", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_l2_allows_start(self):
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L2"})
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        mock_run.assert_called_once()
+
+    def test_kill_switch_blocks_everything(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+        loop_policy.write_stop(root)
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "loop", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_l3_requires_lock_on_a_nonmutating_stage(self):
+        # At L3 every stage but 'loop' must hold the lock; a foreign lock blocks idea.
+        root = _workspace_with_loop("idea", "---\nx\n---\nCapture $ARGUMENTS", {"autonomy": "L3"})
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="foreign", pid=os.getpid()).acquire()
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
+        self.assertEqual(rc, 1)
+        mock_run.assert_not_called()
+
+    def test_budget_ceiling_blocks_at_l2(self):
+        root = _workspace_with_loop(
+            "start", "---\nx\n---\nGo $ARGUMENTS",
+            {"autonomy": "L2", "daily_cost_ceiling_usd": 1.0},
+        )
+        loop_budget.record(root, 1.5)  # today's spend already over the $1 ceiling
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 3)
+        mock_run.assert_not_called()
+
+    def test_cost_capture_records_at_l2(self):
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L2"})
+
+        class _Proc:
+            returncode = 0
+            stdout = '{"total_cost_usd": 0.5}'
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        args, _ = mock_run.call_args
+        self.assertEqual(args[0], ["claude", "-p", "--output-format", "json"])
+        self.assertAlmostEqual(loop_budget.daily_spend(root), 0.5)
 
 
 if __name__ == "__main__":
