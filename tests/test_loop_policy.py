@@ -92,6 +92,43 @@ class TestDenylist(unittest.TestCase):
         for ok in ("solomon_harness/cli.py", "tests/test_x.py", "docs/readme.md"):
             self.assertFalse(p.is_denied_path(ok), ok)
 
+    def test_absolute_path_is_relativized_against_root(self):
+        root = tempfile.mkdtemp()
+        p = LoopPolicy(root, level="L2")
+        self.assertTrue(p.is_denied_path(os.path.join(root, ".agent", "config.json")))
+
+
+class TestDeniedWrite(unittest.TestCase):
+    def _policy(self, root=None):
+        return LoopPolicy(root or tempfile.mkdtemp(), level="L2")
+
+    def test_blocks_edit_to_denied_path(self):
+        block, reason = loop_policy.denied_write_verdict(
+            {"tool_name": "Edit", "tool_input": {"file_path": ".agent/config.json"}}, self._policy()
+        )
+        self.assertTrue(block)
+        self.assertIn("denylist", reason)
+
+    def test_blocks_absolute_denied_path(self):
+        root = tempfile.mkdtemp()
+        block, _ = loop_policy.denied_write_verdict(
+            {"tool_name": "Write", "tool_input": {"file_path": os.path.join(root, ".agent", "config.json")}},
+            self._policy(root),
+        )
+        self.assertTrue(block)
+
+    def test_allows_normal_write(self):
+        block, _ = loop_policy.denied_write_verdict(
+            {"tool_name": "Edit", "tool_input": {"file_path": "solomon_harness/cli.py"}}, self._policy()
+        )
+        self.assertFalse(block)
+
+    def test_ignores_non_write_tools(self):
+        block, _ = loop_policy.denied_write_verdict(
+            {"tool_name": "Bash", "tool_input": {"command": "rm .agent/config.json"}}, self._policy()
+        )
+        self.assertFalse(block)
+
 
 class TestCheckerSplit(unittest.TestCase):
     def test_split_requires_two_distinct_models(self):

@@ -18,7 +18,7 @@ automation and cadence.
 import fnmatch
 import json
 import os
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from solomon_harness.loop_lock import resolve_common_file
 
@@ -122,8 +122,17 @@ class LoopPolicy:
 
     # -- denylist -----------------------------------------------------------
     def is_denied_path(self, path: str) -> bool:
-        """True when the loop is forbidden from modifying ``path``."""
+        """True when the loop is forbidden from modifying ``path``.
+
+        An absolute path is relativized against the workspace root first, so
+        slash-bearing patterns (``.agent/config.json``, ``*secrets/*``) match
+        regardless of how the path was rooted — otherwise an absolute path would
+        slip past them on the basename alone.
+        """
         p = path.replace(os.sep, "/")
+        root = (self.workspace_root or "").replace(os.sep, "/").rstrip("/")
+        if root and p.startswith(root + "/"):
+            p = p[len(root) + 1:]
         if p.startswith("./"):
             p = p[2:]
         base = os.path.basename(p)
@@ -172,3 +181,33 @@ def clear_stop(workspace_root: str) -> bool:
         return True
     except FileNotFoundError:
         return False
+
+
+# File-modifying host tools whose target path the denylist guards.
+WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def denied_write_verdict(payload: Dict[str, Any], policy: "LoopPolicy") -> Tuple[bool, str]:
+    """Block a file-write tool call that targets a denylisted path.
+
+    This is the enforcement the denylist needs to be more than advisory: it stops
+    an autonomous (or prompt-injected) run from editing ``.agent/config.json`` to
+    widen its own autonomy level, empty the denylist, or defeat the cost ceiling.
+    It runs in the PreToolUse `loop-guard` hook, so it is a Claude-side hard block;
+    on the Gemini host (no PreToolUse) the denylist stays model-honored, and an
+    unattended L3 cadence should pin the level with ``SOLOMON_LOOP_AUTONOMY`` so a
+    config edit cannot raise it.
+    """
+    tool = payload.get("tool_name") or payload.get("tool") or ""
+    if tool not in WRITE_TOOLS:
+        return (False, "")
+    tool_input = payload.get("tool_input") or {}
+    path = tool_input.get("file_path") or tool_input.get("path") or tool_input.get("notebook_path") or ""
+    if path and policy.is_denied_path(str(path)):
+        return (
+            True,
+            f"Blocked by the loop denylist: {path} may not be modified by an autonomous "
+            "run (it could widen the run's own autonomy, denylist, or cost ceiling). "
+            "Pin the autonomy level with SOLOMON_LOOP_AUTONOMY for unattended runs.",
+        )
+    return (False, "")

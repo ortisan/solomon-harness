@@ -246,11 +246,14 @@ def handle_loop_budget(workspace_root: str) -> None:
 
 
 def handle_loop_guard(workspace_root: str) -> None:
-    """PreToolUse hook: block git push / gh pr merge under a live foreign lock.
+    """PreToolUse hook: block unsafe tool calls under the loop's guardrails.
 
-    Reads the Claude Code hook payload from stdin. Exits 2 to block (the message
-    is fed back to the model), 0 to allow. Fail-open: any error allows the tool,
-    because the portable enforcement is the run_stage gate, not this hook.
+    Blocks a `git push` / `gh pr merge` issued while another live driver holds the
+    lock, and a file-write tool (Edit/Write/MultiEdit) that targets a denylisted
+    path (so an autonomous run cannot edit `.agent/config.json` to widen itself).
+    Reads the Claude Code hook payload from stdin. Exits 2 to block (the message is
+    fed back to the model), 0 to allow. Fail-open: any error allows the tool,
+    because the portable enforcement of record is the run_stage gate, not this hook.
     """
     import json as _json
 
@@ -262,9 +265,12 @@ def handle_loop_guard(workspace_root: str) -> None:
 
     try:
         from solomon_harness.loop_lock import LoopLock, guard_verdict
+        from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
 
         lock = LoopLock(workspace_root, session_id=payload.get("session_id"))
         block, reason = guard_verdict(payload, lock)
+        if not block:
+            block, reason = denied_write_verdict(payload, LoopPolicy.from_config(workspace_root))
     except Exception:
         sys.exit(0)
 

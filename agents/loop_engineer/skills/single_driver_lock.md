@@ -1,6 +1,6 @@
 # Single-Driver Lock
 
-Every driver acquires the single-driver lock before it touches git or the board; this skill governs the lock protocol and its recovery, the precondition that makes any cadence safe. Two concurrent drivers once produced premature merges that bypassed the review gate and flipped `core.bare=true`; the lock converts that race into impossible-by-construction.
+Every HEADLESS driver (the `solomon-harness dev` cadence path) acquires the single-driver lock before a mutating stage touches git or the board; this skill governs the lock protocol and its recovery, the precondition that makes a cadence safe. Two concurrent drivers once produced premature merges that bypassed the review gate and flipped `core.bare=true`; the lock makes that race impossible-by-construction on the headless path. Interactive `/solomon-*` sessions do not acquire the lock — they are bounded by the human merge gate and the `loop-guard` hook, and operators run one at a time; do not claim the lock protects concurrent interactive drivers.
 
 ## The protocol (`solomon_harness/loop_lock.py`)
 

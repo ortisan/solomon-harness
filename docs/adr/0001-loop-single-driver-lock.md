@@ -7,8 +7,9 @@
 
 ## Context and problem statement
 
-The `/solomon-loop` workflow drives mutating lifecycle stages (loop, start,
-review, release) that branch, push, merge, and cut releases. Two drivers running
+The `/solomon-loop` workflow and the Phase 3 maintenance loops drive mutating
+stages (loop, start, review, release, scan-arch, scan-dedup) that branch, push,
+merge, and cut releases. Two drivers running
 against one repository at the same time is a real, observed failure mode: a
 documented concurrent-driver incident produced premature merges that bypassed the
 review gate and flipped `core.bare=true` through worktree tooling, corrupting git
@@ -61,14 +62,19 @@ that satisfies C2 and C5 together while remaining live and auditable.
   shelling out to `git`), so every linked worktree of the repository contends on
   the same file. When the directory is not a git repository it falls back to
   `<root>/.solomon/loop.lock`. The JSON holder is itself the audit record. A
-  stale lock — heartbeat past the TTL (1800s default), or a dead pid on the same
-  host — is reclaimed automatically rather than wedging the loop.
-  (`solomon_harness/loop_lock.py`.)
+  live process on the same host is never stale, however long it holds the lock
+  (a long stage is never reclaimed mid-run); only a dead same-host pid, or a
+  cross-host lock past the TTL (1800s default, since a remote pid cannot be
+  probed), is reclaimed. (`solomon_harness/loop_lock.py`.)
 - The enforcement of record is the portable gate in `run_stage`
   (`solomon_harness/workflows.py`): for every stage in `LOCKED_STAGES`
-  (`loop`, `start`, `review`, `release`) it acquires the lock before invoking the
-  host engine and releases it in a `finally`. Because it is Python, it enforces
-  identically on Claude Code and the Gemini CLI (C5).
+  (`loop`, `start`, `review`, `release`, `scan-arch`, `scan-dedup`) — and, at L3,
+  every stage `LoopPolicy.requires_lock` names — it acquires the lock before
+  invoking the host engine and releases it in a `finally`. This is the enforcement
+  of record for the headless cadence path (`solomon-harness dev`); because it is
+  Python it holds identically on Claude Code and the Gemini CLI (C5). Interactive
+  `/solomon-*` sessions do not acquire the lock — they are bounded by the human
+  merge gate and the `loop-guard` hook, and operators run one at a time.
 - A PreToolUse `loop-guard` hook in `.claude/settings.json` blocks `git push` /
   `gh pr merge` / `git merge` while another live driver holds the lock. This is
   Claude-only defense-in-depth that fails open; it is not the enforcement of

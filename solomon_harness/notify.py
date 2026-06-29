@@ -42,6 +42,10 @@ class WebhookNotifier(Notifier):
         self._opener = opener or urllib.request.urlopen
 
     def send(self, event: str, message: str) -> None:
+        # Only POST to http(s); refuse file:// and other schemes a misconfigured
+        # or hostile SOLOMON_NOTIFY_WEBHOOK could otherwise make urlopen open.
+        if not self.url.lower().startswith(("http://", "https://")):
+            raise ValueError(f"refusing non-http notify URL scheme: {self.url!r}")
         body = json.dumps({"text": f"[solomon:{event}] {message}"}).encode("utf-8")
         req = urllib.request.Request(
             self.url, data=body, headers={"Content-Type": "application/json"}, method="POST"
@@ -67,7 +71,7 @@ def get_notifier(workspace_root: str, env: Optional[Dict[str, str]] = None) -> O
         return None
     url = env.get(cfg.get("webhook_env", DEFAULT_WEBHOOK_ENV))
     mode = cfg.get("mode")
-    if url and mode in (None, "webhook"):
+    if url and url.lower().startswith(("http://", "https://")) and mode in (None, "webhook"):
         return WebhookNotifier(url)
     if mode == "console":
         return ConsoleNotifier()

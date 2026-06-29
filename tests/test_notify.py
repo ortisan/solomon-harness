@@ -29,6 +29,13 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(captured["method"], "POST")
         self.assertIn("PR 31 awaiting review", captured["body"]["text"])
 
+    def test_webhook_send_rejects_non_http_scheme(self):
+        opened = []
+        n = WebhookNotifier("file:///etc/passwd", opener=lambda req, timeout=None: opened.append(req))
+        with self.assertRaises(ValueError):
+            n.send("e", "m")
+        self.assertEqual(opened, [])  # never opened the non-http URL
+
 
 class TestSelection(unittest.TestCase):
     def _root(self, notify_block=None):
@@ -41,6 +48,9 @@ class TestSelection(unittest.TestCase):
 
     def test_default_is_noop(self):
         self.assertIsNone(notify.get_notifier(self._root(), env={}))
+
+    def test_get_notifier_rejects_non_http_url(self):
+        self.assertIsNone(notify.get_notifier(self._root(), env={"SOLOMON_NOTIFY_WEBHOOK": "file:///etc/passwd"}))
 
     def test_webhook_from_env(self):
         n = notify.get_notifier(self._root(), env={"SOLOMON_NOTIFY_WEBHOOK": "https://h/x"})

@@ -2,9 +2,12 @@
 
 Two concurrent solomon drivers on one repository previously collided — premature
 merges that bypassed the review gate, and worktree tooling flipping
-``core.bare=true``. This module makes that race impossible by construction: every
-driver acquires one advisory lockfile before it touches git or the board, and a
-second driver is refused.
+``core.bare=true``. This module serializes the **headless cadence path**
+(``solomon-harness dev``): every headless driver acquires one advisory lockfile
+before a mutating stage touches git or the board, and a second is refused, so that
+path is race-free by construction. Interactive ``/solomon-*`` sessions do not
+acquire the lock; they are bounded by the human merge gate and the Claude-side
+``loop-guard`` hook, and operators run one interactive driver at a time.
 
 The lock is anchored at the git *common* directory (resolved by reading ``.git``
 directly, not by shelling out to ``git`` — which would be intercepted by tests
@@ -13,9 +16,10 @@ on the same file. When the directory is not a git repository the lock falls back
 to ``<root>/.solomon/loop.lock``.
 
 The lock is a plain JSON file on disk, so the holder is itself auditable —
-"every decision traces back to a file on disk". Staleness is reclaimable: a lock
-whose heartbeat is older than the TTL, or whose pid is dead on the same host, is
-taken over by the next driver rather than wedging the loop forever.
+"every decision traces back to a file on disk". Staleness favors safety: a live
+process on the same host is never stale (so a long stage is never reclaimed
+mid-run); only a dead same-host pid, or a cross-host lock past the TTL (a remote
+pid cannot be probed), is taken over by the next driver.
 """
 
 import json

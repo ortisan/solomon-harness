@@ -23,7 +23,7 @@ Three rules no level can widen: **merge, release, and Done are permanently human
 
 ## Denylist and the maker/checker split
 
-`is_denied_path` forbids the loop from reading or modifying sensitive paths (defaults: `.git/*`, `.agent/config.json`, `*.env`, `*.pem`, `*.key`, `*.enc`, `*secrets/*`, migrations, vendored code). `checker_split_ok` requires the verifier to run on a different model than the maker — a config invariant surfaced by `loop-policy`; it complements, never replaces, the human `/solomon-review` gate.
+`is_denied_path` names the paths the loop must not modify (defaults: `.git/*`, `.agent/config.json`, `*.env`, `*.pem`, `*.key`, `*.enc`, `*secrets/*`, migrations, vendored code). It is **enforced** by the `loop-guard` PreToolUse hook, which blocks an `Edit`/`Write`/`MultiEdit` to a denied path (and a `git push`/`gh pr merge` under a foreign lock) — a Claude-side hard block. On the Gemini host (no PreToolUse) the denylist is model-honored, so an unattended L3 cadence on Gemini must pin its level with `SOLOMON_LOOP_AUTONOMY` (env beats config in `from_config`) so a self-edit of `.agent/config.json` cannot raise the level. `checker_split_ok` requires the verifier to run on a different model than the maker — a config invariant surfaced by `loop-policy`; it complements, never replaces, the human `/solomon-review` gate.
 
 ## The kill-switch
 
@@ -33,7 +33,7 @@ Three rules no level can widen: **merge, release, and Done are permanently human
 
 - Coercing an invalid level to `human` — that fails open; keep it failing closed.
 - Letting L3 act without the lock, or letting any level merge/release autonomously.
-- Reading the denylist as advisory — it bounds what a scan loop may touch and must be enforced where files are modified.
+- Treating the denylist as enforced everywhere — it is a hard block only at the Claude `loop-guard` PreToolUse boundary; on Gemini it is model-honored, so pin the level via env there.
 - Putting a webhook URL or model secret in the committed `loop`/`notify` block — secrets come from the environment.
 
 ## Definition of done
@@ -41,5 +41,5 @@ Three rules no level can widen: **merge, release, and Done are permanently human
 - [ ] `human` is unrestricted; L1 report-only; L2/L3 draft-only; an invalid level denies.
 - [ ] Merge, release, and Done are denied at every non-human level.
 - [ ] The kill-switch halts all stages and is clearable; `loop-policy` shows the full state.
-- [ ] The denylist and checker-split are enforced/surfaced; secrets stay in env.
+- [ ] The denylist is enforced at the loop-guard PreToolUse boundary (Edit/Write/Bash) and model-honored on Gemini; the checker-split is surfaced; secrets stay in env.
 - [ ] Changes ship with covering tests in `tests/test_loop_policy.py`.

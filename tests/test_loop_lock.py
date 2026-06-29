@@ -121,6 +121,21 @@ class TestLoopLock(unittest.TestCase):
             self.assertEqual(self._lock("z").read()["session_id"], "a")
         self.assertFalse(os.path.exists(self.path))
 
+    def test_reclaim_cas_loser_backs_off(self):
+        # Two drivers race to reclaim the same dead lock. After our atomic write,
+        # the confirmation re-read sees a live foreign winner, so we must back off
+        # (raise LoopLockHeld) rather than both believing we hold it.
+        self._lock("pre", host="other-host", clock=lambda: 0.0).acquire()  # file exists -> reclaim path
+        new = self._lock("loser", host="h1", pid=os.getpid(), clock=lambda: 1.0e9)
+        seq = [
+            {"session_id": "dead", "host": "other-host", "pid": 1, "heartbeat_at": loop_lock._iso(0.0)},
+            {"session_id": "winner", "host": "h1", "pid": os.getpid(), "heartbeat_at": loop_lock._iso(1.0e9)},
+        ]
+        new.read = lambda: seq.pop(0)
+        with self.assertRaises(LoopLockHeld) as ctx:
+            new.acquire()
+        self.assertEqual(ctx.exception.holder["session_id"], "winner")
+
 
 class TestGuard(unittest.TestCase):
     def setUp(self):

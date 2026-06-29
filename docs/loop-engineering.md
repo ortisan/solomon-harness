@@ -76,8 +76,8 @@ auditable record are guaranteed.
 - **Phase 4 — Ownership (loop_engineer shipped).** A dedicated `loop_engineer`
   agent now owns the lock/policy/run-log/budget/notify modules, with six skills
   citing their real APIs (the precedent `practice_curator` set for a deferred
-  agent). Remaining: the `agents/AGENTS.md` index entry (deferred while a
-  concurrent session edits that file), worktree hygiene, and state GC.
+  agent), and is indexed in `agents/AGENTS.md`. Remaining: worktree hygiene and
+  state GC.
 
 ## Phase 0, as shipped
 
