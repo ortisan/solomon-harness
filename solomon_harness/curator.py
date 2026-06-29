@@ -3,6 +3,11 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
 
+# Proposal kind for a skill acquired through the external broker. Brokered
+# proposals carry single-source provenance instead of the two-source evidence
+# floor, so the kind is matched in several places; keep it a single constant.
+ADAPT_SKILL_KIND = "adapt_skill"
+
 @dataclass(frozen=True)
 class DriftMatch:
     agent: str
@@ -105,13 +110,23 @@ def apply_proposal(
     gh_runner: Optional[Callable[[List[str]], Any]] = None
 ) -> str:
     """Apply an accepted proposal to an agent by branching, editing, compiling, committing, and opening a draft PR."""
+    import re
     root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Validation 1: sources >= 2 (broker adapt_skill proposals carry genuine
-    # single-source provenance and are exempt).
-    if proposal.kind != "adapt_skill" and len(proposal.sources) < 2:
+
+    # Validation 1: provenance floor. Brokered adapt_skill proposals carry
+    # genuine single-source provenance (<source>@<full-sha>) instead of the
+    # two-source evidence floor; require that shape rather than exempting the
+    # kind outright, so no caller can bypass evidence with an empty source set.
+    if proposal.kind == ADAPT_SKILL_KIND:
+        if len(proposal.sources) != 1 or not re.fullmatch(
+            r"\S+@(?:[0-9a-f]{40}|[0-9a-f]{64})", proposal.sources[0]
+        ):
+            raise ValueError(
+                "adapt_skill proposal requires one <source>@<full-sha> provenance entry"
+            )
+    elif len(proposal.sources) < 2:
         raise ValueError("evidence regressed")
-        
+
     # Validation 2: target exactly one agent
     agent_names = discover_agents(root)
     if not proposal.agent or proposal.agent not in agent_names:
@@ -130,8 +145,7 @@ def apply_proposal(
     # Run git and process commands
     import sys
     import subprocess
-    import re
-    
+
     # slugify branch name
     slug = re.sub(r'[^a-zA-Z0-9\-]', '-', proposal.drift_description.lower())
     slug = re.sub(r'-+', '-', slug).strip('-')
@@ -180,7 +194,7 @@ def apply_proposal(
         title = f"feat(agents): apply proposal for {proposal.agent}"
         body = f"Closes #{proposal.decision_id or ''}"
         gh_cmd = ["gh", "pr", "create", "--draft", "--base", "main", "--title", title, "--body", body]
-        if proposal.kind == "adapt_skill":
+        if proposal.kind == ADAPT_SKILL_KIND:
             gh_cmd.extend(["--reviewer", "security"])
         
         if gh_runner:
@@ -424,7 +438,7 @@ def broker_skill(
             sources=(f"{source_name}@{source.get('pin')}",),
             rationale=f"Acquiring missing capability '{skill_name}' via broker",
             decision_id=None,
-            kind="adapt_skill",
+            kind=ADAPT_SKILL_KIND,
         )
         return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
 

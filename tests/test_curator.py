@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -299,12 +300,66 @@ class TestApplyProposal(unittest.TestCase):
         p = curator.Proposal(
             agent="qa",
             drift_description="Add new capability foo",
-            sources=("one-source@deadbeef",),
+            sources=("one-source@" + "a" * 40,),
             rationale="r",
-            kind="adapt_skill",
+            kind=curator.ADAPT_SKILL_KIND,
         )
         curator.apply_proposal(p, edit_callback, self.root, gh_runner=gh_runner)
         self.assertTrue(any("--reviewer" in a and "security" in a for a in captured))
+
+    def test_apply_proposal_adapt_skill_requires_provenance_when_sources_empty(self):
+        # N1: adapt_skill must not be a free pass. An empty sources tuple no
+        # longer slips past validation; it must carry one <source>@<full-sha>.
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="Add new capability foo",
+            sources=(),
+            rationale="r",
+            kind=curator.ADAPT_SKILL_KIND,
+        )
+        with self.assertRaisesRegex(ValueError, "adapt_skill proposal requires one"):
+            curator.apply_proposal(p, lambda ad: None, self.root)
+
+    def test_apply_proposal_adapt_skill_rejects_source_without_full_sha(self):
+        # N1: a source string lacking the <name>@<full-sha> shape is rejected.
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="Add new capability foo",
+            sources=("foo",),
+            rationale="r",
+            kind=curator.ADAPT_SKILL_KIND,
+        )
+        with self.assertRaisesRegex(ValueError, "adapt_skill proposal requires one"):
+            curator.apply_proposal(p, lambda ad: None, self.root)
+
+    def test_apply_proposal_adapt_skill_accepts_full_sha_provenance(self):
+        # N1: exactly one <source>@<40-hex> entry clears the provenance floor
+        # and the proposal applies end to end.
+        captured = []
+
+        def gh_runner(args):
+            captured.append(args)
+
+            class R:
+                stdout = "https://github.com/ortisan/solomon-harness/pull/9\n"
+
+            return R()
+
+        def edit_callback(agent_dir):
+            sd = os.path.join(agent_dir, "skills")
+            os.makedirs(sd, exist_ok=True)
+            with open(os.path.join(sd, "brokered.md"), "w", encoding="utf-8") as f:
+                f.write("content")
+
+        p = curator.Proposal(
+            agent="qa",
+            drift_description="Add new capability foo",
+            sources=("anthropic-skills@" + "a" * 40,),
+            rationale="r",
+            kind=curator.ADAPT_SKILL_KIND,
+        )
+        pr_url = curator.apply_proposal(p, edit_callback, self.root, gh_runner=gh_runner)
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/9")
 
     def test_apply_proposal_without_kind_omits_security_reviewer(self):
         # Fix 7: a non-broker proposal (kind is None) must not attach a reviewer
@@ -433,6 +488,15 @@ class TestValidateAndInstallSkill(unittest.TestCase):
             with self.subTest(name=bad):
                 with self.assertRaisesRegex(ValueError, "invalid skill name"):
                     curator.validate_and_install_skill(self.src, self.skills_dir, bad, self.root)
+
+    def test_rejects_target_outside_agents_directory(self):
+        # M1: a clean name still cannot install into an agent_skills_dir that
+        # resolves outside <workspace_root>/agents. The realpath confinement
+        # guard must fire even when the name guard passes.
+        outside = tempfile.mkdtemp(prefix="vis-outside-")
+        self.addCleanup(shutil.rmtree, outside, True)
+        with self.assertRaisesRegex(ValueError, "Confinement"):
+            curator.validate_and_install_skill(self.src, outside, "x", self.root)
 
 
 class TestBrokerAcquisition(unittest.TestCase):
@@ -593,6 +657,66 @@ class TestBrokerAcquisition(unittest.TestCase):
         self.assertIn("## Common pitfalls", content)
         self.assertIn("## Definition of done", content)
 
+    def test_broker_skill_packaged_successful_adapt_and_install(self):
+        # M2: a packaged skill (a directory with SKILL.md plus inert siblings)
+        # is installed end to end: the package dir lands under the agent, the
+        # SKILL.md is adapted, and the inert siblings are copied verbatim. A
+        # file sibling (reference.md) exercises copy2 and a directory sibling
+        # (docs/) exercises copytree. Brokering twice exercises the rmtree of an
+        # existing target on reinstall, so the whole packaged-install block runs.
+        pkg_dir = os.path.join(self.src_git, "goodpkg")
+        os.makedirs(os.path.join(pkg_dir, "docs"), exist_ok=True)
+        with open(os.path.join(pkg_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("# Good Package\n\nWe leverage tooling here 🚀\n")
+        with open(os.path.join(pkg_dir, "reference.md"), "w", encoding="utf-8") as f:
+            f.write("inert reference data")
+        with open(os.path.join(pkg_dir, "docs", "notes.md"), "w", encoding="utf-8") as f:
+            f.write("inert notes")
+        self._commit_and_repin("add packaged skill")
+
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+
+        gh_args = []
+
+        def gh_runner(args):
+            gh_args.append(args)
+            return MockCompletedProcess()
+
+        curator.broker_skill(self.root, "mock-source", "goodpkg", "qa", gh_runner=gh_runner)
+        pr_url = curator.broker_skill(self.root, "mock-source", "goodpkg", "qa", gh_runner=gh_runner)
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/123")
+        self.assertTrue(any("--reviewer" in args and "security" in args for args in gh_args))
+
+        proc = subprocess.run(
+            ["git", "branch", "--list", "feature/adapt-skill-goodpkg-from-mock-source"],
+            cwd=self.root, capture_output=True, text=True, check=True,
+        )
+        branches = [b for b in proc.stdout.splitlines() if b.strip()]
+        self.assertEqual(len(branches), 1)
+
+        installed_dir = os.path.join(self.root, "agents", "qa", "skills", "goodpkg")
+        self.assertTrue(os.path.isdir(installed_dir))
+
+        skill_md = os.path.join(installed_dir, "SKILL.md")
+        self.assertTrue(os.path.isfile(skill_md))
+        with open(skill_md, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertNotIn("🚀", content)
+        self.assertNotIn("leverage", content)
+        self.assertIn("use", content)
+        self.assertIn("## Common pitfalls", content)
+        self.assertIn("## Definition of done", content)
+
+        sibling = os.path.join(installed_dir, "reference.md")
+        self.assertTrue(os.path.isfile(sibling))
+        with open(sibling, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "inert reference data")
+
+        docs_sibling = os.path.join(installed_dir, "docs", "notes.md")
+        self.assertTrue(os.path.isfile(docs_sibling))
+
     def _commit_and_repin(self, msg):
         subprocess.run(["git", "add", "."], cwd=self.src_git, check=True)
         subprocess.run(["git", "commit", "-m", msg], cwd=self.src_git, check=True)
@@ -711,6 +835,32 @@ class TestBrokerAcquisition(unittest.TestCase):
         self.assertEqual(proposal.kind, "adapt_skill")
         self.assertNotIn("baseline", proposal.sources)
         self.assertEqual(proposal.sources, (f"mock-source@{self.pin}",))
+
+
+class TestPinnedManifestFitness(unittest.TestCase):
+    """Fitness function over the committed skill-sources.json manifest.
+
+    Every git-type source must carry a full-SHA pin, so an unpinned source
+    fails CI rather than reaching a default-branch clone at runtime.
+    """
+
+    def test_every_git_source_carries_full_sha_pin(self):
+        from solomon_harness import skills
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(curator.__file__)))
+        manifest = os.path.join(repo_root, "skill-sources.json")
+        if not os.path.isfile(manifest):
+            self.skipTest("no skill-sources.json at repo root")
+
+        sources = skills.load_sources(repo_root)
+        sha = re.compile(r"^([0-9a-f]{40}|[0-9a-f]{64})$")
+        git_sources = [s for s in sources.values() if s.get("type") == "git"]
+        self.assertTrue(git_sources, "expected at least one git source in the manifest")
+        for source in git_sources:
+            pin = source.get("pin") or source.get("commit")
+            name = source.get("name")
+            self.assertIsNotNone(pin, f"git source {name!r} is unpinned")
+            self.assertRegex(pin, sha, f"git source {name!r} pin is not a full SHA")
 
 
 if __name__ == "__main__":
