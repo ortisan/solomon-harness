@@ -111,6 +111,38 @@ class TestBuildBoard(unittest.TestCase):
         self.assertEqual(board["unmapped"], 0)
         self.assertEqual(board["project"], "alpha")
 
+    def test_empty_project_renders_seven_zero_columns_and_is_not_seeded(self):
+        """A zero-issue tenant renders all seven headers at count 0 with total 0,
+        and building the board creates no rows (it is never seeded)."""
+        client = DatabaseClient(db_path=self.db_path)
+
+        board = cockpit_read.build_board(client, "empty")
+
+        self.assertEqual([c["name"] for c in board["columns"]], SEVEN_COLUMNS)
+        self.assertTrue(all(c["count"] == 0 for c in board["columns"]))
+        self.assertEqual(board["total"], 0)
+        self.assertEqual(board["unmapped"], 0)
+        # Re-reading the tenant proves the build did not fabricate any issue.
+        self.assertEqual(client.list_issues(), [])
+        client.close()
+
+    def test_issue_with_status_outside_columns_counts_as_unmapped(self):
+        """An issue whose status is not one of the seven columns is not coerced
+        into a column; it is counted in unmapped so no issue is dropped and
+        total == sum(column counts) + unmapped."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("b1", "Backlog one", "feature", "Backlog", None)
+        client.log_issue("x1", "Stray status", "feature", "open", None)
+
+        board = cockpit_read.build_board(client, "alpha")
+        client.close()
+
+        column_total = sum(c["count"] for c in board["columns"])
+        self.assertEqual(column_total, 1)
+        self.assertEqual(board["unmapped"], 1)
+        self.assertEqual(board["total"], 2)
+        self.assertEqual(board["total"], column_total + board["unmapped"])
+
 
 class TestDiscoverProjects(unittest.TestCase):
     def setUp(self):
