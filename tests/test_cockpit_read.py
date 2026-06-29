@@ -1609,6 +1609,61 @@ class TestComposeVelocity(unittest.TestCase):
         self.assertEqual(rows["gh:bob"]["count"], 1)
         self.assertEqual(rows["gh:bob"]["perTenant"], {"alpha": 1})
 
+    def test_compose_velocity_marks_partial_and_207_when_tenant_degraded(self):
+        """A degraded (UNREACHABLE) tenant lifts the aggregate to 207, contributes
+        no counts, and flags every per-person figure partial naming the degraded
+        tenant; the reachable tenants compute in full. Because the degraded tenant
+        could have held deliveries for any person, the figure is the reachable
+        subtotal, never presented as complete."""
+        results = [
+            _ok_velocity(
+                "alpha",
+                {
+                    "alice@example.com": {
+                        "count": 4,
+                        "excluded": 0,
+                        "doneAt": [
+                            "2026-06-28T10:00:00",
+                            "2026-06-27T10:00:00",
+                            "2026-06-26T10:00:00",
+                            "2026-06-25T10:00:00",
+                        ],
+                    }
+                },
+            ),
+            _ok_velocity(
+                "beta",
+                {
+                    "alice@example.com": {
+                        "count": 3,
+                        "excluded": 0,
+                        "doneAt": [
+                            "2026-06-23T10:00:00",
+                            "2026-06-22T10:00:00",
+                            "2026-06-21T10:00:00",
+                        ],
+                    }
+                },
+            ),
+            {"project": "gamma", "status": "UNREACHABLE", "velocity": None},
+        ]
+
+        payload = cockpit_read.compose_velocity(results)
+
+        # The degraded tenant lifts the aggregate to 207 and is named.
+        self.assertEqual(payload["aggregateStatus"], 207)
+        self.assertEqual(payload["degraded"], ["gamma"])
+
+        rows = {row["personKey"]: row for row in payload["rows"]}
+        alice = rows["alice@example.com"]
+        # alpha and beta compute in full; gamma contributes nothing.
+        self.assertEqual(alice["count"], 7)
+        self.assertEqual(alice["perTenant"], {"alpha": 4, "beta": 3})
+        self.assertNotIn("gamma", alice["perTenant"])
+        # Every figure is flagged partial naming the degraded tenant.
+        self.assertTrue(alice["partial"])
+        self.assertEqual(alice["partialTenants"], ["gamma"])
+
 
 if __name__ == "__main__":
     unittest.main()
