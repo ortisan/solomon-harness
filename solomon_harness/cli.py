@@ -537,11 +537,14 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             )
             return
         try:
-            states = _fetch_gh_issue_states(workspace_root)
+            issue_states = _fetch_gh_issue_states(workspace_root)
+            pr_states = _fetch_gh_pr_states(workspace_root)
         except RuntimeError as exc:
             print(f"reconcile failed: {exc}", file=sys.stderr)
             sys.exit(1)
-        result = reconcile_memory(db, states, dry_run=dry_run)
+        result = reconcile_memory(db, issue_states, dry_run=dry_run)
+        resolved_map = _build_resolved_map(issue_states, pr_states)
+        tracking = reconcile_tracking_rows(db, resolved_map, dry_run=dry_run)
 
     if dry_run:
         ids = ", ".join(f"#{n}" for n in result["would_repair"])
@@ -550,10 +553,21 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             f"reconcile --dry-run: {len(result['would_repair'])} issue(s) would be "
             f"set to closed ({result['scanned']} GitHub issues scanned){suffix}"
         )
+        slugs = ", ".join(tracking["would_close"])
+        track_suffix = f": {slugs}" if slugs else ""
+        print(
+            f"reconcile --dry-run: {len(tracking['would_close'])} tracking row(s) "
+            f"would be set to done ({tracking['scanned_tracking']} tracking rows "
+            f"scanned){track_suffix}"
+        )
     else:
         print(
             f"reconcile: {result['repaired']} issue(s) set to closed "
             f"({result['scanned']} GitHub issues scanned)"
+        )
+        print(
+            f"reconcile: {tracking['closed']} tracking row(s) set to done "
+            f"({tracking['scanned_tracking']} tracking rows scanned)"
         )
 
 

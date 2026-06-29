@@ -491,5 +491,72 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
         self.assertIn("reconcile failed", err.getvalue())
 
 
+class TestHandleReconcileTracking(unittest.TestCase):
+    """The reconcile command's tracking-row pass, wired end to end against a real
+    store with a mocked gh. The parent is a MERGED PR, so the expanded PR path is
+    exercised through the real fetch + merge + close pipeline."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+        self.inner = DatabaseClient(db_path=self.db_path)
+        self.inner.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
+        self.proxy = _ShareStoreProxy(self.inner)
+
+    def tearDown(self):
+        self.inner.close()
+        self.temp_dir.cleanup()
+
+    def _gh_payload(self):
+        # Parent #68 is a MERGED PR: rejected by the issue fetch (OPEN/CLOSED only),
+        # accepted by the PR fetch, so the row resolves only through the PR map.
+        return json.dumps([{"number": 68, "state": "MERGED"}])
+
+    def test_real_run_closes_then_idempotent(self):
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("1 tracking row(s) set to done", out.getvalue())
+        # The row dropped out of the open set (became terminal).
+        self.assertNotIn(
+            "68-R-01", {i["github_id"] for i in self.inner.get_open_issues()}
+        )
+
+        out2 = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out2),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("0 tracking row(s) set to done", out2.getvalue())
+
+    def test_main_dry_run_reports_rows_it_would_close(self):
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.main(harness_dir=self.temp_dir.name, argv=["reconcile", "--dry-run"])
+        self.assertIn("would be set to done", out.getvalue())
+        self.assertIn("68-R-01", out.getvalue())
+        # Nothing written on a dry run.
+        self.assertEqual(self.inner.get_issue("68-R-01")["status"], "in_progress")
+
+
 if __name__ == "__main__":
     unittest.main()
