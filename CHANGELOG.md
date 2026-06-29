@@ -2,6 +2,18 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.3.1] - 2026-06-28
+
+### Changed
+- Completed epic #6: the `software_architect` and `sre` role-core skills are brought to the canonical depth standard (#52). This corrects the earlier note that both already met the bar — 14 role-core skills were below it and are now at reference depth (named standards, worked examples, `## Common pitfalls`, `## Definition of done`), with the three meta/scope files reframed as single-concern skills rather than restating shared rules.
+- `PLAN.md` is now per-branch local state (gitignored): `/solomon-start` writes it for the branch in flight and it is never committed, ending the recurring concurrent-branch conflict on it (#52).
+
+### Added
+- `scripts/check-skill-depth.py`: a mechanical gate asserting every non-shared role-core skill is at least 600 words and closes with `## Common pitfalls` and `## Definition of done`, with unit tests.
+
+### Fixed
+- The test suite is now hermetic and worktree-safe (#32), and a regression guard locks the hermeticity property in (#36).
+
 ## [0.3.0] - 2026-06-28
 
 ### Added
