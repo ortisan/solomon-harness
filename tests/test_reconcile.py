@@ -184,6 +184,19 @@ class TestReconcileTrackingRows(unittest.TestCase):
         self.assertIn("R-07", err.getvalue())
         client.close()
 
+    def test_dry_run_collects_slugs_without_writing(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
+
+        result = cli.reconcile_tracking_rows(client, {"68": True}, dry_run=True)
+
+        self.assertEqual(result["would_close"], ["68-R-01"])
+        self.assertEqual(result["closed"], 0)
+        # Nothing written on a dry run: the row is still non-terminal and open.
+        self.assertEqual(client.get_issue("68-R-01")["status"], "in_progress")
+        self.assertIn("68-R-01", {i["github_id"] for i in client.get_open_issues()})
+        client.close()
+
 
 class TestFetchGhIssueStates(unittest.TestCase):
     def test_validates_number_and_state_as_data(self):

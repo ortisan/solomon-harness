@@ -436,6 +436,8 @@ def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = F
         if not resolved_map.get(parent):
             continue
         would_close.append(github_id)
+        if dry_run:
+            continue
         db.log_issue(
             github_id,
             row.get("title"),
