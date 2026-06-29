@@ -1,6 +1,6 @@
 # ADR-0003: Web UI stack for the delivery cockpit
 
-- Status: accepted (amended 2026-06-28 — see Amendment below)
+- Status: superseded by ADR-0005
 - Date: 2026-06-28
 - Deciders: frontend with software_architect (UX: ux_designer); ratified by the maintainer
 - Issue: #44 (gates all slices including #53)
@@ -105,3 +105,7 @@ rebuild MUST honor them:
   207/403 contract is enforced at the Next route + read port (no FastAPI layer).
 
 A future separate SPA + API split remains possible but is not built now.
+
+This amendment is superseded by ADR-0005, which now carries the realized
+decision (the Next.js full-stack app with a non-shell bridge over the ADR-0002
+read port). This file is retained for history; see ADR-0005 for the live decision.
