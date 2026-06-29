@@ -25,6 +25,8 @@ from solomon_harness.wiki_bootstrap import (
     WikiBootstrapResult,
     bootstrap_wiki,
     choose_tier,
+    is_github_remote,
+    remote_host,
     resolve_web_wiki_url,
     resolve_wiki_clone_url,
     wiki_refs_present,
@@ -128,6 +130,55 @@ class TestResolveWebWikiUrl(unittest.TestCase):
         self.assertIsNone(resolve_web_wiki_url(""))
 
 
+class TestGitHubHostAllowlist(unittest.TestCase):
+    """Security (R-?): "is this GitHub?" is decided by the parsed host equalling an
+    allowlisted host, never by a substring. A substring check let crafted remotes
+    like git@github.com.evil.com:o/r.git pass and yield a github.com.evil.com web
+    URL handed to the authenticated browser on AUTOMATE.
+    """
+
+    def test_parses_the_host_from_each_remote_shape(self):
+        cases = {
+            "https://github.com/o/r.git": "github.com",
+            "https://github.com/o/r": "github.com",
+            "git@github.com:o/r.git": "github.com",
+            "ssh://git@github.com/o/r.git": "github.com",
+            "https://x-access-token:SECRET@github.com/o/r.git": "github.com",
+            "git@github.com.evil.com:o/r.git": "github.com.evil.com",
+            "https://github.com.evil.com/o/r/wiki": "github.com.evil.com",
+        }
+        for remote, host in cases.items():
+            self.assertEqual(remote_host(remote), host, remote)
+
+    def test_legit_github_remotes_are_recognized(self):
+        for remote in (
+            "https://github.com/o/r.git",
+            "https://github.com/o/r",
+            "git@github.com:o/r.git",
+            "ssh://git@github.com/o/r.git",
+            "https://x-access-token:SECRET@github.com/o/r.git",
+        ):
+            self.assertTrue(is_github_remote(remote), remote)
+
+    def test_bypass_vectors_are_not_github(self):
+        # The crafted hosts the substring check accepted; the allowlist rejects
+        # them because the parsed host does not equal "github.com".
+        for remote in (
+            "git@github.com.evil.com:o/r.git",
+            "https://github.com.evil.com/o/r.git",
+            "https://evilgithub.com/o/r.git",
+            "git@evilgithub.com:o/r.git",
+            "https://notgithub.com.attacker.net/o/r.git",
+            "ssh://git@github.com.evil.com/o/r.git",
+        ):
+            self.assertFalse(is_github_remote(remote), remote)
+
+    def test_no_usable_remote_is_not_github(self):
+        self.assertFalse(is_github_remote("none"))
+        self.assertFalse(is_github_remote(""))
+        self.assertIsNone(remote_host("none"))
+
+
 class TestWikiRefsPresent(unittest.TestCase):
     def test_true_when_a_head_is_advertised(self):
         runner = _runner_returning(0, "deadbeef\trefs/heads/master\n")
@@ -202,6 +253,25 @@ class TestInitDetectAndHint(unittest.TestCase):
                 refs_checker=lambda url, timeout=10.0: False,
             )
         self.assertEqual(buf.getvalue(), "")
+
+    def test_silent_and_no_probe_on_a_spoofed_github_host(self):
+        # A remote whose host only looks like GitHub must not be probed or hinted.
+        calls = []
+
+        def _refs(url, timeout=10.0):
+            calls.append(url)
+            return False
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            hint_uninitialized_wiki(
+                "/ws",
+                "git@github.com.evil.com:o/r.git",
+                wiki_enabled_checker=lambda _ws: True,
+                refs_checker=_refs,
+            )
+        self.assertEqual(buf.getvalue(), "")
+        self.assertEqual(calls, [], "a spoofed host must not be probed")
 
 
 class TestInitWiresTheWikiHint(unittest.TestCase):
@@ -490,6 +560,50 @@ class TestBootstrapWiki(unittest.TestCase):
         self.assertTrue(result.proceed)
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(probe.calls, [], "no remote must not trigger a network probe")
+
+    def test_spoofed_github_host_is_a_noop_and_never_automates(self):
+        # A crafted remote whose host only looks like GitHub must be treated as
+        # non-GitHub: no probe, no web URL handed to the browser, no AUTOMATE.
+        probe = _RefProbe(False)
+        bootstrapper = _FakeBootstrapper(authenticated=True)
+        for remote in (
+            "git@github.com.evil.com:o/r.git",
+            "https://github.com.evil.com/o/r.git",
+            "https://evilgithub.com/o/r.git",
+            "https://notgithub.com.attacker.net/o/r.git",
+        ):
+            result = bootstrap_wiki(
+                remote,
+                interactive=True,
+                bootstrapper=bootstrapper,
+                refs_checker=probe,
+                confirm=_never_confirm,
+                notify=lambda _m: None,
+            )
+            self.assertIs(result.tier, Tier.NOOP, remote)
+            self.assertTrue(result.proceed, remote)
+            self.assertEqual(result.exit_code, 0, remote)
+            self.assertEqual(result.message, "", remote)
+        self.assertEqual(bootstrapper.create_calls, [], "no first page on a spoofed host")
+        self.assertEqual(probe.calls, [], "a spoofed host must not trigger a network probe")
+
+    def test_degrade_message_redacts_url_credentials(self):
+        # A token embedded in the remote (x-access-token:SECRET@) must never be
+        # echoed in the actionable message.
+        probe = _RefProbe(False)
+        result = bootstrap_wiki(
+            "https://x-access-token:SECRET@github.com/o/r.git",
+            interactive=False,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=_never_confirm,
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.DEGRADE)
+        self.assertNotIn("SECRET", result.message)
+        self.assertNotIn("x-access-token", result.message)
+        self.assertIn("https://github.com/o/r.wiki.git", result.message)
+        self.assertIn("https://github.com/o/r/wiki/_new", result.message)
 
 
 class TestWikiCliWiring(unittest.TestCase):

@@ -27,6 +27,61 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 
+GITHUB_HOSTS = frozenset({"github.com"})
+
+
+def remote_host(remote_url: str) -> str | None:
+    """Parse the bare host from a git remote, or ``None`` when none can be parsed.
+
+    Handles the ``scheme://[user[:secret]@]host[:port]/path`` form (https and
+    ssh) and the scp-like ``user@host:path`` form. Any userinfo and port are
+    stripped, so the result is the lowercase host alone. This is the basis for
+    deciding GitHub identity by an exact host match rather than a bypassable
+    substring.
+    """
+    if not remote_url or remote_url == "none":
+        return None
+    url = remote_url.strip()
+    if "://" in url:
+        authority = url.split("://", 1)[1].split("/", 1)[0]
+    elif "@" in url and ":" in url.split("@", 1)[1]:
+        authority = url.split("@", 1)[1].split("/", 1)[0]
+    else:
+        return None
+    authority = authority.rsplit("@", 1)[-1]  # drop any user[:secret]@
+    host = authority.split(":", 1)[0].strip()  # drop any :port or scp :path
+    return host.lower() or None
+
+
+def is_github_remote(
+    remote_url: str, *, allowed_hosts: frozenset[str] = GITHUB_HOSTS
+) -> bool:
+    """Report whether ``remote_url``'s host is an allowlisted GitHub host.
+
+    The decision is an exact host match against ``allowed_hosts`` (default
+    ``github.com``; pass a configured GitHub Enterprise host to extend it), so a
+    crafted remote such as ``git@github.com.evil.com:o/r.git`` is rejected
+    rather than accepted by a substring check and handed to the browser.
+    """
+    host = remote_host(remote_url)
+    return host is not None and host in allowed_hosts
+
+
+def _strip_url_userinfo(url: str) -> str:
+    """Remove ``user[:secret]@`` userinfo from a URL's authority before it is
+    echoed in a message, so a token embedded in a remote cannot leak. scp-like
+    ``git@host:path`` remotes (no ``//``) are left untouched: that user is the
+    conventional ``git`` account, not a secret.
+    """
+    if "://" not in url:
+        return url
+    scheme, _, rest = url.partition("://")
+    authority, slash, path = rest.partition("/")
+    if "@" in authority:
+        authority = authority.rsplit("@", 1)[-1]
+    return f"{scheme}://{authority}{slash}{path}"
+
+
 def resolve_wiki_clone_url(remote_url: str) -> str | None:
     """Map a repository remote URL to its ``.wiki.git`` clone URL.
 
@@ -193,6 +248,8 @@ class WikiBootstrapResult:
 
 
 def _uninitialized_message(clone_url: str, web_url: str) -> str:
+    clone_url = _strip_url_userinfo(clone_url)
+    web_url = _strip_url_userinfo(web_url)
     return (
         "Error: the GitHub wiki has not been initialized.\n"
         f"GitHub creates the wiki content repository ({clone_url}) only after the "
@@ -204,6 +261,8 @@ def _uninitialized_message(clone_url: str, web_url: str) -> str:
 
 
 def _inconclusive_message(clone_url: str, web_url: str) -> str:
+    clone_url = _strip_url_userinfo(clone_url)
+    web_url = _strip_url_userinfo(web_url)
     return (
         "Error: could not determine whether the GitHub wiki is initialized.\n"
         "Detection was inconclusive (network or timeout): the wiki content "
@@ -226,6 +285,7 @@ def _degrade_message(clone_url: str, web_url: str, refs_present: bool | None) ->
 
 
 def _guide_message(web_url: str) -> str:
+    web_url = _strip_url_userinfo(web_url)
     return (
         "The GitHub wiki has not been initialized, so there is nothing to publish "
         "to yet.\n"
@@ -280,8 +340,11 @@ def bootstrap_wiki(
     clone_url = resolve_wiki_clone_url(git_remote)
     web_url = resolve_web_wiki_url(git_remote)
     # No usable GitHub remote (mock mode, or a non-GitHub host): nothing to
-    # bootstrap. Proceed without probing the network so the step stays offline-safe.
-    if not clone_url or not web_url or "github.com" not in git_remote:
+    # bootstrap. The host is matched exactly against the allowlist, never by a
+    # substring, so a crafted remote whose host only looks like GitHub is treated
+    # as non-GitHub here -- no web URL is built for the browser and AUTOMATE never
+    # fires. Proceed without probing the network so the step stays offline-safe.
+    if not clone_url or not web_url or not is_github_remote(git_remote):
         return WikiBootstrapResult(Tier.NOOP, proceed=True, exit_code=0, message="")
 
     refs = refs_checker(clone_url, timeout=timeout)

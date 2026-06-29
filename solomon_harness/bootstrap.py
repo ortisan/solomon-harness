@@ -6,6 +6,7 @@ import subprocess
 from typing import Callable, List, Dict
 
 from solomon_harness.wiki_bootstrap import (
+    is_github_remote,
     resolve_web_wiki_url,
     resolve_wiki_clone_url,
     wiki_refs_present,
@@ -228,7 +229,9 @@ def hint_uninitialized_wiki(
     wiki feature is confirmed enabled, so init stays fast and offline-safe when
     GitHub is unreachable, and never hints when there is nothing to initialize.
     """
-    if git_remote == "none" or "github.com" not in git_remote:
+    # Match the host exactly against the GitHub allowlist (never a substring), so
+    # a crafted remote whose host only looks like GitHub is not probed or hinted.
+    if not is_github_remote(git_remote):
         return
     if not wiki_enabled_checker(workspace_root):
         return
