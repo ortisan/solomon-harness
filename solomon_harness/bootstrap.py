@@ -301,8 +301,6 @@ def scaffold_agents(workspace_root: str) -> None:
     main_src = os.path.join(template_dir, "main.py")
     config_src = os.path.join(template_dir, ".agent", "config.json")
 
-    print(f"DEBUG: main_src={main_src} exists={os.path.isfile(main_src)}")
-
     for name in sorted(os.listdir(agents_dir)):
         agent_dir = os.path.join(agents_dir, name)
         if not os.path.isfile(os.path.join(agent_dir, "agents", f"{name}.md")):
