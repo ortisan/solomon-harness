@@ -1,49 +1,46 @@
-# Plan: feat(agents): add educational_psychologist specialist agent
+# Plan: feat(agents): practice_curator — fleet sweep emitting one bounded proposal per agent
 
-- Issue: #68 https://github.com/ortisan/solomon-harness/issues/68
-- Branch: feature/add-educational-psychologist
+- Issue: #19 https://github.com/ortisan/solomon-harness/issues/19
+- Branch: feature/practice-curator-fleet-sweep
 
 ## Problem Statement
-The harness roster currently lacks a specialist covering psychopedagogy or the learning sciences. Any learning-facing project driven by the harness has no dedicated expert to consult. We need to introduce an `educational_psychologist` agent whose skills are grounded in established, evidence-based methodologies.
+Implement a fleet-sweep mechanism for the `practice_curator` agent. It must compare the best-practice baseline (e.g. from its `sourcing_the_state_of_the_art.md` skill) against all existing agents in the fleet and identify/report any drift in their skills or profiles, without making any file changes directly. It must emit exactly one bounded proposal per affected agent, backed by at least 2 dated and credible sources.
 
 ## Proposed Change
-1. Create folder structure `agents/educational_psychologist/` with `persona.md`, `agents/educational_psychologist.md`, `.agent/config.json`, and 9 skills under `skills/`.
-2. Register the agent in `scripts/validate-agents.py`.
-3. Add the agent to `agents/AGENTS.md`.
-4. Create test suite `tests/test_educational_psychologist.py` to cover agent validations.
+1. Implement a `sweep_fleet` or `sweep` method in the `practice_curator` agent or code.
+   Since `capability_router.py` exists in `solomon_harness/` for Slice A of curator capability-broker, we will put the sweep logic in `solomon_harness/curator.py`.
+2. The sweep logic:
+   - Iterate over all agents in the fleet (using `discover_agents`).
+   - For each agent, analyze their skills or profile against the best-practice baseline.
+   - The analysis itself is a match process. To keep the core testable and deterministic (similar to `capability_router.py`), we will inject a `sweep_analyzer` port (Matcher/Callable). In production, this is driven by the host LLM; in tests, by a deterministic stub.
+   - For each affected agent with drift:
+     - Generate a proposal carrying >= 2 dated, credible sources.
+     - Record the proposal with `db.log_decision` in project memory.
+     - Emit the proposal (or file it as a `/solomon-issue` or print it).
+     - If the drift is backed by fewer than 2 dated sources, do not emit it as a proposal, but list it under "needs evidence" in the sweep summary.
+   - The sweep process must remain strictly read-only: no files under any `agents/<name>/` directory can be modified.
+   - Each proposal must target exactly one agent.
 
 ## Target Files
-- `agents/educational_psychologist/persona.md`
-- `agents/educational_psychologist/agents/educational_psychologist.md`
-- `agents/educational_psychologist/.agent/config.json`
-- `agents/educational_psychologist/skills/cognitive_load_theory.md`
-- `agents/educational_psychologist/skills/retrieval_practice.md`
-- `agents/educational_psychologist/skills/distributed_practice.md`
-- `agents/educational_psychologist/skills/dual_coding.md`
-- `agents/educational_psychologist/skills/backward_design.md`
-- `agents/educational_psychologist/skills/evidence_based_sourcing.md`
-- `agents/educational_psychologist/skills/definition_of_done.md`
-- `agents/educational_psychologist/skills/common_pitfalls.md`
-- `agents/educational_psychologist/skills/scope_and_non_negotiables.md`
-- `scripts/validate-agents.py`
-- `agents/AGENTS.md`
-- `tests/test_educational_psychologist.py`
+- `solomon_harness/curator.py`
+- `tests/test_curator.py`
+- `agents/practice_curator/skills/auditing_delivered_work.md` (check/deepen safety guidance if needed)
+- `agents/practice_curator/skills/sourcing_the_state_of_the_art.md` (check/deepen safety guidance if needed)
 
 ## Edge Cases & STRIDE
-- Platitude detection: The manual gate must reject generalist advice.
-- Verification script `scripts/check-skill-depth.py` must run and exit 0 for this agent.
-- STRIDE: No input validation required since these are static markdown/config files, but we must verify that no code execution is introduced in active skills and no untrusted markdown injection occurs.
+- Banned edit: Verify that the sweep modifies no agent files.
+- Insufficient sources: If a drift has < 2 sources, it is not filed but listed as "needs evidence".
+- Single agent target: Ensure each proposal only targets a single agent.
+- STRIDE: No input validation required since it is a local tool, but we must protect against writing to arbitrary file paths or executing untrusted scripts.
 
 ## TDD Loop Breakdown
-1. **Step 1 (Red)**: Add tests to `tests/test_educational_psychologist.py` validating that the folder structure, config format, and allow-list attributions are checked. Run and fail.
-2. **Step 2 (Green)**: Implement `agents/educational_psychologist/` directory and files, including the 9 skills with allow-list attributions and 600+ word counts. Run tests to pass.
-3. **Step 3 (Red)**: Write a test asserting that `scripts/validate-agents.py` checks `educational_psychologist.md`. Run and fail.
-4. **Step 4 (Green)**: Register the agent in `scripts/validate-agents.py` and run `scripts/document-skills.py`. Run tests to pass.
-5. **Step 5 (Red/Green)**: Run `scripts/check-skill-depth.py` on the agent and ensure it passes, refactoring any skills that do not clear the depth gate.
+1. **Step 1 (Red)**: Write unit tests in `tests/test_curator.py` asserting that the sweep iterates all agents, identifies drift, rejects drifts with < 2 sources (listing them under "needs evidence"), and emits exactly one proposal per affected agent, recording each with `save_decision`.
+2. **Step 2 (Green)**: Implement the sweep core in `solomon_harness/curator.py` to make the tests pass.
+3. **Step 3 (Refactor)**: Clean up `solomon_harness/curator.py` and ensure the code is modular and clean.
+4. **Step 4 (Red)**: Write a test asserting that the sweep never modifies any files in the workspace.
+5. **Step 5 (Green)**: Ensure the sweep only reads and performs no writes on files.
+6. **Step 6 (Verify)**: Run the full test suite and verify that the `practice_curator` tests pass.
 
 ## Verification Criteria
-- `python scripts/check-skill-depth.py educational_psychologist` exits 0.
-- `python scripts/validate-agents.py` exits 0.
-- `python scripts/document-skills.py` exits 0.
-- `solomon-harness compile` exits 0.
-- `python -m unittest tests.test_educational_psychologist` passes.
+- `uv run python -m unittest discover -s tests` passes.
+- All new tests in `tests/test_curator.py` pass.
