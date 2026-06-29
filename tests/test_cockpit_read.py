@@ -24,7 +24,10 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from solomon_harness import cockpit_read  # noqa: E402
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    person_key_or_unassigned,
+)
 
 # Capture the read-path spans in memory. The global tracer provider can only be
 # set once per process, so this module owns it (no other test module sets one).
@@ -173,6 +176,34 @@ class TestBuildBoard(unittest.TestCase):
         self.assertEqual(board["unmapped"], 1)
         self.assertEqual(board["total"], 2)
         self.assertEqual(board["total"], column_total + board["unmapped"])
+
+    def test_build_board_surfaces_person_key_on_each_card(self):
+        """Each card carries an explicit personKey equal to
+        person_key_or_unassigned(assignee): a stored email key and a gh: handle
+        pass through unchanged, a null assignee resolves to the reserved
+        unassigned pseudo-key (never re-derived from email/login), and the
+        source issue row is never mutated by the read."""
+        issues = [
+            {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+            {"github_id": "a2", "status": "Backlog", "assignee": "gh:bob"},
+            {"github_id": "a3", "status": "Backlog", "assignee": None},
+        ]
+        source = [dict(issue) for issue in issues]
+
+        board = cockpit_read.build_board(_IssuesOnlyClient(issues), "alpha")
+
+        cards = {
+            card["github_id"]: card
+            for column in board["columns"]
+            for card in column["issues"]
+        }
+        self.assertEqual(cards["a1"]["personKey"], "alice@example.com")
+        self.assertEqual(cards["a2"]["personKey"], "gh:bob")
+        self.assertEqual(cards["a3"]["personKey"], person_key_or_unassigned(None))
+        self.assertEqual(cards["a3"]["personKey"], "unassigned")
+        # The card is a copy: the surfaced key never leaks back onto the row.
+        self.assertEqual(issues, source)
+        self.assertNotIn("personKey", issues[0])
 
 
 class TestDiscoverProjects(unittest.TestCase):
@@ -395,6 +426,186 @@ class TestComposePortfolio(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             cockpit_read.compose_portfolio([broken])
+
+
+def _portfolio_with_assignees():
+    """Compose a three-tenant portfolio whose cards carry mixed person keys.
+
+    alice owns 3 cards in alpha and 2 in beta and none in gamma; bob owns cards
+    in every tenant; two alpha cards and one beta card are unassigned. Built
+    through the real compose_portfolio so every card carries the surfaced
+    personKey the filter matches on.
+    """
+    alpha = [
+        {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+        {"github_id": "a2", "status": "In Progress", "assignee": "alice@example.com"},
+        {"github_id": "a3", "status": "Done", "assignee": "alice@example.com"},
+        {"github_id": "a4", "status": "Backlog", "assignee": "gh:bob"},
+        {"github_id": "a5", "status": "Ready", "assignee": None},
+        {"github_id": "a6", "status": "QA", "assignee": None},
+    ]
+    beta = [
+        {"github_id": "b1", "status": "Ready", "assignee": "alice@example.com"},
+        {"github_id": "b2", "status": "QA", "assignee": "alice@example.com"},
+        {"github_id": "b3", "status": "Done", "assignee": "gh:bob"},
+        {"github_id": "b4", "status": "Backlog", "assignee": None},
+    ]
+    gamma = [
+        {"github_id": "g1", "status": "Backlog", "assignee": "gh:bob"},
+        {"github_id": "g2", "status": "In Progress", "assignee": "gh:bob"},
+    ]
+    return cockpit_read.compose_portfolio(
+        [
+            _ok_result("alpha", alpha),
+            _ok_result("beta", beta),
+            _ok_result("gamma", gamma),
+        ]
+    )
+
+
+class TestFilterPortfolio(unittest.TestCase):
+    def _ids_by_project(self, payload):
+        return {
+            lane["project"]: {
+                card["github_id"]
+                for column in lane["columns"]
+                for card in column["issues"]
+            }
+            for lane in payload["swimlanes"]
+        }
+
+    def _ids_by_column(self, lane):
+        return {
+            column["name"]: {card["github_id"] for card in column["issues"]}
+            for column in lane["columns"]
+        }
+
+    def test_filter_portfolio_narrows_to_one_person_key(self):
+        """filter_portfolio keeps one swimlane per project and, within each, only
+        the cards whose surfaced personKey matches: alice renders her alpha/beta
+        cards with gamma a present-but-empty lane and a re-summed total of 5; a
+        person assigned nowhere (carol) keeps all three lanes present and empty
+        with total 0; the unassigned pseudo-key renders only the null-assignee
+        cards. The lane is narrowed not flattened, filteredUser is stamped, the
+        seven portfolio column counts re-sum over the matched set, and no card
+        carrying another person's key survives anywhere."""
+        portfolio = _portfolio_with_assignees()
+
+        cases = {
+            "alice@example.com": {
+                "ids": {
+                    "alpha": {"a1", "a2", "a3"},
+                    "beta": {"b1", "b2"},
+                    "gamma": set(),
+                },
+                "total": 5,
+            },
+            "carol@example.com": {
+                "ids": {"alpha": set(), "beta": set(), "gamma": set()},
+                "total": 0,
+            },
+            "unassigned": {
+                "ids": {"alpha": {"a5", "a6"}, "beta": {"b4"}, "gamma": set()},
+                "total": 3,
+            },
+        }
+
+        for person_key, expected in cases.items():
+            with self.subTest(person_key=person_key):
+                filtered = cockpit_read.filter_portfolio(portfolio, person_key)
+
+                # One lane per project survives: narrowed, never flattened.
+                self.assertEqual(
+                    [lane["project"] for lane in filtered["swimlanes"]],
+                    ["alpha", "beta", "gamma"],
+                )
+                self.assertEqual(self._ids_by_project(filtered), expected["ids"])
+
+                # Each lane total re-sums its filtered cards; an unmatched lane is
+                # present at zero, never hidden.
+                lanes = {lane["project"]: lane for lane in filtered["swimlanes"]}
+                for project, ids in expected["ids"].items():
+                    self.assertEqual(lanes[project]["total"], len(ids))
+
+                # The kept cards stay in their stored columns, not just in the
+                # flattened set: a regression that redistributed alice's cards
+                # across columns would reconcile on the sum yet fail here.
+                if person_key == "alice@example.com":
+                    alpha_columns = self._ids_by_column(lanes["alpha"])
+                    self.assertEqual(alpha_columns["Backlog"], {"a1"})
+                    self.assertEqual(alpha_columns["In Progress"], {"a2"})
+                    self.assertEqual(alpha_columns["Done"], {"a3"})
+                    beta_columns = self._ids_by_column(lanes["beta"])
+                    self.assertEqual(beta_columns["Ready"], {"b1"})
+                    self.assertEqual(beta_columns["QA"], {"b2"})
+
+                # The portfolio total and the seven column counts re-sum over the
+                # matched set; filteredUser names the subject.
+                self.assertEqual(filtered["total"], expected["total"])
+                self.assertEqual(
+                    sum(c["count"] for c in filtered["columns"]), expected["total"]
+                )
+                self.assertEqual(filtered["filteredUser"], person_key)
+
+                # No card carrying another person's key survives in any lane.
+                surviving_keys = {
+                    card["personKey"]
+                    for lane in filtered["swimlanes"]
+                    for column in lane["columns"]
+                    for card in column["issues"]
+                }
+                self.assertTrue(surviving_keys <= {person_key})
+
+    def test_filter_portfolio_preserves_degraded_207_and_total_over_reachable(self):
+        """Filtering a portfolio that has degraded lanes keeps each degraded
+        lane's status (and the FORBIDDEN 403) untouched with no rows, holds
+        aggregateStatus at 207, and sums the filtered total over the reachable
+        lanes only."""
+        alpha = [
+            {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+            {"github_id": "a2", "status": "In Progress", "assignee": "alice@example.com"},
+            {"github_id": "a3", "status": "Done", "assignee": "alice@example.com"},
+            {"github_id": "a4", "status": "Backlog", "assignee": "gh:bob"},
+        ]
+        delta = [
+            {"github_id": "d1", "status": "QA", "assignee": "alice@example.com"},
+            {"github_id": "d2", "status": "Done", "assignee": "gh:bob"},
+        ]
+        portfolio = cockpit_read.compose_portfolio(
+            [
+                _ok_result("alpha", alpha),
+                {"project": "beta", "status": "UNREACHABLE", "board": None},
+                {"project": "gamma", "status": "FORBIDDEN", "board": None},
+                _ok_result("delta", delta),
+            ]
+        )
+        self.assertEqual(portfolio["aggregateStatus"], 207)
+
+        filtered = cockpit_read.filter_portfolio(portfolio, "alice@example.com")
+
+        lanes = {lane["project"]: lane for lane in filtered["swimlanes"]}
+        # Lane order and presence are preserved: nothing is hidden or flattened.
+        self.assertEqual(
+            [lane["project"] for lane in filtered["swimlanes"]],
+            ["alpha", "beta", "gamma", "delta"],
+        )
+        # The degraded lanes keep their status and 403, carrying no rows.
+        self.assertEqual(lanes["beta"]["status"], "UNREACHABLE")
+        self.assertNotIn("httpStatus", lanes["beta"])
+        self.assertEqual(lanes["gamma"]["status"], "FORBIDDEN")
+        self.assertEqual(lanes["gamma"]["httpStatus"], 403)
+        for degraded in ("beta", "gamma"):
+            self.assertEqual(lanes[degraded]["total"], 0)
+            self.assertEqual(
+                [card for c in lanes[degraded]["columns"] for card in c["issues"]],
+                [],
+            )
+        # The reachable lanes render alice's filtered cards.
+        self.assertEqual(lanes["alpha"]["total"], 3)
+        self.assertEqual(lanes["delta"]["total"], 1)
+        # 207 holds and the filtered total sums the reachable lanes only (3 + 1).
+        self.assertEqual(filtered["aggregateStatus"], 207)
+        self.assertEqual(filtered["total"], 4)
 
 
 class _CleanTenantClient:
@@ -855,6 +1066,105 @@ class TestPortfolioPayload(unittest.TestCase):
         self.assertEqual(ids_by_project["alpha"] & ids_by_project["gamma"], set())
         self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
 
+    def test_portfolio_payload_filter_is_read_only_and_no_leak(self):
+        """portfolio_payload(person=...) narrows the board to one person through
+        the real fan-out: every surviving card carries that person's key, each
+        lane carries only its own tenant's ids (the per-lane id sets stay
+        pairwise disjoint under the filter, so nothing leaks across tenants), and
+        driving every tenant through a ReadOnlyGuard records zero writes."""
+        issues = {
+            "alpha": [
+                {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+                {"github_id": "a2", "status": "Done", "assignee": "alice@example.com"},
+                {"github_id": "a3", "status": "Backlog", "assignee": "gh:bob"},
+            ],
+            "beta": [
+                {"github_id": "b1", "status": "In Progress", "assignee": "alice@example.com"},
+                {"github_id": "b2", "status": "Done", "assignee": "gh:bob"},
+            ],
+            "gamma": [
+                {"github_id": "g1", "status": "Ready", "assignee": "alice@example.com"},
+                {"github_id": "g2", "status": "QA", "assignee": "gh:bob"},
+                {"github_id": "g3", "status": "Backlog", "assignee": None},
+            ],
+        }
+        guards = []
+
+        def factory():
+            guard = ReadOnlyGuard(FakeTenantClient(issues))
+            guards.append(guard)
+            return guard
+
+        payload = cockpit_read.portfolio_payload(
+            client_factory=factory, person="alice@example.com"
+        )
+
+        # Only alice's cards survive, and filteredUser names the subject.
+        self.assertEqual(payload["filteredUser"], "alice@example.com")
+        surviving_keys = {
+            card["personKey"]
+            for lane in payload["swimlanes"]
+            for column in lane["columns"]
+            for card in column["issues"]
+        }
+        self.assertEqual(surviving_keys, {"alice@example.com"})
+
+        # Each lane carries only its own tenant's filtered ids; sets are disjoint.
+        ids_by_project = {
+            lane["project"]: {
+                card["github_id"]
+                for column in lane["columns"]
+                for card in column["issues"]
+            }
+            for lane in payload["swimlanes"]
+        }
+        self.assertEqual(ids_by_project["alpha"], {"a1", "a2"})
+        self.assertEqual(ids_by_project["beta"], {"b1"})
+        self.assertEqual(ids_by_project["gamma"], {"g1"})
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["beta"], set())
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["gamma"], set())
+        self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
+        self.assertEqual(payload["total"], 4)
+
+        # The filtered read path issued zero writes across every tenant.
+        self.assertGreaterEqual(len(guards), 4)
+        for guard in guards:
+            self.assertEqual(guard.write_calls, [])
+        self.assertEqual(payload["aggregateStatus"], 200)
+
+    def test_portfolio_payload_falsy_person_is_unfiltered_no_op(self):
+        """portfolio_payload no-ops on any falsy person (None or ""): both return
+        today's unfiltered payload, so the seam matches the route/CLI that map a
+        falsy value to no filter and no caller narrows-to-empty by accident."""
+        issues = {
+            "alpha": [
+                {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+                {"github_id": "a2", "status": "Done", "assignee": "gh:bob"},
+            ],
+            "beta": [
+                {"github_id": "b1", "status": "Ready", "assignee": None},
+            ],
+        }
+
+        def factory():
+            return FakeTenantClient(issues)
+
+        unfiltered = cockpit_read.portfolio_payload(client_factory=factory)
+        explicit_none = cockpit_read.portfolio_payload(
+            client_factory=factory, person=None
+        )
+        empty_person = cockpit_read.portfolio_payload(
+            client_factory=factory, person=""
+        )
+
+        self.assertEqual(unfiltered, explicit_none)
+        # An empty person string narrows to nothing if treated as a filter; the
+        # seam must no-op it instead of stamping filteredUser="" with total 0.
+        self.assertEqual(unfiltered, empty_person)
+        self.assertNotIn("filteredUser", empty_person)
+        self.assertNotIn("filteredUser", unfiltered)
+        self.assertEqual(unfiltered["total"], 3)
+
 
 class TestPortfolioCli(unittest.TestCase):
     def setUp(self):
@@ -887,6 +1197,38 @@ class TestPortfolioCli(unittest.TestCase):
 
         span_names = [s.name for s in _SPAN_EXPORTER.get_finished_spans()]
         self.assertIn("cockpit.portfolio", span_names)
+
+    def test_portfolio_cli_filters_by_user(self):
+        """main(["portfolio", "--user", <key>]) prints the portfolio narrowed to
+        that person: filteredUser names the subject and only that person's cards
+        survive, so the route can bridge the filter server-side."""
+        issues = {
+            "alpha": [
+                {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+                {"github_id": "a2", "status": "Done", "assignee": "gh:bob"},
+            ],
+            "beta": [
+                {"github_id": "b1", "status": "Ready", "assignee": "alice@example.com"},
+            ],
+        }
+        out = io.StringIO()
+        with patch(
+            "solomon_harness.cockpit_read.DatabaseClient",
+            side_effect=lambda *args, **kwargs: FakeTenantClient(issues),
+        ):
+            with contextlib.redirect_stdout(out):
+                rc = cockpit_read.main(["portfolio", "--user", "alice@example.com"])
+
+        self.assertEqual(rc, 0)
+        printed = json.loads(out.getvalue())
+        self.assertEqual(printed["filteredUser"], "alice@example.com")
+        ids = {
+            card["github_id"]
+            for lane in printed["swimlanes"]
+            for column in lane["columns"]
+            for card in column["issues"]
+        }
+        self.assertEqual(ids, {"a1", "b1"})
 
 
 class TestBoardPayloadTenantTargeting(unittest.TestCase):

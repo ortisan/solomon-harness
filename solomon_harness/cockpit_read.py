@@ -24,6 +24,7 @@ from solomon_harness.tools.database_client import (
     STATUS_DISPLAY_COLUMNS,
     DatabaseClient,
     normalize_status,
+    person_key_or_unassigned,
 )
 
 _tracer = trace.get_tracer("solomon_harness.cockpit_read")
@@ -67,6 +68,17 @@ PER_PROJECT_TIMEOUT_S = 5.0
 _PERMISSION_PATTERNS = ("permission", "forbidden", "denied", "unauthor", "not allowed")
 
 
+def _card(issue: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy an issue row into a swimlane card carrying its canonical person key.
+
+    The card is a copy so the source row is never mutated, and ``personKey`` reads
+    the stored ``assignee`` through ``person_key_or_unassigned`` (ADR-0012): a null
+    assignee resolves to the reserved ``unassigned`` pseudo-key, and the key is
+    never re-derived from email/login here (that happened at the #118 capture seam).
+    """
+    return {**issue, "personKey": person_key_or_unassigned(issue.get("assignee"))}
+
+
 def build_board(client: Any, project: str) -> Dict[str, Any]:
     """Group one tenant's issues into the seven ordered board columns.
 
@@ -93,7 +105,7 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
             status = normalize_status(issue.get("status"))
             column = STATUS_DISPLAY_COLUMNS.get(status) if status else None
             if column in by_column:
-                by_column[column].append(issue)
+                by_column[column].append(_card(issue))
                 mapped += 1
 
         columns: List[Dict[str, Any]] = [
@@ -217,6 +229,54 @@ def compose_portfolio(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "total": total,
         "unmapped": unmapped,
         "aggregateStatus": aggregate_status,
+    }
+
+
+def _filter_lane(lane: Dict[str, Any], person_key: str) -> Dict[str, Any]:
+    """Narrow one OK swimlane to the cards whose personKey matches (pure).
+
+    Keeps only the matching card in each column, recomputes that column's count
+    and the lane total, and zeroes ``unmapped``: an unmapped issue carries no
+    card and so cannot be attributed to a person. Because it only removes cards
+    already in this lane, it cannot pull in another tenant's row.
+    """
+    columns: List[Dict[str, Any]] = []
+    for column in lane["columns"]:
+        kept = [card for card in column["issues"] if card.get("personKey") == person_key]
+        columns.append({"name": column["name"], "count": len(kept), "issues": kept})
+    total = sum(column["count"] for column in columns)
+    return {**lane, "columns": columns, "total": total, "unmapped": 0}
+
+
+def filter_portfolio(payload: Dict[str, Any], person_key: str) -> Dict[str, Any]:
+    """Narrow a composed portfolio payload to one person key (pure).
+
+    Operates on the already-composed, per-tenant-isolated payload, so it can only
+    REMOVE non-matching cards within each lane — it never joins lanes, and tenant
+    isolation (ADR-0002 compose-never-join) holds by construction. Within each OK
+    swimlane it keeps the cards whose surfaced ``personKey`` matches and re-sums
+    that lane; it keeps one swimlane per project (an unmatched project becomes a
+    present-but-empty lane, never hidden) and leaves degraded (UNREACHABLE/
+    FORBIDDEN) lanes untouched, since they already carry no rows. It re-sums the
+    seven portfolio column counts and the portfolio total over the matched set,
+    re-asserts the reconciliation invariant, stamps ``filteredUser``, and passes
+    ``aggregateStatus``/``overflow``/``notice`` straight through.
+    """
+    swimlanes = [
+        _filter_lane(lane, person_key) if lane["status"] == STATUS_OK else lane
+        for lane in payload["swimlanes"]
+    ]
+    columns = _portfolio_columns(swimlanes)
+    total = sum(lane["total"] for lane in swimlanes)
+    unmapped = sum(lane["unmapped"] for lane in swimlanes)
+    _assert_reconciles(total, columns, unmapped)
+    return {
+        **payload,
+        "swimlanes": swimlanes,
+        "columns": columns,
+        "total": total,
+        "unmapped": unmapped,
+        "filteredUser": person_key,
     }
 
 
@@ -384,15 +444,21 @@ def portfolio_payload(
     max_projects: int = MAX_PROJECTS,
     max_workers: int = MAX_FANOUT_WORKERS,
     timeout: float = PER_PROJECT_TIMEOUT_S,
+    person: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the cross-tenant portfolio board by fanning out over the tenants.
 
     Discovers the sorted tenant set, caps it at ``max_projects`` (recording the
     overflow count and a stable notice), fans the capped set out under a bounded
     pool with a per-project read timeout, and composes the per-project outcomes
-    into one portfolio board. The whole read is wrapped in a ``cockpit.portfolio``
-    span that records the per-project statuses for the audit trace. Read-only:
-    every tenant is read through the read port and nothing is joined or written.
+    into one portfolio board. When ``person`` is given, the composed payload is
+    narrowed to that person key through ``filter_portfolio`` (server-side, so a
+    non-matching tenant's rows never reach the wire); a falsy ``person`` (``None``
+    or ``""``) is a no-op, so every existing caller is unchanged. The whole read
+    is wrapped in a
+    ``cockpit.portfolio`` span that records the per-project statuses for the audit
+    trace. Read-only: every tenant is read through the read port and nothing is
+    joined or written.
 
     ``client_factory`` lets a test inject fakes; by default each call opens a
     fresh ``DatabaseClient`` for the harness directory.
@@ -407,6 +473,10 @@ def portfolio_payload(
         payload = compose_portfolio(results)
         payload["overflow"] = overflow_count
         payload["notice"] = _overflow_notice(overflow_count)
+        # A falsy person (None or "") is a no-op, matching the route/CLI that map
+        # a falsy filter value to no narrowing; only a real key narrows the board.
+        if person:
+            payload = filter_portfolio(payload, person)
 
         span.set_attribute("cockpit.project_count", len(available))
         span.set_attribute("cockpit.shown_count", len(shown))
@@ -423,8 +493,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """JSON CLI for the Node-to-Python read bridge.
 
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
-    board for one tenant; ``portfolio`` prints the cross-tenant aggregate board.
-    Output is JSON on stdout so the Next route can parse it.
+    board for one tenant; ``portfolio`` prints the cross-tenant aggregate board,
+    narrowed to one person key when ``--user <key>`` is given. Output is JSON on
+    stdout so the Next route can parse it.
     """
     if "traceparent" in os.environ:
         from opentelemetry import trace
@@ -446,7 +517,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub.add_parser("projects", help="list the harness-managed tenants")
     board_parser = sub.add_parser("board", help="render one tenant's board")
     board_parser.add_argument("--project", default=None, help="the tenant/project name")
-    sub.add_parser("portfolio", help="render the cross-tenant portfolio board")
+    portfolio_parser = sub.add_parser(
+        "portfolio", help="render the cross-tenant portfolio board"
+    )
+    portfolio_parser.add_argument(
+        "--user", default=None, help="narrow the portfolio to one person key"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -458,7 +534,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     elif args.command == "board":
         print(json.dumps(board_payload(args.project, harness_dir=args.harness_dir)))
     elif args.command == "portfolio":
-        print(json.dumps(portfolio_payload(harness_dir=args.harness_dir)))
+        print(
+            json.dumps(
+                portfolio_payload(harness_dir=args.harness_dir, person=args.user)
+            )
+        )
     return 0
 
 

@@ -275,6 +275,73 @@ describe("dashboard portfolio route", () => {
     }
     expect(execSync).not.toHaveBeenCalled();
   });
+
+  it("threads ?user= to the portfolio bridge as an inert argv element and maps 207", async () => {
+    // An injection-shaped user value proves inertness: it must reach execFile as
+    // exactly one argv element, never a shell string.
+    const user = "alice; rm -rf ~";
+    wirePortfolio({
+      swimlanes: [
+        {
+          project: "alpha",
+          status: "OK",
+          total: 1,
+          unmapped: 0,
+          columns: SEVEN.map((name) =>
+            name === "Backlog"
+              ? {
+                  name,
+                  count: 1,
+                  issues: [
+                    {
+                      github_id: "a1",
+                      title: "alice card",
+                      type_: "feature",
+                      status: "Backlog",
+                      personKey: user,
+                    },
+                  ],
+                }
+              : { name, count: 0, issues: [] },
+          ),
+        },
+        { project: "beta", status: "UNREACHABLE", total: 0, unmapped: 0, columns: zeroColumns() },
+      ],
+      columns: zeroColumns().map(({ name, count }) => ({ name, count })),
+      total: 1,
+      unmapped: 0,
+      aggregateStatus: 207,
+      overflow: 0,
+      notice: null,
+      filteredUser: user,
+    });
+
+    const res = await routeModule.GET(
+      new Request(`http://localhost/api/dashboard?user=${encodeURIComponent(user)}`),
+    );
+
+    // The user value reaches execFile as exactly one argv element after --user;
+    // no shell parses it, so the destructive command cannot run.
+    const call = vi
+      .mocked(execFile)
+      .mock.calls.find((c) => (c[1] as string[]).includes("portfolio"));
+    expect(call).toBeDefined();
+    const argv = call![1] as string[];
+    expect(argv.includes("portfolio")).toBe(true);
+    expect(argv[argv.indexOf("--user") + 1]).toBe(user);
+    expect((call![2] as { shell?: boolean }).shell).toBe(false);
+    expect(execSync).not.toHaveBeenCalled();
+
+    // The composer filtered server-side; the route maps the 207 straight through.
+    expect(res.status).toBe(207);
+    const body = await res.json();
+    expect(body.filteredUser).toBe(user);
+
+    // Only the read portfolio subcommand is ever bridged under the filter.
+    for (const bridged of vi.mocked(execFile).mock.calls) {
+      expect((bridged[1] as string[]).includes("portfolio")).toBe(true);
+    }
+  });
 });
 
 describe("dashboard route tracing", () => {
