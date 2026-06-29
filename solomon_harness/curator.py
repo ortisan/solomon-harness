@@ -128,9 +128,13 @@ def apply_proposal(
         raise ValueError("evidence regressed")
 
     # Validation 2: target exactly one agent
-    agent_names = discover_agents(root)
-    if not proposal.agent or proposal.agent not in agent_names:
-        raise ValueError("targets multiple or invalid agent")
+    if proposal.kind == "create_agent":
+        if not proposal.agent or os.sep in proposal.agent or "/" in proposal.agent or ".." in proposal.agent:
+            raise ValueError("targets multiple or invalid agent")
+    else:
+        agent_names = discover_agents(root)
+        if not proposal.agent or proposal.agent not in agent_names:
+            raise ValueError("targets multiple or invalid agent")
         
     # Validation 3: rule duplicate detection
     agents_md_path = os.path.join(root, "agents", "AGENTS.md")
@@ -165,7 +169,7 @@ def apply_proposal(
     if branch_exists:
         subprocess.run(["git", "checkout", branch_name], cwd=root, env=env, check=True)
     else:
-        subprocess.run(["git", "checkout", "-b", branch_name], cwd=root, env=env, check=True)
+        subprocess.run(["git", "-C", root, "checkout", "-b", branch_name], cwd=root, env=env, check=True)
     
     try:
         # edit agent files
@@ -207,8 +211,19 @@ def apply_proposal(
             gh_env = os.environ.copy()
             gh_env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
             gh_env["PYTHONPATH"] = root
-            res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
-            pr_url = res.stdout.strip()
+            try:
+                res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
+                pr_url = res.stdout.strip()
+            except subprocess.CalledProcessError as e:
+                if "already exists" in e.stderr or "already exists" in e.stdout:
+                    view_cmd = ["gh", "pr", "view", branch_name, "--json", "url", "--template", "{{.url}}"]
+                    view_res = subprocess.run(view_cmd, cwd=root, capture_output=True, text=True, env=gh_env)
+                    if view_res.returncode == 0 and view_res.stdout.strip():
+                        pr_url = view_res.stdout.strip()
+                    else:
+                        raise
+                else:
+                    raise
             
         return pr_url
     except Exception:
@@ -441,4 +456,148 @@ def broker_skill(
             kind=ADAPT_SKILL_KIND,
         )
         return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
+
+
+def broker_agent(
+    workspace_root: str,
+    agent_name: str,
+    title: str,
+    description: str,
+    duties: List[str],
+    gh_runner: Optional[Callable[[List[str]], Any]] = None
+) -> str:
+    """Acquires a new agent by scaffolding its directories, files, and default skill,
+
+    registering it, compiling the integrations, and opening a draft PR via apply_proposal.
+    """
+    import os
+    import re
+    from solomon_harness.bootstrap import scaffold_agents
+
+    # Reject a name that could escape the agents directory
+    if os.path.isabs(agent_name) or os.sep in agent_name or "/" in agent_name or ".." in agent_name:
+        raise ValueError("invalid agent name")
+
+    def edit_callback(agent_dir: str) -> None:
+        role_dir = os.path.join(agent_dir, "agents")
+        skills_dir = os.path.join(agent_dir, "skills")
+        role_path = os.path.join(role_dir, f"{agent_name}.md")
+        persona_path = os.path.join(agent_dir, "persona.md")
+        skill_path = os.path.join(skills_dir, "operating_principles.md")
+
+        # Confinement check
+        target_realpath = os.path.realpath(agent_dir)
+        agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
+        if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
+            raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
+
+        os.makedirs(role_dir, exist_ok=True)
+        os.makedirs(skills_dir, exist_ok=True)
+
+        # Write role file
+        duties_str = "\n".join(f"- {d}" for d in duties)
+        role_content = f"""# {title} Profile
+
+{description}
+
+## Core Duties
+{duties_str}
+
+## Active Skills
+
+No local skills configured.
+
+## External Skills
+
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent {agent_name}
+```
+"""
+        with open(role_path, "w", encoding="utf-8") as f:
+            f.write(role_content)
+
+        # Write persona file
+        persona_content = f"""# {title} Persona
+
+{description}
+
+This agent is the {agent_name} brain for solomon-harness. It reasons within the shared rules in agents/AGENTS.md and its contract in agents/{agent_name}/agents/{agent_name}.md, applies the skills in agents/{agent_name}/skills/, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
+"""
+        with open(persona_path, "w", encoding="utf-8") as f:
+            f.write(persona_content)
+
+        # Write default skill
+        skill_content = f"""# Operating Principles
+
+Operating principles and common pitfalls for the {agent_name} specialist.
+
+## Common pitfalls
+- Stray configuration and redundant abstractions.
+
+## Definition of done
+- [ ] The skill conforms to the house style.
+"""
+        with open(skill_path, "w", encoding="utf-8") as f:
+            f.write(skill_content)
+
+        # Register in agents/AGENTS.md
+        agents_md_path = os.path.join(workspace_root, "agents", "AGENTS.md")
+        if os.path.isfile(agents_md_path):
+            with open(agents_md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            pattern = r"(## The specialist agents\n\n)([\s\S]*)"
+            match = re.search(pattern, content)
+            if match:
+                heading = match.group(1)
+                list_content = match.group(2)
+                
+                lines = list_content.splitlines()
+                agent_lines = []
+                other_lines = []
+                in_list = True
+                for line in lines:
+                    if in_list and line.strip().startswith("- `"):
+                        agent_lines.append(line)
+                    else:
+                        in_list = False
+                        other_lines.append(line)
+                
+                new_line = f"- `{agent_name}` — {description}"
+                agent_lines.append(new_line)
+                
+                def extract_name(l):
+                    m = re.search(r"- `([^`]+)`", l)
+                    return m.group(1) if m else l
+                
+                seen = set()
+                unique_agent_lines = []
+                for line in sorted(agent_lines, key=extract_name):
+                    name = extract_name(line)
+                    if name not in seen:
+                        seen.add(name)
+                        unique_agent_lines.append(line)
+                
+                new_list_content = "\n".join(unique_agent_lines)
+                if other_lines:
+                    new_list_content += "\n" + "\n".join(other_lines)
+                
+                new_content = content[:match.start()] + heading + new_list_content + "\n"
+                with open(agents_md_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+
+        # Apply harness scaffolding for missing main.py and config.json
+        scaffold_agents(workspace_root)
+
+    proposal = Proposal(
+        agent=agent_name,
+        drift_description=f"Create agent {agent_name}",
+        sources=(f"demand@{agent_name}", f"template@{agent_name}"),
+        rationale=f"Creating missing agent {agent_name} for capability",
+        decision_id=None,
+        kind="create_agent",
+    )
+    return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
+
 
