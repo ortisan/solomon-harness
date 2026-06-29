@@ -218,6 +218,7 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `product_owner` — PRDs, requirements, user stories, scope and deliverables.
 - `qa` — unit, integration and E2E tests, mocking external services, UAT, QA reports.
 - `quant_trader` — quantitative strategies, backtests, slippage and transaction costs, Sharpe/drawdown/profit-factor risk.
+- `research_analyst` — fundamental and qualitative investment research: valuation (DCF, multiples, sum-of-the-parts), qualitative asset selection, and the sources playbook (how to proceed and where to look); sources and timestamps every claim, and hands quantitative validation to quant_trader and statistical-model work to ml_engineer. The fundamental counterpart to quant_trader.
 - `scrum_master` — milestones, backlog, sprints, Git Flow, conventional commits.
 - `security` — threat modeling (STRIDE), SAST, dependency and vulnerability checks.
 - `seo` — semantic structure, metadata, indexing and crawling, page speed, audits.

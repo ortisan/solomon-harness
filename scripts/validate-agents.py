@@ -78,6 +78,14 @@ REQUIRED_KEYWORDS = {
         "transaction costs",
         "risk parameters",
     ],
+    "research_analyst.md": [
+        "Research Analyst",
+        "valuation",
+        "investment research",
+        "asset selection",
+        "sources",
+        "quant_trader",
+    ],
     "qa.md": [
         "QA Specialist",
         "UAT",
