@@ -125,10 +125,19 @@ def run_stage(
     print(f"Running /solomon-{stage} headless via {engine}...")
     try:
         try:
+            if engine == "gemini":
+                cmd = [engine, "-p", "Execute prompt from stdin", "--skip-trust"]
+                if capture_cost:
+                    cmd.extend(["--output-format", "json"])
+            else:
+                cmd = [engine, "-p"]
+                if capture_cost:
+                    cmd.extend(["--output-format", "json"])
+
             if capture_cost:
                 # Capture the engine's reported cost into the budget ledger.
                 proc = subprocess.run(
-                    [engine, "-p", "--output-format", "json"],
+                    cmd,
                     input=prompt, text=True, capture_output=True, check=False,
                 )
                 out = getattr(proc, "stdout", None)
@@ -140,7 +149,7 @@ def run_stage(
                 if cost is not None:
                     loop_budget.record(workspace_root, cost, stage=stage)
             else:
-                proc = subprocess.run([engine, "-p"], input=prompt, text=True, check=False)
+                proc = subprocess.run(cmd, input=prompt, text=True, check=False)
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
             return 1
