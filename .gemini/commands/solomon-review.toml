@@ -52,6 +52,12 @@ Each lens returns findings tagged blocker, major, or minor.
   for each concrete issue, one comment per finding.
 - Summary verdict: `gh pr review {{args}} --approve` or
   `gh pr review {{args}} --request-changes --body "<blocking findings>"`.
+- On an **approve** verdict, take the PR out of draft: run `gh pr ready {{args}}`.
+  This is mandatory, not optional — a draft PR cannot be merged, so leaving it in
+  draft strands an approved change. The command is idempotent (a no-op if already
+  ready). If `gh pr review --approve` is refused because the reviewer authored the PR
+  (single-maintainer self-review), the posted comment is the approval of record and
+  `gh pr ready` is still what advances the PR; run it regardless.
 - File each blocker/major as a tracked issue with `log_issue`.
 
 ## 5. Persist to memory
