@@ -17,9 +17,29 @@ from solomon_harness.tools.database_client import (  # noqa: E402
     TERMINAL_STATUSES,
     DatabaseClient,
     _resolve_database,
+    is_github_issue,
     is_terminal,
     normalize_status,
 )
+
+
+class TestIsGithubIssue(unittest.TestCase):
+    def test_is_github_issue_classifies_by_digits_only(self):
+        """is_github_issue is True only for a non-empty, ASCII, all-digits id, so a
+        numeric GitHub id counts while a composite slug, empty, null, unicode-digit,
+        or padded id is a tracking item (digits-only, not "contains a number")."""
+        cases = {
+            "116": True,
+            "0": True,
+            "116-R-01": False,
+            "bug-x": False,
+            "": False,
+            None: False,
+            "²": False,
+            " 12 ": False,
+        }
+        for github_id, expected in cases.items():
+            self.assertIs(is_github_issue(github_id), expected, msg=repr(github_id))
 
 
 class TestResolveDatabase(unittest.TestCase):

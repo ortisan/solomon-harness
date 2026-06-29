@@ -149,6 +149,19 @@ def is_terminal(status: Optional[str]) -> bool:
     return normalize_status(status) in TERMINAL_STATUSES
 
 
+def is_github_issue(github_id: Optional[str]) -> bool:
+    """True when ``github_id`` is a real GitHub issue id (a non-empty, ASCII,
+    all-digits string), False for a composite RAID/follow-up slug (``116-R-01``),
+    an empty or null id, a unicode-digit string, or any other tracking item.
+
+    This is the single source of truth for the digits-only rule that segregates
+    real GitHub work from internal tracking rows (#116). It is total: it never
+    raises, defaulting any unknown shape to the tracking bucket (False).
+    """
+    s = str(github_id)
+    return s.isdigit() and s.isascii()
+
+
 class SpectronFallbackClient:
     """Fallback client for Spectron REST API when the python package doesn't export it."""
 
