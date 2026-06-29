@@ -206,3 +206,9 @@ def cli_worktree(repo_root: str, branch: str, base: str = "main") -> int:
         return 1
     print(path)
     return 0
+
+
+def repair_git_config(repo_root: str) -> None:
+    """Repair the local git config by unsetting stray core.worktree and setting core.bare to false."""
+    _run_git(repo_root, ["config", "--local", "--unset", "core.worktree"], check=False)
+    _run_git(repo_root, ["config", "--local", "core.bare", "false"], check=False)

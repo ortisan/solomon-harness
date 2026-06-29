@@ -345,6 +345,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
 
     subparsers.add_parser("healthcheck", help="Report runtime readiness and pending init items (Docker, memory, board, global install)")
 
+    subparsers.add_parser("git-repair", help="Repair local git config by unsetting stray core.worktree and setting core.bare to false")
+
     loop_lock_parser = subparsers.add_parser(
         "loop-lock", help="Inspect or clear the single-driver loop lock"
     )
@@ -454,6 +456,11 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         checks = run_checks(workspace_root)
         print(format_report(checks))
         sys.exit(1 if any(c["status"] == "fail" for c in checks) else 0)
+    elif args.command == "git-repair":
+        from solomon_harness.worktree import repair_git_config
+        repair_git_config(workspace_root)
+        print("Git local configuration repaired successfully.")
+        sys.exit(0)
     elif args.command == "loop-lock":
         handle_loop_lock(workspace_root, args.action)
     elif args.command == "loop-guard":
