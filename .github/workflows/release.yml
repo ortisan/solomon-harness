@@ -136,4 +136,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run release check
-        run: uv run solomon-harness release check
+        # This repo sets [tool.uv] package = false, so `uv sync` does not install
+        # the `solomon-harness` console script. Invoke the module directly, the
+        # same way CLAUDE.md runs the CLI.
+        run: uv run python -m solomon_harness.cli release check
