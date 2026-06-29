@@ -18,6 +18,7 @@ from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from solomon_harness.tools.database_client import (
+    BOARD_COLUMNS,
     STATUS_DISPLAY_COLUMNS,
     DatabaseClient,
     normalize_status,
@@ -25,19 +26,11 @@ from solomon_harness.tools.database_client import (
 
 _tracer = trace.get_tracer("solomon_harness.cockpit_read")
 
-# The canonical delivery-board columns, in fixed left-to-right order, matching
-# docs/solomon-workflow.md (Ideas -> Backlog -> Ready -> In Progress ->
-# Code Review -> QA -> Done). An issue whose status is not one of these is not
-# coerced into a column; it is counted in ``unmapped`` so nothing is dropped.
-BOARD_COLUMNS: List[str] = [
-    "Ideas",
-    "Backlog",
-    "Ready",
-    "In Progress",
-    "Code Review",
-    "QA",
-    "Done",
-]
+# The canonical delivery-board columns (Ideas -> Backlog -> Ready -> In Progress ->
+# Code Review -> QA -> Done) are defined once in the memory adapter and imported
+# here, so this read side and the board adapter share one source of truth
+# (ADR-0006). An issue whose status maps to none of these is not coerced into a
+# column; it is counted in ``unmapped`` so nothing is dropped.
 
 
 def build_board(client: Any, project: str) -> Dict[str, Any]:

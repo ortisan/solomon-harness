@@ -20,9 +20,14 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
+# The board columns have one canonical definition in the memory adapter (the
+# lowest-level module); importing it here keeps github.py and cockpit_read.py from
+# re-declaring the names and drifting (ADR-0006). database_client takes no
+# dependency on this module, so this import direction carries no cycle.
+from solomon_harness.tools.database_client import BOARD_COLUMNS
+
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
-BOARD_COLUMNS = ["Ideas", "Backlog", "Ready", "In Progress", "Code Review", "QA", "Done"]
 
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:

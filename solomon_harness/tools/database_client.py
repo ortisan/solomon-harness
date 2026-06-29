@@ -53,6 +53,13 @@ STATUS_DISPLAY_COLUMNS = {
     "closed": "Done",
 }
 
+# The delivery-board display columns in fixed left-to-right order. This is the one
+# canonical definition of the column names: it is derived from STATUS_DISPLAY_COLUMNS
+# (insertion order Ideas -> Backlog -> Ready -> In Progress -> Code Review -> QA ->
+# Done) so the column list can never drift from the status vocabulary. github.py and
+# cockpit_read.py import this constant rather than re-declaring it (ADR-0006).
+BOARD_COLUMNS: List[str] = list(STATUS_DISPLAY_COLUMNS.values())
+
 
 def normalize_status(status: Optional[str]) -> Optional[str]:
     """Map a board display name or casing alias to its canonical memory token.

@@ -798,5 +798,37 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertEqual(mode.lower(), "wal")
 
 
+class TestBoardColumnsSingleSource(unittest.TestCase):
+    """The delivery-board column names have one canonical definition (ADR-0006).
+
+    Fitness function: the display-column values of the status vocabulary and the
+    BOARD_COLUMNS list must stay in lockstep, and every consumer must import the
+    one definition rather than re-declaring it, so the names cannot drift.
+    """
+
+    def test_display_columns_match_board_columns(self):
+        from solomon_harness.tools.database_client import (
+            BOARD_COLUMNS,
+            STATUS_DISPLAY_COLUMNS,
+        )
+
+        self.assertEqual(set(STATUS_DISPLAY_COLUMNS.values()), set(BOARD_COLUMNS))
+
+    def test_board_columns_order_is_canonical(self):
+        from solomon_harness.tools.database_client import BOARD_COLUMNS
+
+        self.assertEqual(
+            BOARD_COLUMNS,
+            ["Ideas", "Backlog", "Ready", "In Progress", "Code Review", "QA", "Done"],
+        )
+
+    def test_consumers_share_the_one_board_columns_object(self):
+        from solomon_harness import cockpit_read, github
+        from solomon_harness.tools import database_client
+
+        self.assertIs(github.BOARD_COLUMNS, database_client.BOARD_COLUMNS)
+        self.assertIs(cockpit_read.BOARD_COLUMNS, database_client.BOARD_COLUMNS)
+
+
 if __name__ == "__main__":
     unittest.main()
