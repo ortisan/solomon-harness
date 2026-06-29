@@ -1837,7 +1837,7 @@ dependencies = [
     { name = "surrealdb" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
@@ -1847,14 +1847,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "opentelemetry-api", specifier = ">=1.43.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.43.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "surrealdb", specifier = ">=2.0.0,<3.0.0" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=7.0" },
+    { name = "ruff", specifier = ">=0.5" },
+]
 
 [[package]]
 name = "sse-starlette"
