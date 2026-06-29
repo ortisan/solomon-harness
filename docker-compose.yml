@@ -11,6 +11,9 @@ services:
       - "8099:8000"
     volumes:
       - ./memory/surrealdb:/data
+    environment:
+      SURREAL_ROCKSDB_BLOCK_CACHE_SIZE: 268435456 # 256MB
+    mem_limit: 512m
     # SurrealDB v3: --username/--password (v2+ renamed --user/--pass) and the
     # rocksdb store ("file:" was removed in v2).
     command: start --username root --password root --log info rocksdb:/data/solomon.db
