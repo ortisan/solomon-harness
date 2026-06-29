@@ -22,7 +22,11 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from solomon_harness import cli  # noqa: E402
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    is_terminal,
+    recover_parent,
+)
 
 
 class _Proc:
@@ -30,6 +34,28 @@ class _Proc:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+class TestRecoverParent(unittest.TestCase):
+    """recover_parent maps a tracking row's id/title to its parent GitHub number.
+
+    id-first (the slug's leading int before the first hyphen), else the first
+    ``#<digits>`` in the title (which subsumes the ``PR #45`` form), else None.
+    Pure and total: it never raises and never guesses a number that is not there.
+    """
+
+    def test_recover_parent_truth_table(self):
+        cases = [
+            (("68-R-01", "RAID R-01 (#68)"), "68"),   # id wins
+            (("45-M2", "loop review minor"), "45"),    # id wins, no title ref
+            (("R-01", "RAID R-01 (#68)"), "68"),       # id has no leading int -> title
+            (("follow-up", "loop (review minor, PR #45)"), "45"),  # PR # form via #(\d+)
+            (("R-07", "no number here"), None),        # nothing recoverable
+            ((None, None), None),                       # total over None inputs
+        ]
+        for (github_id, title), expected in cases:
+            with self.subTest(github_id=github_id, title=title):
+                self.assertEqual(recover_parent(github_id, title), expected)
 
 
 class TestReconcileMemory(unittest.TestCase):
