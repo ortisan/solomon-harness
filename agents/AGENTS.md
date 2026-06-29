@@ -210,7 +210,9 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `data_analyst` — querying, wrangling, processing big data (Spark, ClickHouse), visual storytelling, reporting and SQL analytics.
 - `dba` — data modeling, performance tuning, indexing, migrations, replication and backups.
 - `documenter` — technical and business documentation, user guides, design docs.
+- `educational_psychologist` — learning interfaces and instructional architectures: Cognitive Load Theory, retrieval practice, spaced repetition, dual coding, backward design, constructive alignment, scaffolding, and evidence-based research sourcing.
 - `flutter` — Flutter and Dart applications, clean architecture, widget and integration tests.
+
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
 - `loop_engineer` — autonomous-loop mechanics: the single-driver lock, the autonomy ladder and guardrails, the run-log, the cost budget, and the context-reset discipline, so loops run unattended without bypassing the human review gate.
 - `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, and didactic reporting (absorbs data science).

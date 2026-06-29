@@ -208,14 +208,15 @@ REQUIRED_KEYWORDS = {
         "big data",
         "visualization",
     ],
-    "data_science.md": [
-        "Data Scientist",
-        "predictive",
-        "statistical",
-        "didactically",
-        "cross-validation",
+    "educational_psychologist.md": [
+        "Educational Psychologist",
+        "learning sciences",
+        "cognitive load",
+        "evidence-based",
     ],
 }
+
+
 
 
 def has_emoji(text):
