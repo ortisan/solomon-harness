@@ -488,6 +488,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         }
         with open(claude_settings_path, "w", encoding="utf-8") as f:
             json.dump(claude_settings, f, indent=2)
+        try:
+            os.chmod(claude_settings_path, 0o600)
+        except Exception:
+            pass
     else:
         print("Keeping existing .claude/settings.json.")
 
@@ -535,13 +539,23 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         }
         with open(gemini_settings_path, "w", encoding="utf-8") as f:
             json.dump(gemini_settings, f, indent=2)
+        try:
+            os.chmod(gemini_settings_path, 0o600)
+        except Exception:
+            pass
     else:
         # If settings.json exists, merge the SessionStart and PreToolUse hooks into it.
-        try:
-            with open(gemini_settings_path, "r", encoding="utf-8") as f:
-                settings = json.load(f) or {}
-        except Exception:
-            settings = {}
+        settings = {}
+        if os.path.getsize(gemini_settings_path) > 0:
+            try:
+                with open(gemini_settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f) or {}
+            except json.JSONDecodeError as exc:
+                print(f"WARNING: local settings file at {gemini_settings_path} is not valid JSON ({exc}). Overwriting with default settings.")
+                settings = {}
+            except Exception as exc:
+                print(f"WARNING: failed to read local settings file at {gemini_settings_path} ({exc}). Hooks not merged.")
+                return
         
         hooks = settings.setdefault("hooks", {})
         
@@ -573,6 +587,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         if updated:
             with open(gemini_settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2)
+            try:
+                os.chmod(gemini_settings_path, 0o600)
+            except Exception:
+                pass
             print("Merged hooks into existing .gemini/settings.json.")
         else:
             print("Keeping existing .gemini/settings.json (hooks already present).")

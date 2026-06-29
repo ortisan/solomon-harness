@@ -122,6 +122,62 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("Refine/Start Issue #46: /solomon-issue 46", text)
         self.assertIn("Capture a new product idea: /solomon-idea", text)
 
+    def test_digest_shows_in_flight_review_qa(self):
+        issues = [
+            {"github_id": "100", "title": "review this", "status": "code_review"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("We found a pending task: Review/QA issue #100", text)
+        self.assertIn("/solomon-review 100", text)
+
+        issues = [
+            {"github_id": "101", "title": "qa this", "status": "qa"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("We found a pending task: Review/QA issue #101", text)
+        self.assertIn("/solomon-review 101", text)
+
+    def test_digest_shows_resume_start_active(self):
+        resume = {"type": "session", "agent": "qa", "task": "start 42", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("Resume last activity: qa is working on 'start 42'", text)
+        self.assertIn("/solomon-start 42", text)
+
+    def test_digest_shows_ready_issues(self):
+        issues = [
+            {"github_id": "200", "title": "ready to work", "status": "ready"}
+        ]
+        text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
+        self.assertIn("We found a pending task: Start development on Ready issue #200", text)
+        self.assertIn("/solomon-start 200", text)
+
+    def test_best_effort_prs_success(self):
+        from unittest.mock import patch, MagicMock
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = '[{"number": 1, "title": "PR 1", "reviewDecision": "APPROVED", "isDraft": false}]'
+            mock_run.return_value = mock_proc
+            res = digest._best_effort_prs(".")
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["number"], 1)
+
+    def test_best_effort_prs_failure(self):
+        from unittest.mock import patch, MagicMock
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 1
+            mock_proc.stdout = ""
+            mock_run.return_value = mock_proc
+            res = digest._best_effort_prs(".")
+            self.assertIsNone(res)
+
+    def test_best_effort_prs_exception(self):
+        from unittest.mock import patch
+        with patch("subprocess.run", side_effect=RuntimeError("timeout")):
+            res = digest._best_effort_prs(".")
+            self.assertIsNone(res)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -185,6 +185,53 @@ class TestInstallGlobal(unittest.TestCase):
             self.assertIsNone(res.get("agy_imported"))
             mock_run.assert_not_called()
 
+    def test_describe_formatting(self):
+        # Case 1: All values present
+        res_val = {
+            "memory_port": 8099,
+            "home_agents": True,
+            "home_compose": True,
+            "claude_agents": ["qa.md"],
+            "claude_commands": ["cmd1"],
+            "gemini_commands": ["cmd2"],
+            "gemini_extension": True,
+            "agy_imported": True,
+            "hook_installed": True,
+            "gemini_hook_installed": True,
+            "mcp_claude": True,
+            "mcp_gemini": True,
+        }
+        summary = ig.describe(res_val)
+        self.assertIn("SurrealDB host port 8099", summary)
+        self.assertIn("successfully imported and converted", summary)
+        self.assertIn("session hook (claude): installed", summary)
+        self.assertIn("session hook (gemini): installed", summary)
+        self.assertIn("MCP (claude, user scope): registered", summary)
+        self.assertIn("MCP (gemini, user scope): registered", summary)
+
+        # Case 2: MCPs missing (None) and agy failed
+        res_val2 = {
+            "gemini_extension": True,
+            "agy_imported": False,
+            "hook_installed": False,
+            "gemini_hook_installed": False,
+            "mcp_claude": None,
+            "mcp_gemini": None,
+        }
+        summary2 = ig.describe(res_val2)
+        self.assertIn("import run failed", summary2)
+        self.assertIn("session hook (claude): already present", summary2)
+        self.assertIn("MCP (claude): claude CLI not found", summary2)
+        self.assertIn("MCP (gemini): gemini CLI not found", summary2)
+
+        # Case 3: agy_imported is None and gemini_extension is True
+        res_val3 = {
+            "gemini_extension": True,
+            "agy_imported": None,
+        }
+        summary3 = ig.describe(res_val3)
+        self.assertIn("agy CLI not found or non-default path", summary3)
+
 
 if __name__ == "__main__":
     unittest.main()

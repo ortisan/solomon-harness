@@ -50,11 +50,16 @@ def _merge_session_start_hook(settings_path: str) -> bool:
     """
     settings: Dict = {}
     if os.path.isfile(settings_path):
-        try:
-            with open(settings_path, "r", encoding="utf-8") as f:
-                settings = json.load(f) or {}
-        except Exception:
-            settings = {}
+        if os.path.getsize(settings_path) > 0:
+            try:
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f) or {}
+            except json.JSONDecodeError as exc:
+                sys.stderr.write(f"WARNING: global settings file at {settings_path} is not valid JSON ({exc}). Overwriting with default settings.\n")
+                settings = {}
+            except Exception as exc:
+                sys.stderr.write(f"WARNING: failed to read global settings file at {settings_path} ({exc}). Hook not merged.\n")
+                return False
 
     hooks = settings.setdefault("hooks", {})
     session_start = hooks.setdefault("SessionStart", [])
@@ -73,6 +78,10 @@ def _merge_session_start_hook(settings_path: str) -> bool:
     os.makedirs(os.path.dirname(settings_path), exist_ok=True)
     with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
+    try:
+        os.chmod(settings_path, 0o600)
+    except Exception:
+        pass
     return True
 
 
