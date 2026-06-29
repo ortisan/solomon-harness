@@ -519,13 +519,24 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                             },
                         ]
                     }
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "uv run python -m solomon_harness.cli loop-guard",
+                            }
+                        ]
+                    }
                 ]
             },
         }
         with open(gemini_settings_path, "w", encoding="utf-8") as f:
             json.dump(gemini_settings, f, indent=2)
     else:
-        # If settings.json exists, merge the SessionStart hook into it.
+        # If settings.json exists, merge the SessionStart and PreToolUse hooks into it.
         try:
             with open(gemini_settings_path, "r", encoding="utf-8") as f:
                 settings = json.load(f) or {}
@@ -533,18 +544,36 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             settings = {}
         
         hooks = settings.setdefault("hooks", {})
+        
+        # Merge SessionStart
         session_start = hooks.setdefault("SessionStart", [])
-        existing = json.dumps(session_start)
-        if "solomon_harness.cli memory-up" not in existing:
+        existing_ss = json.dumps(session_start)
+        updated = False
+        if "solomon_harness.cli memory-up" not in existing_ss:
             session_start.append({
                 "hooks": [
                     {"type": "command", "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"},
                     {"type": "command", "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"},
                 ]
             })
+            updated = True
+
+        # Merge PreToolUse
+        pre_tool_use = hooks.setdefault("PreToolUse", [])
+        existing_ptu = json.dumps(pre_tool_use)
+        if "solomon_harness.cli loop-guard" not in existing_ptu:
+            pre_tool_use.append({
+                "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+                "hooks": [
+                    {"type": "command", "command": "uv run python -m solomon_harness.cli loop-guard"}
+                ]
+            })
+            updated = True
+
+        if updated:
             with open(gemini_settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2)
-            print("Merged SessionStart hooks into existing .gemini/settings.json.")
+            print("Merged hooks into existing .gemini/settings.json.")
         else:
             print("Keeping existing .gemini/settings.json (hooks already present).")
 
