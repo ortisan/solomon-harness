@@ -2344,7 +2344,10 @@ class DatabaseClient:
         string-formatted, so the predicate carries no injection surface.
 
         Returns:
-            A list of dictionaries containing the non-terminal issues.
+            A list of dictionaries, one per non-terminal issue, each carrying the
+            stored fields plus a derived ``is_github_issue`` boolean (#116): True for
+            a numeric GitHub id, False for a RAID/follow-up tracking row. The derived
+            field is additive -- the stored row and the returned set are unchanged.
         """
         if self.backend == "surrealdb":
             query = (
