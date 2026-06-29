@@ -8,7 +8,7 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import Optional, List
+from typing import Dict, Optional, List
 
 
 def _subagent_description(filepath: str) -> str:
@@ -393,6 +393,59 @@ def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
         )
         repaired += 1
     return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
+
+
+def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = False) -> dict:
+    """Set each tracking row whose parent number is RESOLVED to the terminal "done".
+
+    Tracking rows are the non-numeric slug rows (``is_github_issue`` False) that
+    carry RAID/follow-up items parented to a real GitHub issue or PR (#127). This
+    pass walks the non-terminal rows, skips the numeric GitHub rows untouched,
+    recovers each tracking row's parent number with ``recover_parent``, and -- when
+    that number is RESOLVED in ``resolved_map`` (its issue is CLOSED or its PR is
+    MERGED/CLOSED) -- read-modify-writes the row to "done" through the unchanged
+    6-arg ``log_issue`` UPSERT, preserving title/type/milestone/assignee. The write
+    normalizes "done" to the terminal "closed", so the row drops out of
+    ``get_open_issues``; a second pass therefore closes nothing (idempotent). A row
+    with an unresolved or absent parent is left open (never guessed); a row with no
+    recoverable parent is counted and skipped. No row is ever deleted. With
+    ``dry_run`` the would-close slugs are collected and nothing is written.
+
+    Returns ``{"closed", "would_close", "skipped_no_parent", "scanned_tracking"}``.
+    """
+    from solomon_harness.tools.database_client import is_github_issue, recover_parent
+
+    would_close: List[str] = []
+    closed = 0
+    skipped_no_parent = 0
+    scanned_tracking = 0
+    for row in db.get_open_issues():
+        github_id = row.get("github_id")
+        if is_github_issue(github_id):
+            continue
+        scanned_tracking += 1
+        parent = recover_parent(github_id, row.get("title"))
+        if parent is None:
+            skipped_no_parent += 1
+            continue
+        if not resolved_map.get(parent):
+            continue
+        would_close.append(github_id)
+        db.log_issue(
+            github_id,
+            row.get("title"),
+            row.get("type_"),
+            "done",
+            row.get("milestone_id"),
+            row.get("assignee"),
+        )
+        closed += 1
+    return {
+        "closed": closed,
+        "would_close": would_close,
+        "skipped_no_parent": skipped_no_parent,
+        "scanned_tracking": scanned_tracking,
+    }
 
 
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:

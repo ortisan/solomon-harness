@@ -121,6 +121,57 @@ class TestReconcileMemory(unittest.TestCase):
         client.close()
 
 
+class TestReconcileTrackingRows(unittest.TestCase):
+    """The tracking-row close pass: a slug row whose parent number is RESOLVED
+    becomes terminal; every other row (open parent, absent parent, numeric) is
+    spared. Never deletes a row; never touches a numeric (real GitHub) row."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _seed(self):
+        client = DatabaseClient(db_path=self.db_path)
+        # Parent #68 is resolved -> this row must close.
+        client.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
+        # Parent #100 is present but unresolved (open) -> untouched.
+        client.log_issue("100-R-02", "RAID for open issue (#100)", "raid", "in_progress", None)
+        # Parent #45 is absent from the map entirely -> untouched (safe default).
+        client.log_issue("45-M2", "loop review minor", "followup", "in_progress", None)
+        # A real numeric GitHub row -> never a candidate.
+        client.log_issue("100", "Still open numeric", "feature", "in_progress", None)
+        return client
+
+    def test_closes_resolved_parent_and_spares_the_rest(self):
+        client = self._seed()
+        resolved_map = {"68": True, "100": False}
+
+        result = cli.reconcile_tracking_rows(client, resolved_map)
+
+        self.assertEqual(result["closed"], 1)
+        self.assertEqual(result["skipped_no_parent"], 0)
+        self.assertEqual(result["scanned_tracking"], 3)
+
+        # The resolved-parent row is now terminal, with its other fields preserved.
+        closed_row = client.get_issue("68-R-01")
+        self.assertTrue(is_terminal(closed_row["status"]))
+        self.assertEqual(closed_row["title"], "RAID R-01 (#68)")
+        self.assertEqual(closed_row["type_"], "raid")
+
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        # The closed row dropped out; the open-parent, absent-parent and numeric
+        # rows are all still open.
+        self.assertNotIn("68-R-01", open_ids)
+        self.assertEqual(open_ids, {"100-R-02", "45-M2", "100"})
+        self.assertEqual(client.get_issue("100-R-02")["status"], "in_progress")
+        self.assertEqual(client.get_issue("45-M2")["status"], "in_progress")
+        self.assertEqual(client.get_issue("100")["status"], "in_progress")
+        client.close()
+
+
 class TestFetchGhIssueStates(unittest.TestCase):
     def test_validates_number_and_state_as_data(self):
         payload = json.dumps(
