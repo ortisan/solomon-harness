@@ -127,6 +127,33 @@ class TestCatalog(CapabilityRouterTestBase):
         # It should cap at 8192 bytes/chars
         self.assertEqual(len(by_name["giantline"]), 8192)
 
+    def test_symlink_role_file_rejected(self):
+        role_dir = os.path.join(self.root, "agents", "symlinked_agent", "agents")
+        os.makedirs(role_dir)
+        target_file = os.path.join(self.root, "target.md")
+        with open(target_file, "w", encoding="utf-8") as f:
+            f.write("# symlinked_agent\n\nsome description\n")
+        symlink_file = os.path.join(role_dir, "symlinked_agent.md")
+        os.symlink(target_file, symlink_file)
+        with self.assertRaises(cr.CatalogError):
+            cr.load_catalog(self.root)
+
+    def test_path_confinement_violation_rejected(self):
+        role_dir = os.path.join(self.root, "agents", "evil_agent", "agents")
+        os.makedirs(role_dir)
+        outside_dir = tempfile.mkdtemp(prefix="outside-")
+        try:
+            outside_role = os.path.join(outside_dir, "evil_agent.md")
+            with open(outside_role, "w", encoding="utf-8") as f:
+                f.write("# evil_agent\n\ndescription\n")
+            os.rmdir(role_dir)
+            os.symlink(outside_dir, role_dir)
+            with self.assertRaises(cr.CatalogError):
+                cr.load_catalog(self.root)
+        finally:
+            shutil.rmtree(outside_dir, ignore_errors=True)
+
+
 
 
 class TestGap(CapabilityRouterTestBase):

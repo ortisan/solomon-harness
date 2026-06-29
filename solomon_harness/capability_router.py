@@ -113,14 +113,25 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     agent, so the caller fails closed instead of routing against an empty catalog.
     """
     root = workspace_root or _default_workspace_root()
-    names = discover_agents(root)
+    real_root = os.path.realpath(root)
+    agents_dir = os.path.realpath(os.path.join(real_root, "agents"))
+    names = discover_agents(real_root)
     if not names:
-        raise CatalogError(f"no agents discovered under {os.path.join(root, 'agents')}")
+        raise CatalogError(f"no agents discovered under {os.path.join(real_root, 'agents')}")
     catalog = []
     for name in sorted(names):
-        role = os.path.join(root, "agents", name, "agents", f"{name}.md")
-        catalog.append(Agent(name=name, description=_role_description(role)))
+        role = os.path.join(agents_dir, name, "agents", f"{name}.md")
+        real_role = os.path.realpath(role)
+        if not real_role.startswith(agents_dir + os.sep):
+            raise CatalogError(f"path confinement violation: {role} resolves outside {agents_dir}")
+        curr = role
+        while curr and curr != agents_dir and curr != os.path.dirname(curr):
+            if os.path.islink(curr):
+                raise CatalogError(f"symlink rejected: {curr}")
+            curr = os.path.dirname(curr)
+        catalog.append(Agent(name=name, description=_role_description(real_role)))
     return catalog
+
 
 
 def route(demand: str, matcher: Matcher, workspace_root: Optional[str] = None) -> Verdict:
