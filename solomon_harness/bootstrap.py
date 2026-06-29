@@ -37,8 +37,8 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
             try:
                 # Basic parsing if toml is not installed, or try to import tomllib
                 import tomllib
-                with open(pyproject, "rb") as f:
-                    project_name = tomllib.load(f).get("project", {}).get("name", "")
+                with open(pyproject, "rb") as fb:
+                    project_name = tomllib.load(fb).get("project", {}).get("name", "")
             except Exception:
                 try:
                     with open(pyproject, "r", encoding="utf-8") as f:

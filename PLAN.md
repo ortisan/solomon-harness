@@ -1,53 +1,42 @@
-# Plan: add pytest to dev extras so uv run pytest works
+# PLAN.md: chore(agents): capability-router hardening follow-ups
 
-Refs #31 #41
-
-## Problem statement
-
-Running `uv run pytest` is currently not supported because `pytest` is declared in `optional-dependencies.dev` instead of the default development groups, and also lacks a configured `pythonpath` for module collection, resulting in a `ModuleNotFoundError` during imports.
+Problem statement: Harden the capability-router module by implementing safety caps, path confinement/symlink rejection, import-graph/no-write fitness checks, distinct matcher contract error type, and order assertions (#85).
 
 ## Proposed changes
-
-1. **Update `pyproject.toml` dependencies**:
-   - Move or add `ruff`, `mypy`, and `pytest` to `[tool.uv.dev-dependencies]`.
-   - Add `[tool.pytest.ini_options]` with `pythonpath = ["."]` to the root of `pyproject.toml`.
-2. **Sync dependencies**:
-   - Run `uv sync` to update the virtual environment.
-3. **Verify collection and execution**:
-   - Execute `uv run pytest` to ensure tests are collected and pass without path/import errors.
+- Introduce `MatcherContractError` in `solomon_harness/capability_router.py`.
+- Update `_role_description` to prevent unbounded memory read by reading at most 8192 bytes per readline call and handling line continuation.
+- Update `load_catalog` to resolve realpaths, ensure paths are confined within the `agents` folder, and reject symlink files/directories.
+- Raise `MatcherContractError` (instead of `CatalogError`) when the matcher returns an agent not in the catalog.
+- Write unit tests covering read-capping, path confinement, symlink rejection, the new error type, alternatives ordering, and module isolation/no-write fitness check.
 
 ## Target files
+- `solomon_harness/capability_router.py`
+- `tests/test_capability_router.py`
 
-- `pyproject.toml`
-
-## Edge cases as observable outcomes
-
-- **Missing pythonpath**: If `pythonpath = ["."]` is absent, running `uv run pytest` will fail during collection with `ModuleNotFoundError: No module named 'solomon_harness'`.
-- **Missing dev extra sync**: If dependencies remain under optional dev extras without syncing them as default dev dependencies, running `uv run pytest` will report "Failed to spawn: pytest".
+## Edge cases
+- Giant single-line role file (memory safety).
+- Directory traversal using symlink.
+- Matcher returning an agent not present in the catalog.
+- Alternatives containing invalid/valid agents in specific order.
+- Module attempting to import blacklisted libraries (e.g. requests, urllib, torch).
 
 ## TDD breakdown
-
-### Step 1: Add pytest configuration to `pyproject.toml`
-- **Goal**: Configure pytest pythonpath.
-- **Action**: Add `[tool.pytest.ini_options] pythonpath = ["."]` to `pyproject.toml`.
-- **Commit**: `chore(testing): configure pytest pythonpath`
-
-### Step 2: Transition dev dependencies to default dev-dependencies
-- **Goal**: Make pytest available by default.
-- **Action**: Add `ruff`, `mypy`, and `pytest` to `[tool.uv.dev-dependencies]` block and update optional dev dependencies.
-- **Commit**: `chore(testing): add pytest to default dev-dependencies`
-
-### Step 3: Run uv sync and verify pytest runs
-- **Goal**: Confirm all tests pass under pytest.
-- **Action**: Execute `uv sync` followed by `uv run pytest`.
-- **Commit**: `test(testing): verify test suite runs successfully under pytest`
-
-## STRIDE notes
-
-- **Security Boundary**: No network or external input boundaries are modified by this chore. STRIDE threat model is not impacted.
+1. **Red**: Write a test in `tests/test_capability_router.py` for giant single-line files and read capping.
+   **Green**: Update `_role_description` to read in chunks of 8192 bytes and handle line continuation.
+   *Commit: test: add read cap tests and implement readline capping*
+2. **Red**: Write a test for symlink rejection and path confinement.
+   **Green**: Update `load_catalog` to verify realpaths and reject symlinks using `os.path.islink`.
+   *Commit: test: add confinement/symlink tests and implement catalog protection*
+3. **Red**: Write a test asserting that `MatcherContractError` is raised when the matcher returns an invalid agent.
+   **Green**: Define `MatcherContractError` and raise it in `route`.
+   *Commit: test: add matcher contract error test and implement error type*
+4. **Red**: Write a test asserting that alternatives ordering is preserved.
+   **Green**: Verify alternatives tuple is constructed preserving order.
+   *Commit: test: add alternatives order assertion test*
+5. **Red**: Write a test parsing `solomon_harness/capability_router.py` AST to check imports (fitness check) and ensuring no write operations.
+   **Green**: Ensure AST validation test passes.
+   *Commit: test: add CI fitness check for module isolation*
 
 ## Verification criteria
-
-1. Running `uv run pytest` collects all tests and exits 0.
-2. No `PYTHONPATH=.` environment prefix is required to invoke pytest.
-3. `uv run python scripts/validate-agents.py` exits 0.
+- `PYTHONPATH=. uv run pytest tests/test_capability_router.py` passes.
+- All 387 tests pass.
