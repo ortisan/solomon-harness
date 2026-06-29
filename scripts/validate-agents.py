@@ -208,13 +208,6 @@ REQUIRED_KEYWORDS = {
         "big data",
         "visualization",
     ],
-    "data_science.md": [
-        "Data Scientist",
-        "predictive",
-        "statistical",
-        "didactically",
-        "cross-validation",
-    ],
 }
 
 
