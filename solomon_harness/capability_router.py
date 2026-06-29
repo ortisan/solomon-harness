@@ -26,6 +26,11 @@ class CatalogError(Exception):
     """The agent catalog could not be read or is empty; routing fails closed."""
 
 
+class MatcherContractError(Exception):
+    """The matcher returned an invalid response (e.g. an agent name not in the catalog)."""
+
+
+
 @dataclass(frozen=True)
 class Agent:
     """One catalog entry: an agent name and its one-line role description."""
@@ -80,14 +85,30 @@ def _default_workspace_root() -> str:
 def _role_description(role_path: str) -> str:
     """First non-heading, non-empty line of a role file (its advertised summary)."""
     try:
+        if os.path.getsize(role_path) > 1024 * 1024:
+            return ""
         with open(role_path, "r", encoding="utf-8") as f:
-            for line in f:
+            in_skipped_line = False
+            while True:
+                line = f.readline(8192)
+                if not line:
+                    break
+                is_continuation = in_skipped_line
+                if line.endswith("\n"):
+                    in_skipped_line = False
+                else:
+                    in_skipped_line = True
+                if is_continuation:
+                    continue
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#"):
                     return stripped
+                if stripped.startswith("#"):
+                    in_skipped_line = not line.endswith("\n")
     except OSError:
         return ""
     return ""
+
 
 
 def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
@@ -97,14 +118,25 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     agent, so the caller fails closed instead of routing against an empty catalog.
     """
     root = workspace_root or _default_workspace_root()
-    names = discover_agents(root)
+    real_root = os.path.realpath(root)
+    agents_dir = os.path.realpath(os.path.join(real_root, "agents"))
+    names = discover_agents(real_root)
     if not names:
-        raise CatalogError(f"no agents discovered under {os.path.join(root, 'agents')}")
+        raise CatalogError(f"no agents discovered under {os.path.join(real_root, 'agents')}")
     catalog = []
     for name in sorted(names):
-        role = os.path.join(root, "agents", name, "agents", f"{name}.md")
-        catalog.append(Agent(name=name, description=_role_description(role)))
+        role = os.path.join(agents_dir, name, "agents", f"{name}.md")
+        real_role = os.path.realpath(role)
+        if not real_role.startswith(agents_dir + os.sep):
+            raise CatalogError(f"path confinement violation: {role} resolves outside {agents_dir}")
+        curr = role
+        while curr and curr != agents_dir and curr != os.path.dirname(curr):
+            if os.path.islink(curr):
+                raise CatalogError(f"symlink rejected: {curr}")
+            curr = os.path.dirname(curr)
+        catalog.append(Agent(name=name, description=_role_description(real_role)))
     return catalog
+
 
 
 def route(demand: str, matcher: Matcher, workspace_root: Optional[str] = None) -> Verdict:
@@ -124,7 +156,7 @@ def route(demand: str, matcher: Matcher, workspace_root: Optional[str] = None) -
 
     if match.agent is not None:
         if match.agent not in names:
-            raise CatalogError(
+            raise MatcherContractError(
                 f"matcher returned agent '{match.agent}' that is not in the catalog"
             )
         lines = (match.rationale or "").strip().splitlines()
