@@ -64,6 +64,19 @@ REQUIRED_KEYWORDS = {
         "bugfix/*",
         "conventional commit",
     ],
+    "legacy_modernizer.md": [
+        "Legacy Modernizer",
+        "parsimonious",
+        "delegate",
+        "sequenced",
+        "incremental",
+        "bounded step",
+        "human-gated",
+        "hexagonal",
+        "OpenTelemetry",
+        "secure-by-default",
+        "Test-Driven Development",
+    ],
     "ml_engineer.md": [
         "ML Engineer",
         "hyperparameters",
@@ -207,13 +220,6 @@ REQUIRED_KEYWORDS = {
         "SQL",
         "big data",
         "visualization",
-    ],
-    "data_science.md": [
-        "Data Scientist",
-        "predictive",
-        "statistical",
-        "didactically",
-        "cross-validation",
     ],
 }
 
