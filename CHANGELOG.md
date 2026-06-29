@@ -2,6 +2,11 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.10.0] - 2026-06-29
+
+### Added
+- check memory for pending tasks and output options card on session start for Claude Code and Gemini (#130)
+
 ## [0.9.0] - 2026-06-29
 
 ### Added
