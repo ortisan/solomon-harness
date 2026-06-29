@@ -2,6 +2,11 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.7.0] - 2026-06-29
+
+### Added
+- feat(ui): cockpit foundation — read-only single-project board (slice 1a) (#77)
+
 ## [0.6.0] - 2026-06-29
 
 ### Added

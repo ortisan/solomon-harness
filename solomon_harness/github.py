@@ -310,7 +310,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Ensure the link even when the board already existed (cheap, idempotent).
         if result.get("ok") and not result.get("created"):
             num = (result.get("project") or {}).get("number")
-            linked = _link_project_to_repo(result.get("owner"), num, repo_name_with_owner())
+            owner = result.get("owner")
+            linked = _link_project_to_repo(str(owner) if owner is not None else "", num, repo_name_with_owner())
             result["linked_to_repo"] = bool(linked.get("ok"))
         if result.get("ok"):
             num = (result.get("project") or {}).get("number")
