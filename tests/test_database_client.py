@@ -40,8 +40,16 @@ class TestDatabaseClient(unittest.TestCase):
         # Create a temp directory for SQLite DB files
         self.temp_dir = tempfile.TemporaryDirectory()
         self.sqlite_db_path = os.path.join(self.temp_dir.name, "harness.db")
+        # Keep the write-through mirror (#35) inside the temp dir so the SurrealDB
+        # tests here (built without a db_path) never touch the real project's
+        # .solomon/ store.
+        self._mirror_env = patch.dict(
+            os.environ, {"HARNESS_MIRROR_ROOT": os.path.join(self.temp_dir.name, "mirror")}
+        )
+        self._mirror_env.start()
 
     def tearDown(self):
+        self._mirror_env.stop()
         self.temp_dir.cleanup()
 
     def test_sqlite_backend_initialization_and_operations(self):
