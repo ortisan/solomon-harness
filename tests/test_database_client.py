@@ -736,7 +736,7 @@ class TestDatabaseClient(unittest.TestCase):
         client.close()
 
         self.assertIn("NOT IN", captured["query"])
-        self.assertEqual(captured["params"], {"terminal": list(TERMINAL_STATUSES)})
+        self.assertEqual(captured["params"]["terminal"], list(TERMINAL_STATUSES))
 
     def test_get_open_issues_keeps_null_status_rows_sqlite(self):
         """A row with no status is non-terminal and kept by get_open_issues, matching
@@ -771,7 +771,64 @@ class TestDatabaseClient(unittest.TestCase):
 
         self.assertIn("NOT IN", captured["query"])
         self.assertIn("NONE", captured["query"].upper())
-        self.assertEqual(captured["params"], {"terminal": list(TERMINAL_STATUSES)})
+        self.assertEqual(
+            captured["params"],
+            {
+                "terminal": list(TERMINAL_STATUSES),
+                "synthetic_types": ["risk", "dependency", "design", "followup", "review-finding"]
+            }
+        )
+
+    def test_get_open_issues_excludes_synthetic_tracking_rows_sqlite(self):
+        """get_open_issues on SQLite excludes synthetic/tracking issues (such as
+        risk-*, dep-*, followup-*, RAID-*, design-*, %-M%, and synthetic types)
+        even if their status is not terminal."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("123", "Real Issue 1", "feature", "open", None)
+        client.log_issue("gh-1", "Real Issue 2", "bug", "open", None)
+        client.log_issue("risk-117-r1", "Synthetic Risk", "risk", "open", None)
+        client.log_issue("dep-44", "Synthetic Dependency", "dependency", "open", None)
+        client.log_issue("45-M1", "Synthetic Milestone", "chore", "open", None)
+        client.log_issue("design-note", "Synthetic Design", "design", "open", None)
+        client.log_issue("normal-but-synthetic-type", "Synthetic Type", "review-finding", "open", None)
+
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        client.close()
+
+        self.assertIn("123", open_ids)
+        self.assertIn("gh-1", open_ids)
+        self.assertNotIn("risk-117-r1", open_ids)
+        self.assertNotIn("dep-44", open_ids)
+        self.assertNotIn("45-M1", open_ids)
+        self.assertNotIn("design-note", open_ids)
+        self.assertNotIn("normal-but-synthetic-type", open_ids)
+
+    def test_get_open_issues_surreal_excludes_synthetic_tracking_rows(self):
+        """On SurrealDB the open query excludes synthetic/tracking issues by prefix
+        and synthetic types."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.backend = "surrealdb"
+        captured = {}
+
+        def fake_run(query, params=None):
+            captured["query"] = query
+            captured["params"] = params
+            return []
+
+        client._run_surreal = fake_run
+        client.get_open_issues()
+        client.backend = "sqlite"
+        client.close()
+
+        query_upper = captured["query"].upper()
+        self.assertIn("LIKE 'RISK-%'", query_upper)
+        self.assertIn("LIKE 'DEP-%'", query_upper)
+        self.assertIn("CONTAINS '-M'", query_upper)
+        self.assertIn("NOT IN $SYNTHETIC_TYPES", query_upper)
+        self.assertEqual(
+            captured["params"]["synthetic_types"],
+            ["risk", "dependency", "design", "followup", "review-finding"]
+        )
 
     def test_status_vocabulary_helpers(self):
         """normalize_status and is_terminal agree on the canonical vocabulary."""

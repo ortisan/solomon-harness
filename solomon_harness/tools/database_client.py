@@ -508,7 +508,12 @@ class DatabaseClient:
                             # Vector: HNSW index over the 256-dim memory embedding.
                             "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
                             f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
-                            "DIST COSINE TYPE F32;"
+                            "DIST COSINE TYPE F32; "
+                            "UPDATE issues SET status = 'closed' WHERE "
+                            "(status IS NONE OR status IS NULL OR status NOT IN ['closed', 'done', 'Done']) "
+                            "AND (github_id LIKE 'risk-%' OR github_id LIKE 'dep-%' OR github_id LIKE 'followup-%' "
+                            "OR github_id LIKE 'RAID-%' OR github_id LIKE 'design-%' OR (github_id CONTAINS '-M') "
+                            "OR type_ IN ['risk', 'dependency', 'design', 'followup', 'review-finding']);"
                         )
                         self.db.query(init_query)
                         self.backend = "surrealdb"
@@ -709,6 +714,17 @@ class DatabaseClient:
             );
             """,
             "CREATE INDEX IF NOT EXISTS metrics_name_time ON metrics (name, time);",
+            """
+            UPDATE issues SET status = 'closed'
+            WHERE (status IS NULL OR status NOT IN ('closed', 'done', 'Done'))
+              AND (github_id LIKE 'risk-%'
+                   OR github_id LIKE 'dep-%'
+                   OR github_id LIKE 'followup-%'
+                   OR github_id LIKE 'RAID-%'
+                   OR github_id LIKE 'design-%'
+                   OR github_id LIKE '%-M%'
+                   OR type_ IN ('risk', 'dependency', 'design', 'followup', 'review-finding'));
+            """
         ]
 
         try:
@@ -2232,10 +2248,23 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = (
                 "SELECT * FROM issues "
-                "WHERE status IS NONE OR status IS NULL OR status NOT IN $terminal"
+                "WHERE (status IS NONE OR status IS NULL OR status NOT IN $terminal) "
+                "AND github_id NOT LIKE 'risk-%' "
+                "AND github_id NOT LIKE 'dep-%' "
+                "AND github_id NOT LIKE 'followup-%' "
+                "AND github_id NOT LIKE 'RAID-%' "
+                "AND github_id NOT LIKE 'design-%' "
+                "AND NOT (github_id CONTAINS '-M') "
+                "AND (type_ IS NONE OR type_ IS NULL OR type_ NOT IN $synthetic_types)"
             )
             try:
-                res = self._run_surreal(query, {"terminal": list(TERMINAL_STATUSES)})
+                res = self._run_surreal(
+                    query,
+                    {
+                        "terminal": list(TERMINAL_STATUSES),
+                        "synthetic_types": ["risk", "dependency", "design", "followup", "review-finding"]
+                    }
+                )
                 return self._extract_list(res)
             except _ConnectionLost:
                 raise
@@ -2246,13 +2275,23 @@ class DatabaseClient:
                 )
         else:
             placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
+            synthetic_types = ("risk", "dependency", "design", "followup", "review-finding")
+            synthetic_placeholders = ", ".join("?" for _ in synthetic_types)
             query = (
-                f"SELECT * FROM issues WHERE status IS NULL OR status NOT IN ({placeholders})"
+                f"SELECT * FROM issues WHERE (status IS NULL OR status NOT IN ({placeholders})) "
+                "AND github_id NOT LIKE 'risk-%' "
+                "AND github_id NOT LIKE 'dep-%' "
+                "AND github_id NOT LIKE 'followup-%' "
+                "AND github_id NOT LIKE 'RAID-%' "
+                "AND github_id NOT LIKE 'design-%' "
+                "AND github_id NOT LIKE '%-M%' "
+                f"AND (type_ IS NULL OR type_ NOT IN ({synthetic_placeholders}))"
             )
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, tuple(TERMINAL_STATUSES))
+                    params = tuple(TERMINAL_STATUSES) + synthetic_types
+                    cursor.execute(query, params)
                     rows = cursor.fetchall()
                     return [dict(row) for row in rows]
             except sqlite3.Error as e:
