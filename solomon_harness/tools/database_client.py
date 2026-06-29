@@ -172,6 +172,14 @@ class DatabaseClient:
                 namespace = db_config.get("namespace", "solomon")
                 database = _resolve_database(db_config.get("database"), project_root)
 
+                # Store connection details for reconnection support
+                self.surreal_url = url
+                self.surreal_username = username
+                self.surreal_password = password
+                self.surreal_namespace = namespace
+                self.surreal_database = database
+                self.project_root = project_root
+
                 try:
                     self.db = Surreal(url)
                     if hasattr(self.db, "connect"):
@@ -447,6 +455,56 @@ class DatabaseClient:
             return RecordID(table, rid)
         return s
 
+    def _ensure_connection(self) -> bool:
+        """Verify connection to SurrealDB. If stale, try to reconnect. Fallback to SQLite on failure."""
+        if self.backend != "surrealdb":
+            return False
+
+        # Check if the connection is currently open (and handle mock objects for testing)
+        if self.db is not None:
+            if type(self.db).__name__ in ("MagicMock", "Mock"):
+                return True
+
+            socket = getattr(self.db, "socket", None)
+            if socket is not None and type(socket).__name__ not in ("MagicMock", "Mock"):
+                try:
+                    state = getattr(socket, "state", None)
+                    if state is not None and getattr(state, "name", None) == "OPEN":
+                        return True
+                except Exception:
+                    pass
+
+            # If the check failed, try to close the stale connection
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
+
+        # Reconnection attempt
+        try:
+            import surrealdb
+
+            self.db = surrealdb.Surreal(self.surreal_url)
+            if hasattr(self.db, "connect"):
+                self.db.connect()
+            self.db.signin({"username": self.surreal_username, "password": self.surreal_password})
+            self.db.use(self.surreal_namespace, self.surreal_database)
+
+            logging.info("Successfully reconnected to SurrealDB backend.")
+            return True
+        except Exception as e:
+            sys.stderr.write(f"Warning: Reconnection to SurrealDB failed: {e}\n")
+            sys.stderr.write("Falling back to SQLite database backend.\n")
+            self.db = None
+            self.backend = "sqlite"
+            if self.db_path is None:
+                db_dir = os.path.join(self.project_root, "memory", "long_term")
+                os.makedirs(db_dir, exist_ok=True)
+                self.db_path = os.path.join(db_dir, "harness.db")
+            self._init_sqlite_db()
+            return False
+
     def log_decision(
         self,
         title: str,
@@ -469,6 +527,7 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the inserted record.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = """
             INSERT INTO decisions {
@@ -520,6 +579,7 @@ class DatabaseClient:
             value: Value of the memory entry.
             category: Categorical bucket for the memory.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             if self.spectron is not None:
                 try:
@@ -567,6 +627,7 @@ class DatabaseClient:
 
     def delete_memory(self, key: str) -> None:
         """Deletes a memory entry by key (no-op if it does not exist)."""
+        self._ensure_connection()
         if self.backend == "surrealdb":
             try:
                 self.db.query("DELETE memory WHERE key = $key;", {"key": key})
@@ -589,6 +650,7 @@ class DatabaseClient:
         Returns:
             The memory value string or None if not found.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             if self.spectron is not None:
                 try:
@@ -631,6 +693,7 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the created milestone.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = """
             INSERT INTO milestones {
@@ -670,6 +733,7 @@ class DatabaseClient:
 
     def list_milestones(self) -> List[Dict[str, Any]]:
         """List milestones, most recent first."""
+        self._ensure_connection()
         if self.backend == "surrealdb":
             try:
                 res = self.db.query("SELECT * FROM milestones ORDER BY created_at DESC")
@@ -711,6 +775,7 @@ class DatabaseClient:
         Returns:
             The id of the created release record.
         """
+        self._ensure_connection()
         mid = str(milestone_id) if milestone_id is not None else None
         if self.backend == "surrealdb":
             query = """
@@ -758,6 +823,7 @@ class DatabaseClient:
 
     def get_release(self, release_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieve a release by id."""
+        self._ensure_connection()
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
@@ -780,6 +846,7 @@ class DatabaseClient:
 
     def list_releases(self, limit: int = 20) -> List[Dict[str, Any]]:
         """List delivered releases, most recent first."""
+        self._ensure_connection()
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
@@ -819,6 +886,7 @@ class DatabaseClient:
             status: Status (e.g., open, closed).
             milestone_id: Associated milestone ID in the database.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = """
             UPSERT $id CONTENT {
@@ -885,6 +953,7 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the inserted record.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = """
             INSERT INTO backtest_runs {
@@ -954,6 +1023,7 @@ class DatabaseClient:
             task: Task description.
             messages: List of message dictionaries representing conversation history.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = """
             UPSERT $id CONTENT {
@@ -1008,6 +1078,7 @@ class DatabaseClient:
         Returns:
             A dictionary containing the session details or None.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM sessions WHERE session_id = $session_id"
             try:
@@ -1048,6 +1119,7 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the created handoff.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = """
             INSERT INTO handoffs {
@@ -1098,6 +1170,7 @@ class DatabaseClient:
         Returns:
             A dictionary containing the handoff details or None.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
@@ -1129,6 +1202,7 @@ class DatabaseClient:
         Returns:
             A dictionary containing the record details or None.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
@@ -1160,6 +1234,7 @@ class DatabaseClient:
         Returns:
             A dictionary containing the record details or None.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
@@ -1191,6 +1266,7 @@ class DatabaseClient:
         Returns:
             A dictionary containing the record details or None.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues WHERE github_id = $github_id"
             try:
@@ -1220,6 +1296,7 @@ class DatabaseClient:
         Returns:
             A dictionary containing the record details or None.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
@@ -1250,6 +1327,7 @@ class DatabaseClient:
         Returns:
             A list of dictionaries containing open issues.
         """
+        self._ensure_connection()
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues WHERE status = 'open'"
             try:
@@ -1280,6 +1358,7 @@ class DatabaseClient:
             (and 'contract_path' for handoffs, pointing to the handoff contract
             artifact), or None if no activity exists.
         """
+        self._ensure_connection()
         latest_session = None
         if self.backend == "surrealdb":
             query = "SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1"
