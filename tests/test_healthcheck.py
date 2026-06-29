@@ -171,6 +171,25 @@ class TestPendingReconcile(unittest.TestCase):
             self.assertEqual(hc.pending_reconcile_count(d), 0)
             self.assertEqual(hc.check_pending_reconcile(d)["status"], hc.OK)
 
+    def test_honors_harness_mirror_root_env(self):
+        # The mirror can be redirected with HARNESS_MIRROR_ROOT (the same precedence
+        # the client uses). The healthcheck must read pending records from there,
+        # not from a hard-coded <workspace>/.solomon/memory-mirror, or it would
+        # report 0 pending while records sit elsewhere.
+        with tempfile.TemporaryDirectory() as workspace, \
+             tempfile.TemporaryDirectory() as mirror_root:
+            directory = os.path.join(mirror_root, "release")
+            os.makedirs(directory)
+            with open(os.path.join(directory, "r0.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "---\nid: r0\nkind: release\n"
+                    "created_at: 2026-06-28T22:00:00+00:00\nsynced: false\n---\n\n"
+                    "# release record\n"
+                )
+            # The default location under the workspace is empty.
+            with patch.dict(os.environ, {"HARNESS_MIRROR_ROOT": mirror_root}):
+                self.assertEqual(hc.pending_reconcile_count(workspace), 1)
+
     def test_run_checks_includes_pending_reconcile(self):
         with tempfile.TemporaryDirectory() as d:
             self._write_mirror(d, "release", "r0", "false")

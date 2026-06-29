@@ -77,6 +77,35 @@ def _resolve_database(configured: Optional[str], project_root: str) -> str:
     return database
 
 
+def _resolve_mirror_root_path(
+    project_root: str,
+    db_path: Optional[str] = None,
+    override: Optional[str] = None,
+) -> str:
+    """Resolve the write-through mirror root from a single precedence rule.
+
+    Shared by :class:`DatabaseClient` and the healthcheck so a pending-reconcile
+    count is never read from a different directory than the one writes land in
+    (issue #35). Precedence: an explicit ``override``, then ``HARNESS_MIRROR_ROOT``,
+    then a ``memory-mirror`` sibling of an explicit ``db_path`` or ``HARNESS_DB_PATH``
+    (the test/sandbox isolation convention), then
+    ``<project_root>/.solomon/memory-mirror``.
+    """
+    if override:
+        return override
+    env = os.environ.get("HARNESS_MIRROR_ROOT")
+    if env:
+        return env
+    if db_path:
+        base = os.path.dirname(os.path.abspath(db_path))
+        return os.path.join(base, "memory-mirror")
+    env_db = os.environ.get("HARNESS_DB_PATH")
+    if env_db:
+        base = os.path.dirname(os.path.abspath(env_db))
+        return os.path.join(base, "memory-mirror")
+    return os.path.join(project_root, ".solomon", "memory-mirror")
+
+
 def _surreal_connection_exception_types() -> tuple:
     """Connection/websocket exception classes that mark a transport fault by type.
 
@@ -745,20 +774,14 @@ class DatabaseClient:
         a test never touches the real project's ``.solomon/`` -- the same isolation
         convention :meth:`_resolve_sqlite_path` uses for the DB. Otherwise it is the
         gitignored ``.solomon/memory-mirror`` at the repository root.
+
+        Delegates to the module-level :func:`_resolve_mirror_root_path` so the
+        healthcheck resolves the very same root and can never count pending records
+        in a different directory than the one writes land in.
         """
-        if override:
-            return override
-        env = os.environ.get("HARNESS_MIRROR_ROOT")
-        if env:
-            return env
-        if self._db_path_param:
-            base = os.path.dirname(os.path.abspath(self._db_path_param))
-            return os.path.join(base, "memory-mirror")
-        env_db = os.environ.get("HARNESS_DB_PATH")
-        if env_db:
-            base = os.path.dirname(os.path.abspath(env_db))
-            return os.path.join(base, "memory-mirror")
-        return os.path.join(self._project_root, ".solomon", "memory-mirror")
+        return _resolve_mirror_root_path(
+            self._project_root, db_path=self._db_path_param, override=override
+        )
 
     @staticmethod
     def _utc_iso() -> str:

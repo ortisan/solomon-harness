@@ -87,8 +87,14 @@ def pending_reconcile_count(workspace_root: str) -> int:
 
     These are memory writes captured locally during a SurrealDB outage that have not
     yet been replayed to the primary; ``solomon-harness memory sync`` clears them.
+
+    The mirror root is resolved through the same precedence the client uses
+    (``HARNESS_MIRROR_ROOT`` / the db_path-sibling convention), so the count can
+    never read 0 while pending records sit under a redirected root.
     """
-    root = os.path.join(workspace_root, ".solomon", "memory-mirror")
+    from solomon_harness.tools.database_client import _resolve_mirror_root_path
+
+    root = _resolve_mirror_root_path(workspace_root)
     if not os.path.isdir(root):
         return 0
     count = 0
