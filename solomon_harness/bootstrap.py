@@ -3,7 +3,14 @@ import json
 import shutil
 import datetime
 import subprocess
-from typing import List, Dict
+from typing import Callable, List, Dict
+
+from solomon_harness.wiki_bootstrap import (
+    resolve_web_wiki_url,
+    resolve_wiki_clone_url,
+    wiki_refs_present,
+)
+
 
 def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
     """Extracts project name, git remote, and detected technologies."""
@@ -185,6 +192,58 @@ def has_github_project_and_wiki(workspace_root: str, git_remote: str) -> bool:
         if os.path.isdir(wiki_dir) and os.listdir(wiki_dir):
             return True
         return False
+
+
+def github_wiki_enabled(workspace_root: str) -> bool | None:
+    """Return GitHub's hasWikiEnabled flag for the repo, or None when unknown.
+
+    None means the flag could not be determined (no gh, not authenticated, or the
+    repo could not be resolved); callers treat that as "do not probe the network".
+    """
+    try:
+        out = subprocess.check_output(
+            ["gh", "repo", "view", "--json", "hasWikiEnabled"],
+            cwd=workspace_root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+        )
+        return bool(json.loads(out).get("hasWikiEnabled", False))
+    except Exception:
+        return None
+
+
+def hint_uninitialized_wiki(
+    workspace_root: str,
+    git_remote: str,
+    *,
+    wiki_enabled_checker: Callable[[str], bool | None] = github_wiki_enabled,
+    refs_checker: Callable[..., bool | None] = wiki_refs_present,
+) -> None:
+    """Detect an uninitialized GitHub wiki at init time and hint; never bootstrap.
+
+    init commonly runs non-interactive, so it only detects the state and prints
+    the one manual step that fixes it. It opens no browser, never prompts, and
+    never creates the first page. The network ref probe is skipped unless the
+    wiki feature is confirmed enabled, so init stays fast and offline-safe when
+    GitHub is unreachable, and never hints when there is nothing to initialize.
+    """
+    if git_remote == "none" or "github.com" not in git_remote:
+        return
+    if not wiki_enabled_checker(workspace_root):
+        return
+    clone_url = resolve_wiki_clone_url(git_remote)
+    web_url = resolve_web_wiki_url(git_remote)
+    if not clone_url or not web_url:
+        return
+    if refs_checker(clone_url, timeout=5.0) is True:
+        return
+    print(
+        "Note: the GitHub wiki feature is enabled but the wiki has not been "
+        "initialized.\n"
+        f"  Open {web_url} and save a page so the wiki step can publish docs.\n"
+        "  init only detects this; it does not create the page."
+    )
 
 
 def _install_harness_files(workspace_root: str) -> None:
