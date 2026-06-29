@@ -226,7 +226,19 @@ describe("dashboard portfolio route", () => {
           httpStatus: 403,
           total: 0,
           unmapped: 0,
-          columns: zeroColumns(),
+          // A regressed composer that leaked the FORBIDDEN tenant's rows: the
+          // route must strip them at the boundary so they never reach the wire.
+          columns: SEVEN.map((name) =>
+            name === "Backlog"
+              ? {
+                  name,
+                  count: 1,
+                  issues: [
+                    { github_id: "g1", title: forbiddenTitle, type_: "feature", status: "Backlog" },
+                  ],
+                }
+              : { name, count: 0, issues: [] },
+          ),
         },
       ],
       columns: zeroColumns().map(({ name, count }) => ({ name, count })),

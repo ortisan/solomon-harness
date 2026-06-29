@@ -20,6 +20,43 @@ const HTTP_OK = 200;
 const HTTP_MULTI_STATUS = 207;
 const HTTP_NOT_FOUND = 404;
 
+// Per-project read outcome carried inside the 207 envelope; only OK lanes hold
+// issue rows. Mirrors the Python composer's STATUS_OK.
+const STATUS_OK = "OK";
+
+interface DegradableColumn {
+  issues: unknown[];
+  [key: string]: unknown;
+}
+
+interface PortfolioSwimlane {
+  status: string;
+  columns: DegradableColumn[];
+  [key: string]: unknown;
+}
+
+interface AggregatePortfolio {
+  aggregateStatus: number;
+  swimlanes: PortfolioSwimlane[];
+  [key: string]: unknown;
+}
+
+// Defense in depth at the transport boundary: a degraded (non-OK) swimlane must
+// carry no issue rows, even if the upstream composer regressed and sent some, so
+// a FORBIDDEN or UNREACHABLE tenant's data never reaches the wire (information
+// disclosure). OK lanes pass through untouched.
+function withoutDegradedRows(portfolio: AggregatePortfolio): AggregatePortfolio {
+  const swimlanes = portfolio.swimlanes.map((lane) =>
+    lane.status === STATUS_OK
+      ? lane
+      : {
+          ...lane,
+          columns: lane.columns.map((column) => ({ ...column, issues: [] })),
+        },
+  );
+  return { ...portfolio, swimlanes };
+}
+
 const tracer = trace.getTracer("solomon_harness.cockpit_dashboard_route");
 
 function pythonBin(rootDir: string): string {
@@ -80,13 +117,13 @@ async function portfolioResponse(
   env: NodeJS.ProcessEnv,
   span: Span,
 ): Promise<Response> {
-  const portfolio = JSON.parse(
+  const portfolio: AggregatePortfolio = JSON.parse(
     await readBridge(bin, ["-m", MODULE, "portfolio"], rootDir, env),
   );
   span.setAttribute("cockpit.aggregate_status", portfolio.aggregateStatus);
   const status =
     portfolio.aggregateStatus === HTTP_MULTI_STATUS ? HTTP_MULTI_STATUS : HTTP_OK;
-  return Response.json(portfolio, { status });
+  return Response.json(withoutDegradedRows(portfolio), { status });
 }
 
 // Single-project drill-down path (slice 1a): the requested project is passed as
