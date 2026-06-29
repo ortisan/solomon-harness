@@ -343,6 +343,12 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
 
+    # Detect-and-hint at init (ADR-0012): if the GitHub wiki is enabled but never
+    # initialized, print the one manual step that fixes it. init commonly runs
+    # non-interactive, so this only detects and hints -- it opens no browser,
+    # prompts for nothing, and never creates the first page.
+    hint_uninitialized_wiki(workspace_root, git_remote)
+
     # Enforce GitHub prerequisites if the project is hosted on GitHub
     if "github.com" in git_remote and not os.environ.get("SOLOMON_SKIP_GH_CHECK"):
         print("Checking GitHub prerequisites (Wiki and Project)...")

@@ -11,13 +11,15 @@ from these tests, which inject fakes and a fake ref-checker instead.
 
 import contextlib
 import io
+import os
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
 from solomon_harness import cli
-from solomon_harness.bootstrap import hint_uninitialized_wiki
+from solomon_harness.bootstrap import bootstrap_project, hint_uninitialized_wiki
+from solomon_harness.bootstrap import hint_uninitialized_wiki as _real_hint
 from solomon_harness.wiki_bootstrap import (
     Tier,
     WikiBootstrapResult,
@@ -200,6 +202,59 @@ class TestInitDetectAndHint(unittest.TestCase):
                 refs_checker=lambda url, timeout=10.0: False,
             )
         self.assertEqual(buf.getvalue(), "")
+
+
+class TestInitWiresTheWikiHint(unittest.TestCase):
+    """Regression: bootstrap_project (the init flow) must actually invoke the
+    detect-and-hint. The hint helper has its own unit tests, but nothing proved
+    init calls it, so the ADR-0012 "detect-and-hint at init" never ran end to end.
+
+    These exercise only the init->hint seam: the cheap pre-hint collaborators are
+    stubbed and execution is stopped right after the hint via a sentinel, so the
+    heavy remainder of bootstrap_project is not run.
+    """
+
+    class _StopAfterHint(Exception):
+        pass
+
+    def _run_until_hint(self, hint_side_effect):
+        with (
+            patch.dict(os.environ, {"SOLOMON_SKIP_GH_CHECK": "true"}),
+            patch("solomon_harness.bootstrap._install_harness_files"),
+            patch("solomon_harness.prereqs.check_prerequisites"),
+            patch(
+                "solomon_harness.bootstrap.get_project_metadata",
+                return_value=("proj", REMOTE, "Python"),
+            ),
+            patch(
+                "solomon_harness.bootstrap.hint_uninitialized_wiki",
+                side_effect=hint_side_effect,
+            ) as hint,
+        ):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                with self.assertRaises(self._StopAfterHint):
+                    bootstrap_project("/ws")
+            return hint, buf.getvalue()
+
+    def test_bootstrap_project_invokes_the_hint_with_the_remote(self):
+        hint, _out = self._run_until_hint(self._StopAfterHint)
+        hint.assert_called_once_with("/ws", REMOTE)
+
+    def test_init_stays_silent_when_the_wiki_already_has_refs(self):
+        # Drive the real hint (feature enabled, refs present) through the wiring to
+        # prove the init path prints nothing once the wiki is initialized.
+        def _hint_then_stop(ws, remote):
+            _real_hint(
+                ws,
+                remote,
+                wiki_enabled_checker=lambda _ws: True,
+                refs_checker=lambda url, timeout=10.0: True,
+            )
+            raise self._StopAfterHint
+
+        _hint, out = self._run_until_hint(_hint_then_stop)
+        self.assertNotIn("/wiki/_new", out)
 
 
 class TestChooseTier(unittest.TestCase):
