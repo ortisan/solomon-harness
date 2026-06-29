@@ -16,7 +16,6 @@ from typing import (
     Any,
     Dict,
     List,
-    Mapping,
     Optional,
     Protocol,
     Union,
@@ -165,26 +164,26 @@ def is_terminal(status: Optional[str]) -> bool:
 UNASSIGNED_PERSON_KEY = "unassigned"
 
 
-def normalize_person_key(assignee: Optional[Mapping[str, Any]]) -> Optional[str]:
-    """Map a GitHub assignee object to the canonical, cross-tenant person key.
+def normalize_person_key(email: Optional[str], login: Optional[str]) -> Optional[str]:
+    """Map an email and a login to the canonical, cross-tenant person key.
 
-    Implements the ADR-0012 identity contract. Total and deterministic: it never
-    raises and has no side effects. A non-empty, ``@``-bearing email wins,
-    lowercased and trimmed, because an email is the same string across projects
-    and tools. Otherwise a non-empty login yields ``gh:<lowercased-login>``; the
-    ``gh:`` namespace has no ``@``, so a handle key can never collide with an
-    email key. A null, non-mapping, or empty assignee (no usable email and no
-    login) yields None, which reads back under the reserved ``unassigned``
-    pseudo-key via :func:`person_key_or_unassigned`.
+    Implements the ADR-0012 identity contract at its normative scalar seam: the
+    caller (the github.py capture site) extracts the email and login from the
+    GitHub assignee JSON, so this function stays free of any source shape. Total
+    and deterministic: it never raises and has no side effects. A non-empty,
+    ``@``-bearing email wins, lowercased and trimmed, because an email is the same
+    string across projects and tools. Otherwise a non-empty login yields
+    ``gh:<lowercased-login>``; the ``gh:`` namespace has no ``@``, so a handle key
+    can never collide with an email key. When neither yields a usable value the
+    result is None, which reads back under the reserved ``unassigned`` pseudo-key
+    via :func:`person_key_or_unassigned`.
     """
-    if not isinstance(assignee, Mapping):
-        return None
-    email = str(assignee.get("email") or "").strip().lower()
-    if email and "@" in email:
-        return email
-    login = str(assignee.get("login") or "").strip().lower()
-    if login:
-        return f"gh:{login}"
+    normalized_email = str(email or "").strip().lower()
+    if normalized_email and "@" in normalized_email:
+        return normalized_email
+    normalized_login = str(login or "").strip().lower()
+    if normalized_login:
+        return f"gh:{normalized_login}"
     return None
 
 

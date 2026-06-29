@@ -312,9 +312,11 @@ def capture_issue_assignee(issue_number) -> Optional[str]:
     """Capture an issue's GitHub assignee as the canonical person key (ADR-0012).
 
     Reads the assignees at sync/write time (epic #44 forbids a live read at query
-    time) via ``gh issue view <n> --json assignees`` and maps the first assignee
-    through :func:`normalize_person_key`. PII-minimal: only the normalized key is
-    derived; name, avatar, and other profile fields are never read out.
+    time) via ``gh issue view <n> --json assignees``, defensively extracts the
+    first assignee's email and login from the GitHub JSON here (this capture site
+    owns the source shape), and maps those two scalars through
+    :func:`normalize_person_key`. PII-minimal: only the normalized key is derived;
+    name, avatar, and other profile fields are never read out.
 
     Best-effort: a gh failure, an unparseable shape, or any other error is caught,
     logged by exception type only (never ``str(exc)``, which can leak internals),
@@ -330,7 +332,10 @@ def capture_issue_assignee(issue_number) -> Optional[str]:
         assignees = (res.get("data") or {}).get("assignees") or []
         if not assignees:
             return None
-        return normalize_person_key(assignees[0])
+        first = assignees[0]
+        email = first.get("email") if isinstance(first, dict) else None
+        login = first.get("login") if isinstance(first, dict) else None
+        return normalize_person_key(email, login)
     except Exception as exc:  # noqa: BLE001 - best-effort; never break the sync path
         logging.warning(
             "assignee capture for issue %s failed: %s",
