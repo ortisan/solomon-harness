@@ -2,6 +2,11 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.6.0] - 2026-06-29
+
+### Added
+- add the legacy_modernizer specialist and its parsimonious migration-planning contract (#83)
+
 ## [0.5.0] - 2026-06-28
 
 ### Added
