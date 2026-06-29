@@ -48,10 +48,15 @@ Two layers, delivered as #37 (connection resilience, lands first) then #35 (dura
    `.solomon/memory-mirror/<kind>/<id>.md` (frontmatter `id, kind, created_at, synced`),
    stamped `synced: true` on DB success and `synced: false` on outage; the write never
    raises solely because the DB is down. `reconcile()` replays `synced: false` records to
-   the DB idempotently on recovery (run at memory-up / SessionStart and via
-   `solomon-harness memory sync`); the pending count is surfaced in `healthcheck`. Records
-   carry a client-minted stable id used as the SurrealDB RecordID, so replay is a
-   deterministic UPSERT (no duplicates); INSERT-based writes are converted to UPSERT.
+   the DB idempotently. It runs automatically at memory-up / SessionStart (best-effort and
+   bounded: it reuses the bounded connect and never blocks or fails the hook) and on demand
+   via `solomon-harness memory sync`. Recovery happens at that boundary, not mid-process: a
+   client that has already fallen back to SQLite mid-session keeps serving from SQLite for
+   the rest of that process and does not re-probe SurrealDB; its pending records are
+   replayed at the next memory-up / SessionStart or a manual sync. The pending count is
+   surfaced in `healthcheck`. Records carry a client-minted stable id used as the SurrealDB
+   RecordID, so replay is a deterministic UPSERT (no duplicates); INSERT-based writes are
+   converted to UPSERT.
 
 Chosen because reconnect-once-then-fallback satisfies durability and bounded behavior with
 the least change (the SQLite branch already exists per method), and the write-through mirror
@@ -60,8 +65,9 @@ and a clean reconciliation of any SurrealDB/SQLite divergence the fallback creat
 
 ### Consequences
 
-- Positive: a mid-session backend drop no longer loses writes or masks reads; recovery is
-  automatic and bounded; the audit trail is durable and human-readable.
+- Positive: a mid-session backend drop no longer loses writes or masks reads; recovery of
+  the durable mirror is automatic at the next memory-up / SessionStart (or a manual
+  `memory sync`) and bounded; the audit trail is durable and human-readable.
 - Negative: a mirror write on every call (kept < ~5 ms/record); a SQLite fallback can
   diverge from SurrealDB until reconcile runs (made visible by a loud warning + the pending
   count, and healed by reconcile).

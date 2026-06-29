@@ -1,8 +1,10 @@
+import io
 import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from contextlib import redirect_stderr
+from unittest.mock import MagicMock, patch
 
 from solomon_harness import memory
 
@@ -177,6 +179,64 @@ class TestEnsureMemoryUp(unittest.TestCase):
             res = memory.ensure_memory_up(self.root, wait_seconds=1)
         self.assertFalse(res["ok"])
         self.assertEqual(res["error"], "boom")
+
+
+class TestMemoryUpReconcile(unittest.TestCase):
+    """ADR-0002 promises auto-reconcile at memory-up / SessionStart, not only via
+    the manual `memory sync`. ensure_memory_up must replay pending mirror records
+    once the backend is confirmed up, and must never let that step break the hook."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, ".agent"))
+        with open(os.path.join(self.root, ".agent", "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"database": {"provider": "surrealdb", "url": "ws://localhost:8000/rpc"}}, f)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_reconcile_runs_when_backend_already_up(self):
+        recon = MagicMock(return_value={"synced": 1, "remaining": 0})
+        with patch.object(memory, "is_serving", return_value=True), \
+             patch.object(memory, "reconcile_pending", recon):
+            res = memory.ensure_memory_up(self.root)
+        self.assertTrue(res["already_running"])
+        recon.assert_called_once_with(self.root)
+
+    def test_reconcile_runs_after_compose_start(self):
+        recon = MagicMock(return_value={"synced": 0, "remaining": 0})
+        with patch.object(memory, "is_serving", side_effect=[False, True]), \
+             patch.object(memory, "_tcp_open", return_value=False), \
+             patch.object(memory, "ensure_home_compose", return_value="/home/sh/docker-compose.yml"), \
+             patch.object(memory, "_compose_command", return_value=["docker", "compose"]), \
+             patch.object(memory, "reconcile_pending", recon), \
+             patch("subprocess.run", return_value=_Proc(0, "", "")):
+            res = memory.ensure_memory_up(self.root, wait_seconds=5)
+        self.assertTrue(res["started"])
+        recon.assert_called_once_with(self.root)
+
+    def test_memory_up_never_raises_when_reconcile_blows_up(self):
+        # Drive the real guard: a pending record forces a client build, and the
+        # build raises. ensure_memory_up must still return cleanly -- the
+        # session-start hook is never broken (best-effort, swallowing).
+        import solomon_harness.tools.database_client as dbc
+        with patch.object(memory, "is_serving", return_value=True), \
+             patch("solomon_harness.healthcheck.pending_reconcile_count", return_value=1), \
+             patch.object(dbc, "DatabaseClient", side_effect=RuntimeError("boom")):
+            with redirect_stderr(io.StringIO()):
+                res = memory.ensure_memory_up(self.root)
+        self.assertTrue(res["already_running"])
+
+    def test_reconcile_pending_skips_client_when_nothing_pending(self):
+        # The common case: nothing pending, so no client is built and no socket is
+        # opened. If a client were built the patched factory would record the call.
+        import solomon_harness.tools.database_client as dbc
+        built = MagicMock(side_effect=AssertionError("must not build a client"))
+        with patch("solomon_harness.healthcheck.pending_reconcile_count", return_value=0), \
+             patch.object(dbc, "DatabaseClient", built):
+            result = memory.reconcile_pending(self.root)
+        self.assertEqual(result, {"synced": 0, "remaining": 0})
 
 
 class TestEnsureHomeCompose(unittest.TestCase):
