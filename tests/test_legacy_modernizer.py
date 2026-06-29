@@ -390,5 +390,37 @@ class TestHumanizer(unittest.TestCase):
                 self.assertNotIn(cliche, low, f"{rel} contains AI cliche {cliche!r}")
 
 
+class TestIdempotence(unittest.TestCase):
+    """A fitness guard: the committed generated artifacts must equal a second
+    generator pass, so a hand-edit that bypasses the generators is caught.
+    Mirrors tests/test_integrations.py::TestGeminiDrift.
+    """
+
+    def test_compile_and_document_are_stable(self):
+        before_subagent = _read(SUBAGENT_REL)
+        before_profile = _read(PROFILE_REL)
+
+        generate = _load_module(GENERATE_INTEGRATIONS_PATH, "gen_integrations_idem")
+        document_skills = _load_module(DOCUMENT_SKILLS_PATH, "document_skills_idem")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            generate.generate(WORKSPACE)
+            document_skills.document_agent(
+                "legacy_modernizer", os.path.join(WORKSPACE, "agents")
+            )
+
+        self.assertEqual(
+            _read(SUBAGENT_REL),
+            before_subagent,
+            "compile is not idempotent: .claude/agents/legacy_modernizer.md drifted",
+        )
+        self.assertEqual(
+            _read(PROFILE_REL),
+            before_profile,
+            "document-skills is not idempotent: the profile drifted",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
