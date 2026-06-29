@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -451,6 +452,148 @@ class TestReadTenantSwimlane(unittest.TestCase):
         )
         self.assertEqual(unreachable["status"], "UNREACHABLE")
         self.assertIsNone(unreachable["board"])
+
+
+class _ConcurrencyTracker:
+    """Track the peak number of per-tenant reads running at the same time."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def enter(self):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+
+    def leave(self):
+        with self._lock:
+            self.active -= 1
+
+
+class _ConcurrentTenantClient:
+    """A per-tenant read port whose read holds briefly and records concurrency.
+
+    Shared across the fan-out via a single tracker, it proves the reads overlap
+    (run in parallel) and that their peak count never exceeds the bounded pool.
+    """
+
+    def __init__(self, tenants, tracker, hold):
+        self._tenants = tenants
+        self._tracker = tracker
+        self._hold = hold
+
+    def list_databases(self):
+        return list(self._tenants)
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        self._tracker.enter()
+        try:
+            time.sleep(self._hold)
+            return []
+        finally:
+            self._tracker.leave()
+
+    def close(self):
+        pass
+
+
+class TestPortfolioPayload(unittest.TestCase):
+    def test_portfolio_payload_caps_at_25_with_stable_overflow(self):
+        """portfolio_payload caps the fan-out at 25 swimlanes (the first 25 in
+        sorted order), emits a deterministic overflow notice, excludes the same
+        26th project on every load, and totals over the 25 shown."""
+        names = [f"proj-{index:02d}" for index in range(26)]
+        issues = {
+            name: [{"github_id": f"{name}-1", "status": "Backlog"}] for name in names
+        }
+
+        def factory():
+            return FakeTenantClient(issues)
+
+        first = cockpit_read.portfolio_payload(client_factory=factory)
+        second = cockpit_read.portfolio_payload(client_factory=factory)
+
+        expected_shown = sorted(names)[:25]
+        self.assertEqual(len(first["swimlanes"]), 25)
+        self.assertEqual([s["project"] for s in first["swimlanes"]], expected_shown)
+        self.assertEqual(first["overflow"], 1)
+        self.assertEqual(first["notice"], "1 project not shown")
+        self.assertEqual(first["total"], 25)
+        self.assertEqual(first["aggregateStatus"], 200)
+
+        # The excluded 26th tenant (sorted last) never appears, on either load.
+        self.assertNotIn("proj-25", [s["project"] for s in first["swimlanes"]])
+        self.assertEqual(
+            [s["project"] for s in first["swimlanes"]],
+            [s["project"] for s in second["swimlanes"]],
+        )
+
+    def test_portfolio_payload_fans_out_bounded_concurrently(self):
+        """portfolio_payload reads tenants in parallel (the in-flight reads
+        overlap) while never exceeding the bounded worker count, so 25 reads do
+        not serialize and one slow tenant cannot stall the rest."""
+        names = [f"t{index:02d}" for index in range(16)]
+        tracker = _ConcurrencyTracker()
+
+        def factory():
+            return _ConcurrentTenantClient(names, tracker, hold=0.05)
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory)
+
+        self.assertEqual(len(payload["swimlanes"]), 16)
+        # Reads overlap (parallel) and their peak never exceeds the worker cap.
+        self.assertGreater(tracker.max_active, 1)
+        self.assertLessEqual(tracker.max_active, cockpit_read.MAX_FANOUT_WORKERS)
+
+    def test_portfolio_payload_empty_single_and_exact_cap(self):
+        """portfolio_payload handles the boundaries: an empty portfolio yields no
+        swimlanes (total 0, no notice, 200); a single project yields one swimlane
+        whose total is the portfolio total; exactly 25 projects yields 25
+        swimlanes with no overflow notice."""
+        def empty_factory():
+            return FakeTenantClient({})
+
+        empty = cockpit_read.portfolio_payload(client_factory=empty_factory)
+        self.assertEqual(empty["swimlanes"], [])
+        self.assertEqual(empty["total"], 0)
+        self.assertEqual(empty["overflow"], 0)
+        self.assertIsNone(empty["notice"])
+        self.assertEqual(empty["aggregateStatus"], 200)
+
+        def single_factory():
+            return FakeTenantClient(
+                {
+                    "solo": [
+                        {"github_id": "s1", "status": "Backlog"},
+                        {"github_id": "s2", "status": "Done"},
+                    ]
+                }
+            )
+
+        single = cockpit_read.portfolio_payload(client_factory=single_factory)
+        self.assertEqual([s["project"] for s in single["swimlanes"]], ["solo"])
+        self.assertEqual(single["total"], 2)
+        self.assertIsNone(single["notice"])
+        self.assertEqual(single["aggregateStatus"], 200)
+
+        names = [f"p{index:02d}" for index in range(25)]
+        issues = {
+            name: [{"github_id": f"{name}-1", "status": "Ready"}] for name in names
+        }
+
+        def exact_factory():
+            return FakeTenantClient(issues)
+
+        exact = cockpit_read.portfolio_payload(client_factory=exact_factory)
+        self.assertEqual(len(exact["swimlanes"]), 25)
+        self.assertEqual(exact["overflow"], 0)
+        self.assertIsNone(exact["notice"])
+        self.assertEqual(exact["total"], 25)
 
 
 class TestBoardPayloadTenantTargeting(unittest.TestCase):

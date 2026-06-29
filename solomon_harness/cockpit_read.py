@@ -51,6 +51,16 @@ FORBIDDEN_HTTP_STATUS = 403
 AGGREGATE_OK = 200
 AGGREGATE_MULTI_STATUS = 207
 
+# The portfolio fan-out is capped so a host with many tenants cannot blow the
+# p95 latency envelope (R-06): at most this many projects are read and rendered,
+# the rest reported as an overflow count. The cap is on the sorted set, so the
+# excluded tail is stable across loads.
+MAX_PROJECTS = 25
+
+# Bounded concurrency for the fan-out: at most this many tenants are read at once
+# so the reads run in parallel without unbounded thread or connection growth.
+MAX_FANOUT_WORKERS = 8
+
 # A per-project read that blocks past this many seconds is classified UNREACHABLE
 # rather than allowed to stall the fan-out (DoS mitigation, R-04).
 PER_PROJECT_TIMEOUT_S = 5.0
@@ -321,6 +331,89 @@ def board_payload(
         return payload
     finally:
         client.close()
+
+
+def _discover_with(client_factory: Callable[[], Any]) -> List[str]:
+    """Open one client only to discover the sorted tenant set, then close it."""
+    client = client_factory()
+    try:
+        return discover_projects(client.list_databases)
+    finally:
+        client.close()
+
+
+def _overflow_notice(count: int) -> Optional[str]:
+    """Render the "N project(s) not shown" notice, or None when nothing spills."""
+    if count <= 0:
+        return None
+    noun = "project" if count == 1 else "projects"
+    return f"{count} {noun} not shown"
+
+
+def _fan_out(
+    projects: Sequence[str],
+    client_factory: Callable[[], Any],
+    max_workers: int,
+    timeout: float,
+) -> List[Dict[str, Any]]:
+    """Read the projects in parallel under a bounded pool, preserving their order.
+
+    Each project is read by ``read_tenant_swimlane`` with its own fresh client, so
+    no connection is shared across workers. The results are returned in the input
+    (sorted) order regardless of completion order, so the render is deterministic.
+    """
+    if not projects:
+        return []
+    results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(read_tenant_swimlane, project, client_factory, timeout): project
+            for project in projects
+        }
+        for future, project in futures.items():
+            results[project] = future.result()
+    return [results[project] for project in projects]
+
+
+def portfolio_payload(
+    harness_dir: Optional[str] = None,
+    client_factory: Optional[Callable[[], Any]] = None,
+    max_projects: int = MAX_PROJECTS,
+    max_workers: int = MAX_FANOUT_WORKERS,
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Build the cross-tenant portfolio board by fanning out over the tenants.
+
+    Discovers the sorted tenant set, caps it at ``max_projects`` (recording the
+    overflow count and a stable notice), fans the capped set out under a bounded
+    pool with a per-project read timeout, and composes the per-project outcomes
+    into one portfolio board. The whole read is wrapped in a ``cockpit.portfolio``
+    span that records the per-project statuses for the audit trace. Read-only:
+    every tenant is read through the read port and nothing is joined or written.
+
+    ``client_factory`` lets a test inject fakes; by default each call opens a
+    fresh ``DatabaseClient`` for the harness directory.
+    """
+    factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
+    with _tracer.start_as_current_span("cockpit.portfolio") as span:
+        available = _discover_with(factory)
+        shown = list(available[:max_projects])
+        overflow_count = len(available) - len(shown)
+
+        results = _fan_out(shown, factory, max_workers, timeout)
+        payload = compose_portfolio(results)
+        payload["overflow"] = overflow_count
+        payload["notice"] = _overflow_notice(overflow_count)
+
+        span.set_attribute("cockpit.project_count", len(available))
+        span.set_attribute("cockpit.shown_count", len(shown))
+        span.set_attribute("cockpit.overflow_count", overflow_count)
+        span.set_attribute("cockpit.aggregate_status", payload["aggregateStatus"])
+        span.set_attribute(
+            "cockpit.project_statuses",
+            [f"{s['project']}:{s['status']}" for s in payload["swimlanes"]],
+        )
+        return payload
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
