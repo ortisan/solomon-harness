@@ -420,7 +420,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """JSON CLI for the Node-to-Python read bridge.
 
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
-    board for one tenant. Output is JSON on stdout so the Next route can parse it.
+    board for one tenant; ``portfolio`` prints the cross-tenant aggregate board.
+    Output is JSON on stdout so the Next route can parse it.
     """
     if "traceparent" in os.environ:
         from opentelemetry import trace
@@ -442,6 +443,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub.add_parser("projects", help="list the harness-managed tenants")
     board_parser = sub.add_parser("board", help="render one tenant's board")
     board_parser.add_argument("--project", default=None, help="the tenant/project name")
+    sub.add_parser("portfolio", help="render the cross-tenant portfolio board")
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -452,6 +454,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             client.close()
     elif args.command == "board":
         print(json.dumps(board_payload(args.project, harness_dir=args.harness_dir)))
+    elif args.command == "portfolio":
+        print(json.dumps(portfolio_payload(harness_dir=args.harness_dir)))
     return 0
 
 

@@ -595,6 +595,74 @@ class TestPortfolioPayload(unittest.TestCase):
         self.assertIsNone(exact["notice"])
         self.assertEqual(exact["total"], 25)
 
+    def test_portfolio_payload_is_read_only_across_all_tenants(self):
+        """Driving the whole fan-out through a ReadOnlyGuard for every tenant
+        records zero write calls; because the guard raises on any write, a
+        write attempt would degrade a swimlane, so the all-OK 200 result also
+        proves no tenant was written."""
+        issues = {
+            "alpha": [
+                {"github_id": "a1", "status": "Backlog"},
+                {"github_id": "a2", "status": "Done"},
+            ],
+            "beta": [{"github_id": "b1", "status": "In Progress"}],
+            "gamma": [
+                {"github_id": "g1", "status": "Ready"},
+                {"github_id": "g2", "status": "QA"},
+                {"github_id": "g3", "status": "Done"},
+            ],
+        }
+        guards = []
+
+        def factory():
+            guard = ReadOnlyGuard(FakeTenantClient(issues))
+            guards.append(guard)
+            return guard
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory)
+
+        # A guard wrapped every client opened on the path (discovery + per-tenant).
+        self.assertGreaterEqual(len(guards), 4)
+        for guard in guards:
+            self.assertEqual(guard.write_calls, [])
+        # All OK and reconciled: no write degraded any swimlane.
+        self.assertEqual(payload["aggregateStatus"], 200)
+        self.assertTrue(all(s["status"] == "OK" for s in payload["swimlanes"]))
+        self.assertEqual(payload["total"], 6)
+
+
+class TestPortfolioCli(unittest.TestCase):
+    def setUp(self):
+        _SPAN_EXPORTER.clear()
+
+    def test_portfolio_cli_outputs_aggregate_json(self):
+        """main(["portfolio"]) prints the aggregate portfolio JSON (swimlanes,
+        total, aggregateStatus) for the Node bridge and emits the
+        cockpit.portfolio span for the audit trace."""
+        issues = {
+            "alpha": [{"github_id": "a1", "status": "Backlog"}],
+            "beta": [{"github_id": "b1", "status": "Done"}],
+        }
+        out = io.StringIO()
+        with patch(
+            "solomon_harness.cockpit_read.DatabaseClient",
+            side_effect=lambda *args, **kwargs: FakeTenantClient(issues),
+        ):
+            with contextlib.redirect_stdout(out):
+                rc = cockpit_read.main(["portfolio"])
+
+        self.assertEqual(rc, 0)
+        printed = json.loads(out.getvalue())
+        self.assertIn("swimlanes", printed)
+        self.assertEqual(
+            sorted(s["project"] for s in printed["swimlanes"]), ["alpha", "beta"]
+        )
+        self.assertEqual(printed["total"], 2)
+        self.assertEqual(printed["aggregateStatus"], 200)
+
+        span_names = [s.name for s in _SPAN_EXPORTER.get_finished_spans()]
+        self.assertIn("cockpit.portfolio", span_names)
+
 
 class TestBoardPayloadTenantTargeting(unittest.TestCase):
     def test_board_payload_reads_selected_tenant_not_host(self):
