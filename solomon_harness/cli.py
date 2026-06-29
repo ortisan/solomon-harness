@@ -343,8 +343,11 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
             continue
+        raw_number = item.get("number")
+        if raw_number is None:
+            continue
         try:
-            number = str(int(item.get("number")))
+            number = str(int(raw_number))
         except (TypeError, ValueError):
             continue
         state = str(item.get("state", "")).upper()

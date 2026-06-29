@@ -56,7 +56,8 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
         by_column: Dict[str, List[Dict[str, Any]]] = {name: [] for name in BOARD_COLUMNS}
         mapped = 0
         for issue in issues:
-            column = STATUS_DISPLAY_COLUMNS.get(normalize_status(issue.get("status")))
+            status = normalize_status(issue.get("status"))
+            column = STATUS_DISPLAY_COLUMNS.get(status) if status else None
             if column in by_column:
                 by_column[column].append(issue)
                 mapped += 1
