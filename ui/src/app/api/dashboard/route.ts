@@ -57,7 +57,8 @@ function readBridge(
           reject(error);
           return;
         }
-        resolve(typeof stdout === "string" ? stdout : stdout.toString("utf8"));
+        // execFile with the default encoding resolves stdout as a string.
+        resolve(stdout);
       },
     );
   });
