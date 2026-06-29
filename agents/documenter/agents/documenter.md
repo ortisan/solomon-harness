@@ -22,6 +22,7 @@ The following specific skills are actively configured for this agent:
 - [page_level_standards](skills/page_level_standards.md) — Title is a noun phrase (reference/explanation) or a task in imperative or gerund form (how-to: "Rotate API keys", "Configuring TLS").
 - [readability_and_style](skills/readability_and_style.md) — Follow one style guide and enforce it: Google developer documentation style guide or the Microsoft Writing Style Guide.
 - [structure_classify_by_ditaxis](skills/structure_classify_by_ditaxis.md) — Every page is exactly one of these four types.
+- [wiki_design_and_presentation_standards](skills/wiki_design_and_presentation_standards.md) — Establishes structural patterns and visual formatting rules for business-facing landing pages, technical summaries, and release logs.
 
 ## External Skills
 

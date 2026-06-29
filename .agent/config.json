@@ -10,7 +10,7 @@
     "provider": "surrealdb",
     "url": "ws://localhost:8099/rpc",
     "namespace": "solomon",
-    "database": "harness"
+    "database": "ortisan-solomon-harness"
   },
   "enabled_agents": [
     "documenter",
@@ -19,6 +19,7 @@
     "qa",
     "scrum_master",
     "security",
+    "seo",
     "software_architect",
     "software_engineer",
     "sre"

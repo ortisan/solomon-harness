@@ -93,6 +93,9 @@ class TestBootstrapAgent(unittest.TestCase):
         self._home = tempfile.mkdtemp()
         self._prev_home = os.environ.get("SOLOMON_HARNESS_HOME")
         os.environ["SOLOMON_HARNESS_HOME"] = self._home
+        
+        self._prev_skip_gh = os.environ.get("SOLOMON_SKIP_GH_CHECK")
+        os.environ["SOLOMON_SKIP_GH_CHECK"] = "true"
 
     def tearDown(self):
         # Clean up temporary directory
@@ -101,6 +104,11 @@ class TestBootstrapAgent(unittest.TestCase):
             os.environ.pop("SOLOMON_HARNESS_HOME", None)
         else:
             os.environ["SOLOMON_HARNESS_HOME"] = self._prev_home
+            
+        if self._prev_skip_gh is None:
+            os.environ.pop("SOLOMON_SKIP_GH_CHECK", None)
+        else:
+            os.environ["SOLOMON_SKIP_GH_CHECK"] = self._prev_skip_gh
         shutil.rmtree(self._home, ignore_errors=True)
 
     def test_non_interactive_default_via_env(self):
