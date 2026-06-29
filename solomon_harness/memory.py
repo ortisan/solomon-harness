@@ -153,7 +153,7 @@ def reconcile_pending(workspace_root: str) -> Optional[dict]:
 
     Called once the backend is confirmed up (memory-up / SessionStart) so a write
     captured locally during a prior outage is healed automatically, not only via a
-    manual ``solomon-harness memory sync`` (ADR-0002, issue #35). It is bounded and
+    manual ``solomon-harness memory sync`` (ADR-0007, issue #35). It is bounded and
     swallowing -- it must never raise or block the session-start hook -- so any
     failure (including a backend that drops again) is reported on stderr and
     ignored. A cheap pending-count pre-check skips building a client (and opening a
