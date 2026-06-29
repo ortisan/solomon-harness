@@ -1,6 +1,6 @@
 # ADR-0005: legacy_modernizer — a delegation-only, one-step-per-run migration-planning contract
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-28
 - Deciders: software_architect, product_owner, scrum_master (NFR-bar owners security, observability, qa as content confirmers)
 - Issue: #70 (first slice of modernization epic #72; constrains follow-ups #74, #75)
