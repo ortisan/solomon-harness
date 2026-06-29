@@ -1,9 +1,12 @@
-"""Unit tests for the shared wiki-bootstrap detection primitives (issue #117).
+"""Unit tests for the wiki-bootstrap module (issue #117).
 
 These cover the no-browser, no-network seam used by both the wiki step and the
-init detect-and-hint: URL resolution and the ls-remote-based ref probe (with the
-git call injected so the tests stay hermetic). The browser-automation tier
-(choose_tier / bootstrap_wiki) is deferred and not exercised here.
+init detect-and-hint (URL resolution and the ls-remote-based ref probe, with the
+git call injected so the tests stay hermetic), plus the interactive degrade
+ladder: the ``choose_tier`` routing decision and ``bootstrap_wiki`` orchestrated
+over an injected fake ``BrowserBootstrapper`` port. The real claude-in-chrome
+adapter is a host-integration seam proven manually at review; it is never driven
+from these tests, which inject fakes and a fake ref-checker instead.
 """
 
 import contextlib
@@ -13,6 +16,8 @@ import unittest
 
 from solomon_harness.bootstrap import hint_uninitialized_wiki
 from solomon_harness.wiki_bootstrap import (
+    Tier,
+    choose_tier,
     resolve_web_wiki_url,
     resolve_wiki_clone_url,
     wiki_refs_present,
@@ -147,6 +152,95 @@ class TestInitDetectAndHint(unittest.TestCase):
                 refs_checker=lambda url, timeout=10.0: False,
             )
         self.assertEqual(buf.getvalue(), "")
+
+
+class TestChooseTier(unittest.TestCase):
+    """The pure routing decision for the degrade ladder (full truth table).
+
+    Precedence: an initialized wiki is always a NO-OP; a non-interactive run is
+    always the DEGRADE floor (no browser is ever driven without an operator);
+    interactive runs AUTOMATE only with a usable, authenticated browser and a
+    confirmed-uninitialized (0 refs) wiki, otherwise GUIDE.
+    """
+
+    def test_refs_present_is_always_noop(self):
+        # Refs already exist -> idempotent no-op regardless of the other inputs.
+        for interactive in (True, False):
+            for browser in (True, False):
+                for auth in (True, False):
+                    self.assertIs(
+                        choose_tier(
+                            interactive=interactive,
+                            browser_available=browser,
+                            authenticated=auth,
+                            refs_present=True,
+                        ),
+                        Tier.NOOP,
+                        (interactive, browser, auth),
+                    )
+
+    def test_non_interactive_always_degrades(self):
+        # The headless/CI floor: never drive a browser without an operator, even
+        # if a bootstrapper happens to be injected.
+        for browser in (True, False):
+            for auth in (True, False):
+                for refs in (False, None):
+                    self.assertIs(
+                        choose_tier(
+                            interactive=False,
+                            browser_available=browser,
+                            authenticated=auth,
+                            refs_present=refs,
+                        ),
+                        Tier.DEGRADE,
+                        (browser, auth, refs),
+                    )
+
+    def test_interactive_without_browser_guides(self):
+        self.assertIs(
+            choose_tier(
+                interactive=True,
+                browser_available=False,
+                authenticated=False,
+                refs_present=False,
+            ),
+            Tier.GUIDE,
+        )
+
+    def test_interactive_with_unauthenticated_browser_guides(self):
+        self.assertIs(
+            choose_tier(
+                interactive=True,
+                browser_available=True,
+                authenticated=False,
+                refs_present=False,
+            ),
+            Tier.GUIDE,
+        )
+
+    def test_interactive_usable_browser_and_zero_refs_automates(self):
+        self.assertIs(
+            choose_tier(
+                interactive=True,
+                browser_available=True,
+                authenticated=True,
+                refs_present=False,
+            ),
+            Tier.AUTOMATE,
+        )
+
+    def test_inconclusive_detection_does_not_automate(self):
+        # Detection could not confirm 0 refs; do not auto-create a page that might
+        # duplicate an existing wiki -- route an interactive run to GUIDE instead.
+        self.assertIs(
+            choose_tier(
+                interactive=True,
+                browser_available=True,
+                authenticated=True,
+                refs_present=None,
+            ),
+            Tier.GUIDE,
+        )
 
 
 if __name__ == "__main__":
