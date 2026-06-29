@@ -26,6 +26,11 @@ class CatalogError(Exception):
     """The agent catalog could not be read or is empty; routing fails closed."""
 
 
+class MatcherContractError(Exception):
+    """The matcher returned an invalid response (e.g. an agent name not in the catalog)."""
+
+
+
 @dataclass(frozen=True)
 class Agent:
     """One catalog entry: an agent name and its one-line role description."""
@@ -151,7 +156,7 @@ def route(demand: str, matcher: Matcher, workspace_root: Optional[str] = None) -
 
     if match.agent is not None:
         if match.agent not in names:
-            raise CatalogError(
+            raise MatcherContractError(
                 f"matcher returned agent '{match.agent}' that is not in the catalog"
             )
         lines = (match.rationale or "").strip().splitlines()

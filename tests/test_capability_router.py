@@ -80,7 +80,7 @@ class TestRoute(CapabilityRouterTestBase):
 
     def test_route_to_unknown_agent_fails_closed(self):
         matcher = _StubMatcher(cr.Match(agent="ghost", rationale="nope"))
-        with self.assertRaises(cr.CatalogError):
+        with self.assertRaises(cr.MatcherContractError):
             cr.route("do a thing", matcher, self.root)
 
     def test_whitespace_only_rationale_does_not_crash(self):
