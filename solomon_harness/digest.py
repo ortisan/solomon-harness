@@ -20,7 +20,7 @@ from solomon_harness.tools.database_client import is_terminal
 _MAX_LIST = 5
 
 
-def _best_effort_prs(workspace_root: str, timeout: float = 5.0) -> Optional[List[Dict[str, Any]]]:
+def _best_effort_prs(workspace_root: str, timeout: float = 2.0) -> Optional[List[Dict[str, Any]]]:
     """Fetch open PRs via gh; return None when gh is unavailable or slow.
 
     Best-effort by design: the SessionStart hook must never fail or hang on a
@@ -308,9 +308,9 @@ def _run_with_timeout(func, *args, timeout: float = 1.5, default=None):
 
 def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> List[str]:
     """Collect facts from memory (and best-effort gh) and render the digest with timeout protection."""
-    resume = _run_with_timeout(db.get_latest_activity, timeout=1.5, default=None)
-    open_issues = _run_with_timeout(db.get_open_issues, timeout=1.5, default=[]) or []
-    runs = _run_with_timeout(db.list_loop_runs, 1, timeout=1.5, default=[]) or []
+    resume = _run_with_timeout(db.get_latest_activity, timeout=0.5, default=None)
+    open_issues = _run_with_timeout(db.get_open_issues, timeout=0.5, default=[]) or []
+    runs = _run_with_timeout(db.list_loop_runs, 1, timeout=0.5, default=[]) or []
     last_loop = runs[0] if runs else None
     prs = _best_effort_prs(workspace_root) if fetch_github else None
     # Read the backend AFTER the queries: a mid-call ConnectionLost can flip the
