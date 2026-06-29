@@ -281,6 +281,66 @@ class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
         self.assertEqual(client.backend, "surrealdb", "a query/data error must not fall back")
 
 
+class TestConnectionErrorClassification(ResilienceTestBase):
+    """``_is_connection_error`` must key off exception TYPE first and fall back to
+    only narrow, anchored transport phrases. A query/data error that merely
+    contains the words "connection" or "closed" must not be read as a drop, or it
+    would silently reconnect/fall back and mask a real bug (#37)."""
+
+    # A genuine data error that happens to mention the loaded words in passing.
+    DATA_ERROR_WITH_CONN_WORDS = (
+        "data error: the connection pool field is now closed for new rows"
+    )
+
+    def test_data_error_mentioning_connection_words_is_not_a_drop(self):
+        exc = Exception(self.DATA_ERROR_WITH_CONN_WORDS)
+        self.assertFalse(DatabaseClient._is_connection_error(exc))
+
+    def test_incident_no_close_frame_is_still_a_drop(self):
+        # The exact v0.3.0 symptom must keep classifying as a transport fault.
+        self.assertTrue(DatabaseClient._is_connection_error(Exception(TRANSPORT_ERROR)))
+
+    def test_oserror_is_a_drop_by_type(self):
+        self.assertTrue(DatabaseClient._is_connection_error(ConnectionResetError("reset")))
+
+    def test_surreal_connection_exception_is_a_drop_by_type(self):
+        try:
+            from surrealdb.errors import ConnectionUnavailableError
+        except Exception:  # pragma: no cover - SDK without the class
+            self.skipTest("surrealdb ConnectionUnavailableError not importable")
+        # Even with a benign message, the connection TYPE marks it a drop.
+        self.assertTrue(
+            DatabaseClient._is_connection_error(ConnectionUnavailableError("oops"))
+        )
+
+    def test_data_error_with_conn_words_does_not_reconnect_or_fall_back(self):
+        def raise_data_error(query, params=None):
+            raise Exception(self.DATA_ERROR_WITH_CONN_WORDS)
+
+        client = self._surreal_client(FakeSurreal(result=raise_data_error))
+
+        reconnect_calls = []
+
+        def fake_reconnect():
+            reconnect_calls.append(1)
+            return True
+
+        client._connect_surreal = fake_reconnect
+
+        with self.assertRaises(RuntimeError):
+            client.log_decision(
+                title="t",
+                rationale="r",
+                outcome="o",
+                author="po",
+                branch="b",
+                commit_sha="sha",
+            )
+
+        self.assertEqual(len(reconnect_calls), 0, "a data error must not reconnect")
+        self.assertEqual(client.backend, "surrealdb", "a data error must not fall back")
+
+
 class TestConnectIsBoundedAndCannotHang(ResilienceTestBase):
     """The anti-hang core of #37: a wedged handshake must not block past the
     deadline. Every other resilience test stubs ``_connect_surreal`` out, so this

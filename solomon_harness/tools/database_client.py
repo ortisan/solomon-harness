@@ -77,6 +77,37 @@ def _resolve_database(configured: Optional[str], project_root: str) -> str:
     return database
 
 
+def _surreal_connection_exception_types() -> tuple:
+    """Connection/websocket exception classes that mark a transport fault by type.
+
+    The surrealdb SDK (``ConnectionUnavailableError``) and its websocket transport
+    raise dedicated exception types when the connection drops; matching on the type
+    is far more precise than scanning a message for substrings. Each candidate is
+    imported defensively because the exact set varies by SDK/websockets version, so
+    any class that is absent is simply skipped (issue #37).
+    """
+    types: List[type] = []
+    candidates = [
+        ("surrealdb.errors", "ConnectionUnavailableError"),
+        ("websockets.exceptions", "ConnectionClosed"),
+        ("websockets.exceptions", "ConnectionClosedError"),
+        ("websockets.exceptions", "ConnectionClosedOK"),
+        ("websockets.exceptions", "WebSocketException"),
+    ]
+    for module_name, attr in candidates:
+        try:
+            module = __import__(module_name, fromlist=[attr])
+        except Exception:
+            continue
+        exc_type = getattr(module, attr, None)
+        if isinstance(exc_type, type) and issubclass(exc_type, BaseException):
+            types.append(exc_type)
+    return tuple(types)
+
+
+_SURREAL_CONNECTION_EXCEPTIONS = _surreal_connection_exception_types()
+
+
 class _ConnectionLost(Exception):
     """Raised when a SurrealDB call fails because the transport/connection dropped.
 
@@ -522,22 +553,39 @@ class DatabaseClient:
     def _is_connection_error(exc: Exception) -> bool:
         """True only for a transport/connection fault, never a query or data error.
 
-        Scoping the reconnect trigger this narrowly is the contract: a malformed
-        query or a data error must surface unchanged and must not reconnect or
-        fall back (issue #37).
+        Classification is by exception TYPE first -- Python's own
+        ``ConnectionError``/``OSError`` and the surrealdb SDK's
+        websocket/connection exception classes -- because the type is the precise
+        signal. The message fallback is deliberately narrow: it matches only
+        anchored, multi-word transport phrases (the "no close frame" incident
+        symptom, "connection reset", and the like), so a genuine query/data error
+        that merely contains the word "connection" or "closed" in passing is NOT
+        misread as a drop. Scoping the reconnect trigger this narrowly is the
+        contract: a malformed query or a data error must surface unchanged and
+        must not reconnect or fall back (issue #37).
         """
         if isinstance(exc, (ConnectionError, OSError)):
             return True
+        if _SURREAL_CONNECTION_EXCEPTIONS and isinstance(
+            exc, _SURREAL_CONNECTION_EXCEPTIONS
+        ):
+            return True
         message = str(exc).lower()
+        # Anchored phrases only: each is a transport symptom that does not occur in
+        # an ordinary query/data error message.
         markers = (
             "no close frame",
-            "websocket",
-            "connection",
-            "closed",
-            "broken pipe",
+            "connection closed",
             "connection reset",
+            "connection refused",
+            "connection aborted",
+            "connection lost",
+            "websocket connection is closed",
+            "websocket is closed",
+            "transport closed",
+            "transport is closed",
+            "broken pipe",
             "not connected",
-            "transport",
         )
         return any(marker in message for marker in markers)
 
