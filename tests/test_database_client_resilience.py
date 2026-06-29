@@ -12,6 +12,7 @@ import io
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr
@@ -278,6 +279,53 @@ class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
 
         self.assertEqual(len(reconnect_calls), 0, "a query/data error must not reconnect")
         self.assertEqual(client.backend, "surrealdb", "a query/data error must not fall back")
+
+
+class TestConnectIsBoundedAndCannotHang(ResilienceTestBase):
+    """The anti-hang core of #37: a wedged handshake must not block past the
+    deadline. Every other resilience test stubs ``_connect_surreal`` out, so this
+    drives the real method against a Surreal factory whose connect/signin block on
+    an Event that is never set -- the exact "no close frame" half-open socket that
+    motivated the bounded worker-thread + join(deadline). Removing the deadline (or
+    the worker thread) would hang here forever, failing the < 2s bound."""
+
+    def test_connect_returns_false_within_deadline_when_handshake_blocks(self):
+        never = threading.Event()  # deliberately never set: the handshake wedges
+
+        class BlockingSurreal:
+            def __init__(self, url):
+                self.url = url
+
+            def connect(self):
+                never.wait()  # block indefinitely, like a half-open socket
+
+            def signin(self, creds):
+                never.wait()
+
+            def use(self, namespace, database):
+                pass
+
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        # Point the reconnect machinery at the blocking factory with a tight deadline.
+        client._surreal_class = BlockingSurreal
+        client._surreal_url = "ws://localhost:8000/rpc"
+        client._surreal_username = "root"
+        client._surreal_password = "root"
+        client._surreal_namespace = "solomon"
+        client._surreal_database = "test"
+        client._connect_deadline = 0.2
+
+        start = time.monotonic()
+        with redirect_stderr(io.StringIO()):
+            result = client._connect_surreal()
+        elapsed = time.monotonic() - start
+
+        self.assertFalse(result, "a wedged handshake must not report success")
+        self.assertLess(
+            elapsed, 2.0, "the bounded connect must abandon the attempt, never hang"
+        )
+        # The handle is never adopted from a timed-out attempt.
+        self.assertIsNone(client.db)
 
 
 if __name__ == "__main__":
