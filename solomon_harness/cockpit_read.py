@@ -24,6 +24,7 @@ from solomon_harness.tools.database_client import (
     STATUS_DISPLAY_COLUMNS,
     DatabaseClient,
     normalize_status,
+    person_key_or_unassigned,
 )
 
 _tracer = trace.get_tracer("solomon_harness.cockpit_read")
@@ -67,6 +68,17 @@ PER_PROJECT_TIMEOUT_S = 5.0
 _PERMISSION_PATTERNS = ("permission", "forbidden", "denied", "unauthor", "not allowed")
 
 
+def _card(issue: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy an issue row into a swimlane card carrying its canonical person key.
+
+    The card is a copy so the source row is never mutated, and ``personKey`` reads
+    the stored ``assignee`` through ``person_key_or_unassigned`` (ADR-0012): a null
+    assignee resolves to the reserved ``unassigned`` pseudo-key, and the key is
+    never re-derived from email/login here (that happened at the #118 capture seam).
+    """
+    return {**issue, "personKey": person_key_or_unassigned(issue.get("assignee"))}
+
+
 def build_board(client: Any, project: str) -> Dict[str, Any]:
     """Group one tenant's issues into the seven ordered board columns.
 
@@ -93,7 +105,7 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
             status = normalize_status(issue.get("status"))
             column = STATUS_DISPLAY_COLUMNS.get(status) if status else None
             if column in by_column:
-                by_column[column].append(issue)
+                by_column[column].append(_card(issue))
                 mapped += 1
 
         columns: List[Dict[str, Any]] = [

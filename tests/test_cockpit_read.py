@@ -24,7 +24,10 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from solomon_harness import cockpit_read  # noqa: E402
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    person_key_or_unassigned,
+)
 
 # Capture the read-path spans in memory. The global tracer provider can only be
 # set once per process, so this module owns it (no other test module sets one).
@@ -173,6 +176,34 @@ class TestBuildBoard(unittest.TestCase):
         self.assertEqual(board["unmapped"], 1)
         self.assertEqual(board["total"], 2)
         self.assertEqual(board["total"], column_total + board["unmapped"])
+
+    def test_build_board_surfaces_person_key_on_each_card(self):
+        """Each card carries an explicit personKey equal to
+        person_key_or_unassigned(assignee): a stored email key and a gh: handle
+        pass through unchanged, a null assignee resolves to the reserved
+        unassigned pseudo-key (never re-derived from email/login), and the
+        source issue row is never mutated by the read."""
+        issues = [
+            {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
+            {"github_id": "a2", "status": "Backlog", "assignee": "gh:bob"},
+            {"github_id": "a3", "status": "Backlog", "assignee": None},
+        ]
+        source = [dict(issue) for issue in issues]
+
+        board = cockpit_read.build_board(_IssuesOnlyClient(issues), "alpha")
+
+        cards = {
+            card["github_id"]: card
+            for column in board["columns"]
+            for card in column["issues"]
+        }
+        self.assertEqual(cards["a1"]["personKey"], "alice@example.com")
+        self.assertEqual(cards["a2"]["personKey"], "gh:bob")
+        self.assertEqual(cards["a3"]["personKey"], person_key_or_unassigned(None))
+        self.assertEqual(cards["a3"]["personKey"], "unassigned")
+        # The card is a copy: the surfaced key never leaks back onto the row.
+        self.assertEqual(issues, source)
+        self.assertNotIn("personKey", issues[0])
 
 
 class TestDiscoverProjects(unittest.TestCase):
