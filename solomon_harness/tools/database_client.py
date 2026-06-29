@@ -145,6 +145,10 @@ class DatabaseClient:
         # fallback the resolvable tenant is derived from these, not from the store.
         self._project_root = project_root
         self._configured_database = db_config.get("database")
+        # The SurrealDB namespace that holds every tenant database. Stored so the
+        # read-only use_tenant() accessor can rebind the connection scope to the
+        # selected tenant with the same parameterized SDK bind the constructor uses.
+        self._namespace = db_config.get("namespace", "solomon")
 
         # An explicit db_path forces the SQLite backend (used for test isolation and
         # eval sandboxes), regardless of the configured provider.
@@ -174,7 +178,7 @@ class DatabaseClient:
             creds_ok = bool(username and password)
 
             if has_surrealdb and Surreal is not None and creds_ok:
-                namespace = db_config.get("namespace", "solomon")
+                namespace = self._namespace
                 database = _resolve_database(db_config.get("database"), project_root)
 
                 try:
@@ -1307,6 +1311,20 @@ class DatabaseClient:
                 logging.error(f"Failed to list databases from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to list databases from SurrealDB: {e}")
         return [_resolve_database(self._configured_database, self._project_root)]
+
+    def use_tenant(self, database: str) -> None:
+        """Re-scope the open connection to a tenant database (read-only).
+
+        SurrealDB: rebind the connection scope with the SDK's parameterized
+        ``use(namespace, database)`` call, the same bind the constructor uses.
+        It carries no SQL and performs no write, and binds exactly one database,
+        so per-tenant isolation (ADR-0002) holds by construction. Callers must
+        pass a name already validated against the discovered-tenant allowlist.
+        SQLite fallback: a no-op, because a SQLite workspace resolves to a single
+        tenant and the allowlist only ever yields that one name.
+        """
+        if self.backend == "surrealdb" and self.db is not None:
+            self.db.use(self._namespace, database)
 
     def list_issues(self) -> List[Dict[str, Any]]:
         """Retrieves every issue for this tenant regardless of status.

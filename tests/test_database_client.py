@@ -345,7 +345,44 @@ class TestDatabaseClient(unittest.TestCase):
             self.assertIsNotNone(handoff)
             self.assertEqual(handoff["sender"], "sender")
 
-            # 11. Close client / context manager
+            # 11. list_databases reads tenant names from INFO FOR NS, sorted.
+            mock_surreal_instance.query.reset_mock()
+            mock_surreal_instance.query.return_value = [
+                {
+                    "databases": {
+                        "beta": "DEFINE DATABASE beta",
+                        "alpha": "DEFINE DATABASE alpha",
+                    }
+                }
+            ]
+            self.assertEqual(client.list_databases(), ["alpha", "beta"])
+
+            # A missing/empty databases map yields no tenants, not an error.
+            mock_surreal_instance.query.reset_mock()
+            mock_surreal_instance.query.return_value = [{"tables": {}}]
+            self.assertEqual(client.list_databases(), [])
+
+            # 12. list_issues returns every row including Done (not just open).
+            mock_surreal_instance.query.reset_mock()
+            mock_surreal_instance.query.return_value = [
+                [
+                    {"github_id": "gh-1", "status": "Backlog"},
+                    {"github_id": "gh-2", "status": "Done"},
+                ]
+            ]
+            issues = client.list_issues()
+            self.assertEqual(
+                {i["github_id"]: i["status"] for i in issues},
+                {"gh-1": "Backlog", "gh-2": "Done"},
+            )
+
+            # 13. use_tenant re-scopes the open connection to the selected tenant
+            # via the SDK's parameterized bind (read-only, no SQL, one database).
+            mock_surreal_instance.use.reset_mock()
+            client.use_tenant("beta")
+            mock_surreal_instance.use.assert_called_once_with("solomon", "beta")
+
+            # 14. Close client / context manager
             client.close()
             mock_surreal_instance.close.assert_called_once()
 
