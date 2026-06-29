@@ -129,6 +129,31 @@ class TestBuildBoard(unittest.TestCase):
         self.assertEqual(client.list_issues(), [])
         client.close()
 
+    def test_canonical_tokens_and_legacy_values_bucket_into_columns(self):
+        """Issues stored as canonical snake_case tokens (in_progress, code_review,
+        qa, closed) land in the In Progress / Code Review / QA / Done columns, and
+        a legacy display value (In Progress, Done) lands in the same column. The
+        invariant total == sum(column counts) + unmapped still holds (RAID R3)."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("c1", "Active token", "feature", "in_progress", None)
+        client.log_issue("c2", "Review token", "feature", "code_review", None)
+        client.log_issue("c3", "QA token", "feature", "qa", None)
+        client.log_issue("c4", "Done token", "feature", "closed", None)
+        client.log_issue("c5", "Legacy active", "feature", "In Progress", None)
+        client.log_issue("c6", "Legacy done", "feature", "Done", None)
+
+        board = cockpit_read.build_board(client, "alpha")
+        client.close()
+
+        counts = {c["name"]: c["count"] for c in board["columns"]}
+        self.assertEqual(counts["In Progress"], 2)  # in_progress + legacy In Progress
+        self.assertEqual(counts["Code Review"], 1)
+        self.assertEqual(counts["QA"], 1)
+        self.assertEqual(counts["Done"], 2)  # closed + legacy Done
+        self.assertEqual(board["unmapped"], 0)
+        self.assertEqual(board["total"], 6)
+        self.assertEqual(board["total"], sum(counts.values()) + board["unmapped"])
+
     def test_issue_with_status_outside_columns_counts_as_unmapped(self):
         """An issue whose status is not one of the seven columns is not coerced
         into a column; it is counted in unmapped so no issue is dropped and

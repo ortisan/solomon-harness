@@ -40,6 +40,27 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("gh unavailable", text)
         self.assertIn("run /solomon-loop", text)
 
+    def test_terminal_issues_excluded_from_count_and_list(self):
+        """build_digest defensively drops terminal rows (closed/done/Done) from
+        both the count and the rendered list, even if handed a stale open_issues
+        list, so the resume digest never shows delivered work (ADR-0006)."""
+        issues = [
+            {"github_id": "a", "title": "active", "status": "in_progress"},
+            {"github_id": "b", "title": "closed one", "status": "closed"},
+            {"github_id": "c", "title": "done token", "status": "done"},
+            {"github_id": "d", "title": "legacy done", "status": "Done"},
+            {"github_id": "e", "title": "backlog", "status": "Backlog"},
+        ]
+        text = "\n".join(
+            digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=None)
+        )
+        self.assertIn("Open issues: 2", text)
+        self.assertIn("[a]", text)
+        self.assertIn("[e]", text)
+        self.assertNotIn("[b]", text)
+        self.assertNotIn("[c]", text)
+        self.assertNotIn("[d]", text)
+
     def test_open_issue_list_is_capped(self):
         many = [{"github_id": f"i{i}", "title": f"T{i}"} for i in range(9)]
         text = "\n".join(digest.build_digest(resume=None, open_issues=many, last_loop_run=None, prs=[]))
