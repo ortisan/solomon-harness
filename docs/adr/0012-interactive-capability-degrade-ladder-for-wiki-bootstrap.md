@@ -1,4 +1,4 @@
-# ADR-0007: Interactive-only capability ladder (automate -> guide -> degrade) for the GitHub wiki bootstrap
+# ADR-0012: Interactive-only capability ladder (automate -> guide -> degrade) for the GitHub wiki bootstrap
 
 - Status: accepted
 - Date: 2026-06-29
@@ -137,11 +137,10 @@ standalone decision:
   moving parts than a single manual hint, and its top tier is exercised only
   interactively, so its happy path cannot be fully covered by headless tests and
   must be proven manually.
-- Numbering note: `docs/adr/` currently carries duplicate ADR numbers from ADRs in
-  flight on unmerged branches (for example two 0001, 0002, 0003, and 0005 files).
-  0007 is unused on this branch, but the number may need reconciliation when those
-  branches merge; if so, update the cross-references here and the `save_decision`
-  record accordingly. This mirrors the same caveat ADR-0004 carries.
+- Numbering note: this record was renumbered from 0007 to 0012 after the multi-model
+  memory work (#119) merged its ADR renumber to `main`, which took 0007 for
+  `0007-memory-resilience-model.md`. 0012 is the next free number (main occupies
+  0000-0011). The `save_decision` record is updated to match.
 - Follow-ups: prove the top-tier browser save manually against
   ortisan/solomon-harness and republish the v0.8.0 Code-Overview and Delivered.md
   as the end-to-end acceptance proof (issue #117, I-1); if GitHub ever exposes a
