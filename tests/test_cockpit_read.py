@@ -402,6 +402,38 @@ class _SlowTenantClient:
         self.closed = True
 
 
+class _CloseRecordingSlowClient:
+    """A per-tenant read port whose read blocks and that records its close timing.
+
+    Used to prove the outer read path never closes a client mid-read on timeout:
+    ``list_issues`` flags itself as in-progress while it blocks, and ``close``
+    records whether a read was still running when it was called. The owning worker
+    must close it only after the read returns, so ``closed_during_read`` stays
+    False and the outer path never triggers a close-during-read on the socket.
+    """
+
+    def __init__(self, delay):
+        self._delay = delay
+        self.closed = False
+        self.closed_during_read = None
+        self._reading = False
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        self._reading = True
+        try:
+            time.sleep(self._delay)
+            return []
+        finally:
+            self._reading = False
+
+    def close(self):
+        self.closed_during_read = self._reading
+        self.closed = True
+
+
 class TestReadTenantSwimlane(unittest.TestCase):
     def test_read_tenant_swimlane_classifies_ok_forbidden_unreachable(self):
         """read_tenant_swimlane reads one tenant through its own client and
@@ -453,6 +485,50 @@ class TestReadTenantSwimlane(unittest.TestCase):
         self.assertEqual(unreachable["status"], "UNREACHABLE")
         self.assertIsNone(unreachable["board"])
 
+    def test_read_tenant_swimlane_classifies_connect_phase_failure(self):
+        """A connect-phase failure (the client_factory itself raises) is bounded
+        by the per-project timeout and classified like a read failure: a generic
+        connect error is UNREACHABLE, a permission-flavored connect error is
+        FORBIDDEN, and neither propagates out to collapse the fan-out."""
+        def refused_factory():
+            raise RuntimeError("connection refused")
+
+        refused = cockpit_read.read_tenant_swimlane(
+            "alpha", refused_factory, timeout=1.0
+        )
+        self.assertEqual(refused["status"], "UNREACHABLE")
+        self.assertIsNone(refused["board"])
+
+        def denied_factory():
+            raise RuntimeError("permission denied connecting to tenant")
+
+        denied = cockpit_read.read_tenant_swimlane(
+            "beta", denied_factory, timeout=1.0
+        )
+        self.assertEqual(denied["status"], "FORBIDDEN")
+        self.assertIsNone(denied["board"])
+
+    def test_read_tenant_swimlane_never_closes_a_timed_out_client_mid_read(self):
+        """On timeout the outer path abandons the worker and never closes the
+        client mid-read; the worker that owns the client closes it only after its
+        read finally returns, so there is no close-during-read race on the socket."""
+        client = _CloseRecordingSlowClient(0.5)
+
+        result = cockpit_read.read_tenant_swimlane(
+            "gamma", lambda: client, timeout=0.05
+        )
+
+        self.assertEqual(result["status"], "UNREACHABLE")
+        # The worker is still reading right after the timeout; the outer path has
+        # not closed the client (a mid-read close would race the live socket).
+        self.assertFalse(client.closed)
+        # The owning worker closes it once the read returns, never during it.
+        deadline = time.time() + 2.0
+        while not client.closed and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(client.closed)
+        self.assertFalse(client.closed_during_read)
+
 
 class _ConcurrencyTracker:
     """Track the peak number of per-tenant reads running at the same time."""
@@ -502,6 +578,44 @@ class _ConcurrentTenantClient:
         pass
 
 
+class _DiscoveryOnlyClient:
+    """A read port used only for discovery: it lists the tenants and closes."""
+
+    def __init__(self, tenants):
+        self._tenants = tenants
+
+    def list_databases(self):
+        return list(self._tenants)
+
+    def close(self):
+        pass
+
+
+class _ConnectFailingFactory:
+    """Serves discovery on the first call, then raises on every per-tenant connect.
+
+    ``portfolio_payload`` calls the factory once for discovery (which completes
+    before the fan-out begins) and then once per tenant inside each timed worker.
+    Raising on those per-tenant connects models a connection outage that strikes
+    after discovery, and proves a connect-phase failure is classified within the
+    worker rather than propagated out to collapse the portfolio to a 500.
+    """
+
+    def __init__(self, tenants, error):
+        self._tenants = tenants
+        self._error = error
+        self._lock = threading.Lock()
+        self._calls = 0
+
+    def __call__(self):
+        with self._lock:
+            self._calls += 1
+            is_discovery = self._calls == 1
+        if is_discovery:
+            return _DiscoveryOnlyClient(self._tenants)
+        raise self._error
+
+
 class TestPortfolioPayload(unittest.TestCase):
     def test_portfolio_payload_caps_at_25_with_stable_overflow(self):
         """portfolio_payload caps the fan-out at 25 swimlanes (the first 25 in
@@ -532,6 +646,27 @@ class TestPortfolioPayload(unittest.TestCase):
             [s["project"] for s in first["swimlanes"]],
             [s["project"] for s in second["swimlanes"]],
         )
+
+    def test_portfolio_payload_survives_a_connect_outage(self):
+        """A connection outage that makes every per-tenant connect raise is
+        classified within the per-project timeout: the portfolio still composes
+        (every lane UNREACHABLE with no rows, aggregateStatus 207) instead of
+        propagating the connect exception out to a 500."""
+        factory = _ConnectFailingFactory(
+            ["alpha", "beta", "gamma"], RuntimeError("connection refused")
+        )
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory, timeout=1.0)
+
+        self.assertEqual(
+            [s["project"] for s in payload["swimlanes"]], ["alpha", "beta", "gamma"]
+        )
+        self.assertTrue(
+            all(s["status"] == "UNREACHABLE" for s in payload["swimlanes"])
+        )
+        self.assertTrue(all(s["total"] == 0 for s in payload["swimlanes"]))
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["aggregateStatus"], 207)
 
     def test_portfolio_payload_fans_out_bounded_concurrently(self):
         """portfolio_payload reads tenants in parallel (the in-flight reads

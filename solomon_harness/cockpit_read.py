@@ -224,29 +224,25 @@ def _is_permission_failure(error: Exception) -> bool:
     return any(pattern in message for pattern in _PERMISSION_PATTERNS)
 
 
-def _bind_and_build(client: Any, project: str) -> Dict[str, Any]:
-    """Bind the tenant on the read port, then group its board."""
-    client.use_tenant(project)
-    return build_board(client, project)
-
-
-def _read_board_within_timeout(
-    client: Any, project: str, timeout: float
+def _read_tenant_board(
+    client_factory: Callable[[], Any], project: str
 ) -> Dict[str, Any]:
-    """Run one tenant's bind-and-read in a worker, abandoning it past ``timeout``.
+    """Own one tenant's whole read lifecycle inside the timed worker.
 
-    A hung tenant must classify as UNREACHABLE rather than block the fan-out, so
-    the blocking read runs in a one-shot worker and a deadline-exceeded result
-    raises ``TimeoutError`` instead of waiting. The worker is not joined on
-    timeout (the tenant is already degraded); the bounded fan-out pool and the
-    25-project cap keep the number of abandoned workers small.
+    Creating the client (``client_factory``), binding the tenant (``use_tenant``),
+    and reading its board (``build_board``) all run here, so a connect-phase
+    failure or hang is bounded by the per-project timeout that wraps this worker
+    rather than propagating out to collapse the fan-out. The worker owns its
+    client and closes it in a ``finally``, so even an abandoned (timed-out) worker
+    closes its own connection when the read finally returns or errors, and the
+    outer path never closes a client mid-read (no close-during-read race).
     """
-    pool = ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(_bind_and_build, client, project)
+    client = client_factory()
     try:
-        return future.result(timeout=timeout)
+        client.use_tenant(project)
+        return build_board(client, project)
     finally:
-        pool.shutdown(wait=False)
+        client.close()
 
 
 def read_tenant_swimlane(
@@ -256,19 +252,22 @@ def read_tenant_swimlane(
 ) -> Dict[str, Any]:
     """Read exactly one tenant and classify the outcome (OK/FORBIDDEN/UNREACHABLE).
 
-    Owns its own per-tenant client from ``client_factory`` (a fresh
-    ``DatabaseClient`` bound to that one tenant via ``use_tenant``), so no
-    connection is shared or rebound across the fan-out and per-tenant isolation
-    (ADR-0002) holds by construction. A clean read returns ``OK`` with the grouped
-    board; a ``PermissionError`` or a permission-pattern read failure returns
-    ``FORBIDDEN`` with no data; a read past ``timeout`` or any other read failure
-    returns ``UNREACHABLE`` with no data. The result is the ``compose_portfolio``
-    input element.
+    Runs the entire per-tenant lifecycle (connect, bind, read, close) inside a
+    single one-shot worker bounded by ``timeout``, so per-tenant isolation
+    (ADR-0002) holds by construction (a fresh ``DatabaseClient`` bound to exactly
+    one tenant via ``use_tenant``) and every phase, connect included, is bounded
+    by the per-project deadline. A clean read returns ``OK`` with the grouped
+    board; a ``PermissionError`` or a permission-pattern failure (at connect or
+    read) returns ``FORBIDDEN`` with no data; a read past ``timeout`` or any other
+    failure returns ``UNREACHABLE`` with no data. The worker owns and closes its
+    own client, so a timed-out worker is abandoned (not joined) and closes itself
+    when its read returns; the outer path never closes a client mid-read. The
+    result is the ``compose_portfolio`` input element.
     """
-    client = client_factory()
+    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        board = _read_board_within_timeout(client, project, timeout)
-        return {"project": project, "status": STATUS_OK, "board": board}
+        future = pool.submit(_read_tenant_board, client_factory, project)
+        board = future.result(timeout=timeout)
     except PermissionError:
         return {"project": project, "status": STATUS_FORBIDDEN, "board": None}
     except FuturesTimeoutError:
@@ -276,8 +275,10 @@ def read_tenant_swimlane(
     except Exception as error:
         status = STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE
         return {"project": project, "status": status, "board": None}
+    else:
+        return {"project": project, "status": STATUS_OK, "board": board}
     finally:
-        client.close()
+        pool.shutdown(wait=False)
 
 
 def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
