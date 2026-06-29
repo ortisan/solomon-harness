@@ -357,6 +357,35 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     return states
 
 
+def _fetch_single_gh_issue_state(parent: str, workspace_root: str) -> Optional[str]:
+    """Fetch the state of a single issue/PR via gh.
+
+    Returns "OPEN", "CLOSED", or None if not found/error.
+    """
+    import subprocess
+    import json as _json
+    try:
+        proc = subprocess.run(
+            ["gh", "issue", "view", parent, "--json", "state"],
+            cwd=workspace_root, capture_output=True, text=True, check=False,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        data = _json.loads(proc.stdout or "{}")
+        state = data.get("state")
+        if state in ("OPEN", "CLOSED"):
+            return state
+    except Exception:
+        return None
+    return None
+
+
 def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
     """Set each GitHub-CLOSED issue's non-terminal memory row to "closed".
 
@@ -370,10 +399,15 @@ def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
 
     Returns ``{"repaired", "would_repair", "scanned"}``.
     """
-    from solomon_harness.tools.database_client import is_terminal
+    from solomon_harness.tools.database_client import is_terminal, is_github_issue
+    import re
+    import logging
+    import os
 
     would_repair: List[str] = []
     repaired = 0
+
+    # 1. Reconcile regular GitHub issues
     for entry in gh_states:
         if entry.get("state") != "CLOSED":
             continue
@@ -392,7 +426,62 @@ def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
             row.get("milestone_id"),
         )
         repaired += 1
+
+    # 2. Reconcile synthetic tracking rows whose parent issues/PRs are closed/resolved
+    gh_lookup = {item["number"]: item["state"] for item in gh_states}
+
+    try:
+        open_issues = db.get_open_issues()
+    except Exception as e:
+        logging.error(f"Failed to retrieve open issues for synthetic reconciliation: {e}")
+        open_issues = []
+
+    for row in open_issues:
+        github_id = row.get("github_id")
+        if is_github_issue(github_id):
+            continue
+
+        title = row.get("title") or ""
+        parent = None
+
+        # (1) id-first rule: Extract a leading integer using pattern ^(\d+)-
+        match = re.match(r"^(\d+)-", github_id)
+        if match:
+            parent = match.group(1)
+        else:
+            # (2) title fallback rule: Extract from title using patterns PR #(\d+) or #(\d+)
+            title_match = re.search(r"(?:PR\s+#|#)(\d+)", title)
+            if title_match:
+                parent = title_match.group(1)
+
+        if not parent:
+            logging.warning(f"Synthetic tracking row '{github_id}' has no recoverable parent.")
+            continue
+
+        # Check parent state
+        parent_state = gh_lookup.get(parent)
+        if parent_state is None:
+            # Fallback to direct query
+            workspace_root = getattr(db, "harness_dir", os.getcwd()) or os.getcwd()
+            parent_state = _fetch_single_gh_issue_state(parent, workspace_root)
+
+        if parent_state == "CLOSED":
+            would_repair.append(github_id)
+            if not dry_run:
+                db.log_issue(
+                    github_id,
+                    row.get("title"),
+                    row.get("type_"),
+                    "closed",
+                    row.get("milestone_id"),
+                    assignee=row.get("assignee"),
+                )
+                repaired += 1
+        elif parent_state is None:
+            logging.warning(f"Parent {parent} for tracking row '{github_id}' was not found on GitHub.")
+
     return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
+
 
 
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:

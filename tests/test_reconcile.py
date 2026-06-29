@@ -94,6 +94,109 @@ class TestReconcileMemory(unittest.TestCase):
         self.assertIsNone(client.get_issue("999"))
         client.close()
 
+    def test_synthetic_closed_parent_recovered_from_id_reconciles_to_closed(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("68-R-01", "Follow-up row", "chore", "in_progress", "memory-durability")
+        client.log_issue("45-M2", "Milestone follow-up", "chore", "code_review", "memory-durability")
+        states = [
+            {"number": "68", "state": "CLOSED"},
+            {"number": "45", "state": "CLOSED"},
+        ]
+        result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 2)
+        self.assertEqual(client.get_issue("68-R-01")["status"], "closed")
+        self.assertEqual(client.get_issue("45-M2")["status"], "closed")
+        client.close()
+
+    def test_synthetic_closed_parent_recovered_from_title_reconciles_to_closed(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("risk-44-01", "RAID R-01 (#68): description", "chore", "in_progress", "memory-durability")
+        client.log_issue("milestone-followup", "loop (review minor, PR #45)", "chore", "code_review", "memory-durability")
+        states = [
+            {"number": "68", "state": "CLOSED"},
+            {"number": "45", "state": "CLOSED"},
+        ]
+        result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 2)
+        self.assertEqual(client.get_issue("risk-44-01")["status"], "closed")
+        self.assertEqual(client.get_issue("milestone-followup")["status"], "closed")
+        client.close()
+
+    def test_synthetic_open_parent_remains_open(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("68-R-01", "Follow-up row", "chore", "in_progress", "memory-durability")
+        states = [
+            {"number": "68", "state": "OPEN"},
+        ]
+        result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 0)
+        self.assertEqual(client.get_issue("68-R-01")["status"], "in_progress")
+        client.close()
+
+    def test_synthetic_no_recoverable_parent_remains_open_and_warns(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("bug-test-isolation", "Title with no issue number", "chore", "in_progress", "memory-durability")
+        states = []
+        with self.assertLogs(level="WARNING") as log:
+            result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 0)
+        self.assertEqual(client.get_issue("bug-test-isolation")["status"], "in_progress")
+        self.assertTrue(any("no recoverable parent" in message for message in log.output))
+        client.close()
+
+    def test_synthetic_parent_not_found_remains_open_and_warns(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("9999-R-01", "Follow-up row for nonexistent issue", "chore", "in_progress", "memory-durability")
+        states = []
+        with patch("subprocess.run", return_value=_Proc(1, "", "not found")):
+            with self.assertLogs(level="WARNING") as log:
+                result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 0)
+        self.assertEqual(client.get_issue("9999-R-01")["status"], "in_progress")
+        self.assertTrue(any("was not found on GitHub" in message for message in log.output))
+        client.close()
+
+    def test_synthetic_fallback_check_succeeds_and_closes_issue(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("75-R-01", "Follow-up row for issue 75", "chore", "in_progress", "memory-durability")
+        states = []
+        payload = json.dumps({"state": "CLOSED"})
+        with patch("subprocess.run", return_value=_Proc(0, payload)):
+            result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 1)
+        self.assertEqual(client.get_issue("75-R-01")["status"], "closed")
+        client.close()
+
+    def test_synthetic_dry_run_reports_without_writing(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("68-R-01", "Follow-up row", "chore", "in_progress", "memory-durability")
+        states = [
+            {"number": "68", "state": "CLOSED"},
+        ]
+        result = cli.reconcile_memory(client, states, dry_run=True)
+        self.assertEqual(result["would_repair"], ["68-R-01"])
+        self.assertEqual(result["repaired"], 0)
+        self.assertEqual(client.get_issue("68-R-01")["status"], "in_progress")
+        client.close()
+
+    def test_synthetic_reconcile_does_not_touch_open_real_issues_or_delete_records(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("99", "Real issue 99", "feature", "in_progress", None)
+        client.log_issue("68-R-01", "Follow-up row", "chore", "in_progress", None)
+        states = [
+            {"number": "68", "state": "CLOSED"},
+        ]
+        result = cli.reconcile_memory(client, states)
+        self.assertEqual(result["repaired"], 1)
+        self.assertEqual(client.get_issue("68-R-01")["status"], "closed")
+        self.assertEqual(client.get_issue("99")["status"], "in_progress")
+        self.assertIsNotNone(client.get_issue("99"))
+        self.assertIsNotNone(client.get_issue("68-R-01"))
+        client.close()
+
+
+
+
 
 class TestFetchGhIssueStates(unittest.TestCase):
     def test_validates_number_and_state_as_data(self):
