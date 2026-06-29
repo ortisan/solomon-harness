@@ -3,6 +3,13 @@ import json
 import sqlite3
 import logging
 import sys
+import functools
+import threading
+import datetime
+import glob
+import hashlib
+import re
+import uuid
 from contextlib import contextmanager
 from typing import Generator, Any, Dict, List, Optional, Union
 
@@ -70,6 +77,104 @@ def _resolve_database(configured: Optional[str], project_root: str) -> str:
     return database
 
 
+def _resolve_mirror_root_path(
+    project_root: str,
+    db_path: Optional[str] = None,
+    override: Optional[str] = None,
+) -> str:
+    """Resolve the write-through mirror root from a single precedence rule.
+
+    Shared by :class:`DatabaseClient` and the healthcheck so a pending-reconcile
+    count is never read from a different directory than the one writes land in
+    (issue #35). Precedence: an explicit ``override``, then ``HARNESS_MIRROR_ROOT``,
+    then a ``memory-mirror`` sibling of an explicit ``db_path`` or ``HARNESS_DB_PATH``
+    (the test/sandbox isolation convention), then
+    ``<project_root>/.solomon/memory-mirror``.
+    """
+    if override:
+        return override
+    env = os.environ.get("HARNESS_MIRROR_ROOT")
+    if env:
+        return env
+    if db_path:
+        base = os.path.dirname(os.path.abspath(db_path))
+        return os.path.join(base, "memory-mirror")
+    env_db = os.environ.get("HARNESS_DB_PATH")
+    if env_db:
+        base = os.path.dirname(os.path.abspath(env_db))
+        return os.path.join(base, "memory-mirror")
+    return os.path.join(project_root, ".solomon", "memory-mirror")
+
+
+def _surreal_connection_exception_types() -> tuple:
+    """Connection/websocket exception classes that mark a transport fault by type.
+
+    The surrealdb SDK (``ConnectionUnavailableError``) and its websocket transport
+    raise dedicated exception types when the connection drops; matching on the type
+    is far more precise than scanning a message for substrings. Each candidate is
+    imported defensively because the exact set varies by SDK/websockets version, so
+    any class that is absent is simply skipped (issue #37).
+    """
+    types: List[type] = []
+    candidates = [
+        ("surrealdb.errors", "ConnectionUnavailableError"),
+        ("websockets.exceptions", "ConnectionClosed"),
+        ("websockets.exceptions", "ConnectionClosedError"),
+        ("websockets.exceptions", "ConnectionClosedOK"),
+        ("websockets.exceptions", "WebSocketException"),
+    ]
+    for module_name, attr in candidates:
+        try:
+            module = __import__(module_name, fromlist=[attr])
+        except Exception:
+            continue
+        exc_type = getattr(module, attr, None)
+        if isinstance(exc_type, type) and issubclass(exc_type, BaseException):
+            types.append(exc_type)
+    return tuple(types)
+
+
+_SURREAL_CONNECTION_EXCEPTIONS = _surreal_connection_exception_types()
+
+
+class _ConnectionLost(Exception):
+    """Raised when a SurrealDB call fails because the transport/connection dropped.
+
+    This is deliberately distinct from a query or data error: only a connection
+    loss may trigger a reconnect or a fallback to SQLite (issue #37). A malformed
+    query or a data error must surface unchanged.
+    """
+
+
+def _resilient(method):
+    """Make a public DatabaseClient method survive a mid-session connection drop.
+
+    On ``_ConnectionLost`` the wrapper attempts exactly one bounded reconnect. If
+    that succeeds it re-runs the method once and returns its result. If the
+    reconnect fails (or the single retry still loses the connection) it activates
+    the SQLite fallback and re-runs the method, which then takes its own SQLite
+    branch -- so a transient drop never propagates as a raised error.
+
+    A method that is already on the SQLite backend never raises ``_ConnectionLost``,
+    so the wrapper is a transparent pass-through for SQLite-only clients.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except _ConnectionLost:
+            if self._connect_surreal():
+                try:
+                    return method(self, *args, **kwargs)
+                except _ConnectionLost:
+                    pass
+            self._activate_sqlite_fallback()
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class DatabaseClient:
     """A client to manage SQLite or SurrealDB database operations for the agent harness."""
 
@@ -80,7 +185,10 @@ class DatabaseClient:
     harness_dir: str
 
     def __init__(
-        self, db_path: Optional[str] = None, harness_dir: Optional[str] = None
+        self,
+        db_path: Optional[str] = None,
+        harness_dir: Optional[str] = None,
+        mirror_root: Optional[str] = None,
     ) -> None:
         """Initializes the database client and selects the appropriate backend.
 
@@ -89,11 +197,27 @@ class DatabaseClient:
             harness_dir: The agent (or template) directory that owns .agent/config.json
                 and the memory store. Passed explicitly by the thin agent entrypoint;
                 when omitted it falls back to this file's package location.
+            mirror_root: Optional override for the write-through Markdown mirror root
+                (issue #35). Defaults to ``<repo>/.solomon/memory-mirror``; tests point
+                it at a temp directory so they never touch the real project's state.
         """
         self.backend = "sqlite"
         self.db = None
         self.spectron = None
         self.db_path = db_path
+        # The explicit db_path argument (kept distinct from the resolved store path)
+        # marks a test/sandbox-isolated client, used to keep the mirror beside it.
+        self._db_path_param = db_path
+
+        # SurrealDB connection params captured so the connection can be rebuilt
+        # mid-session after a drop, not only at construction (issue #37).
+        self._surreal_class: Any = None
+        self._surreal_url: Optional[str] = None
+        self._surreal_username: Optional[str] = None
+        self._surreal_password: Optional[str] = None
+        self._surreal_namespace: Optional[str] = None
+        self._surreal_database: Optional[str] = None
+        self._connect_deadline: float = 5.0
 
         # The shared client no longer lives inside the agent directory, so the caller
         # passes the owning harness directory explicitly; fall back to this file's
@@ -120,6 +244,14 @@ class DatabaseClient:
 
         if not found_root:
             project_root = harness_dir
+
+        # Retained so the mid-session SQLite fallback can resolve the same store
+        # path the constructor would have used (issue #37).
+        self._project_root = project_root
+
+        # Root for the write-through Markdown mirror (issue #35). Resolved once, up
+        # front, so every write funnels to the same gitignored local store.
+        self._mirror_root = self._resolve_mirror_root(mirror_root)
 
         # Load configuration. Prefer the harness-local .agent/config.json, which carries
         # the per-agent `database` block, and fall back to the project-root config.
@@ -172,69 +304,81 @@ class DatabaseClient:
                 namespace = db_config.get("namespace", "solomon")
                 database = _resolve_database(db_config.get("database"), project_root)
 
-                try:
-                    self.db = Surreal(url)
-                    if hasattr(self.db, "connect"):
-                        self.db.connect()
-                    # SDK 2.x uses username/password keys (1.x used user/pass).
-                    self.db.signin({"username": username, "password": password})
-                    self.db.use(namespace, database)
+                # Capture the params so _connect_surreal can rebuild the handle
+                # after a mid-session drop, not only here at construction (#37).
+                self._surreal_class = Surreal
+                self._surreal_url = url
+                self._surreal_username = username
+                self._surreal_password = password
+                self._surreal_namespace = namespace
+                self._surreal_database = database
+                self._connect_deadline = float(
+                    db_config.get("connect_timeout_seconds", 5.0)
+                )
 
-                    # Initialize SurrealDB tables. IF NOT EXISTS makes this
-                    # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
-                    init_query = (
-                        "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
-                        "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;"
-                    )
-                    self.db.query(init_query)
-                    self.backend = "surrealdb"
+                if self._connect_surreal():
+                    try:
+                        # Initialize SurrealDB tables. IF NOT EXISTS makes this
+                        # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
+                        init_query = (
+                            "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
+                            "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;"
+                        )
+                        self.db.query(init_query)
+                        self.backend = "surrealdb"
 
-                    # Initialize Spectron if URL and API Key are configured
-                    spectron_url = os.environ.get(
-                        "SPECTRON_URL", db_config.get("spectron_url")
-                    )
-                    spectron_api_key = os.environ.get(
-                        "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-                    )
-                    spectron_context = os.environ.get(
-                        "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-                    )
-                    if spectron_url and spectron_api_key:
-                        try:
+                        # Initialize Spectron if URL and API Key are configured
+                        spectron_url = os.environ.get(
+                            "SPECTRON_URL", db_config.get("spectron_url")
+                        )
+                        spectron_api_key = os.environ.get(
+                            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
+                        )
+                        spectron_context = os.environ.get(
+                            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
+                        )
+                        if spectron_url and spectron_api_key:
                             try:
-                                from surrealdb import Spectron
-                                self.spectron = Spectron(
-                                    context=spectron_context,
-                                    endpoint=spectron_url,
-                                    api_key=spectron_api_key
-                                )
-                            except (ImportError, AttributeError):
-                                self.spectron = SpectronFallbackClient(
-                                    context=spectron_context,
-                                    endpoint=spectron_url,
-                                    api_key=spectron_api_key
-                                )
-                        except Exception as e:
-                            sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                            self.spectron = None
-                except Exception as e:
-                    sys.stderr.write(f"Warning: Connection to SurrealDB failed: {e}\n")
+                                try:
+                                    from surrealdb import Spectron
+                                    self.spectron = Spectron(
+                                        context=spectron_context,
+                                        endpoint=spectron_url,
+                                        api_key=spectron_api_key
+                                    )
+                                except (ImportError, AttributeError):
+                                    self.spectron = SpectronFallbackClient(
+                                        context=spectron_context,
+                                        endpoint=spectron_url,
+                                        api_key=spectron_api_key
+                                    )
+                            except Exception as e:
+                                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
+                                self.spectron = None
+                    except Exception as e:
+                        sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
+                        sys.stderr.write(
+                            "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
+                        )
+                        if self.db:
+                            try:
+                                self.db.close()
+                            except Exception:
+                                pass
+                            self.db = None
+                        self.backend = "sqlite"
+                else:
+                    sys.stderr.write("Warning: Connection to SurrealDB failed.\n")
                     sys.stderr.write(
                         "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
                     )
-                    if self.db:
-                        try:
-                            self.db.close()
-                        except Exception:
-                            pass
-                        self.db = None
                     self.backend = "sqlite"
             else:
                 if not creds_ok:
@@ -251,9 +395,7 @@ class DatabaseClient:
         # Initialize SQLite if backend is sqlite
         if self.backend == "sqlite":
             if self.db_path is None:
-                db_dir: str = os.path.join(project_root, "memory", "long_term")
-                os.makedirs(db_dir, exist_ok=True)
-                self.db_path = os.path.join(db_dir, "harness.db")
+                self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
 
     @contextmanager
@@ -385,6 +527,149 @@ class DatabaseClient:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
 
+    def _resolve_sqlite_path(self) -> str:
+        """Resolve the SQLite store path.
+
+        HARNESS_DB_PATH redirects the store to a temp file for tests and ad-hoc
+        runs so the real project memory is never touched (issue #24); otherwise it
+        lands in the per-project memory dir. Shared by the constructor and the
+        mid-session SQLite fallback so both resolve to the same file (issue #37).
+        """
+        env_db = os.environ.get("HARNESS_DB_PATH")
+        if env_db:
+            os.makedirs(os.path.dirname(os.path.abspath(env_db)), exist_ok=True)
+            return env_db
+        db_dir = os.path.join(self._project_root, "memory", "long_term")
+        os.makedirs(db_dir, exist_ok=True)
+        return os.path.join(db_dir, "harness.db")
+
+    def _connect_surreal(self) -> bool:
+        """(Re)build ``self.db`` and sign in, returning True on success.
+
+        Used both at construction and to recover from a mid-session drop (#37).
+        The attempt runs in a worker thread joined with ``self._connect_deadline``
+        so a half-open socket can never block past the deadline -- the exact
+        indefinite hang ("no close frame") that motivated this fix. A late-
+        completing attempt only mutates a local dict, never ``self.db``.
+        """
+        Surreal = self._surreal_class
+        if Surreal is None or not self._surreal_url:
+            return False
+
+        outcome: Dict[str, Any] = {}
+
+        def _attempt() -> None:
+            try:
+                db = Surreal(self._surreal_url)
+                if hasattr(db, "connect"):
+                    db.connect()
+                # SDK 2.x uses username/password keys (1.x used user/pass).
+                db.signin(
+                    {
+                        "username": self._surreal_username,
+                        "password": self._surreal_password,
+                    }
+                )
+                db.use(self._surreal_namespace, self._surreal_database)
+                outcome["db"] = db
+            except Exception as exc:  # noqa: BLE001 - report, never raise from the worker
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=_attempt, name="surreal-connect", daemon=True)
+        worker.start()
+        worker.join(self._connect_deadline)
+        if worker.is_alive():
+            sys.stderr.write(
+                f"SurrealDB reconnect exceeded {self._connect_deadline}s deadline; "
+                "abandoning the attempt.\n"
+            )
+            return False
+        db = outcome.get("db")
+        if db is None:
+            return False
+        self.db = db
+        return True
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """True only for a transport/connection fault, never a query or data error.
+
+        Classification is by exception TYPE first -- Python's own
+        ``ConnectionError``/``OSError`` and the surrealdb SDK's
+        websocket/connection exception classes -- because the type is the precise
+        signal. The message fallback is deliberately narrow: it matches only
+        anchored, multi-word transport phrases (the "no close frame" incident
+        symptom, "connection reset", and the like), so a genuine query/data error
+        that merely contains the word "connection" or "closed" in passing is NOT
+        misread as a drop. Scoping the reconnect trigger this narrowly is the
+        contract: a malformed query or a data error must surface unchanged and
+        must not reconnect or fall back (issue #37).
+        """
+        if isinstance(exc, (ConnectionError, OSError)):
+            return True
+        if _SURREAL_CONNECTION_EXCEPTIONS and isinstance(
+            exc, _SURREAL_CONNECTION_EXCEPTIONS
+        ):
+            return True
+        message = str(exc).lower()
+        # Anchored phrases only: each is a transport symptom that does not occur in
+        # an ordinary query/data error message.
+        markers = (
+            "no close frame",
+            "connection closed",
+            "connection reset",
+            "connection refused",
+            "connection aborted",
+            "connection lost",
+            "websocket connection is closed",
+            "websocket is closed",
+            "transport closed",
+            "transport is closed",
+            "broken pipe",
+            "not connected",
+        )
+        return any(marker in message for marker in markers)
+
+    def _run_surreal(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """Run a SurrealDB query, raising ``_ConnectionLost`` only on a transport
+        fault so the resilient decorator can reconnect or fall back. A query or
+        data error is re-raised unchanged for the caller's own handling (#37)."""
+        if self.db is None:
+            raise _ConnectionLost("no active SurrealDB connection")
+        try:
+            if params is None:
+                return self.db.query(query)
+            return self.db.query(query, params)
+        except Exception as exc:  # noqa: BLE001 - classified, then re-raised
+            if self._is_connection_error(exc):
+                raise _ConnectionLost(str(exc)) from exc
+            raise
+
+    def _activate_sqlite_fallback(self) -> None:
+        """Switch to the SQLite backend after a reconnect could not be made.
+
+        This is the last resort so a mid-session drop never loses a write: the
+        client keeps serving from the local SQLite store. The switch is announced
+        loudly on stderr because it creates a SurrealDB/SQLite divergence that
+        must be reconciled on recovery (the durable cure is issue #35). Idempotent:
+        re-initializing SQLite uses CREATE TABLE IF NOT EXISTS.
+        """
+        sys.stderr.write(
+            "WARNING: SurrealDB connection lost and the single reconnect failed; "
+            "falling back to the local SQLite store. Memory written from now on will "
+            "diverge from SurrealDB until reconcile runs.\n"
+        )
+        if self.db is not None:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
+        self.backend = "sqlite"
+        if self.db_path is None:
+            self.db_path = self._resolve_sqlite_path()
+        self._init_sqlite_db()
+
     @staticmethod
     def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
         """Make a SurrealDB record JSON-serializable.
@@ -459,6 +744,290 @@ class DatabaseClient:
             return RecordID(table, rid)
         return s
 
+    # ----------------------------------------------------------------------
+    # Write-through Markdown mirror + reconcile-on-recovery (issue #35).
+    #
+    # Every write also lands in a human-readable Markdown file under
+    # ``.solomon/memory-mirror/<kind>/<id>.md`` so a mid-session backend outage
+    # never silently drops an audit-trail record: a write that only reaches the
+    # SQLite fallback is stamped ``synced: false`` and replayed to the SurrealDB
+    # primary on recovery via :meth:`reconcile`. The id is client-minted and used
+    # as both the mirror filename and the SurrealDB RecordID, so a replay is a
+    # deterministic UPSERT that never duplicates an already-present record.
+    # ----------------------------------------------------------------------
+
+    _KIND_TABLE = {
+        "decision": "decisions",
+        "memory": "memory",
+        "issue": "issues",
+        "milestone": "milestones",
+        "release": "releases",
+        "backtest": "backtest_runs",
+        "session": "sessions",
+        "handoff": "handoffs",
+    }
+    _KIND_TIMEFIELD = {
+        "decision": "created_at",
+        "memory": "updated_at",
+        "issue": "created_at",
+        "milestone": "created_at",
+        "release": "released_at",
+        "backtest": "created_at",
+        "session": "timestamp",
+        "handoff": "timestamp",
+    }
+
+    def _resolve_mirror_root(self, override: Optional[str]) -> str:
+        """Resolve the write-through mirror root.
+
+        An explicit ``mirror_root`` (or ``HARNESS_MIRROR_ROOT``) wins. When the
+        SQLite store is redirected to a temp file for a test or sandbox (an
+        explicit ``db_path`` or ``HARNESS_DB_PATH``), the mirror lives beside it so
+        a test never touches the real project's ``.solomon/`` -- the same isolation
+        convention :meth:`_resolve_sqlite_path` uses for the DB. Otherwise it is the
+        gitignored ``.solomon/memory-mirror`` at the repository root.
+
+        Delegates to the module-level :func:`_resolve_mirror_root_path` so the
+        healthcheck resolves the very same root and can never count pending records
+        in a different directory than the one writes land in.
+        """
+        return _resolve_mirror_root_path(
+            self._project_root, db_path=self._db_path_param, override=override
+        )
+
+    @staticmethod
+    def _utc_iso() -> str:
+        """Current UTC time as an ISO-8601 string (the mirror ``created_at``)."""
+        return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    def _mint_id(self, kind: str) -> str:
+        """A client-minted stable id ``<kind>-<utc>-<short-uuid>``.
+
+        Used as the mirror filename and the SurrealDB RecordID so a replay is a
+        deterministic UPSERT. Minted once per logical write, never inside the
+        resilient DB retry, so a reconnect/fallback re-run never re-mints it.
+        """
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        return f"{kind}-{stamp}-{uuid.uuid4().hex[:8]}"
+
+    @staticmethod
+    def _safe_name(record_id: str) -> str:
+        """A filesystem-safe mirror filename for an id.
+
+        Minted ids are already safe and pass through unchanged. A natural-key id
+        (memory key, github_id, session_id) may carry path-unsafe characters, so it
+        is slugified and disambiguated with a short content hash to avoid two
+        distinct keys colliding onto one file. The authoritative id stays in the
+        frontmatter regardless of the filename.
+        """
+        rid = str(record_id)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", rid)
+        if safe == rid:
+            return safe
+        digest = hashlib.sha1(rid.encode("utf-8")).hexdigest()[:8]
+        return f"{safe}-{digest}"
+
+    @staticmethod
+    def _render_mirror(
+        record_id: str, kind: str, created_at: str, synced: bool, fields: Dict[str, Any]
+    ) -> str:
+        """Render a mirror file: YAML-ish frontmatter plus a readable JSON body."""
+        payload = json.dumps(fields, indent=2, sort_keys=True, default=str)
+        # JSON-encode the id so a natural-key id carrying a newline or control
+        # character cannot break out of its single frontmatter line and inject
+        # extra keys (which would corrupt the parsed id on replay). The quoted form
+        # round-trips losslessly through _parse_mirror (issue #35).
+        lines = [
+            "---",
+            f"id: {json.dumps(str(record_id))}",
+            f"kind: {kind}",
+            f"created_at: {created_at}",
+            f"synced: {'true' if synced else 'false'}",
+            "---",
+            "",
+            f"# {kind} record",
+            "",
+            "```json",
+            payload,
+            "```",
+            "",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_mirror(text: str) -> tuple:
+        """Parse a mirror file into ``(meta, payload)``.
+
+        ``meta`` carries ``id``, ``kind``, ``created_at`` and a coerced boolean
+        ``synced``; ``payload`` is the JSON body (the original write fields).
+        """
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            raise ValueError("mirror file has no frontmatter")
+        meta: Dict[str, Any] = {}
+        for line in parts[1].strip().splitlines():
+            if ":" in line:
+                key, _, value = line.partition(":")
+                value = value.strip()
+                # A JSON-quoted value (e.g. an encoded id) is decoded back to its
+                # exact original; plain values pass through unchanged so older
+                # mirror files stay readable.
+                if value.startswith('"'):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                meta[key.strip()] = value
+        meta["synced"] = str(meta.get("synced", "true")).lower() == "true"
+        body = parts[2]
+        payload: Dict[str, Any] = {}
+        start = body.find("```json")
+        if start != -1:
+            end = body.find("```", start + len("```json"))
+            if end != -1:
+                payload = json.loads(body[start + len("```json") : end])
+        return meta, payload
+
+    def _mirror_write(
+        self,
+        kind: str,
+        record_id: str,
+        fields: Dict[str, Any],
+        synced: bool,
+        created_at: Optional[str] = None,
+    ) -> str:
+        """Write (or re-stamp) the Markdown mirror for one record.
+
+        A mirror-write failure is the durability guarantee failing, so it is loud:
+        it raises rather than being swallowed by the DB-down success path (#35).
+        """
+        if created_at is None:
+            created_at = self._utc_iso()
+        directory = os.path.join(self._mirror_root, kind)
+        path = os.path.join(directory, self._safe_name(record_id) + ".md")
+        content = self._render_mirror(record_id, kind, created_at, synced, fields)
+        try:
+            os.makedirs(directory, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        except OSError as exc:
+            raise RuntimeError(f"memory mirror write failed at {path}: {exc}") from exc
+        return path
+
+    def _is_synced(self) -> bool:
+        """Whether the just-attempted write reached the SurrealDB primary.
+
+        With no SurrealDB primary configured the local SQLite store is the only
+        source of truth, so the record is synced by definition and nothing needs
+        reconciling. Otherwise a write is synced only while the client is still on
+        SurrealDB; if a drop forced ``_activate_sqlite_fallback`` (or the primary
+        was already unavailable) the client is on SQLite and the record is pending.
+        """
+        if self._surreal_class is None:
+            return True
+        return self.backend == "surrealdb"
+
+    def _write_through(self, kind, record_id, fields, db_op):
+        """Durability funnel shared by every write method (issue #35).
+
+        Mints the mirror once, OUTSIDE the resilient DB attempt, so a
+        reconnect/fallback re-run never double-writes it. The mirror is stamped
+        ``synced: false`` first; after the DB attempt it is re-stamped via
+        :meth:`_is_synced`. ``db_op`` is the per-kind ``@_resilient`` DB writer; it
+        never raises solely because the backend is down (it falls back to SQLite),
+        so the write is durable even during an outage.
+        """
+        created_at = self._utc_iso()
+        self._mirror_write(kind, record_id, fields, synced=False, created_at=created_at)
+        result = db_op(record_id, fields)
+        self._mirror_write(
+            kind, record_id, fields, synced=self._is_synced(), created_at=created_at
+        )
+        return result
+
+    def _pending_mirror_files(self) -> List[tuple]:
+        """All mirror files still marked ``synced: false``, as ``(path, meta, payload)``."""
+        out: List[tuple] = []
+        if not os.path.isdir(self._mirror_root):
+            return out
+        for path in sorted(glob.glob(os.path.join(self._mirror_root, "*", "*.md"))):
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    meta, payload = self._parse_mirror(handle.read())
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not meta.get("synced", True):
+                out.append((path, meta, payload))
+        return out
+
+    def _replay(self, meta: Dict[str, Any], payload: Dict[str, Any]) -> None:
+        """Idempotently UPSERT a mirrored record into the SurrealDB primary.
+
+        The UPSERT is keyed by the record's stored id, so replaying a record that
+        is already present updates it in place rather than duplicating it. The
+        original mirror ``created_at`` is preserved as the record's time field so a
+        replayed row sorts where it belongs. Raises ``_ConnectionLost`` on a
+        transport fault so :meth:`reconcile` can stop and leave the rest pending.
+        """
+        kind = meta["kind"]
+        table = self._KIND_TABLE[kind]
+        content = dict(payload)
+        content[self._KIND_TIMEFIELD.get(kind, "created_at")] = meta.get("created_at")
+        self._run_surreal(
+            "UPSERT $id CONTENT $content;",
+            {"id": self._rid(table, meta["id"]), "content": content},
+        )
+
+    def reconcile(self) -> Dict[str, int]:
+        """Replay pending mirror records to the SurrealDB primary (issue #35).
+
+        Recovers a primary connection via :meth:`_connect_surreal` when the client
+        is not currently on SurrealDB. Each ``synced: false`` record is replayed as
+        a deterministic UPSERT by its stored id (idempotent: a second run is a
+        no-op and never duplicates), then its mirror is flipped to ``synced: true``.
+        A mid-run connection drop is tolerated: replay stops and every remaining
+        record stays pending for a later run. Never raises.
+
+        Returns a ``{"synced", "remaining"}`` count.
+        """
+        pending = self._pending_mirror_files()
+        if not pending:
+            return {"synced": 0, "remaining": 0}
+        # A SurrealDB primary is required to reconcile against. With none configured
+        # the local SQLite store is already authoritative, so there is nothing to
+        # push and the records are reported as remaining (not an error).
+        if self._surreal_class is None:
+            return {"synced": 0, "remaining": len(pending)}
+        if self.backend != "surrealdb" or self.db is None:
+            if self._connect_surreal():
+                self.backend = "surrealdb"
+            else:
+                return {"synced": 0, "remaining": len(pending)}
+
+        synced = 0
+        remaining = 0
+        dropped = False
+        for path, meta, payload in pending:
+            if dropped:
+                remaining += 1
+                continue
+            try:
+                self._replay(meta, payload)
+            except _ConnectionLost:
+                # A mid-run drop leaves this and every later record pending.
+                dropped = True
+                remaining += 1
+                continue
+            except Exception as exc:  # noqa: BLE001 - one bad record must not block the rest
+                logging.error(f"Failed to reconcile {path}: {exc}")
+                remaining += 1
+                continue
+            self._mirror_write(
+                meta["kind"], meta["id"], payload, synced=True, created_at=meta.get("created_at")
+            )
+            synced += 1
+        return {"synced": synced, "remaining": remaining}
+
     def log_decision(
         self,
         title: str,
@@ -481,9 +1050,26 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the inserted record.
         """
+        fields = {
+            "title": title,
+            "rationale": rationale,
+            "outcome": outcome,
+            "author": author,
+            "branch": branch,
+            "commit_sha": commit_sha,
+        }
+        return self._write_through(
+            "decision", self._mint_id("decision"), fields, self._db_log_decision
+        )
+
+    @_resilient
+    def _db_log_decision(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a decision: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO decisions {
+            UPSERT $id CONTENT {
                 title: $title,
                 rationale: $rationale,
                 outcome: $outcome,
@@ -491,19 +1077,14 @@ class DatabaseClient:
                 branch: $branch,
                 commit_sha: $commit_sha,
                 created_at: time::now()
-            }
+            };
             """
-            params = {
-                "title": title,
-                "rationale": rationale,
-                "outcome": outcome,
-                "author": author,
-                "branch": branch,
-                "commit_sha": commit_sha,
-            }
+            params = {"id": self._rid("decisions", record_id), **fields}
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to log decision in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to log decision in SurrealDB: {e}")
@@ -516,7 +1097,15 @@ class DatabaseClient:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
-                        query, (title, rationale, outcome, author, branch, commit_sha)
+                        query,
+                        (
+                            fields["title"],
+                            fields["rationale"],
+                            fields["outcome"],
+                            fields["author"],
+                            fields["branch"],
+                            fields["commit_sha"],
+                        ),
                     )
                     conn.commit()
                     return cursor.lastrowid
@@ -532,6 +1121,17 @@ class DatabaseClient:
             value: Value of the memory entry.
             category: Categorical bucket for the memory.
         """
+        fields = {"key": key, "value": value, "category": category}
+        # The natural key is already a stable id, so it is reused for the RecordID
+        # and the mirror filename (re-saving the same key updates in place).
+        self._write_through("memory", key, fields, self._db_save_memory)
+
+    @_resilient
+    def _db_save_memory(self, record_id: str, fields: Dict[str, Any]) -> None:
+        """Persist a memory entry: idempotent UPSERT keyed by the memory key."""
+        key = fields["key"]
+        value = fields["value"]
+        category = fields["category"]
         if self.backend == "surrealdb":
             if self.spectron is not None:
                 try:
@@ -550,13 +1150,15 @@ class DatabaseClient:
             };
             """
             params = {
-                "id": self._rid("memory", key),
+                "id": self._rid("memory", record_id),
                 "key": key,
                 "value": value,
                 "category": category,
             }
             try:
-                self.db.query(query, params)
+                self._run_surreal(query, params)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save memory in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save memory in SurrealDB: {e}")
@@ -577,11 +1179,14 @@ class DatabaseClient:
                 logging.error(f"Failed to save memory: {e}")
                 raise RuntimeError(f"Failed to save memory: {e}")
 
+    @_resilient
     def delete_memory(self, key: str) -> None:
         """Deletes a memory entry by key (no-op if it does not exist)."""
         if self.backend == "surrealdb":
             try:
-                self.db.query("DELETE memory WHERE key = $key;", {"key": key})
+                self._run_surreal("DELETE memory WHERE key = $key;", {"key": key})
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to delete memory in SurrealDB: {e}")
         else:
@@ -592,6 +1197,7 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to delete memory: {e}")
 
+    @_resilient
     def get_memory(self, key: str) -> Optional[str]:
         """Retrieves a memory value by its key.
 
@@ -612,8 +1218,10 @@ class DatabaseClient:
 
             query = "SELECT `value` FROM memory WHERE key = $key"
             try:
-                res = self.db.query(query, {"key": key})
+                res = self._run_surreal(query, {"key": key})
                 return self._extract_field(res, "value")
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve memory from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve memory from SurrealDB: {e}")
@@ -643,25 +1251,37 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the created milestone.
         """
+        fields = {
+            "title": title,
+            "description": description,
+            "due_date": due_date,
+            "state": state,
+        }
+        return self._write_through(
+            "milestone", self._mint_id("milestone"), fields, self._db_create_milestone
+        )
+
+    @_resilient
+    def _db_create_milestone(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a milestone: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO milestones {
+            UPSERT $id CONTENT {
                 title: $title,
                 description: $description,
                 due_date: $due_date,
                 state: $state,
                 created_at: time::now()
-            }
+            };
             """
-            params = {
-                "title": title,
-                "description": description,
-                "due_date": due_date,
-                "state": state,
-            }
+            params = {"id": self._rid("milestones", record_id), **fields}
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to create milestone in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to create milestone in SurrealDB: {e}")
@@ -673,19 +1293,30 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (title, description, due_date, state))
+                    cursor.execute(
+                        query,
+                        (
+                            fields["title"],
+                            fields["description"],
+                            fields["due_date"],
+                            fields["state"],
+                        ),
+                    )
                     conn.commit()
                     return cursor.lastrowid
             except sqlite3.Error as e:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
 
+    @_resilient
     def list_milestones(self) -> List[Dict[str, Any]]:
         """List milestones, most recent first."""
         if self.backend == "surrealdb":
             try:
-                res = self.db.query("SELECT * FROM milestones ORDER BY created_at DESC")
+                res = self._run_surreal("SELECT * FROM milestones ORDER BY created_at DESC")
                 return self._extract_list(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to list milestones from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to list milestones from SurrealDB: {e}")
@@ -724,9 +1355,26 @@ class DatabaseClient:
             The id of the created release record.
         """
         mid = str(milestone_id) if milestone_id is not None else None
+        fields = {
+            "version": version,
+            "tag": tag,
+            "notes": notes,
+            "issue_github_id": issue_github_id,
+            "milestone_id": mid,
+            "commit_sha": commit_sha,
+        }
+        return self._write_through(
+            "release", self._mint_id("release"), fields, self._db_save_release
+        )
+
+    @_resilient
+    def _db_save_release(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a release: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO releases {
+            UPSERT $id CONTENT {
                 version: $version,
                 tag: $tag,
                 notes: $notes,
@@ -734,19 +1382,14 @@ class DatabaseClient:
                 milestone_id: $milestone_id,
                 commit_sha: $commit_sha,
                 released_at: time::now()
-            }
+            };
             """
-            params = {
-                "version": version,
-                "tag": tag,
-                "notes": notes,
-                "issue_github_id": issue_github_id,
-                "milestone_id": mid,
-                "commit_sha": commit_sha,
-            }
+            params = {"id": self._rid("releases", record_id), **fields}
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save release in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save release in SurrealDB: {e}")
@@ -760,7 +1403,15 @@ class DatabaseClient:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
-                        query, (version, tag, notes, issue_github_id, mid, commit_sha)
+                        query,
+                        (
+                            fields["version"],
+                            fields["tag"],
+                            fields["notes"],
+                            fields["issue_github_id"],
+                            fields["milestone_id"],
+                            fields["commit_sha"],
+                        ),
                     )
                     conn.commit()
                     return cursor.lastrowid
@@ -768,14 +1419,17 @@ class DatabaseClient:
                 logging.error(f"Failed to save release: {e}")
                 raise RuntimeError(f"Failed to save release: {e}")
 
+    @_resilient
     def get_release(self, release_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieve a release by id."""
         if self.backend == "surrealdb":
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     "SELECT * FROM $id", {"id": self._parse_rid(release_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve release from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve release from SurrealDB: {e}")
@@ -790,14 +1444,17 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve release: {e}")
                 raise RuntimeError(f"Failed to retrieve release: {e}")
 
+    @_resilient
     def list_releases(self, limit: int = 20) -> List[Dict[str, Any]]:
         """List delivered releases, most recent first."""
         if self.backend == "surrealdb":
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     f"SELECT * FROM releases ORDER BY released_at DESC LIMIT {int(limit)}"
                 )
                 return self._extract_list(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to list releases from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to list releases from SurrealDB: {e}")
@@ -831,6 +1488,19 @@ class DatabaseClient:
             status: Status (e.g., open, closed).
             milestone_id: Associated milestone ID in the database.
         """
+        fields = {
+            "github_id": github_id,
+            "title": title,
+            "type_": type_,
+            "status": status,
+            "milestone_id": milestone_id,
+        }
+        # github_id is already a stable id, reused for the RecordID and filename.
+        self._write_through("issue", github_id, fields, self._db_log_issue)
+
+    @_resilient
+    def _db_log_issue(self, record_id: str, fields: Dict[str, Any]) -> None:
+        """Persist an issue: idempotent UPSERT keyed by the github_id."""
         if self.backend == "surrealdb":
             query = """
             UPSERT $id CONTENT {
@@ -842,16 +1512,11 @@ class DatabaseClient:
                 created_at: time::now()
             };
             """
-            params = {
-                "id": self._rid("issues", github_id),
-                "github_id": github_id,
-                "title": title,
-                "type_": type_,
-                "status": status,
-                "milestone_id": milestone_id,
-            }
+            params = {"id": self._rid("issues", record_id), **fields}
             try:
-                self.db.query(query, params)
+                self._run_surreal(query, params)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to log issue in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to log issue in SurrealDB: {e}")
@@ -867,7 +1532,16 @@ class DatabaseClient:
             """
             try:
                 with self._sqlite_conn() as conn:
-                    conn.execute(query, (github_id, title, type_, status, milestone_id))
+                    conn.execute(
+                        query,
+                        (
+                            fields["github_id"],
+                            fields["title"],
+                            fields["type_"],
+                            fields["status"],
+                            fields["milestone_id"],
+                        ),
+                    )
                     conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"Failed to log issue: {e}")
@@ -897,9 +1571,27 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the inserted record.
         """
+        fields = {
+            "strategy_name": strategy_name,
+            "sharpe_ratio": sharpe_ratio,
+            "max_drawdown": max_drawdown,
+            "profit_factor": profit_factor,
+            "parameters": parameters,
+            "dataset": dataset,
+            "commit_sha": commit_sha,
+        }
+        return self._write_through(
+            "backtest", self._mint_id("backtest"), fields, self._db_save_backtest
+        )
+
+    @_resilient
+    def _db_save_backtest(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a backtest run: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO backtest_runs {
+            UPSERT $id CONTENT {
                 strategy_name: $strategy_name,
                 sharpe_ratio: $sharpe_ratio,
                 max_drawdown: $max_drawdown,
@@ -908,20 +1600,14 @@ class DatabaseClient:
                 dataset: $dataset,
                 commit_sha: $commit_sha,
                 created_at: time::now()
-            }
+            };
             """
-            params = {
-                "strategy_name": strategy_name,
-                "sharpe_ratio": sharpe_ratio,
-                "max_drawdown": max_drawdown,
-                "profit_factor": profit_factor,
-                "parameters": parameters,
-                "dataset": dataset,
-                "commit_sha": commit_sha,
-            }
+            params = {"id": self._rid("backtest_runs", record_id), **fields}
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save backtest run in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save backtest run in SurrealDB: {e}")
@@ -936,13 +1622,13 @@ class DatabaseClient:
                     cursor.execute(
                         query,
                         (
-                            strategy_name,
-                            sharpe_ratio,
-                            max_drawdown,
-                            profit_factor,
-                            parameters,
-                            dataset,
-                            commit_sha,
+                            fields["strategy_name"],
+                            fields["sharpe_ratio"],
+                            fields["max_drawdown"],
+                            fields["profit_factor"],
+                            fields["parameters"],
+                            fields["dataset"],
+                            fields["commit_sha"],
                         ),
                     )
                     conn.commit()
@@ -966,6 +1652,18 @@ class DatabaseClient:
             task: Task description.
             messages: List of message dictionaries representing conversation history.
         """
+        fields = {
+            "session_id": session_id,
+            "agent_name": agent_name,
+            "task": task,
+            "messages": messages,
+        }
+        # session_id is already a stable id, reused for the RecordID and filename.
+        self._write_through("session", session_id, fields, self._db_save_session)
+
+    @_resilient
+    def _db_save_session(self, record_id: str, fields: Dict[str, Any]) -> None:
+        """Persist a session: idempotent UPSERT keyed by the session_id."""
         if self.backend == "surrealdb":
             query = """
             UPSERT $id CONTENT {
@@ -977,18 +1675,21 @@ class DatabaseClient:
             };
             """
             params = {
-                "id": self._rid("sessions", session_id),
-                "session_id": session_id,
-                "agent_name": agent_name,
-                "task": task,
-                "messages": messages,
+                "id": self._rid("sessions", record_id),
+                "session_id": fields["session_id"],
+                "agent_name": fields["agent_name"],
+                "task": fields["task"],
+                "messages": fields["messages"],
             }
             try:
-                self.db.query(query, params)
+                self._run_surreal(query, params)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save session in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save session in SurrealDB: {e}")
         else:
+            messages = fields["messages"]
             serialized_messages = (
                 json.dumps(messages) if not isinstance(messages, str) else messages
             )
@@ -1004,13 +1705,20 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     conn.execute(
-                        query, (session_id, agent_name, task, serialized_messages)
+                        query,
+                        (
+                            fields["session_id"],
+                            fields["agent_name"],
+                            fields["task"],
+                            serialized_messages,
+                        ),
                     )
                     conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"Failed to save session: {e}")
                 raise RuntimeError(f"Failed to save session: {e}")
 
+    @_resilient
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves a session state by session_id.
 
@@ -1023,8 +1731,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM sessions WHERE session_id = $session_id"
             try:
-                res = self.db.query(query, {"session_id": session_id})
+                res = self._run_surreal(query, {"session_id": session_id})
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve session from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve session from SurrealDB: {e}")
@@ -1060,27 +1770,39 @@ class DatabaseClient:
         Returns:
             The primary key ID or record ID of the created handoff.
         """
+        fields = {
+            "sender": sender,
+            "recipient": recipient,
+            "contract_type": contract_type,
+            "contract_path": contract_path,
+            "status": status,
+        }
+        return self._write_through(
+            "handoff", self._mint_id("handoff"), fields, self._db_log_handoff
+        )
+
+    @_resilient
+    def _db_log_handoff(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a handoff: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO handoffs {
+            UPSERT $id CONTENT {
                 sender: $sender,
                 recipient: $recipient,
                 contract_type: $contract_type,
                 contract_path: $contract_path,
                 status: $status,
                 timestamp: time::now()
-            }
+            };
             """
-            params = {
-                "sender": sender,
-                "recipient": recipient,
-                "contract_type": contract_type,
-                "contract_path": contract_path,
-                "status": status,
-            }
+            params = {"id": self._rid("handoffs", record_id), **fields}
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to log handoff in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to log handoff in SurrealDB: {e}")
@@ -1093,7 +1815,14 @@ class DatabaseClient:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
-                        query, (sender, recipient, contract_type, contract_path, status)
+                        query,
+                        (
+                            fields["sender"],
+                            fields["recipient"],
+                            fields["contract_type"],
+                            fields["contract_path"],
+                            fields["status"],
+                        ),
                     )
                     conn.commit()
                     return cursor.lastrowid
@@ -1101,6 +1830,7 @@ class DatabaseClient:
                 logging.error(f"Failed to log handoff: {e}")
                 raise RuntimeError(f"Failed to log handoff: {e}")
 
+    @_resilient
     def get_handoff(self, handoff_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves handoff log details by ID.
 
@@ -1113,10 +1843,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(handoff_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve handoff from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff from SurrealDB: {e}")
@@ -1132,6 +1864,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve handoff: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff: {e}")
 
+    @_resilient
     def get_decision(self, decision_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a logged decision by ID.
 
@@ -1144,10 +1877,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(decision_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve decision from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve decision from SurrealDB: {e}")
@@ -1163,6 +1898,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve decision: {e}")
                 raise RuntimeError(f"Failed to retrieve decision: {e}")
 
+    @_resilient
     def get_milestone(self, milestone_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a milestone by ID.
 
@@ -1175,10 +1911,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(milestone_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve milestone from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone from SurrealDB: {e}")
@@ -1194,6 +1932,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve milestone: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone: {e}")
 
+    @_resilient
     def get_issue(self, github_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves an issue by its GitHub ID.
 
@@ -1206,8 +1945,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues WHERE github_id = $github_id"
             try:
-                res = self.db.query(query, {"github_id": github_id})
+                res = self._run_surreal(query, {"github_id": github_id})
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve issue from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve issue from SurrealDB: {e}")
@@ -1223,6 +1964,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve issue: {e}")
                 raise RuntimeError(f"Failed to retrieve issue: {e}")
 
+    @_resilient
     def get_backtest(self, backtest_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Retrieves a backtest run by ID.
 
@@ -1235,10 +1977,12 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM $id"
             try:
-                res = self.db.query(
+                res = self._run_surreal(
                     query, {"id": self._parse_rid(backtest_id)}
                 )
                 return self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve backtest run from SurrealDB: {e}")
                 raise RuntimeError(
@@ -1256,6 +2000,7 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
 
+    @_resilient
     def get_open_issues(self) -> List[Dict[str, Any]]:
         """Retrieves all open issues.
 
@@ -1265,8 +2010,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM issues WHERE status = 'open'"
             try:
-                res = self.db.query(query)
+                res = self._run_surreal(query)
                 return self._extract_list(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to retrieve open issues from SurrealDB: {e}")
                 raise RuntimeError(
@@ -1284,8 +2031,13 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")
 
+    @_resilient
     def get_latest_activity(self) -> Optional[Dict[str, Any]]:
         """Retrieves the most recent entry from the handoffs or sessions table.
+
+        A broken connection must never masquerade as "no activity": a connection
+        loss propagates as ``_ConnectionLost`` so the resilient decorator reconnects
+        or falls back, and a genuinely empty store still returns None (issue #37).
 
         Returns:
             A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
@@ -1296,8 +2048,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1"
             try:
-                res = self.db.query(query)
+                res = self._run_surreal(query)
                 latest_session = self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to query latest session: {e}")
         else:
@@ -1316,8 +2070,10 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             query = "SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT 1"
             try:
-                res = self.db.query(query)
+                res = self._run_surreal(query)
                 latest_handoff = self._extract_record(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to query latest handoff: {e}")
         else:

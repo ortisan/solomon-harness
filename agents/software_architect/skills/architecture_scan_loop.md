@@ -17,6 +17,33 @@ dependency, a public contract change, a new persistence or transport boundary)
 that shipped without one. One lens only: duplication belongs to the separate
 `duplication_scan_loop`.
 
+## Objective rules and tooling
+
+Every finding must cite a reproducible, objective rule, never a taste judgment.
+Anchor the scan in executable fitness functions so a reviewer can re-run the
+check: `import-linter` contracts for Python layer and dependency-direction rules
+(forbidden imports, layered-architecture, independence of bounded contexts);
+`grimp` or `pydeps` to surface import cycles; an ArchUnit-style suite where the
+stack supports it. Treat the `architecture_review_gate` checklist items as the
+acceptance criteria for "is this drift": if no checklist item or fitness function
+flags it, it is not a finding. Calibrate ADR-significance against the recorded
+triggers — a new cross-cutting dependency, a public-contract or schema change, a
+new persistence or transport boundary, or the reversal of a prior ADR. A change
+that matches a trigger but shipped without an ADR is itself a finding worth a
+draft PR that adds the missing record.
+
+## Cadence and convergence
+
+Run on a fixed, low cadence (daily, or once per merge-batch), never continuously:
+the loop reads repository state, so back-to-back runs over an unchanged tree only
+waste a slot and the single-driver lock. Track convergence through the
+`.solomon/scan-runs/` notes — when two consecutive runs surface no new
+high-confidence finding, the architecture is within tolerance and the loop idles
+until the next change lands. Never let an unresolved finding be re-proposed every
+run: once a finding has an open draft PR or a filed idea, record it as handled in
+the run note so the next iteration skips it and advances to the next-ranked drift
+instead of thrashing on the same one.
+
 ## Acting safely on one finding per run
 
 Rank findings by severity and act on the single highest-confidence finding:

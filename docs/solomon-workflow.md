@@ -49,15 +49,114 @@ list and invite a free-text reply. Lead with the recommended option first and ke
 options mutually exclusive. Prefer this over an open prose question: discrete, numbered
 choices keep the user's context focused and prevent dispersion.
 
+## Implementation mode (automatic or manual)
+
+`/solomon-start` asks, before any code is written, whether the change is implemented
+**automatically** by the agent or **manually** by a developer — the team still has
+hands-on developers who want to write the code themselves. The choice uses the
+enumerated-options style above (Automatic, recommended and first; Manual; Other).
+
+- Automatic: the agent runs the TDD loop (Red/Green/Refactor) per PLAN.md, then opens the
+  draft PR and moves the card to Code Review — the existing behavior.
+- Manual: the agent writes no production or test code and opens no PR. It hands back the
+  prepared worktree, branch, PLAN.md, and the ADR decision, and leaves the card in
+  `In Progress`. The developer implements by hand, then re-runs `/solomon-start` to open the
+  PR (or opens it and runs `/solomon-review`).
+- Headless (`solomon-harness dev start`): with no one to answer, the stage does not block on
+  the prompt — it defaults to Automatic and prints
+  `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
+
+## Deliver and release
+
+`/solomon-release` (sre, software_engineer) takes an approved, merged change from
+`QA` to `Done` and, when a release is due, drives the tag through CI. The full,
+canonical standard is `docs/release-policy.md` (decision recorded in
+`docs/adr/0004-milestone-gated-releases.md`); this section is the operational
+summary the workflow follows.
+
+**Release criterion — milestone-gated, never per-PR.** A tag is cut only when a
+GitHub milestone reaches 0 open issues with CI green on `main`. Merging a single PR
+closes its issue and burns down its milestone; it never cuts a release. Every issue
+rolls up to exactly one milestone:
+
+- An **epic** milestone is titled with its SemVer minor (`v0.4.0`, `v0.5.0`) — the
+  title *is* the version; closing it (`open_issues == 0`, CI green) cuts the MINOR.
+- A **theme / hardening** milestone is titled by theme (`memory-durability`,
+  `test-ci-hardening`, `worktree-lifecycle`); closing it cuts a PATCH whose version
+  is computed at cut time. `/solomon-refine` creates the milestone and assigns every
+  Ready child; a parentless bug or chore goes to the nearest theme milestone.
+
+An on-demand escape valve, `solomon-harness release prep`, may cut a PATCH for an
+accumulated batch without waiting for a milestone to fully close.
+
+**Version — computed, never hand-picked.** The bump is derived from the
+Conventional Commits in `git log <last-tag>..main --first-parent` (highest wins).
+Pre-1.0 (current `0.x`): a window with any `feat` or a `BREAKING CHANGE` bumps the
+MINOR; otherwise `fix`/`perf`/`refactor`/`revert` bumps the PATCH; a window of only
+`chore`/`docs`/`ci`/`test`/`style`/`build` is non-releasable (no tag). Post-1.0:
+`BREAKING CHANGE` → MAJOR, `feat` → MINOR, `fix`/`perf` → PATCH. A published tag is
+immutable — never moved; a bad release is superseded by the next PATCH (a revert PR
+that ships forward), never by re-tagging.
+
+**Branch model — trunk-only.** Slices squash-merge into `main`; there is no
+`develop` branch and no long-lived `release/*` or `hotfix/*` branch. The only
+release branch is the ephemeral `chore/release-vX.Y.Z` prep branch, which lives
+minutes: `solomon-harness release prep` opens a PR carrying the `pyproject` version
+bump and the new `CHANGELOG.md` section, commits `chore(release): vX.Y.Z`, then
+stops. The human merges that PR — that merge **is** the release gate — and the
+branch is deleted.
+
+**Tag and publish — CI is the single owner.** On the prep-PR merge, the `main` push
+carries the `chore(release): vX.Y.Z` commit; the release workflow creates and pushes
+the annotated tag and publishes (`draft: false`) the GitHub Release with the
+CHANGELOG section as its notes. There is no manual `gh release create`. CI pushes
+only the tag (tags are not branch-protected) using the default `GITHUB_TOKEN` with
+`contents: write` — no PAT, and CI never pushes a commit to protected `main`.
+
+**Fail-closed gate.** `solomon-harness release check` asserts that the tag, the
+`pyproject` version, and the top `CHANGELOG.md` heading (Keep a Changelog, dated
+today) all agree, that the tag does not already exist, and that tests and `ruff` are
+green; it exits non-zero on any mismatch, and CI enforces it on every
+`chore/release-*` PR. Humans never hand-edit `pyproject.version` or add a CHANGELOG
+heading — `release prep` writes them, and a CI check rejects any non-release PR that
+touches them, which structurally prevents three-way version drift.
+
+**Library readiness gate.** Because the harness is distributed as an immutable git
+tag and GitHub Release of the source tree — not a running service and not published
+to PyPI — the SLO-burn / canary / blue-green / on-call production-readiness review
+does not apply. The release gate is a library readiness check: tests and `ruff`
+green on `main`, `python -c "import solomon_harness"` succeeds, the
+`solomon-harness` console script runs, and `release check` passes. The one kernel
+carried over from progressive delivery is reversibility: immutable, never-moved
+tags; rollback as a revert PR that auto-ships the next patch; and
+backward-compatible expand/contract migrations for the SurrealDB / SQLite memory
+store.
+
+The CLI surface for this stage is `solomon-harness release plan | prep | check`:
+`plan` is read-only and headless-safe (the loop may *propose* a release with it);
+`prep` opens the prep PR and stops, never merging; `check` is the read-only
+fail-closed gate.
+
 ## GitHub conventions
 
 - Issues are created with `gh issue create`. Labels: `type:feature`, `type:bug`,
   `type:idea`, `type:chore`; plus `priority:p0|p1|p2` and `area:<domain>`.
-- Branches (Git Flow): `feature/<slug>` for features, `bugfix/<slug>` for defects,
-  `hotfix/<version>` for production-critical fixes. The branch name carries NO issue
-  number (kept deliberately clean); `<slug>` is the kebab-cased issue title. The issue
-  is linked instead by the back-link comment and the `Refs #`/`Closes #` trailers.
-  Branch from `develop`.
+- Branches (trunk-based): `feature/<slug>` for features, `bugfix/<slug>` for defects,
+  both cut from `main` and squash-merged back to `main`. There is no `develop` and no
+  long-lived `release/*` or `hotfix/*`; a production-critical fix is a `bugfix/<slug>`
+  off `main` that ships in the next patch. The only release branch is the ephemeral
+  `chore/release-vX.Y.Z` prep branch. The branch name carries NO issue number (kept
+  deliberately clean); `<slug>` is the kebab-cased issue title. The issue is linked
+  instead by the back-link comment and the `Refs #`/`Closes #` trailers.
+- Worktrees: `/solomon-start` creates each issue's branch in its own isolated git
+  worktree rather than switching the primary checkout, so a dirty checkout never blocks
+  a start and several issues can be in flight at once. The worktree lives at a sibling
+  path beside the repo — `<parent>/<repo>-worktrees/<branch with '/' as '-'>`, e.g.
+  `../solomon-harness-worktrees/feature-add-csv-export` — never nested inside the repo,
+  so recursive tooling (test collection, IDE indexers) does not double-traverse it.
+  Creation is idempotent; a conflicting path or a branch already checked out elsewhere is
+  reported, never forced. Removal on merge/release is manual for now
+  (`git worktree remove <path>`). The helper is `solomon-harness worktree <branch> [--base <ref>]`.
 - Commits: Conventional Commits, no emojis (the commit-msg hook enforces this).
 - Pull requests: conventional title, body that contains `Closes #<issue>`, opened
   as a draft until `/solomon-review` approves. Link the ADR if one was written.

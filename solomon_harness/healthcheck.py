@@ -7,6 +7,7 @@ the GitHub board enabled, is the global install in place. Each check returns a
 status (ok | warn | fail) and, when not ok, a one-line fix. It never raises.
 """
 
+import glob
 import json
 import os
 import shutil
@@ -81,6 +82,50 @@ def check_memory(workspace_root: str) -> Dict:
     )
 
 
+def pending_reconcile_count(workspace_root: str) -> int:
+    """Count write-through mirror records still marked ``synced: false`` (issue #35).
+
+    These are memory writes captured locally during a SurrealDB outage that have not
+    yet been replayed to the primary; ``solomon-harness memory sync`` clears them.
+
+    The mirror root is resolved through the same precedence the client uses
+    (``HARNESS_MIRROR_ROOT`` / the db_path-sibling convention), so the count can
+    never read 0 while pending records sit under a redirected root.
+    """
+    from solomon_harness.tools.database_client import _resolve_mirror_root_path
+
+    root = _resolve_mirror_root_path(workspace_root)
+    if not os.path.isdir(root):
+        return 0
+    count = 0
+    for path in glob.glob(os.path.join(root, "*", "*.md")):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        parts = text.split("---", 2)
+        frontmatter = parts[1] if len(parts) >= 3 else text
+        for line in frontmatter.splitlines():
+            if line.strip().lower() == "synced: false":
+                count += 1
+                break
+    return count
+
+
+def check_pending_reconcile(workspace_root: str) -> Dict:
+    """Surface the count of memory writes still pending reconcile to SurrealDB."""
+    pending = pending_reconcile_count(workspace_root)
+    if pending == 0:
+        return _check("Memory reconcile", OK, "no memory records pending reconcile")
+    return _check(
+        "Memory reconcile",
+        WARN,
+        f"{pending} memory records pending reconcile",
+        "Run 'solomon-harness memory sync' once SurrealDB is reachable.",
+    )
+
+
 def check_github() -> Dict:
     """gh installed, authenticated, and carrying the project scope the board needs."""
     if not shutil.which("gh"):
@@ -136,6 +181,7 @@ def run_checks(workspace_root: Optional[str] = None) -> List[Dict]:
         ("Docker", check_docker),
         ("Shared home", check_shared_home),
         ("Memory backend", lambda: check_memory(workspace_root)),
+        ("Memory reconcile", lambda: check_pending_reconcile(workspace_root)),
         ("Global install", check_global_install),
         ("GitHub auth", check_github),
     ]
