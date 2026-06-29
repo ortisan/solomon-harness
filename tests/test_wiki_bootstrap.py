@@ -23,6 +23,7 @@ from solomon_harness.bootstrap import hint_uninitialized_wiki as _real_hint
 from solomon_harness.wiki_bootstrap import (
     Tier,
     WikiBootstrapResult,
+    _confirm_via_input,
     bootstrap_wiki,
     choose_tier,
     is_github_remote,
@@ -514,6 +515,41 @@ class TestBootstrapWiki(unittest.TestCase):
         self.assertIn("/wiki/_new", result.message)
         self.assertNotIn("Repository not found", result.message)
 
+    def test_unauthenticated_browser_guides_and_never_creates_a_page(self):
+        # R-2 control: a browser is present but not authenticated, so the harness
+        # must not assume an identity -- it GUIDEs the operator and never drives
+        # the port. choose_tier's is_authenticated wiring is covered above; this
+        # pins the orchestration end of that control.
+        probe = _RefProbe(False)
+        bootstrapper = _FakeBootstrapper(authenticated=False)
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=bootstrapper,
+            refs_checker=probe,
+            confirm=lambda: True,  # even if the operator confirms, no page is driven
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.GUIDE)
+        self.assertEqual(bootstrapper.create_calls, [], "an unauthenticated browser must not create a page")
+
+    def test_guide_declined_degrades_without_a_reprobe(self):
+        # When the operator declines the guide, the step degrades immediately and
+        # does not re-probe the refs (only the initial detection probe runs).
+        probe = _RefProbe(False)
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=lambda: False,
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.GUIDE)
+        self.assertFalse(result.proceed)
+        self.assertEqual(result.exit_code, 4)
+        self.assertEqual(len(probe.calls), 1, "a declined guide must not re-probe")
+
     def test_degrade_headless_attempts_no_browser_and_does_not_prompt(self):
         probe = _RefProbe(False)
         result = bootstrap_wiki(
@@ -604,6 +640,23 @@ class TestBootstrapWiki(unittest.TestCase):
         self.assertNotIn("x-access-token", result.message)
         self.assertIn("https://github.com/o/r.wiki.git", result.message)
         self.assertIn("https://github.com/o/r/wiki/_new", result.message)
+
+
+class TestConfirmViaInput(unittest.TestCase):
+    """The default GUIDE confirmation prompt. It is only reached on an interactive
+    run, but it must still fail safe (treat a closed stdin as 'do not proceed')."""
+
+    def test_returns_false_on_eof(self):
+        with patch("builtins.input", side_effect=EOFError):
+            self.assertFalse(_confirm_via_input())
+
+    def test_skip_reply_returns_false(self):
+        with patch("builtins.input", return_value="skip"):
+            self.assertFalse(_confirm_via_input())
+
+    def test_enter_returns_true(self):
+        with patch("builtins.input", return_value=""):
+            self.assertTrue(_confirm_via_input())
 
 
 class TestWikiCliWiring(unittest.TestCase):
