@@ -676,8 +676,29 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         result = install_global(register_mcp=not args.no_mcp)
         print(describe(result))
     elif args.command == "wiki":
-        from solomon_harness.bootstrap import index_codebase, write_code_overview
+        from solomon_harness.bootstrap import (
+            get_project_metadata,
+            index_codebase,
+            write_code_overview,
+        )
         from solomon_harness.tools.database_client import DatabaseClient
+        from solomon_harness.wiki_bootstrap import bootstrap_wiki
+
+        # Initialize the GitHub wiki (or degrade) before refreshing the living
+        # docs. The pure-CLI path injects no browser bootstrapper, so an
+        # uninitialized wiki resolves to GUIDE (interactive) or the DEGRADE floor
+        # (headless), never to AUTOMATE -- the host-driven browser adapter would be
+        # injected here. On DEGRADE, exit 4 with the actionable message rather than
+        # refresh docs that cannot be published; on NO-OP, fall through unchanged.
+        _, git_remote, _ = get_project_metadata(workspace_root)
+        outcome = bootstrap_wiki(
+            git_remote,
+            interactive=sys.stdin.isatty(),
+            bootstrapper=None,
+        )
+        if not outcome.proceed:
+            print(outcome.message, file=sys.stderr)
+            sys.exit(outcome.exit_code)
         try:
             with DatabaseClient(harness_dir=workspace_root) as db:
                 index_codebase(workspace_root, db)
