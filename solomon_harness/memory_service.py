@@ -163,3 +163,122 @@ class MemoryService:
 
     def get_latest_activity(self) -> Dict[str, Any]:
         return {"activity": self.client.get_latest_activity()}
+
+    # --- Graph (write) -------------------------------------------------------
+
+    def relate(
+        self, edge: str, from_id: str, to_id: str, **fields: Any
+    ) -> Dict[str, Any]:
+        edge_id = self.client.relate(edge, from_id, to_id, **fields)
+        return {"edge_id": edge_id}
+
+    def block_issue(
+        self,
+        blocker_github_id: str,
+        blocked_github_id: str,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        edge_id = self.client.block_issue(blocker_github_id, blocked_github_id, reason)
+        return {"edge_id": edge_id}
+
+    def supersede_decision(
+        self,
+        new_decision_id: str,
+        old_decision_id: str,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        edge_id = self.client.supersede_decision(
+            new_decision_id, old_decision_id, reason
+        )
+        return {"edge_id": edge_id}
+
+    def assign_issue_to_milestone(
+        self, milestone_id: str, github_id: str
+    ) -> Dict[str, Any]:
+        edge_id = self.client.assign_issue_to_milestone(milestone_id, github_id)
+        return {"edge_id": edge_id}
+
+    def link_session_handoff(
+        self, session_id: str, handoff_id: str
+    ) -> Dict[str, Any]:
+        edge_id = self.client.link_session_handoff(session_id, handoff_id)
+        return {"edge_id": edge_id}
+
+    def decision_addresses_issue(
+        self, decision_id: str, github_id: str
+    ) -> Dict[str, Any]:
+        edge_id = self.client.decision_addresses_issue(decision_id, github_id)
+        return {"edge_id": edge_id}
+
+    # --- Graph (read) --------------------------------------------------------
+
+    def issues_blocking(self, github_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        return {"issues": self.client.issues_blocking(github_id)}
+
+    def issues_blocked_by(self, github_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        return {"issues": self.client.issues_blocked_by(github_id)}
+
+    def milestone_issues(self, milestone_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        return {"issues": self.client.milestone_issues(milestone_id)}
+
+    def supersedes_chain(self, decision_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        return {"decisions": self.client.supersedes_chain(decision_id)}
+
+    # --- Timeseries ----------------------------------------------------------
+
+    def record_metric(
+        self,
+        name: str,
+        value: float,
+        tags: Optional[Dict[str, Any]] = None,
+        at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        metric_id = self.client.record_metric(name, value, tags=tags, at=at)
+        return {"metric_id": metric_id}
+
+    def query_metric(
+        self,
+        name: str,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "results": self.client.query_metric(
+                name, since=since, until=until, limit=limit
+            )
+        }
+
+    def aggregate_metric(
+        self,
+        name: str,
+        bucket: str = "day",
+        agg: str = "count",
+        since: Optional[str] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "buckets": self.client.aggregate_metric(
+                name, bucket=bucket, agg=agg, since=since
+            )
+        }
+
+    def loop_run_throughput(
+        self, bucket: str = "day", since: Optional[str] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "throughput": self.client.loop_run_throughput(bucket=bucket, since=since)
+        }
+
+    def loop_run_failure_rate(self, since: Optional[str] = None) -> Dict[str, Any]:
+        return {"failure_rate": self.client.loop_run_failure_rate(since=since)}
+
+    # --- Vector --------------------------------------------------------------
+
+    def semantic_search(
+        self, query: str, k: int = 5, category: Optional[str] = None, ef: int = 64
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "results": self.client.semantic_search(
+                query, k=k, category=category, ef=ef
+            )
+        }
