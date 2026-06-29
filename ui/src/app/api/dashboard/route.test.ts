@@ -80,6 +80,28 @@ function get(project?: string) {
   return routeModule.GET(new Request(url));
 }
 
+function zeroColumns() {
+  return SEVEN.map((name) => ({ name, count: 0, issues: [] }));
+}
+
+// Drive the mocked subprocess for the no-project portfolio path: the `portfolio`
+// subcommand returns the composed aggregate JSON the Python composer would print.
+function wirePortfolio(portfolio: unknown) {
+  vi.mocked(execFile).mockImplementation(((
+    _file: string,
+    args: string[],
+    _options: unknown,
+    callback: (err: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    if (args.includes("portfolio")) {
+      callback(null, JSON.stringify(portfolio), "");
+    } else {
+      callback(new Error(`unexpected args: ${args.join(" ")}`), "", "");
+    }
+    return {} as never;
+  }) as never);
+}
+
 describe("dashboard read route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -136,6 +158,110 @@ describe("dashboard read route", () => {
     expect(body.selectedProject).toBe("alpha");
     expect(body.board.found).toBe(true);
     expect(body.projects).toEqual(KNOWN_TENANTS);
+  });
+});
+
+describe("dashboard portfolio route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("bridges to the portfolio subcommand and returns 200 when all OK", async () => {
+    wirePortfolio({
+      swimlanes: [
+        { project: "alpha", status: "OK", total: 2, unmapped: 0, columns: zeroColumns() },
+        { project: "beta", status: "OK", total: 1, unmapped: 0, columns: zeroColumns() },
+      ],
+      columns: zeroColumns().map(({ name, count }) => ({ name, count })),
+      total: 3,
+      unmapped: 0,
+      aggregateStatus: 200,
+      overflow: 0,
+      notice: null,
+    });
+
+    const res = await get();
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.swimlanes.map((s: { project: string }) => s.project)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(body.total).toBe(3);
+
+    // The bridge used the portfolio subcommand as an argv array with shell:false.
+    const call = vi.mocked(execFile).mock.calls[0];
+    expect((call[1] as string[]).includes("portfolio")).toBe(true);
+    expect(Array.isArray(call[1])).toBe(true);
+    expect((call[2] as { shell?: boolean }).shell).toBe(false);
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  it("maps a degraded aggregate to 207 and keeps the FORBIDDEN tenant's rows out", async () => {
+    const forbiddenTitle = "forbidden-tenant-secret-issue";
+    wirePortfolio({
+      swimlanes: [
+        {
+          project: "alpha",
+          status: "OK",
+          total: 1,
+          unmapped: 0,
+          columns: SEVEN.map((name) =>
+            name === "Backlog"
+              ? {
+                  name,
+                  count: 1,
+                  issues: [
+                    { github_id: "a1", title: "visible", type_: "feature", status: "Backlog" },
+                  ],
+                }
+              : { name, count: 0, issues: [] },
+          ),
+        },
+        { project: "beta", status: "UNREACHABLE", total: 0, unmapped: 0, columns: zeroColumns() },
+        {
+          project: "gamma",
+          status: "FORBIDDEN",
+          httpStatus: 403,
+          total: 0,
+          unmapped: 0,
+          columns: zeroColumns(),
+        },
+      ],
+      columns: zeroColumns().map(({ name, count }) => ({ name, count })),
+      total: 1,
+      unmapped: 0,
+      aggregateStatus: 207,
+      overflow: 0,
+      notice: null,
+    });
+
+    const res = await get();
+
+    // Any degraded tenant lifts the aggregate to 207 Multi-Status.
+    expect(res.status).toBe(207);
+    const body = await res.json();
+
+    const gamma = body.swimlanes.find(
+      (s: { project: string }) => s.project === "gamma",
+    );
+    expect(gamma.status).toBe("FORBIDDEN");
+    expect(gamma.httpStatus).toBe(403);
+
+    // No row of the FORBIDDEN tenant's data appears anywhere in the payload.
+    const gammaIssues = gamma.columns.flatMap(
+      (c: { issues: unknown[] }) => c.issues,
+    );
+    expect(gammaIssues).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain(forbiddenTitle);
+
+    // Every bridge call is execFile with an argv array and shell disabled.
+    for (const call of vi.mocked(execFile).mock.calls) {
+      expect(Array.isArray(call[1])).toBe(true);
+      expect((call[2] as { shell?: boolean }).shell).toBe(false);
+    }
+    expect(execSync).not.toHaveBeenCalled();
   });
 });
 
