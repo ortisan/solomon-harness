@@ -115,10 +115,17 @@ async function portfolioResponse(
   bin: string,
   rootDir: string,
   env: NodeJS.ProcessEnv,
+  user: string,
   span: Span,
 ): Promise<Response> {
+  // The user filter is applied server-side by the composer, so a non-matching
+  // tenant's rows never reach the wire. The value travels as one inert argv
+  // element (shell:false), so an injection value runs as nothing (bug #65).
+  const args = user
+    ? ["-m", MODULE, "portfolio", "--user", user]
+    : ["-m", MODULE, "portfolio"];
   const portfolio: AggregatePortfolio = JSON.parse(
-    await readBridge(bin, ["-m", MODULE, "portfolio"], rootDir, env),
+    await readBridge(bin, args, rootDir, env),
   );
   span.setAttribute("cockpit.aggregate_status", portfolio.aggregateStatus);
   const status =
@@ -155,15 +162,17 @@ export async function GET(request: Request): Promise<Response> {
 
       const { searchParams } = new URL(request.url);
       const requested = searchParams.get("project") ?? "";
+      const user = searchParams.get("user") ?? "";
       span.setAttribute("cockpit.project", requested);
 
       // Propagate the active trace to the Python read path via the subprocess env.
       const env = withTraceparent(process.env, span);
 
-      // No project selected renders the cross-tenant portfolio; a selected
-      // project drills down into that one tenant's board.
+      // No project selected renders the cross-tenant portfolio (optionally
+      // narrowed to one person); a selected project drills down into that one
+      // tenant's board.
       if (!requested) {
-        return await portfolioResponse(bin, rootDir, env, span);
+        return await portfolioResponse(bin, rootDir, env, user, span);
       }
       return await boardResponse(bin, rootDir, env, requested, span);
     } catch (error) {
