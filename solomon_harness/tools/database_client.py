@@ -14,6 +14,68 @@ from contextlib import contextmanager
 from typing import Generator, Any, Dict, List, Optional, Union
 
 
+# ---------------------------------------------------------------------------
+# Canonical issue-status vocabulary (ADR-0006).
+#
+# One source of truth for the status token stored on an issue, so the
+# normalize-on-write rule, the open/terminal predicate, and the cockpit's
+# column mapping cannot drift apart. Board display names and casing aliases
+# collapse to one canonical token per logical status; reads stay tolerant of
+# legacy values (expand/contract, no destructive rewrite).
+# ---------------------------------------------------------------------------
+
+# Lowercased board display name / alias -> canonical token. A status not listed
+# here (Ideas, Backlog, Ready, the legacy literal open) passes through unchanged.
+_STATUS_ALIASES = {
+    "in progress": "in_progress",
+    "in_progress": "in_progress",
+    "code review": "code_review",
+    "code_review": "code_review",
+    "qa": "qa",
+    "done": "closed",
+    "closed": "closed",
+}
+
+# Stored literals treated as terminal (delivered). New writes normalize to
+# "closed"; "done" and "Done" remain so legacy rows written before normalization
+# are still excluded by the open predicate. Bound as query parameters, never
+# string-formatted, so the predicate carries no injection surface (STRIDE).
+TERMINAL_STATUSES = ("closed", "done", "Done")
+
+# Canonical token -> delivery-board display column, for the cockpit read side.
+STATUS_DISPLAY_COLUMNS = {
+    "Ideas": "Ideas",
+    "Backlog": "Backlog",
+    "Ready": "Ready",
+    "in_progress": "In Progress",
+    "code_review": "Code Review",
+    "qa": "QA",
+    "closed": "Done",
+}
+
+
+def normalize_status(status: Optional[str]) -> Optional[str]:
+    """Map a board display name or casing alias to its canonical memory token.
+
+    The canonical tokens are in_progress, code_review, qa and the terminal
+    closed; Ideas, Backlog, Ready and the legacy literal open pass through
+    unchanged. None passes through so an unset status is never invented.
+    """
+    if status is None:
+        return None
+    return _STATUS_ALIASES.get(str(status).strip().lower(), status)
+
+
+def is_terminal(status: Optional[str]) -> bool:
+    """True when a status is terminal (delivered) under the canonical vocabulary.
+
+    Normalizes first, then tests membership in the terminal-literal set, so every
+    spelling of a delivered status (closed, done, Done, the board's Done) is
+    classified terminal while open work is not.
+    """
+    return normalize_status(status) in TERMINAL_STATUSES
+
+
 class SpectronFallbackClient:
     """Fallback client for Spectron REST API when the python package doesn't export it."""
 

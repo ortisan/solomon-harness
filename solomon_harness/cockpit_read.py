@@ -17,7 +17,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from solomon_harness.tools.database_client import DatabaseClient
+from solomon_harness.tools.database_client import (
+    STATUS_DISPLAY_COLUMNS,
+    DatabaseClient,
+    normalize_status,
+)
 
 _tracer = trace.get_tracer("solomon_harness.cockpit_read")
 
@@ -52,18 +56,22 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
         span.set_attribute("cockpit.project", project)
         issues = client.list_issues()
 
-        by_status: Dict[Any, List[Dict[str, Any]]] = {}
-        for issue in issues:
-            by_status.setdefault(issue.get("status"), []).append(issue)
-
-        columns: List[Dict[str, Any]] = []
+        # Resolve each stored status to a display column through the shared
+        # vocabulary (ADR-0006): a canonical token (in_progress, closed) and the
+        # legacy display value (In Progress, Done) both normalize to the same
+        # column, so delivered work no longer falls into unmapped.
+        by_column: Dict[str, List[Dict[str, Any]]] = {name: [] for name in BOARD_COLUMNS}
         mapped = 0
-        for name in BOARD_COLUMNS:
-            column_issues = by_status.get(name, [])
-            mapped += len(column_issues)
-            columns.append(
-                {"name": name, "count": len(column_issues), "issues": column_issues}
-            )
+        for issue in issues:
+            column = STATUS_DISPLAY_COLUMNS.get(normalize_status(issue.get("status")))
+            if column in by_column:
+                by_column[column].append(issue)
+                mapped += 1
+
+        columns: List[Dict[str, Any]] = [
+            {"name": name, "count": len(by_column[name]), "issues": by_column[name]}
+            for name in BOARD_COLUMNS
+        ]
 
         span.set_attribute("cockpit.total_issues", len(issues))
         span.set_attribute("cockpit.unmapped_issues", len(issues) - mapped)
