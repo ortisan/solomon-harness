@@ -187,7 +187,6 @@ export default function Home() {
   useEffect(() => {
     void load();
     // Load once on mount; the selector triggers subsequent loads.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function load(project?: string) {
