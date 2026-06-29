@@ -425,7 +425,9 @@ class DatabaseClient:
                         if spectron_url and spectron_api_key:
                             try:
                                 try:
-                                    from surrealdb import Spectron
+                                    # Spectron ships only in newer surrealdb builds;
+                                    # the except below handles its absence at runtime.
+                                    from surrealdb import Spectron  # type: ignore[attr-defined]
                                     self.spectron = Spectron(
                                         context=spectron_context,
                                         endpoint=spectron_url,

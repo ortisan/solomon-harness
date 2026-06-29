@@ -158,7 +158,7 @@ jobs:
         # uv provisions a Python interpreter matching pyproject's requires-python
         # (>=3.10), so no separate setup-python action is needed and every pinned
         # GitHub Action in this file stays SHA-pinned.
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Release-prep gate, or non-release drift guard
         # [tool.uv] package = false, so `uv sync` does not install the

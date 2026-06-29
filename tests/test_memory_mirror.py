@@ -29,7 +29,10 @@ try:  # importable both as `tests.test_...` and bare under unittest discover
         ResilienceTestBase,
     )
 except ImportError:  # pragma: no cover - depends on the discovery entry point
-    from test_database_client_resilience import (  # noqa: E402
+    # Same names as the try branch: with namespace packages mypy resolves both
+    # module paths to one file and reports a redefinition, but only one branch
+    # runs at import time.
+    from test_database_client_resilience import (  # type: ignore[no-redef]  # noqa: E402
         TRANSPORT_ERROR,
         FakeSurreal,
         ResilienceTestBase,
