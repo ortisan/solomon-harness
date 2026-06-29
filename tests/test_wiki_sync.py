@@ -154,5 +154,32 @@ class TestWikiSyncDegrade(WikiSyncFixture):
         self.assertNotIn("Repository not found", out)
 
 
+class TestWikiSyncNoOp(WikiSyncFixture):
+    """Step 2 (NO-OP / IDEMPOTENCY): with >= 1 ref present the precheck falls
+    through to the existing clone, copy, commit and push, exiting 0 with no
+    degraded message and no first-page bootstrap."""
+
+    def test_refs_present_syncs_unchanged_and_exits_zero(self):
+        bare = self._seed_bare_with_ref()
+        self._set_wiki_remote(bare)
+
+        result = self._run()
+        out = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 0, out)
+        self.assertNotIn("wiki/_new", out)
+        self.assertNotIn("has not been initialized", out)
+        self.assertIn("synchronized successfully", out)
+
+        # The docs page was published to the wiki remote: clone, commit and push
+        # all ran against the initialized repo.
+        tree = subprocess.run(
+            ["git", "-C", bare, "ls-tree", "-r", "--name-only", "HEAD"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn("Home.md", tree)
+
+
 if __name__ == "__main__":
     unittest.main()
