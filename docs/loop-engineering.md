@@ -31,7 +31,10 @@ These are non-negotiable and bound every option below.
   plugin; Gemini equivalents). The harness supplies loop design, not a runner.
 - **C2 — The review gate is sacred.** Concurrent drivers once caused premature
   merges that bypassed review. Any autonomy preserves human approval before merge
-  or release and serializes drivers with a single-driver lock.
+  or release and serializes drivers with a single-driver lock. The loop is therefore
+  host-orchestrated and human-gated, never fully autonomous: the host tool runs the
+  markdown stages and a human approves every merge and release. No code decides the
+  next stage on its own.
 - **C3 — Conventions.** Branches `feature/<slug>` / `bugfix/<slug>` with no issue
   number; Conventional Commits with no `Co-Authored-By` trailer; enumerated user
   choices ending in "Other"; no emojis or AI cliches in artifacts.

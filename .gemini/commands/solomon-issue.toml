@@ -26,6 +26,10 @@ Steps:
    - **Scope** and **Out of scope** — an explicit out-of-scope list.
    - **Definition of Ready** — INVEST met, AC present, dependencies/assumptions
      with owners, non-functional constraints stated with numbers, sized by eng.
+   - **Definition of Done** — the conditions that close the story: every acceptance
+     criterion demonstrably met with covering tests, code reviewed and merged with CI
+     green, and docs updated. `/solomon-review` and `/solomon-release` enforce it as
+     the close gate.
 
 3. Choose labels: `type:feature` plus a priority (`priority:p0|p1|p2`, justified
    with a named method — MoSCoW or RICE, show the inputs) and an `area:<domain>`.
