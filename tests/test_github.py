@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, create_autospec, patch
@@ -32,6 +33,29 @@ class TestGhWrapper(unittest.TestCase):
             res = github._gh(["x"], parse_json=True)
         self.assertTrue(res["ok"])
         self.assertEqual(res["data"], {"a": 1})
+
+    def test_gh_bounds_every_call_with_a_timeout(self):
+        """Every gh invocation passes a timeout so a hung gh cannot block a caller."""
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return _Proc(0, "{}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            github._gh(["repo", "view"], parse_json=True)
+        self.assertEqual(captured.get("timeout"), github.GH_TIMEOUT_SECONDS)
+
+    def test_gh_timeout_is_handled_as_a_failed_call(self):
+        """A gh subprocess that exceeds the timeout is treated as a failed call:
+        _gh returns the ok:False shape and never raises."""
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["gh"], timeout=15),
+        ):
+            res = github._gh(["issue", "view", "7"])
+        self.assertFalse(res["ok"])
+        self.assertIn("error", res)
 
 
 class TestEnsureBoard(unittest.TestCase):
@@ -277,6 +301,16 @@ class TestCaptureIssueAssignee(unittest.TestCase):
             return_value={"ok": False, "error": "gh exploded"},
         ):
             self.assertIsNone(github.capture_issue_assignee(7))
+
+    def test_capture_survives_a_gh_timeout(self):
+        """A hung gh (TimeoutExpired) on the capture path yields None (unassigned)
+        and never raises, so a slow GitHub cannot block the merge/write-through path.
+        The timeout is absorbed by _gh as a failed call, so no warning is logged."""
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["gh"], timeout=15),
+        ):
+            self.assertIsNone(github.capture_issue_assignee(7))  # must not raise
 
     def test_malformed_assignee_warns_type_only_and_does_not_raise(self):
         """A failure while normalizing a malformed assignee is caught: capture

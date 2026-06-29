@@ -31,13 +31,29 @@ from solomon_harness.tools.database_client import BOARD_COLUMNS, normalize_perso
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
 
+# Wall-clock ceiling for any single gh subprocess. The merge path now routes
+# through gh (record_terminal_status -> capture_issue_assignee -> _gh), so an
+# unbounded gh that hangs would block the merge; a timeout degrades it to a
+# failed call instead (the assignee then reads back as unassigned).
+GH_TIMEOUT_SECONDS = 15
+
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
     """Run a gh command and return {'ok', 'data'|'stdout', 'error'}."""
     try:
-        proc = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GH_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError:
         return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
+    except subprocess.TimeoutExpired:
+        # A fixed message, never str(exc): treat a hung gh as a failed call so the
+        # caller degrades gracefully instead of blocking or raising.
+        return {"ok": False, "error": f"gh command timed out after {GH_TIMEOUT_SECONDS}s."}
     if proc.returncode != 0:
         return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
     out = proc.stdout.strip()
