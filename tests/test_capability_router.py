@@ -96,6 +96,20 @@ class TestRoute(CapabilityRouterTestBase):
         verdict = cr.route("do a thing", matcher, self.root)
         self.assertEqual(verdict.alternatives, ("security",))
 
+    def test_alternatives_preserves_order(self):
+        matcher = _StubMatcher(
+            cr.Match(agent="qa", rationale="r", alternatives=["security", "software_engineer"])
+        )
+        verdict = cr.route("do a thing", matcher, self.root)
+        self.assertEqual(verdict.alternatives, ("security", "software_engineer"))
+        
+        matcher_rev = _StubMatcher(
+            cr.Match(agent="qa", rationale="r", alternatives=["software_engineer", "security"])
+        )
+        verdict_rev = cr.route("do a thing", matcher_rev, self.root)
+        self.assertEqual(verdict_rev.alternatives, ("software_engineer", "security"))
+
+
 
 class TestCatalog(CapabilityRouterTestBase):
     def test_load_catalog_returns_sorted_agents_with_descriptions(self):
