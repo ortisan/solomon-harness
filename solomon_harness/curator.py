@@ -95,3 +95,90 @@ def sweep_fleet(
                 })
                 
     return SweepResult(proposals=proposals, needs_evidence=needs_evidence)
+
+
+def apply_proposal(
+    proposal: Proposal,
+    edit_callback: Callable[[str], None],
+    workspace_root: Optional[str] = None,
+    gh_runner: Optional[Callable[[List[str]], Any]] = None
+) -> str:
+    """Apply an accepted proposal to an agent by branching, editing, compiling, committing, and opening a draft PR."""
+    root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Validation 1: sources >= 2
+    if len(proposal.sources) < 2:
+        raise ValueError("evidence regressed")
+        
+    # Validation 2: target exactly one agent
+    agent_names = discover_agents(root)
+    if not proposal.agent or proposal.agent not in agent_names:
+        raise ValueError("targets multiple or invalid agent")
+        
+    # Validation 3: rule duplicate detection
+    agents_md_path = os.path.join(root, "agents", "AGENTS.md")
+    if os.path.isfile(agents_md_path):
+        with open(agents_md_path, "r", encoding="utf-8") as f:
+            agents_rules = f.read().lower()
+        for line in agents_rules.splitlines():
+            line_clean = line.strip().lstrip("-*#").rstrip(".:!").strip()
+            if len(line_clean) > 20 and line_clean in proposal.drift_description.lower():
+                raise ValueError("restates shared rules — keep skills single-concern")
+                
+    # Run git and process commands
+    import sys
+    import subprocess
+    import re
+    
+    # slugify branch name
+    slug = re.sub(r'[^a-zA-Z0-9\-]', '-', proposal.drift_description.lower())
+    slug = re.sub(r'-+', '-', slug).strip('-')
+    branch_name = f"feature/{slug}"
+    
+    actual_package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{actual_package_root}{os.path.pathsep}{root}"
+    
+    # checkout branch
+    subprocess.run(["git", "checkout", "-b", branch_name], cwd=root, env=env, check=True)
+    
+    try:
+        # edit agent files
+        agent_dir = os.path.join(root, "agents", proposal.agent)
+        edit_callback(agent_dir)
+        
+        # document-skills.py
+        doc_script = os.path.join(root, "scripts", "document-skills.py")
+        if os.path.isfile(doc_script):
+            subprocess.run([sys.executable, doc_script], cwd=root, env=env, check=True)
+            
+        # solomon compile
+        subprocess.run([sys.executable, "-m", "solomon_harness.cli", "compile"], cwd=root, env=env, check=True)
+        
+        # add and commit
+        subprocess.run(["git", "add", "."], cwd=root, env=env, check=True)
+        commit_msg = f"feat(agents): apply proposal for {proposal.agent} closes #{proposal.decision_id or ''}"
+        subprocess.run(["git", "commit", "-m", commit_msg], cwd=root, env=env, check=True)
+        
+        # gh pr create
+        title = f"feat(agents): apply proposal for {proposal.agent}"
+        body = f"Closes #{proposal.decision_id or ''}"
+        gh_cmd = ["gh", "pr", "create", "--draft", "--base", "main", "--title", title, "--body", body]
+        
+        if gh_runner:
+            res = gh_runner(gh_cmd)
+            pr_url = res.stdout.strip() if hasattr(res, "stdout") and res.stdout else "https://github.com/mock/pr"
+        elif os.environ.get("MOCK_GH") == "1":
+            pr_url = f"https://github.com/ortisan/solomon-harness/pull/mock-{proposal.decision_id}"
+        else:
+            # Clean environment for gh command
+            gh_env = os.environ.copy()
+            gh_env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
+            gh_env["PYTHONPATH"] = root
+            res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
+            pr_url = res.stdout.strip()
+            
+        return pr_url
+    except Exception:
+        raise
+
