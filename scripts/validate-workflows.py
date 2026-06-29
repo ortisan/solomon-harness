@@ -66,39 +66,23 @@ def validate_yaml_formatting(content, filepath):
                         )
                         return False
 
-    # Check matching quotes and brackets
-    # Using stack for brackets/braces
-    stack = []
-    brackets_map = {"]": "[", "}": "{"}
-    in_single_quote = False
-    in_double_quote = False
-    escaped = False
-
-    for idx, char in enumerate(content):
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if char == "'" and not in_double_quote:
-            in_single_quote = not in_single_quote
-        elif char == '"' and not in_single_quote:
-            in_double_quote = not in_double_quote
-        elif not in_single_quote and not in_double_quote:
-            if char in brackets_map.values():
-                stack.append(char)
-            elif char in brackets_map.keys():
-                if not stack or stack[-1] != brackets_map[char]:
-                    print(f"Error [{filepath}]: Mismatched brackets or braces.")
-                    return False
-                stack.pop()
-
-    if in_single_quote or in_double_quote:
-        print(f"Error [{filepath}]: Unclosed quote character.")
-        return False
-    if stack:
-        print(f"Error [{filepath}]: Unclosed brackets or braces.")
+    # Structural validity via a real YAML parse. The previous hand-rolled
+    # character scanner for matched brackets/quotes produced false positives on
+    # legitimate shell regexes embedded in run: blocks (a `[` inside a quoted
+    # `sed` expression toggled its own quote state), so it is replaced with the
+    # parser the rest of the world uses. GitHub Actions' `on:` mapping parses
+    # cleanly; the parser only flags genuinely malformed YAML.
+    try:
+        import yaml
+    except ImportError:
+        # PyYAML absent: the emoji, tab, permissions and SHA-pin checks still
+        # run; skip the structural parse rather than fail on a missing library.
+        return True
+    try:
+        yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        detail = str(exc).replace("\n", " ")
+        print(f"Error [{filepath}]: Invalid YAML: {detail}")
         return False
 
     return True
@@ -172,25 +156,23 @@ def main():
     success = True
 
     ci_path = ".github/workflows/ci.yml"
+    # Content verification asserts the CURRENT pipeline contract. The harness CI
+    # is a uv-driven Python+Node gate (ruff, mypy, pytest, the Next.js cockpit);
+    # the obsolete self-hosted/agent-eval substrings (bash -n, shellcheck,
+    # main.py eval, compile-harnesses.py) were removed when that machinery was
+    # reverted, so asserting them here only made the validator drift from reality.
     ci_required = [
         "name: CI",
         "on:",
-        "push:",
         "pull_request:",
         "branches:",
         "main",
         "runs-on: ubuntu-latest",
         "actions/setup-python",
-        "bash -n",
-        "python3 -m py_compile",
-        "shellcheck",
-        "bootstrap-agent.sh",
-        "python3 -m unittest discover -s tests",
-        'python3 "$agent_dir/main.py" eval',
-        "scripts/compile-harnesses.py",
-        "scripts/validate-agents.py",
-        "scripts/validate-templates.py",
-        "scripts/validate-workflows.py",
+        "uv sync --group dev",
+        "uv run ruff check",
+        "uv run mypy",
+        "uv run pytest",
     ]
 
     print("Validating CI/CD Workflow...")
@@ -200,16 +182,17 @@ def main():
         success = False
 
     release_path = ".github/workflows/release.yml"
+    # The release model (ADR-0004, issue #34): CI is the single tag/publish owner,
+    # firing on a merged `chore(release): vX.Y.Z` prep PR — not on a pushed tag.
+    # The old tag-trigger/draft-auto-notes substrings (tags, v*, draft: true,
+    # generate_release_notes) describe the removed design and are dropped.
     release_required = [
         "name: Release",
         "on:",
-        "push:",
-        "tags:",
-        "v*",
         "runs-on: ubuntu-latest",
         "action-gh-release",
-        "draft: true",
-        "generate_release_notes: true",
+        "chore(release): v",
+        "release check",
     ]
 
     print("\nValidating Release Workflow...")

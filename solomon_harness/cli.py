@@ -539,12 +539,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
 
     release_parser = subparsers.add_parser(
         "release",
-        help="Plan, prepare, or check a milestone-gated release (plan | prep [version] | check)",
+        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | wiki-page [version])",
     )
     release_parser.add_argument(
         "release_args",
         nargs=argparse.REMAINDER,
-        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate)",
+        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), wiki-page [version] (write the release wiki page)",
     )
 
     wt_parser = subparsers.add_parser(

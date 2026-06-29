@@ -1,6 +1,6 @@
 # Capability Broker
 
-Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-reviewed acquisition (adapt an external skill into an agent, or create a new agent). Routing and gap detection are read-only and deterministic; every acquisition is a draft PR a human approves. This skill fixes the contract; the model is recorded in ADR-0003.
+Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-reviewed acquisition (adapt an external skill into an agent, or create a new agent). Routing and gap detection are read-only and deterministic; every acquisition is a draft PR a human approves. This skill fixes the contract; the model is recorded in ADR-0008.
 
 ## The verdict contract
 
@@ -11,7 +11,7 @@ Governs how the practice_curator acts as a proxy for incoming demands: resolve a
   - `adapt_skill` when a `nearest_agent` exists that only lacks a skill — fetch and adapt an external skill into that agent (slice #47).
   - `create_agent` when no agent fits — scaffold a new agent (slice #48), delegated to the `agent_builder` meta-agent once it exists (slice #49).
 
-The gap verdict is the hand-off shape the acquisition slices consume; do not widen it without updating ADR-0003 (recorded in MADR 4.0 format under `docs/adr/`).
+The gap verdict is the hand-off shape the acquisition slices consume; do not widen it without updating ADR-0008 (recorded in MADR 4.0 format under `docs/adr/`).
 
 ## The match is an injected port
 
@@ -37,5 +37,5 @@ The demand→agent match is supplied by the host LLM (the harness's model), pass
 - [ ] A demand resolves to a `route` or a `gap` verdict via the injected matcher, with no file mutation and no network/model call in the core.
 - [ ] Ambiguity surfaces ranked `alternatives`; a route to an unknown agent and an empty catalog both fail closed.
 - [ ] A gap names the `missing_capability` and the correct `suggested_action` (`adapt_skill` with a `nearest_agent`, else `create_agent`).
-- [ ] The contract here matches ADR-0003 and the `route()`/verdict shapes in `capability_router.py`.
+- [ ] The contract here matches ADR-0008 and the `route()`/verdict shapes in `capability_router.py`.
 - [ ] Acquisition paths (when implemented) open a single-agent draft PR with human approval, never merging autonomously.

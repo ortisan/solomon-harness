@@ -1,13 +1,15 @@
-# ADR-0003: Capability-broker / self-extending-fleet model
+# ADR-0008: Capability-broker / self-extending-fleet model
 
 - Status: accepted
 - Date: 2026-06-29
 - Deciders: software_architect, product_owner, practice_curator, software_engineer, security
 - Issue: #46 (slice A of epic #43)
 
-> Numbering note: 0003 is the next free ADR on `main` at authoring time (0001 worktree,
-> 0002 memory-resilience). A concurrent cockpit (#44) branch is also producing an ADR; if a
-> different 0003 lands on `main` first, this one is renumbered to the next free value at merge.
+> Numbering note: originally authored as 0003 (the next free number at authoring time,
+> after the worktree ADR-0001 and the memory-resilience ADR). The concurrent cockpit (#44)
+> branch's ADR-0003 (web UI stack) landed first, so this ADR was renumbered to 0008. The
+> memory-resilience ADR it referenced was likewise renumbered to 0007; the worktree ADR
+> stays 0001.
 
 ## Context and problem statement
 

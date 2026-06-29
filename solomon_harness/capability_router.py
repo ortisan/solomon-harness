@@ -1,6 +1,6 @@
 """Route a free-text demand to the best-fit existing agent, or report a capability gap.
 
-Slice A of the practice_curator capability-broker (ADR-0003). This module is READ-ONLY:
+Slice A of the practice_curator capability-broker (ADR-0008). This module is READ-ONLY:
 it loads the agent catalog and constructs a verdict; it never writes anything, opens no
 network socket, and instantiates no model. The demand->agent match is supplied by an
 injected matcher port (the host LLM in production, a deterministic stub in tests), so the

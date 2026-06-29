@@ -29,7 +29,10 @@ subagents); do not review with a single generic pass.
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
   `ci_quality_gates` skill, then actually run the suite —
   `uv run pytest --cov --cov-branch --cov-report=term-missing`. Confirm new and
-  changed behavior has covering tests and the full suite is green.
+  changed behavior has covering tests and the full suite is green. Then verify each
+  acceptance criterion in the linked issue is demonstrably met and that every item of
+  the issue's Definition of Done is satisfied — an unmet acceptance criterion or an
+  unsatisfied Definition of Done item is a blocker.
 - security agent: STRIDE pass per `threat_modeling_with_stride` plus an SAST sweep
   (`sast` skill) over the diff. Flag any secret, injection, or unmitigated boundary.
 - software_architect agent: apply the `architecture_review_gate` checklist against
@@ -47,7 +50,8 @@ Each lens returns findings tagged blocker, major, or minor.
 ## 3. Decide the verdict
 - Block approval (request changes) on: missing tests for changed behavior, a failing
   test run, a failing fitness function or quality gate, an unmitigated high-value
-  STRIDE threat, or a missing required ADR — any blocker.
+  STRIDE threat, a missing required ADR, an unmet acceptance criterion, or an
+  unsatisfied Definition of Done item — any blocker.
 - Approve only when there are zero blockers and zero open majors.
 
 ## 4. Post the outcome (confirm with the user before submitting the review)
@@ -55,6 +59,12 @@ Each lens returns findings tagged blocker, major, or minor.
   for each concrete issue, one comment per finding.
 - Summary verdict: `gh pr review $ARGUMENTS --approve` or
   `gh pr review $ARGUMENTS --request-changes --body "<blocking findings>"`.
+- On an **approve** verdict, take the PR out of draft: run `gh pr ready $ARGUMENTS`.
+  This is mandatory, not optional — a draft PR cannot be merged, so leaving it in
+  draft strands an approved change. The command is idempotent (a no-op if already
+  ready). If `gh pr review --approve` is refused because the reviewer authored the PR
+  (single-maintainer self-review), the posted comment is the approval of record and
+  `gh pr ready` is still what advances the PR; run it regardless.
 - File each blocker/major as a tracked issue with `mcp__solomon-memory__log_issue`.
 
 ## 5. Persist to memory

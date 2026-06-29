@@ -1,4 +1,4 @@
-# ADR-0001: Single-driver lock for the loop-engineering safety floor
+# ADR-0010: Single-driver lock for the loop-engineering safety floor
 
 - Status: accepted
 - Date: 2026-06-28

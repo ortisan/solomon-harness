@@ -4,7 +4,9 @@ A multi-agent harness for controlling, planning, and delivering software. It
 defines a team of specialist agents, a project memory, and an end-to-end,
 GitHub-integrated delivery workflow that runs inside the host tool you already
 use — Claude Code or the Gemini CLI. The harness supplies the agents and the
-memory; the host tool supplies the model loop.
+memory; the host tool supplies the model loop. The delivery loop is
+host-orchestrated and human-gated, not fully autonomous: the host tool runs the
+workflow prompts and a human approves every merge and release.
 
 It ships a dual-backend memory layer (SurrealDB primary, SQLite fallback), a
 non-destructive scaffolder, and a set of `/solomon-*` workflows that take a
@@ -88,11 +90,10 @@ Provide credentials via the `SURREAL_USER` / `SURREAL_PASS` environment variable
 (none are committed); locally they default to `root`/`root`. The Surrealist IDE is
 at `http://localhost:3000`.
 
-### Run your first workflow
-
 In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
 
 ```text
+/solomon-loop    (orchestrate/scan)
 /solomon-issue   add rate limiting to the public API
 /solomon-refine  42
 /solomon-start    42
@@ -123,6 +124,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 
 | Workflow | Stage | Driving agents |
 | --- | --- | --- |
+| `/solomon-loop` | orchestrate/scan | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
 | `/solomon-issue` | create a feature/story | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |

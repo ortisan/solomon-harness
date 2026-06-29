@@ -194,8 +194,8 @@ def _subject(message: str) -> str:
     return m.group("subject").strip() if m else first_line.strip()
 
 
-def render_changelog_section(version: str, date: str, commit_messages: List[str]) -> str:
-    """Render one Keep a Changelog section grouping commits by type."""
+def _change_buckets(commit_messages: List[str]) -> dict:
+    """Group commit subjects into Keep a Changelog buckets keyed by type."""
     buckets: dict = {name: [] for name in _SECTION_ORDER}
     for msg in commit_messages:
         ctype, breaking = classify_commit(msg)
@@ -210,12 +210,139 @@ def render_changelog_section(version: str, date: str, commit_messages: List[str]
                 continue
         prefix = "BREAKING: " if breaking else ""
         buckets[section].append(f"- {prefix}{_subject(msg)}")
-    lines = [f"## [{version}] - {date}", ""]
+    return buckets
+
+
+def _bucket_lines(buckets: dict) -> List[str]:
+    """Render the ``### Section`` blocks for non-empty buckets, in canonical order."""
+    lines: List[str] = []
     for name in _SECTION_ORDER:
         if buckets[name]:
             lines.append(f"### {name}")
             lines.extend(buckets[name])
             lines.append("")
+    return lines
+
+
+def render_changelog_section(version: str, date: str, commit_messages: List[str]) -> str:
+    """Render one Keep a Changelog section grouping commits by type."""
+    lines = [f"## [{version}] - {date}", ""]
+    lines.extend(_bucket_lines(_change_buckets(commit_messages)))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# --- Release wiki page rendering ------------------------------------------
+
+# Shown when no milestone or delivered issues are recorded for a release, so the
+# page still carries the section and prompts a human to fill the business case.
+_BUSINESS_PLACEHOLDER = (
+    "_No business context was recorded for this release. Document the problem "
+    "this release solves and the value it delivers to stakeholders here._"
+)
+
+
+def _issue_number(issue: dict) -> str:
+    """Normalise an issue's id to a ``#N`` reference for display."""
+    raw = str(issue.get("github_id") or issue.get("number") or "").strip()
+    return raw if raw.startswith("#") else f"#{raw}" if raw else "#?"
+
+
+def _business_problem_lines(
+    milestone: Optional[dict], issues: Optional[List[dict]]
+) -> List[str]:
+    """Render the Business Problem section body from the milestone and issues.
+
+    The narrative is sourced from the milestone title and description (the
+    richest business context the memory store holds); delivered issues are
+    listed underneath so the page ties the value back to concrete work. When
+    neither is available a clear placeholder is emitted instead of an empty
+    section.
+    """
+    milestone = milestone or {}
+    issues = issues or []
+    title = str(milestone.get("title") or "").strip()
+    description = str(milestone.get("description") or "").strip()
+
+    lines: List[str] = []
+    if title:
+        lines.append(f"**Milestone:** {title}")
+        lines.append("")
+    if description:
+        lines.append(description)
+        lines.append("")
+    if not title and not description:
+        if issues:
+            lines.append("This release delivers the work tracked by the issues below.")
+        else:
+            lines.append(_BUSINESS_PLACEHOLDER)
+        lines.append("")
+    if issues:
+        lines.append("### Delivered work")
+        for issue in issues:
+            subject = str(issue.get("title") or "").strip()
+            lines.append(f"- {_issue_number(issue)} {subject}".rstrip())
+        lines.append("")
+    return lines
+
+
+def _technical_lines(
+    commit_messages: Optional[List[str]],
+    adrs: Optional[List[str]],
+    code_areas: Optional[List[str]],
+) -> List[str]:
+    """Render the Technical section body: change breakdown, ADRs, code areas."""
+    lines: List[str] = []
+    bucket_lines = _bucket_lines(_change_buckets(commit_messages or []))
+    if bucket_lines:
+        lines.append("### Changes")
+        lines.append("")
+        lines.extend(bucket_lines)
+    else:
+        lines.append("_No Conventional Commit changes were recorded for this release._")
+        lines.append("")
+    if adrs:
+        lines.append("### Architecture decisions")
+        lines.extend(f"- {a}" for a in adrs)
+        lines.append("")
+    if code_areas:
+        lines.append("### Code areas touched")
+        lines.extend(f"- `{area}`" for area in code_areas)
+        lines.append("")
+    return lines
+
+
+def render_release_wiki_page(
+    version: str,
+    *,
+    date: Optional[str] = None,
+    commit_messages: Optional[List[str]] = None,
+    milestone: Optional[dict] = None,
+    issues: Optional[List[dict]] = None,
+    adrs: Optional[List[str]] = None,
+    code_areas: Optional[List[str]] = None,
+) -> str:
+    """Render the Markdown wiki page documenting a single release.
+
+    The page always carries two clearly headed sections so every release is
+    documented on both axes:
+
+    - ``## Business Problem`` — the problem the release solves and the value
+      delivered, sourced from the milestone title/description and the delivered
+      issue titles, with a placeholder when no such context is recorded.
+    - ``## Technical`` — the Conventional Commit change breakdown (Added /
+      Changed / Fixed), notable ADRs, and the code areas touched.
+    """
+    clean = str(version).lstrip("v")
+    lines = [f"# Release v{clean}", ""]
+    if date:
+        lines.append(f"Released {date}.")
+        lines.append("")
+    lines.append("## Business Problem")
+    lines.append("")
+    lines.extend(_business_problem_lines(milestone, issues))
+    lines.append("## Technical")
+    lines.append("")
+    lines.extend(_technical_lines(commit_messages, adrs, code_areas))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -316,6 +443,65 @@ def prepend_changelog_section(path: str, section: str) -> None:
         f.write(new_text)
 
 
+# --- Release context gathering (for the wiki page) ------------------------
+
+def _load_memory_context(
+    workspace_root: str, version: str
+) -> Tuple[Optional[dict], List[dict]]:
+    """Best-effort pull of the milestone and delivered issues from project memory.
+
+    Returns ``(milestone, issues)``. The milestone is matched against the
+    release ``version`` by title/description when possible, otherwise the most
+    recent one is used; the issues are those attached to that milestone. Raises
+    on any backend failure so the caller can degrade to a placeholder page.
+    """
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    db = DatabaseClient(harness_dir=workspace_root)
+    milestones = db.list_milestones() or []
+    milestone: Optional[dict] = None
+    needle = str(version).lstrip("v")
+    for ms in milestones:
+        haystack = f"{ms.get('title', '')} {ms.get('description', '')}"
+        if needle and needle in haystack:
+            milestone = ms
+            break
+    if milestone is None and milestones:
+        milestone = milestones[0]
+
+    issues: List[dict] = []
+    milestone_id = milestone.get("id") if milestone else None
+    if milestone_id is not None:
+        try:
+            issues = [
+                i
+                for i in (db.get_open_issues() or [])
+                if str(i.get("milestone_id")) == str(milestone_id)
+            ]
+        except Exception:
+            issues = []
+    return milestone, issues
+
+
+def _gather_release_context(workspace_root: str, version: str) -> dict:
+    """Collect the data a release wiki page needs, degrading on any failure.
+
+    Commits come from the trunk window via :func:`plan`; the milestone and
+    delivered issues come from project memory. Either source can be missing
+    (no git history, no memory backend) without blocking the page, which is the
+    point of documenting a release: it must always produce a page.
+    """
+    try:
+        commits = plan(workspace_root).get("commits", []) or []
+    except Exception:
+        commits = []
+    try:
+        milestone, issues = _load_memory_context(workspace_root, version)
+    except Exception:
+        milestone, issues = None, []
+    return {"commits": commits, "milestone": milestone, "issues": issues}
+
+
 # --- CLI handlers ---------------------------------------------------------
 
 def cmd_plan(workspace_root: str) -> int:
@@ -399,10 +585,64 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     return proc.returncode
 
 
+def _today() -> str:
+    return subprocess.run(
+        ["date", "+%Y-%m-%d"], text=True, capture_output=True, check=True
+    ).stdout.strip()
+
+
+def cmd_wiki_page(
+    workspace_root: str,
+    version: Optional[str] = None,
+    date: Optional[str] = None,
+) -> int:
+    """Write ``docs/wiki/Release-<version>.md`` with Business and Technical sections.
+
+    The page always renders, even when no memory backend or git history is
+    reachable: missing business context becomes a placeholder so a human can
+    fill it in. The version defaults to the planned next release.
+    """
+    if not version:
+        try:
+            version = plan(workspace_root).get("next")
+        except Exception:
+            version = None
+        if not version:
+            try:
+                version = read_pyproject_version(
+                    os.path.join(workspace_root, "pyproject.toml")
+                )
+            except Exception:
+                print(
+                    "release wiki-page: could not determine a version; pass --release.",
+                    file=sys.stderr,
+                )
+                return 1
+    clean = str(version).lstrip("v")
+    ctx = _gather_release_context(workspace_root, clean)
+    page = render_release_wiki_page(
+        clean,
+        date=date or _today(),
+        commit_messages=ctx["commits"],
+        milestone=ctx["milestone"],
+        issues=ctx["issues"],
+    )
+    wiki_dir = os.path.join(workspace_root, "docs", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    path = os.path.join(wiki_dir, f"Release-{clean}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(page)
+    print(f"Wrote release wiki page: {os.path.relpath(path, workspace_root)}")
+    return 0
+
+
 def run(workspace_root: str, args: List[str]) -> int:
-    """Dispatch ``release <plan|prep|check>``."""
+    """Dispatch ``release <plan|prep|check|wiki-page>``."""
     if not args:
-        print("Usage: solomon-harness release <plan|prep|check> [version]", file=sys.stderr)
+        print(
+            "Usage: solomon-harness release <plan|prep|check|wiki-page> [version]",
+            file=sys.stderr,
+        )
         return 1
     sub, rest = args[0], args[1:]
     if sub == "plan":
@@ -411,5 +651,74 @@ def run(workspace_root: str, args: List[str]) -> int:
         return cmd_check(workspace_root)
     if sub == "prep":
         return cmd_prep(workspace_root, rest[0] if rest else None)
-    print(f"Unknown release subcommand {sub!r}. Use plan, prep, or check.", file=sys.stderr)
+    if sub == "wiki-page":
+        return cmd_wiki_page(workspace_root, rest[0] if rest else None)
+    print(
+        f"Unknown release subcommand {sub!r}. Use plan, prep, check, or wiki-page.",
+        file=sys.stderr,
+    )
     return 1
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Headless entry: ``python -m solomon_harness.release <command> [options]``.
+
+    Mirrors the ``cli.py`` ``release`` dispatch but is independently runnable so
+    a release wiki page can be generated without the full harness CLI:
+    ``python -m solomon_harness.release wiki-page --release <version>``.
+    """
+    import argparse
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(
+        prog="python -m solomon_harness.release",
+        description="Release mechanics: plan, prep, check, and document releases.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def _with_root(p):
+        # A workspace-root override shared by every subcommand; defaults to cwd.
+        p.add_argument(
+            "--root",
+            dest="root",
+            default=None,
+            help="Workspace root (defaults to the current directory).",
+        )
+        return p
+
+    wp = _with_root(
+        sub.add_parser(
+            "wiki-page",
+            help="Write docs/wiki/Release-<version>.md with Business Problem and Technical sections",
+        )
+    )
+    wp.add_argument(
+        "--release",
+        dest="release",
+        default=None,
+        help="Release version (e.g. 0.4.0). Defaults to the planned next version.",
+    )
+    wp.add_argument(
+        "--date", dest="date", default=None, help="Release date (YYYY-MM-DD). Defaults to today."
+    )
+
+    _with_root(sub.add_parser("plan"))
+    _with_root(sub.add_parser("check"))
+    prep = _with_root(sub.add_parser("prep"))
+    prep.add_argument("version", nargs="?", default=None)
+
+    args = parser.parse_args(argv)
+    root = getattr(args, "root", None) or os.getcwd()
+    if args.command == "wiki-page":
+        return cmd_wiki_page(root, version=args.release, date=args.date)
+    if args.command == "plan":
+        return cmd_plan(root)
+    if args.command == "check":
+        return cmd_check(root)
+    if args.command == "prep":
+        return cmd_prep(root, args.version)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

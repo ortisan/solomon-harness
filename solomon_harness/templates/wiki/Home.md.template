@@ -1,14 +1,56 @@
-# Welcome to the {{PROJECT_NAME}} Wiki
+# {{PROJECT_NAME}}
 
-This wiki serves as the central knowledge base for the project, containing both business requirements and technical design specifications.
+This is the central knowledge base and business documentation portal for **{{PROJECT_NAME}}**. 
 
-## Documentation Index
+Rather than a simple AI chat interface, this project is configured as a **complete software development and automation harness**. By integrating a coordinated fleet of 24 specialized AI agents, interactive CLI commands (`/solomon-*`), stateful memory databases, and automated release gates, the harness manages the entire software development lifecycle (SDLC) while preserving strict architectural guidelines, security policies, and institutional memory.
 
-- [Business Requirements](Business-Requirements.md)
-  Overview of business goals, user personas, target metrics, and release criteria.
+---
 
-- [Technical Documentation](Technical-Documentation.md)
-  System architecture, tech stack description, database schema, and design patterns.
+## Business Value Proposition
 
-- [Development Workflow Guide](CLAUDE.md)
-  Guidelines for local development, code style, testing, and CI/CD pipelines.
+The harness is structured to deliver clear, auditable business outcomes by optimizing the following core pillars:
+* **High Development Velocity:** Translating requirement specifications directly into robust code implementations using an automated Test-Driven Development (TDD) engine.
+* **Interactive SDLC Automation:** Automating administrative overhead (backlog refinement, QA checks, PR reviews, and wiki updates) via dedicated developer slash commands.
+* **Zero-Drift Compliance & Security:** Enforcing strict, automated validation gates (TDD, linting, threat mitigations) before code can reach integration.
+* **Institutional Memory Preservation:** Persisting all business goals, sessions, architectural decision records (ADRs), and sprint metrics in the database.
+
+---
+
+## Core Process Flow
+
+The development life-cycle flows systematically from conception to production delivery:
+
+```mermaid
+graph TD
+    A["Conception (Business Need)"] -->|"/solomon-issue"| B["Backlog (Scrum Board)"]
+    B -->|"/solomon-refine"| C["Ready (Refined Specification)"]
+    C -->|"/solomon-start"| D["In Progress (TDD Engine)"]
+    D -->|"/solomon-review"| E["QA / Code Review (Verification)"]
+    E -->|"/solomon-release"| F["Done (Production Tag & Sync)"]
+```
+
+---
+
+## Documentation Directory
+
+* **[Quick Start Guide](Quick-Start)**
+  Step-by-step installation, CLI configuration, and running the first cycle.
+* **[Commands Reference](Commands-Reference)**
+  Detailed index of all `/solomon-*` commands, parameters, workflows, and orchestrations.
+* **[Features](Features)**
+  Detailed system feature groups, capabilities, and developer powers.
+* **[Development Workflow](Development-Workflow)**
+  Detailed view of the phased software delivery lifecycle, branch conventions, and TDD execution rules.
+* **[Business Requirements](Business-Requirements)**
+  Overview of business objectives, user personas, roadmap, and target key performance indicators (KPIs).
+* **[Technical Documentation](Technical-Documentation)**
+  System architecture overview, tech stack specifications, database schema, and API contracts.
+* **[Living Code Overview](Code-Overview)**
+  Automatically updated codebase analytics, file statistics, and active specialist agents.
+* **[Release History](Release-Notes)**
+  Release policy, version bumping standards, and version history logs.
+* **[Wiki Design System](Design-System)**
+  Formatting guidelines, tables style, callout colors, list conventions, and layouts.
+
+> [!IMPORTANT]
+> All changes must be backed by a structured GitHub issue and a verified `PLAN.md`. Commit messages must follow Conventional Commits to ensure correct versioning.

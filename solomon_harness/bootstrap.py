@@ -343,6 +343,89 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
 
+    # Enforce GitHub prerequisites if the project is hosted on GitHub
+    if "github.com" in git_remote and not os.environ.get("SOLOMON_SKIP_GH_CHECK"):
+        print("Checking GitHub prerequisites (Wiki and Project)...")
+        import sys
+        
+        # Resolve Wiki remote URL to check initialization
+        remote_url = git_remote.rstrip('/')
+        if remote_url.endswith('.wiki.git'):
+            wiki_url = remote_url
+        elif remote_url.endswith('.wiki'):
+            wiki_url = remote_url + '.git'
+        elif remote_url.endswith('.git'):
+            wiki_url = remote_url[:-4] + '.wiki.git'
+        else:
+            wiki_url = remote_url + '.wiki.git'
+            
+        # Resolve GitHub web wiki URL for instructions
+        web_wiki_url = remote_url
+        if web_wiki_url.startswith("git@"):
+            try:
+                parts = web_wiki_url.split("@", 1)[1].split(":", 1)
+                domain = parts[0]
+                path = parts[1]
+                web_wiki_url = f"https://{domain}/{path}"
+            except Exception:
+                web_wiki_url = web_wiki_url.replace("git@", "https://").replace(":", "/")
+        if web_wiki_url.endswith(".git"):
+            web_wiki_url = web_wiki_url[:-4]
+        web_wiki_url = web_wiki_url + "/wiki"
+            
+        try:
+            out = subprocess.check_output(
+                ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled"],
+                cwd=workspace_root,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5.0
+            )
+            data = json.loads(out)
+            
+            wiki_enabled = data.get("hasWikiEnabled", False)
+            projects_ok = data.get("hasProjectsEnabled", False)
+            
+            # Check if the Wiki repository is initialized (first page created)
+            wiki_initialized = False
+            if wiki_enabled:
+                try:
+                    subprocess.check_output(
+                        ["git", "ls-remote", wiki_url],
+                        stderr=subprocess.DEVNULL,
+                        timeout=5.0
+                    )
+                    wiki_initialized = True
+                except Exception:
+                    pass
+            
+            wiki_ok = wiki_enabled and wiki_initialized
+            
+            wiki_icon = "\033[32m✓\033[0m" if wiki_ok else "\033[31m✗\033[0m"
+            projects_icon = "\033[32m✓\033[0m" if projects_ok else "\033[31m✗\033[0m"
+            
+            print(f"  {wiki_icon}  GitHub Wiki")
+            print(f"  {projects_icon}  GitHub Projects")
+            
+            if not wiki_ok or not projects_ok:
+                print("\nError: Prerequisite checks failed. Please enable the missing features in your GitHub repository settings.")
+                if not wiki_enabled:
+                    print("  - Enable Wikis: Settings -> General -> Features -> Wikis")
+                elif not wiki_initialized:
+                    print(f"  - Initialize Wiki: Visit {web_wiki_url} and click 'Create the first page' or 'Save page'.")
+                if not projects_ok:
+                    print("  - Enable Projects: Settings -> General -> Features -> Projects")
+                sys.exit(1)
+                
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.strip() if e.stderr else str(e)
+            print(f"Error: Failed to verify GitHub repository settings via gh CLI: {error_msg}")
+            print("Please ensure you are authenticated via 'gh auth login' and have access to the repository.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error checking GitHub prerequisites: {e}")
+            sys.exit(1)
+
     tenant = ensure_database_config(workspace_root)
     try:
         from solomon_harness.home import assigned_memory_port
@@ -407,12 +490,31 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # If the user has a custom templates folder in the root, prefer that
     templates_dir = local_templates_dir if os.path.isdir(local_templates_dir) else bundled_templates_dir
 
+    # Format technologies as an unordered list for the tech stack
+    tech_list = [t.strip() for t in technologies.split(",")]
+    tech_stack_list = "\n".join(f"  - {t}" for t in tech_list)
+
+    # Resolve GitHub web repo URL for links
+    web_repo_url = git_remote.rstrip('/')
+    if web_repo_url.startswith("git@"):
+        try:
+            parts = web_repo_url.split("@", 1)[1].split(":", 1)
+            domain = parts[0]
+            path = parts[1]
+            web_repo_url = f"https://{domain}/{path}"
+        except Exception:
+            web_repo_url = web_repo_url.replace("git@", "https://").replace(":", "/")
+    if web_repo_url.endswith(".git"):
+        web_repo_url = web_repo_url[:-4]
+
     generation_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     replacements = {
         "PROJECT_NAME": project_name,
         "GIT_REMOTE": git_remote,
+        "WEB_REPO_URL": web_repo_url,
         "TECHNOLOGIES": technologies,
         "TECH_STACK": technologies,
+        "TECH_STACK_LIST": tech_stack_list,
         "GENERATION_DATE": generation_date
     }
 
@@ -544,13 +646,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         except Exception as exc:
             print(f"  Note: GitHub setup skipped: {exc}")
 
-    # 9. Create fallback Kanban board and Wiki template if not present on GitHub
+    # 9. Create fallback Kanban board if not present on GitHub
     if not has_github_project_and_wiki(workspace_root, git_remote):
-        print("GitHub project/wiki not detected. Initializing local Kanban and Wiki templates...")
-        
+        print("GitHub project/wiki not detected. Initializing local Kanban board...")
         kanban_path = os.path.join(workspace_root, "planning", "KANBAN.md")
-        wiki_dir = os.path.join(workspace_root, "docs", "wiki")
-        
         if not os.path.exists(kanban_path):
             interpolate_and_write(
                 os.path.join(templates_dir, "KANBAN.md.template"),
@@ -560,21 +659,28 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             )
             print(f"  Created local Kanban board: {kanban_path}")
             
-        os.makedirs(wiki_dir, exist_ok=True)
-        if not os.listdir(wiki_dir):
-            wiki_templates = [
-                ("Home.md.template", "Home.md"),
-                ("Business-Requirements.md.template", "Business-Requirements.md"),
-                ("Technical-Documentation.md.template", "Technical-Documentation.md")
-            ]
-            for src_name, dest_name in wiki_templates:
-                interpolate_and_write(
-                    os.path.join(templates_dir, "wiki", src_name),
-                    os.path.join(wiki_dir, dest_name),
-                    replacements,
-                    f"# {dest_name.replace('.md', '')}\n\nLocal Wiki page template."
-                )
-            print(f"  Created local Wiki templates inside {wiki_dir}")
+    # Always initialize local Wiki templates if the directory is empty, so they can be synced
+    wiki_dir = os.path.join(workspace_root, "docs", "wiki")
+    os.makedirs(wiki_dir, exist_ok=True)
+    if not os.listdir(wiki_dir):
+        wiki_templates = [
+            ("Home.md.template", "Home.md"),
+            ("Business-Requirements.md.template", "Business-Requirements.md"),
+            ("Technical-Documentation.md.template", "Technical-Documentation.md"),
+            ("Features.md.template", "Features.md"),
+            ("Quick-Start.md.template", "Quick-Start.md"),
+            ("Release-Notes.md.template", "Release-Notes.md"),
+            ("Design-System.md.template", "Design-System.md"),
+            ("_Sidebar.md.template", "_Sidebar.md")
+        ]
+        for src_name, dest_name in wiki_templates:
+            interpolate_and_write(
+                os.path.join(templates_dir, "wiki", src_name),
+                os.path.join(wiki_dir, dest_name),
+                replacements,
+                f"# {dest_name.replace('.md', '')}\n\nLocal Wiki page template."
+            )
+        print(f"  Created local Wiki templates inside {wiki_dir}")
 
     # 10. Index project codebase into database memory, then refresh the wiki overview.
     try:
@@ -715,7 +821,9 @@ def generate_code_overview(workspace_root: str, db) -> str:
     for ext, n in sorted(ext_counts.items(), key=lambda x: (-x[1], x[0]))[:15]:
         lines.append(f"- `{ext}` - {n}")
     if agents:
-        lines += ["", f"## Agents ({len(agents)})", "", ", ".join(agents)]
+        lines += ["", f"## Agents ({len(agents)})", ""]
+        for agent in agents:
+            lines.append(f"- {agent}")
     lines.append("")
     return "\n".join(lines)
 
