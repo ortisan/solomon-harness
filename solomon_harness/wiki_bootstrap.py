@@ -9,20 +9,22 @@ remote and probe the remote for refs. None of them drive a browser or block on
 input, so they are safe in headless and CI contexts.
 
 The interactive top of the ladder builds on those helpers: ``choose_tier`` is the
-NOOP/DEGRADE/GUIDE/AUTOMATE routing decision.
-
-TODO(#117, next step on this same branch): ``bootstrap_wiki`` orchestrates the
-chosen tier over an injected ``BrowserBootstrapper`` port (whose only real adapter
-drives the claude-in-chrome MCP from the host), verifying success by re-probing
-the refs rather than trusting the port. The no-browser floor in this module and in
-scripts/wiki-sync.sh stands alone without it.
+NOOP/DEGRADE/GUIDE/AUTOMATE routing decision, and ``bootstrap_wiki`` orchestrates
+the chosen tier over an injected ``BrowserBootstrapper`` port. The port's only
+real adapter drives the claude-in-chrome MCP from the host LLM and so cannot be
+called from pure Python; the pure-CLI path injects no bootstrapper and therefore
+only ever GUIDEs or DEGRADEs. Success is asserted by re-probing the refs
+(``wiki_refs_present``), never by trusting the port's return value, so a tampered
+or changed editor page cannot report a false success. The no-browser floor in
+this module and in scripts/wiki-sync.sh stands alone without the browser tier.
 """
 
 from __future__ import annotations
 
 import enum
 import subprocess
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol
 
 
 def resolve_wiki_clone_url(remote_url: str) -> str | None:
@@ -142,3 +144,190 @@ def choose_tier(
     if browser_available and authenticated and refs_present is False:
         return Tier.AUTOMATE
     return Tier.GUIDE
+
+
+class BrowserBootstrapper(Protocol):
+    """Port for the host-driven browser that saves the first wiki page.
+
+    The only real adapter drives the claude-in-chrome MCP from the host LLM, so it
+    cannot be constructed or called from pure Python -- ``bootstrap_wiki`` accepts
+    it as an injected dependency. Tests inject a structural fake; the real adapter
+    is a documented host-integration seam, proven manually at review. The port's
+    return is never trusted: ``bootstrap_wiki`` verifies the save with an
+    independent ``git ls-remote`` re-probe (STRIDE tampering control, R-3).
+    """
+
+    def is_authenticated(self) -> bool:
+        """Report whether the browser holds an authenticated GitHub session.
+
+        Drives the AUTOMATE-vs-GUIDE decision so the harness never assumes an
+        identity (STRIDE spoofing control, R-2).
+        """
+        ...
+
+    def create_first_page(self, web_new_url: str) -> None:
+        """Open ``web_new_url`` (``<repo>/wiki/_new``) and save a minimal page.
+
+        Best-effort: it raises nothing observable that the caller relies on, since
+        success is confirmed only by the post-save ref re-probe.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class WikiBootstrapResult:
+    """The outcome of a bootstrap attempt, consumed by the cli ``wiki`` command.
+
+    ``proceed`` is ``True`` when the wiki is ready (already initialized or just
+    initialized) and the caller should run the existing refresh; ``False`` when
+    the caller must degrade. ``exit_code`` is 0 when proceeding and 4 on degrade.
+    ``message`` is the actionable text the caller prints to stderr on degrade
+    (it names the cause and the ``<repo>/wiki/_new`` step and carries no raw git
+    error).
+    """
+
+    tier: Tier
+    proceed: bool
+    exit_code: int
+    message: str
+
+
+def _uninitialized_message(clone_url: str, web_url: str) -> str:
+    return (
+        "Error: the GitHub wiki has not been initialized.\n"
+        f"GitHub creates the wiki content repository ({clone_url}) only after the "
+        "first page is saved through the web UI, and exposes no API for that page.\n"
+        "Initialize it once: open\n"
+        f"  {web_url}\n"
+        "and save a page (any content), then re-run the wiki step to publish docs."
+    )
+
+
+def _inconclusive_message(clone_url: str, web_url: str) -> str:
+    return (
+        "Error: could not determine whether the GitHub wiki is initialized.\n"
+        "Detection was inconclusive (network or timeout): the wiki content "
+        f"repository ({clone_url}) did not respond.\n"
+        "If the wiki has never been opened, initialize it once: open\n"
+        f"  {web_url}\n"
+        "and save a page (any content), then re-run the wiki step."
+    )
+
+
+def _degrade_message(clone_url: str, web_url: str, refs_present: bool | None) -> str:
+    """Pick the actionable message by the detection state.
+
+    ``refs_present is None`` means detection was inconclusive (timeout/network);
+    any other reached-here state means the wiki advertised zero refs.
+    """
+    if refs_present is None:
+        return _inconclusive_message(clone_url, web_url)
+    return _uninitialized_message(clone_url, web_url)
+
+
+def _guide_message(web_url: str) -> str:
+    return (
+        "The GitHub wiki has not been initialized, so there is nothing to publish "
+        "to yet.\n"
+        "Initialize it once: open\n"
+        f"  {web_url}\n"
+        "and save a page (any content). This run continues once you confirm."
+    )
+
+
+def _emit(message: str) -> None:
+    print(message)
+
+
+def _confirm_via_input() -> bool:
+    """Block for the operator in the GUIDE tier. Returns False on EOF or 'skip'.
+
+    Only reached on an interactive run; a headless run resolves to DEGRADE, which
+    never calls this, so the step cannot block on input in CI.
+    """
+    try:
+        reply = input(
+            "Press Enter once the first wiki page is saved to continue, "
+            "or type 'skip' to stop: "
+        )
+    except EOFError:
+        return False
+    return reply.strip().lower() != "skip"
+
+
+def bootstrap_wiki(
+    git_remote: str,
+    *,
+    interactive: bool,
+    bootstrapper: BrowserBootstrapper | None = None,
+    refs_checker: Callable[..., bool | None] = wiki_refs_present,
+    confirm: Callable[[], bool] = _confirm_via_input,
+    notify: Callable[[str], None] = _emit,
+    timeout: float = 10.0,
+) -> WikiBootstrapResult:
+    """Run the degrade ladder for the wiki step and report what the caller does.
+
+    The chosen tier (see :func:`choose_tier`) is driven by the run context: the
+    injected ``bootstrapper`` (``None`` on the pure-CLI path, so AUTOMATE never
+    fires there), its ``is_authenticated`` precheck, ``interactive``, and the
+    ``refs_checker`` probe. AUTOMATE drives the port then verifies; GUIDE prints
+    the manual step, waits for ``confirm``, then verifies; both succeed only when
+    a re-probe shows a ref. DEGRADE returns the actionable message for the caller
+    to print and exit 4, attempting no browser action and never prompting. NO-OP
+    (already initialized, or no usable GitHub remote) makes no port call and no
+    re-probe -- the bootstrap is idempotent.
+    """
+    clone_url = resolve_wiki_clone_url(git_remote)
+    web_url = resolve_web_wiki_url(git_remote)
+    # No usable GitHub remote (mock mode, or a non-GitHub host): nothing to
+    # bootstrap. Proceed without probing the network so the step stays offline-safe.
+    if not clone_url or not web_url or "github.com" not in git_remote:
+        return WikiBootstrapResult(Tier.NOOP, proceed=True, exit_code=0, message="")
+
+    refs = refs_checker(clone_url, timeout=timeout)
+    browser_available = bootstrapper is not None
+    authenticated = bootstrapper.is_authenticated() if bootstrapper is not None else False
+    tier = choose_tier(
+        interactive=interactive,
+        browser_available=browser_available,
+        authenticated=authenticated,
+        refs_present=refs,
+    )
+
+    if tier is Tier.NOOP:
+        return WikiBootstrapResult(tier, proceed=True, exit_code=0, message="")
+    if tier is Tier.DEGRADE:
+        return WikiBootstrapResult(
+            tier, proceed=False, exit_code=4, message=_degrade_message(clone_url, web_url, refs)
+        )
+    if tier is Tier.AUTOMATE and bootstrapper is not None:
+        bootstrapper.create_first_page(web_url)
+        return _verify(tier, clone_url, web_url, refs_checker, timeout)
+
+    # GUIDE: print the manual step, wait for the operator, then verify.
+    notify(_guide_message(web_url))
+    if not confirm():
+        return WikiBootstrapResult(
+            Tier.GUIDE, proceed=False, exit_code=4, message=_degrade_message(clone_url, web_url, refs)
+        )
+    return _verify(Tier.GUIDE, clone_url, web_url, refs_checker, timeout)
+
+
+def _verify(
+    tier: Tier,
+    clone_url: str,
+    web_url: str,
+    refs_checker: Callable[..., bool | None],
+    timeout: float,
+) -> WikiBootstrapResult:
+    """Re-probe the wiki refs and report success only if a ref now appears.
+
+    This is the tampering control: success is gated on an independent
+    ``git ls-remote``, not on the port's or the operator's claim of success.
+    """
+    refs_after = refs_checker(clone_url, timeout=timeout)
+    if refs_after is True:
+        return WikiBootstrapResult(tier, proceed=True, exit_code=0, message="")
+    return WikiBootstrapResult(
+        tier, proceed=False, exit_code=4, message=_degrade_message(clone_url, web_url, refs_after)
+    )

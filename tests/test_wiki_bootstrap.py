@@ -17,11 +17,55 @@ import unittest
 from solomon_harness.bootstrap import hint_uninitialized_wiki
 from solomon_harness.wiki_bootstrap import (
     Tier,
+    bootstrap_wiki,
     choose_tier,
     resolve_web_wiki_url,
     resolve_wiki_clone_url,
     wiki_refs_present,
 )
+
+REMOTE = "https://github.com/o/r.git"
+CLONE_URL = "https://github.com/o/r.wiki.git"
+NEW_URL = "https://github.com/o/r/wiki/_new"
+
+
+class _RefProbe:
+    """A fake ``wiki_refs_present`` whose answer can flip after a page is saved.
+
+    Records every probe so a test can assert the bootstrap re-verified by an
+    independent ls-remote rather than by trusting the port's return value.
+    """
+
+    def __init__(self, value):
+        self.value = value
+        self.calls = []
+
+    def __call__(self, url, timeout=10.0):
+        self.calls.append((url, timeout))
+        return self.value
+
+
+class _FakeBootstrapper:
+    """A fake browser port. ``on_create`` simulates the side effect of the save
+    (e.g. a ref appearing) so the test controls the observable outcome, never the
+    port's return value."""
+
+    def __init__(self, *, authenticated=True, on_create=None):
+        self._authenticated = authenticated
+        self._on_create = on_create
+        self.create_calls = []
+
+    def is_authenticated(self):
+        return self._authenticated
+
+    def create_first_page(self, web_new_url):
+        self.create_calls.append(web_new_url)
+        if self._on_create is not None:
+            self._on_create()
+
+
+def _never_confirm():
+    raise AssertionError("confirm() must not be called")
 
 
 class _FakeCompleted:
@@ -241,6 +285,152 @@ class TestChooseTier(unittest.TestCase):
             ),
             Tier.GUIDE,
         )
+
+
+class TestBootstrapWiki(unittest.TestCase):
+    """Orchestration over the injected port. Success is asserted by a re-probe of
+    the refs (ls-remote), never by trusting the port's return."""
+
+    def test_noop_when_refs_present_does_not_touch_the_port(self):
+        probe = _RefProbe(True)
+        bootstrapper = _FakeBootstrapper()
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=bootstrapper,
+            refs_checker=probe,
+            confirm=_never_confirm,
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.NOOP)
+        self.assertTrue(result.proceed)
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(bootstrapper.create_calls, [], "no first page must be created")
+        self.assertEqual(len(probe.calls), 1, "no-op must not re-probe")
+
+    def test_automate_success_is_verified_by_a_reprobe_not_the_port(self):
+        probe = _RefProbe(False)
+        # The save's observable effect: a ref appears. The port itself reports
+        # nothing back; success comes only from the re-probe.
+        bootstrapper = _FakeBootstrapper(on_create=lambda: setattr(probe, "value", True))
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=bootstrapper,
+            refs_checker=probe,
+            confirm=_never_confirm,
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.AUTOMATE)
+        self.assertTrue(result.proceed)
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(bootstrapper.create_calls, [NEW_URL])
+        self.assertEqual(len(probe.calls), 2, "automate must re-probe to verify")
+
+    def test_automate_failure_degrades_when_no_ref_appears(self):
+        probe = _RefProbe(False)
+        # The port "ran" (create_first_page is called) but no ref appears, so the
+        # re-probe still sees 0 refs -> the run must degrade, not falsely succeed.
+        bootstrapper = _FakeBootstrapper(on_create=None)
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=bootstrapper,
+            refs_checker=probe,
+            confirm=_never_confirm,
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.AUTOMATE)
+        self.assertFalse(result.proceed)
+        self.assertEqual(result.exit_code, 4)
+        self.assertEqual(bootstrapper.create_calls, [NEW_URL])
+        self.assertIn("/wiki/_new", result.message)
+        self.assertNotIn("Repository not found", result.message)
+
+    def test_guide_success_after_operator_confirms(self):
+        probe = _RefProbe(False)
+        notes = []
+
+        def _confirm_and_save():
+            probe.value = True  # the operator saved the page during the prompt
+            return True
+
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=_confirm_and_save,
+            notify=notes.append,
+        )
+        self.assertIs(result.tier, Tier.GUIDE)
+        self.assertTrue(result.proceed)
+        self.assertEqual(result.exit_code, 0)
+        self.assertTrue(any("/wiki/_new" in n for n in notes), "guide must print the manual step")
+        self.assertEqual(len(probe.calls), 2, "guide must re-probe after confirm")
+
+    def test_guide_still_zero_refs_degrades_with_the_same_message(self):
+        probe = _RefProbe(False)
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=True,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=lambda: True,  # operator confirms but nothing was actually saved
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.GUIDE)
+        self.assertFalse(result.proceed)
+        self.assertEqual(result.exit_code, 4)
+        self.assertIn("/wiki/_new", result.message)
+        self.assertNotIn("Repository not found", result.message)
+
+    def test_degrade_headless_attempts_no_browser_and_does_not_prompt(self):
+        probe = _RefProbe(False)
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=False,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=_never_confirm,  # must not prompt or block on input
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.DEGRADE)
+        self.assertFalse(result.proceed)
+        self.assertEqual(result.exit_code, 4)
+        self.assertIn("/wiki/_new", result.message)
+        self.assertIn("not been initialized", result.message)
+        self.assertNotIn("Repository not found", result.message)
+
+    def test_inconclusive_detection_headless_degrades_with_inconclusive_message(self):
+        probe = _RefProbe(None)
+        result = bootstrap_wiki(
+            REMOTE,
+            interactive=False,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=_never_confirm,
+            notify=lambda _m: None,
+        )
+        self.assertIs(result.tier, Tier.DEGRADE)
+        self.assertFalse(result.proceed)
+        self.assertEqual(result.exit_code, 4)
+        self.assertIn("inconclusive", result.message.lower())
+        self.assertIn("/wiki/_new", result.message)
+
+    def test_proceeds_without_a_github_remote_and_never_probes(self):
+        probe = _RefProbe(False)
+        result = bootstrap_wiki(
+            "none",
+            interactive=False,
+            bootstrapper=None,
+            refs_checker=probe,
+            confirm=_never_confirm,
+            notify=lambda _m: None,
+        )
+        self.assertTrue(result.proceed)
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(probe.calls, [], "no remote must not trigger a network probe")
 
 
 if __name__ == "__main__":
