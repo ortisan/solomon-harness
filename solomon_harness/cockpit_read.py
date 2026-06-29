@@ -8,7 +8,16 @@ that bridges to this composer over a non-shell subprocess; the cross-tenant
 aggregation and the 207/403 partial-render contract are slice 1b (#59).
 """
 
-from typing import Any, Callable, Dict, List
+import argparse
+import json
+import sys
+from typing import Any, Callable, Dict, List, Optional, Sequence
+
+from opentelemetry import trace
+
+from solomon_harness.tools.database_client import DatabaseClient
+
+_tracer = trace.get_tracer("solomon_harness.cockpit_read")
 
 # The canonical delivery-board columns, in fixed left-to-right order, matching
 # docs/solomon-workflow.md (Ideas -> Backlog -> Ready -> In Progress ->
@@ -35,26 +44,44 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
     ``total == sum(column counts) + unmapped`` holds and no issue is silently
     dropped. Read-only: it never creates or mutates a row.
     """
-    issues = client.list_issues()
+    with _tracer.start_as_current_span("cockpit.read_board") as span:
+        span.set_attribute("cockpit.project", project)
+        issues = client.list_issues()
 
-    by_status: Dict[Any, List[Dict[str, Any]]] = {}
-    for issue in issues:
-        by_status.setdefault(issue.get("status"), []).append(issue)
+        by_status: Dict[Any, List[Dict[str, Any]]] = {}
+        for issue in issues:
+            by_status.setdefault(issue.get("status"), []).append(issue)
 
-    columns: List[Dict[str, Any]] = []
-    mapped = 0
-    for name in BOARD_COLUMNS:
-        column_issues = by_status.get(name, [])
-        mapped += len(column_issues)
-        columns.append(
-            {"name": name, "count": len(column_issues), "issues": column_issues}
-        )
+        columns: List[Dict[str, Any]] = []
+        mapped = 0
+        for name in BOARD_COLUMNS:
+            column_issues = by_status.get(name, [])
+            mapped += len(column_issues)
+            columns.append(
+                {"name": name, "count": len(column_issues), "issues": column_issues}
+            )
 
+        span.set_attribute("cockpit.total_issues", len(issues))
+        span.set_attribute("cockpit.unmapped_issues", len(issues) - mapped)
+        return {
+            "project": project,
+            "columns": columns,
+            "total": len(issues),
+            "unmapped": len(issues) - mapped,
+        }
+
+
+def empty_board(project: str) -> Dict[str, Any]:
+    """Return the seven columns at count zero for ``project``.
+
+    Used for an empty or unselectable tenant: every column header still renders
+    with count 0 and nothing is fabricated.
+    """
     return {
         "project": project,
-        "columns": columns,
-        "total": len(issues),
-        "unmapped": len(issues) - mapped,
+        "columns": [{"name": n, "count": 0, "issues": []} for n in BOARD_COLUMNS],
+        "total": 0,
+        "unmapped": 0,
     }
 
 
@@ -67,3 +94,53 @@ def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
     nothing is created and no tenant is seeded.
     """
     return sorted(list_databases())
+
+
+def board_payload(project: str, harness_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Build the board for ``project`` after validating it against discovery.
+
+    The requested project is checked against the discovered-tenant allowlist
+    before any board is read. An unknown (or shell-injection) value is never run
+    as a command: it yields an empty board flagged ``found: false`` so the driving
+    adapter can return 404. A known tenant yields the grouped board, ``found: true``.
+    """
+    client = DatabaseClient(harness_dir=harness_dir)
+    try:
+        available = discover_projects(client.list_databases)
+        if project not in available:
+            payload = empty_board(project)
+            payload["found"] = False
+            return payload
+        payload = build_board(client, project)
+        payload["found"] = True
+        return payload
+    finally:
+        client.close()
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """JSON CLI for the Node-to-Python read bridge.
+
+    ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
+    board for one tenant. Output is JSON on stdout so the Next route can parse it.
+    """
+    parser = argparse.ArgumentParser(prog="solomon_harness.cockpit_read")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("projects", help="list the harness-managed tenants")
+    board_parser = sub.add_parser("board", help="render one tenant's board")
+    board_parser.add_argument("--project", required=True)
+    args = parser.parse_args(argv)
+
+    if args.command == "projects":
+        client = DatabaseClient()
+        try:
+            print(json.dumps(discover_projects(client.list_databases)))
+        finally:
+            client.close()
+    elif args.command == "board":
+        print(json.dumps(board_payload(args.project)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,7 +1,16 @@
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # Ensure the repository root is on sys.path so the package imports cleanly.
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -10,6 +19,16 @@ if repo_root not in sys.path:
 
 from solomon_harness import cockpit_read  # noqa: E402
 from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+
+# Capture the read-path spans in memory. The global tracer provider can only be
+# set once per process, so this module owns it (no other test module sets one).
+_SPAN_EXPORTER = InMemorySpanExporter()
+
+
+def setUpModule():
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(_SPAN_EXPORTER))
+    trace.set_tracer_provider(provider)
 
 SEVEN_COLUMNS = [
     "Ideas",
@@ -120,6 +139,49 @@ class TestDiscoverProjects(unittest.TestCase):
         self.assertEqual(guard.write_calls, [])
         self.assertIsInstance(discovered, list)
         self.assertGreaterEqual(len(discovered), 1)
+
+
+class TestReadPathInstrumentation(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+        _SPAN_EXPORTER.clear()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _run_cli(self, *args):
+        env = dict(os.environ)
+        env["HARNESS_DB_PATH"] = self.db_path
+        env["PYTHONPATH"] = repo_root
+        return subprocess.run(
+            [sys.executable, "-m", "solomon_harness.cockpit_read", *args],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    def test_build_board_emits_read_span_and_cli_outputs_json(self):
+        """build_board records a cockpit.read_board span, and the __main__ CLI
+        prints valid board JSON for the Node bridge."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("b1", "Backlog one", "feature", "Backlog", None)
+        cockpit_read.build_board(client, "alpha")
+        client.close()
+
+        span_names = [s.name for s in _SPAN_EXPORTER.get_finished_spans()]
+        self.assertIn("cockpit.read_board", span_names)
+
+        projects = json.loads(self._run_cli("projects").stdout)
+        self.assertIsInstance(projects, list)
+        self.assertGreaterEqual(len(projects), 1)
+
+        board = json.loads(self._run_cli("board", "--project", projects[0]).stdout)
+        self.assertEqual([c["name"] for c in board["columns"]], SEVEN_COLUMNS)
+        self.assertEqual(board["project"], projects[0])
+        self.assertTrue(board["found"])
 
 
 if __name__ == "__main__":
