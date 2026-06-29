@@ -234,6 +234,38 @@ class TestInvariants(CapabilityRouterTestBase):
         cr.load_catalog(self.root)
         self.assertEqual(_tree_digest(self.agents_dir), before)
 
+    def test_capability_router_is_isolated_and_read_only(self):
+        import ast
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "solomon_harness", "capability_router.py"))
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+            tree = ast.parse(content)
+        allowed_roots = {"os", "dataclasses", "typing", "solomon_harness", "sys", "Union", "List", "Optional", "Callable", "Tuple"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    self.assertIn(root, allowed_roots, f"Import of module '{alias.name}' is forbidden in capability_router")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    root = node.module.split(".")[0]
+                    self.assertIn(root, allowed_roots, f"Import from module '{node.module}' is forbidden in capability_router")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    if len(node.args) >= 2:
+                        mode_node = node.args[1]
+                        if isinstance(mode_node, ast.Constant):
+                            mode = mode_node.value
+                            self.assertNotIn(mode, {"w", "wb", "a", "ab", "w+", "wb+", "a+", "ab+"}, f"Opening file with mode '{mode}' is forbidden")
+                    for kw in node.keywords:
+                        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                            mode = kw.value.value
+                            self.assertNotIn(mode, {"w", "wb", "a", "ab", "w+", "wb+", "a+", "ab+"}, f"Opening file with mode '{mode}' is forbidden")
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "write":
+                    self.fail("Calling .write() is forbidden in capability_router")
+
+
 
 if __name__ == "__main__":
     unittest.main()
