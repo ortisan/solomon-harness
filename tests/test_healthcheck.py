@@ -141,7 +141,7 @@ class TestReport(unittest.TestCase):
             checks = hc.run_checks("/tmp")
         # The failing check is captured as a warn rather than propagating.
         self.assertTrue(any(c["status"] == hc.WARN for c in checks))
-        self.assertEqual(len(checks), 6)
+        self.assertEqual(len(checks), 7)
 
 
 class TestPendingReconcile(unittest.TestCase):
@@ -198,6 +198,30 @@ class TestPendingReconcile(unittest.TestCase):
         self.assertEqual(len(reconcile), 1)
         self.assertEqual(reconcile[0]["status"], hc.WARN)
         self.assertIn("1", reconcile[0]["detail"])
+
+
+class TestGitConfigCheck(unittest.TestCase):
+    def test_clean_config(self):
+        with patch.object(hc.subprocess, "run", side_effect=[_P(1), _P(0, "false")]):
+            c = hc.check_git_config("/tmp")
+        self.assertEqual(c["status"], hc.OK)
+        self.assertIn("clean", c["detail"])
+
+    def test_stray_worktree(self):
+        with patch.object(hc.subprocess, "run", side_effect=[_P(0, "/some/path"), _P(0, "false")]):
+            c = hc.check_git_config("/tmp")
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("stray git configuration found", c["detail"])
+        self.assertIn("core.worktree=/some/path", c["detail"])
+        self.assertIn("git-repair", c["fix"])
+
+    def test_stray_bare_true(self):
+        with patch.object(hc.subprocess, "run", side_effect=[_P(1), _P(0, "true")]):
+            c = hc.check_git_config("/tmp")
+        self.assertEqual(c["status"], hc.WARN)
+        self.assertIn("stray git configuration found", c["detail"])
+        self.assertIn("core.bare=true", c["detail"])
+        self.assertIn("git-repair", c["fix"])
 
 
 if __name__ == "__main__":
