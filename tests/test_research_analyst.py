@@ -23,6 +23,7 @@ SKILLS_DIR = os.path.join(AGENT_DIR, "skills")
 PROFILE = os.path.join(AGENT_DIR, "agents", "research_analyst.md")
 PERSONA = os.path.join(AGENT_DIR, "persona.md")
 CONFIG = os.path.join(AGENT_DIR, ".agent", "config.json")
+MAIN = os.path.join(AGENT_DIR, "main.py")
 
 EXPECTED_SKILLS = [
     "research_sources_playbook.md",
@@ -64,7 +65,7 @@ def _read(path):
 
 class TestStructure(unittest.TestCase):
     def test_core_files_exist(self):
-        for path in (PERSONA, PROFILE, CONFIG):
+        for path in (PERSONA, PROFILE, CONFIG, MAIN):
             self.assertTrue(os.path.isfile(path), f"missing {path}")
         self.assertTrue(os.path.isdir(SKILLS_DIR), "missing skills/ directory")
 
