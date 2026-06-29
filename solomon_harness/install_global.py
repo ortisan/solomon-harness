@@ -159,12 +159,60 @@ def install_global(
         (".md",),
     )
 
-    # 3. Global Gemini commands.
+    # 3. Global Gemini commands (legacy format).
     result["gemini_commands"] = _copy_dir_contents(
         os.path.join(source_root, ".gemini", "commands"),
         os.path.join(gemini_dir, "commands"),
         (".toml",),
     )
+
+    # 3.5. New Antigravity/Gemini CLI extension format.
+    ext_dir = os.path.join(gemini_dir, "extensions", "solomon")
+    os.makedirs(os.path.join(ext_dir, "commands"), exist_ok=True)
+    _copy_dir_contents(
+        os.path.join(source_root, ".gemini", "commands"),
+        os.path.join(ext_dir, "commands"),
+        (".toml",),
+    )
+    # Write gemini-extension.json
+    ext_manifest = {
+        "name": "solomon",
+        "version": "1.0.0",
+        "description": "Solomon Harness Commands"
+    }
+    with open(os.path.join(ext_dir, "gemini-extension.json"), "w", encoding="utf-8") as f:
+        json.dump(ext_manifest, f, indent=4)
+    result["gemini_extension"] = True
+
+    # If agy CLI is present and we are installing to the default ~/.gemini,
+    # automatically run import to convert to Antigravity plugin/skills
+    is_default_gemini = os.path.abspath(gemini_dir) == os.path.abspath(os.path.expanduser("~/.gemini"))
+    if is_default_gemini:
+        agy_bin = shutil.which("agy")
+        if not agy_bin:
+            candidate = os.path.expanduser("~/.local/bin/agy")
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                agy_bin = candidate
+            elif os.name == "nt":
+                win_candidate = os.path.expandvars(r"%LOCALAPPDATA%\agy\bin\agy.exe")
+                if os.path.isfile(win_candidate):
+                    agy_bin = win_candidate
+
+        if agy_bin:
+            try:
+                subprocess.run(
+                    [agy_bin, "plugin", "import", "gemini", "--force"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                result["agy_imported"] = True
+            except Exception:
+                result["agy_imported"] = False
+        else:
+            result["agy_imported"] = None
+    else:
+        result["agy_imported"] = None
 
     # 4. SessionStart hook in the global Claude settings.
     result["hook_installed"] = _merge_session_start_hook(
@@ -191,7 +239,15 @@ def describe(result: dict) -> str:
     port_note = f" (SurrealDB host port {port})" if port else ""
     lines.append(f"  shared home: agents={result.get('home_agents', False)} compose={result.get('home_compose', False)}{port_note}")
     lines.append(f"  ~/.claude: {len(result.get('claude_agents', []))} agents, {len(result.get('claude_commands', []))} commands")
-    lines.append(f"  ~/.gemini: {len(result.get('gemini_commands', []))} commands")
+    lines.append(f"  ~/.gemini: {len(result.get('gemini_commands', []))} legacy commands, extension={result.get('gemini_extension', False)}")
+    agy_imported = result.get("agy_imported")
+    if agy_imported is True:
+        lines.append("  ~/.gemini (Antigravity): successfully imported and converted extension to plugins/skills")
+    elif agy_imported is False:
+        lines.append("  ~/.gemini (Antigravity): import run failed")
+    elif agy_imported is None and result.get("gemini_extension"):
+        # Only show note if extension was processed but agy wasn't found/run
+        lines.append("  ~/.gemini (Antigravity): agy CLI not found or non-default path; no import executed")
     lines.append(f"  session hook: {'installed' if result.get('hook_installed') else 'already present'}")
     mcp = result.get("mcp_claude")
     if mcp is None:

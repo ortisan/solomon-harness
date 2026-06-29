@@ -64,6 +64,19 @@ REQUIRED_KEYWORDS = {
         "bugfix/*",
         "conventional commit",
     ],
+    "legacy_modernizer.md": [
+        "Legacy Modernizer",
+        "parsimonious",
+        "delegate",
+        "sequenced",
+        "incremental",
+        "bounded step",
+        "human-gated",
+        "hexagonal",
+        "OpenTelemetry",
+        "secure-by-default",
+        "Test-Driven Development",
+    ],
     "ml_engineer.md": [
         "ML Engineer",
         "hyperparameters",
@@ -77,6 +90,14 @@ REQUIRED_KEYWORDS = {
         "slippage",
         "transaction costs",
         "risk parameters",
+    ],
+    "research_analyst.md": [
+        "Research Analyst",
+        "valuation",
+        "investment research",
+        "asset selection",
+        "sources",
+        "quant_trader",
     ],
     "qa.md": [
         "QA Specialist",
@@ -200,14 +221,15 @@ REQUIRED_KEYWORDS = {
         "big data",
         "visualization",
     ],
-    "data_science.md": [
-        "Data Scientist",
-        "predictive",
-        "statistical",
-        "didactically",
-        "cross-validation",
+    "educational_psychologist.md": [
+        "Educational Psychologist",
+        "learning sciences",
+        "cognitive load",
+        "evidence-based",
     ],
 }
+
+
 
 
 def has_emoji(text):

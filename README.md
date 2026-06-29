@@ -280,6 +280,8 @@ AI cliches in all generated output.
 | `index` | Index the project codebase into the memory |
 | `wiki` | Refresh the living code-overview wiki page from the index |
 | `run` | Show the resume point (latest activity, open issues) and list the workflows |
+| `log [--last N]` | Show the read-only loop activity feed (loop runs, decisions, handoffs) |
+| `loop-lock [status\|release]` | Inspect or clear the single-driver loop lock (crash recovery) |
 | `db-init` | Initialize the memory store |
 | `eval` | Run the agent evaluation suite |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |

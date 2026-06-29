@@ -27,11 +27,24 @@ Gather these and summarize them concisely:
 
 If `{{args}}` names a specific issue or PR, evaluate that item and pick its next step.
 
-## 3. Propose, confirm, run
+## 3. Propose as an enumerated decision card, confirm, run
 
-- Tell the user, in two to four lines: where things stopped, what is in flight, and the single recommended next step (the exact `/solomon-*` command and its target).
-- Wait for confirmation. Outward-facing actions (creating issues or PRs, merging, releasing) always require an explicit go-ahead.
-- On confirmation, run that workflow by following its command file `.claude/commands/solomon-<stage>.md` and delegating to its driving agents. Advance one stage per invocation; re-run `/solomon-loop` to continue.
+Present the next step as a decision card, not an open prose question — discrete,
+numbered choices keep the user's context focused (see "Interaction style" in
+`docs/solomon-workflow.md`):
+
+- In two to four lines, summarize where things stopped and what is in flight. You
+  can read `solomon-harness log` for the recent loop / decision / handoff trail.
+- Offer the single recommended next step first, then any genuinely credible
+  alternatives the ladder surfaced, as numbered options whose last entry is always
+  "Other" (a free-text answer). Each option is the exact `/solomon-*` command and
+  its target. In Claude Code use the AskUserQuestion tool; in the Gemini CLI
+  present the numbered list and invite a free-text reply.
+- Wait for the pick. Outward-facing actions (creating issues or PRs, merging,
+  releasing) always require an explicit go-ahead.
+- On the pick, run that workflow by following its command file
+  `.claude/commands/solomon-<stage>.md` and delegating to its driving agents.
+  Advance one stage per invocation; re-run `/solomon-loop` to continue.
 
 ## 4. Record
 
