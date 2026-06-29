@@ -3,6 +3,8 @@ import shutil
 import tempfile
 import unittest
 import hashlib
+import subprocess
+import json
 from solomon_harness import curator
 
 def _write_agent(root, name, description):
@@ -272,4 +274,167 @@ class TestApplyProposal(unittest.TestCase):
         import subprocess
         proc = subprocess.run(["git", "branch", "--show-current"], cwd=self.root, capture_output=True, text=True, check=True)
         self.assertTrue(proc.stdout.strip().startswith("feature/implement-some-new-qa-check"))
+
+
+class TestBrokerAcquisition(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        
+        # Init main project git repo
+        subprocess.run(["git", "init", "-b", "main"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.root, check=True)
+        
+        # Create agents directory and qa agent
+        _write_agent(self.root, "qa", "The QA Specialist.")
+        
+        # Create a dummy AGENTS.md
+        agents_dir = os.path.join(self.root, "agents")
+        os.makedirs(agents_dir, exist_ok=True)
+        with open(os.path.join(self.root, "agents", "AGENTS.md"), "w", encoding="utf-8") as f:
+            f.write("# Shared Rules\n- strict TDD is required for all changes.\n- do not use duplicate rules.")
+            
+        with open(os.path.join(self.root, "dummy.txt"), "w") as f:
+            f.write("dummy")
+        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-m", "initial commit"], cwd=self.root, check=True)
+        
+        # Set up a mock external source repository
+        self.src_tmp = tempfile.TemporaryDirectory()
+        self.src_git = self.src_tmp.name
+        subprocess.run(["git", "init", "-b", "main"], cwd=self.src_git, check=True)
+        subprocess.run(["git", "config", "user.name", "Source Author"], cwd=self.src_git, check=True)
+        subprocess.run(["git", "config", "user.email", "src@example.com"], cwd=self.src_git, check=True)
+        
+        # Commit a standalone skill
+        os.makedirs(os.path.join(self.src_git, "skills"), exist_ok=True)
+        with open(os.path.join(self.src_git, "skills", "standalone.md"), "w", encoding="utf-8") as f:
+            f.write("# Standalone Skill\n\nexamine leverage delve tapestry 😊")
+            
+        # Commit a packaged skill
+        os.makedirs(os.path.join(self.src_git, "packaged"), exist_ok=True)
+        with open(os.path.join(self.src_git, "packaged", "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("# Packaged Skill\n\nThis is a packaged skill.")
+            
+        subprocess.run(["git", "add", "."], cwd=self.src_git, check=True)
+        subprocess.run(["git", "commit", "-m", "add skills"], cwd=self.src_git, check=True)
+        
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.src_git, capture_output=True, text=True, check=True)
+        self.pin = proc.stdout.strip()
+        
+        # Write skill-sources.json
+        self.sources_data = {
+            "sources": [
+                {
+                    "name": "mock-source",
+                    "type": "git",
+                    "url": f"file://{self.src_git}",
+                    "pin": self.pin
+                },
+                {
+                    "name": "unpinned-source",
+                    "type": "git",
+                    "url": f"file://{self.src_git}"
+                }
+            ]
+        }
+        with open(os.path.join(self.root, "skill-sources.json"), "w", encoding="utf-8") as f:
+            json.dump(self.sources_data, f)
+            
+    def tearDown(self):
+        self.tmp.cleanup()
+        self.src_tmp.cleanup()
+        
+    def test_broker_skill_allowlist_check(self):
+        with self.assertRaisesRegex(ValueError, "not in the allowlist"):
+            curator.broker_skill(self.root, "unknown-source", "standalone", "qa")
+            
+    def test_broker_skill_sha_pin_check(self):
+        with self.assertRaisesRegex(ValueError, "SHA-pin mandatory"):
+            curator.broker_skill(self.root, "unpinned-source", "standalone", "qa")
+            
+    def test_broker_skill_not_found(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+        def gh_runner(args):
+            return MockCompletedProcess()
+            
+        with self.assertRaisesRegex(ValueError, "not found in source"):
+            curator.broker_skill(self.root, "mock-source", "non_existent_skill", "qa", gh_runner=gh_runner)
+            
+    def test_broker_skill_oversized_standalone(self):
+        # Commit an oversized standalone skill
+        with open(os.path.join(self.src_git, "skills", "oversized.md"), "w", encoding="utf-8") as f:
+            f.write("# Oversized Skill\n" + ("x" * 300000))
+        subprocess.run(["git", "add", "."], cwd=self.src_git, check=True)
+        subprocess.run(["git", "commit", "-m", "add oversized"], cwd=self.src_git, check=True)
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.src_git, capture_output=True, text=True, check=True)
+        new_pin = proc.stdout.strip()
+        
+        self.sources_data["sources"][0]["pin"] = new_pin
+        with open(os.path.join(self.root, "skill-sources.json"), "w", encoding="utf-8") as f:
+            json.dump(self.sources_data, f)
+            
+        with self.assertRaisesRegex(ValueError, "exceeds the 256 KiB cap"):
+            curator.broker_skill(self.root, "mock-source", "oversized", "qa")
+            
+    def test_broker_skill_packaged_executable_quarantine(self):
+        # Create scripts dir in packaged skill
+        os.makedirs(os.path.join(self.src_git, "packaged", "scripts"), exist_ok=True)
+        with open(os.path.join(self.src_git, "packaged", "scripts", "run.sh"), "w", encoding="utf-8") as f:
+            f.write("echo bad")
+        subprocess.run(["git", "add", "."], cwd=self.src_git, check=True)
+        subprocess.run(["git", "commit", "-m", "add script"], cwd=self.src_git, check=True)
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.src_git, capture_output=True, text=True, check=True)
+        new_pin = proc.stdout.strip()
+        
+        self.sources_data["sources"][0]["pin"] = new_pin
+        with open(os.path.join(self.root, "skill-sources.json"), "w", encoding="utf-8") as f:
+            json.dump(self.sources_data, f)
+            
+        with self.assertRaisesRegex(ValueError, "Security risk: skill contains scripts/executables"):
+            curator.broker_skill(self.root, "mock-source", "packaged", "qa")
+            
+        quarantine_path = os.path.join(self.root, ".solomon", "quarantine", "packaged")
+        self.assertTrue(os.path.isdir(quarantine_path))
+        self.assertTrue(os.path.isfile(os.path.join(quarantine_path, "scripts", "run.sh")))
+        
+    def test_broker_skill_successful_adapt_and_install(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+        
+        gh_args = []
+        def gh_runner(args):
+            gh_args.append(args)
+            return MockCompletedProcess()
+            
+        pr_url = curator.broker_skill(self.root, "mock-source", "standalone", "qa", gh_runner=gh_runner)
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/123")
+        
+        self.assertTrue(any("--reviewer" in args and "security" in args for args in gh_args))
+        
+        import subprocess
+        proc = subprocess.run(["git", "branch", "--show-current"], cwd=self.root, capture_output=True, text=True, check=True)
+        branch = proc.stdout.strip()
+        self.assertTrue(branch.startswith("feature/adapt-skill-standalone-from-mock-source"))
+        
+        installed_path = os.path.join(self.root, "agents", "qa", "skills", "standalone.md")
+        self.assertTrue(os.path.isfile(installed_path))
+        with open(installed_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        self.assertNotIn("😊", content)
+        self.assertNotIn("leverage", content)
+        self.assertNotIn("delve", content)
+        self.assertIn("use", content)
+        self.assertIn("examine", content)
+        self.assertIn("## Common pitfalls", content)
+        self.assertIn("## Definition of done", content)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
