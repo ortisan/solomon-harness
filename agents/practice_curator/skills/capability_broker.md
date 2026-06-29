@@ -15,7 +15,7 @@ The gap verdict is the hand-off shape the acquisition slices consume; do not wid
 
 ## The match is an injected port
 
-The demand→agent match is supplied by the host LLM (the harness's model), passed in as a callable matcher port (`matcher(demand, catalog) -> Match`, Python 3.10+); in tests it is a deterministic stub. The router core itself opens no network socket and instantiates no ML model — it only loads the catalog read-only (the `agents/AGENTS.md` index plus each role file, via `agent_selection._discover_agents`) and builds the verdict. Do not add an embedded classifier; an ML matcher would need its own ADR.
+The demand→agent match is supplied by the host LLM (the harness's model), passed in as a callable matcher port (`matcher(demand, catalog) -> Match`, Python 3.10+); in tests it is a deterministic stub. The router core itself opens no network socket and instantiates no ML model — it only loads the catalog read-only (each `agents/<name>/agents/<name>.md` role file, discovered via `agent_selection.discover_agents`) and builds the verdict. Do not add an embedded classifier; an ML matcher would need its own ADR.
 
 ## Read-only, orchestration-time, reviewed
 

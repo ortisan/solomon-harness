@@ -14,9 +14,9 @@ slices (#47 adapt, #48/#49 create).
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple, Union
 
-from solomon_harness.agent_selection import _discover_agents
+from solomon_harness.agent_selection import discover_agents
 
 ADAPT_SKILL = "adapt_skill"
 CREATE_AGENT = "create_agent"
@@ -54,7 +54,7 @@ class Match:
 class RouteVerdict:
     agent: str
     rationale: str
-    alternatives: List[str] = field(default_factory=list)
+    alternatives: Tuple[str, ...] = ()
     kind: str = "route"
 
 
@@ -65,6 +65,12 @@ class GapVerdict:
     rationale: str
     nearest_agent: Optional[str] = None
     kind: str = "gap"
+
+
+Verdict = Union[RouteVerdict, GapVerdict]
+# The injected match port: given a demand and the read-only catalog, return a Match.
+# The host LLM provides this in production; tests pass a deterministic stub.
+Matcher = Callable[[str, List[Agent]], Match]
 
 
 def _default_workspace_root() -> str:
@@ -91,7 +97,7 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     agent, so the caller fails closed instead of routing against an empty catalog.
     """
     root = workspace_root or _default_workspace_root()
-    names = _discover_agents(root)
+    names = discover_agents(root)
     if not names:
         raise CatalogError(f"no agents discovered under {os.path.join(root, 'agents')}")
     catalog = []
@@ -101,7 +107,7 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     return catalog
 
 
-def route(demand, matcher, workspace_root: Optional[str] = None):
+def route(demand: str, matcher: Matcher, workspace_root: Optional[str] = None) -> Verdict:
     """Resolve ``demand`` against the catalog into a RouteVerdict or a GapVerdict.
 
     ``matcher(demand, catalog) -> Match`` is the only match path (host LLM in production,
@@ -121,8 +127,9 @@ def route(demand, matcher, workspace_root: Optional[str] = None):
             raise CatalogError(
                 f"matcher returned agent '{match.agent}' that is not in the catalog"
             )
-        rationale = (match.rationale or "").strip().splitlines()[0] if match.rationale else ""
-        alternatives = [a for a in match.alternatives if a in names and a != match.agent]
+        lines = (match.rationale or "").strip().splitlines()
+        rationale = lines[0] if lines else ""
+        alternatives = tuple(a for a in match.alternatives if a in names and a != match.agent)
         return RouteVerdict(agent=match.agent, rationale=rationale, alternatives=alternatives)
 
     # Gap: a missing capability must be named so the acquisition slices can act.

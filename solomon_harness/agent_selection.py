@@ -35,7 +35,7 @@ FRONTEND_DEPS = ("react", "next", "@angular/core", "vue", "svelte")
 AUTH_DEPS = ("authlib", "python-jose", "passport", "next-auth", "@auth/core", "pyjwt", "oauthlib")
 
 
-def _discover_agents(workspace_root: str) -> Set[str]:
+def discover_agents(workspace_root: str) -> Set[str]:
     agents_dir = os.path.join(workspace_root, "agents")
     found: Set[str] = set()
     if not os.path.isdir(agents_dir):
@@ -44,6 +44,11 @@ def _discover_agents(workspace_root: str) -> Set[str]:
         if os.path.isfile(os.path.join(agents_dir, item, "agents", f"{item}.md")):
             found.add(item)
     return found
+
+
+# Back-compat alias for the historical private name (now a public surface that
+# capability_router and others depend on).
+_discover_agents = discover_agents
 
 
 def _scan(workspace_root: str, max_depth: int = 4) -> tuple:

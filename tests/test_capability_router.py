@@ -60,7 +60,7 @@ class TestRoute(CapabilityRouterTestBase):
         self.assertEqual(verdict.kind, "route")
         self.assertEqual(verdict.agent, "qa")
         self.assertEqual(verdict.rationale, "qa owns integration testing")
-        self.assertEqual(verdict.alternatives, [])
+        self.assertEqual(verdict.alternatives, ())
         self.assertEqual(matcher.calls, 1)
         self.assertEqual(_tree_digest(self.agents_dir), before)
 
@@ -71,7 +71,7 @@ class TestRoute(CapabilityRouterTestBase):
         verdict = cr.route("add a regression test and fix the failing assertion", matcher, self.root)
         self.assertEqual(verdict.kind, "route")
         self.assertEqual(verdict.agent, "qa")
-        self.assertEqual(verdict.alternatives, ["software_engineer"])
+        self.assertEqual(verdict.alternatives, ("software_engineer",))
 
     def test_rationale_collapses_to_a_single_line(self):
         matcher = _StubMatcher(cr.Match(agent="qa", rationale="line one\nline two"))
@@ -82,6 +82,38 @@ class TestRoute(CapabilityRouterTestBase):
         matcher = _StubMatcher(cr.Match(agent="ghost", rationale="nope"))
         with self.assertRaises(cr.CatalogError):
             cr.route("do a thing", matcher, self.root)
+
+    def test_whitespace_only_rationale_does_not_crash(self):
+        matcher = _StubMatcher(cr.Match(agent="qa", rationale="\n   "))
+        verdict = cr.route("test something", matcher, self.root)
+        self.assertEqual(verdict.kind, "route")
+        self.assertEqual(verdict.rationale, "")
+
+    def test_alternatives_strip_unknown_and_self(self):
+        matcher = _StubMatcher(
+            cr.Match(agent="qa", rationale="r", alternatives=["ghost", "qa", "security"])
+        )
+        verdict = cr.route("do a thing", matcher, self.root)
+        self.assertEqual(verdict.alternatives, ("security",))
+
+
+class TestCatalog(CapabilityRouterTestBase):
+    def test_load_catalog_returns_sorted_agents_with_descriptions(self):
+        catalog = cr.load_catalog(self.root)
+        self.assertEqual([a.name for a in catalog], ["qa", "security", "software_engineer"])
+        by_name = {a.name: a.description for a in catalog}
+        self.assertEqual(by_name["qa"], "The QA Specialist owns integration testing and UAT.")
+        self.assertTrue(by_name["security"].startswith("The Security Specialist"))
+
+    def test_role_file_with_only_a_heading_has_empty_description(self):
+        role_dir = os.path.join(self.root, "agents", "blankrole", "agents")
+        os.makedirs(role_dir)
+        with open(os.path.join(role_dir, "blankrole.md"), "w", encoding="utf-8") as f:
+            f.write("# blankrole\n")
+        catalog = cr.load_catalog(self.root)
+        by_name = {a.name: a.description for a in catalog}
+        self.assertIn("blankrole", by_name)
+        self.assertEqual(by_name["blankrole"], "")
 
 
 class TestGap(CapabilityRouterTestBase):

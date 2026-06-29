@@ -43,7 +43,7 @@ fixes that model; slice A (#46) implements only its read-only routing/gap core.
    verdict pre-wires the adapt (#47) and create (#48/#49) slices.
 2. **Match via an injected port.** The demand→agent match is supplied by a matcher port — the host
    LLM in production, a deterministic stub in tests. The core owns read-only catalog loading
-   (the `agents/AGENTS.md` index + each role file, reusing `agent_selection._discover_agents`),
+   (each `agents/<name>/agents/<name>.md` role file, reusing `agent_selection.discover_agents`),
    verdict construction, and invariant enforcement only. No embedded ML model; an ML matcher would
    need its own ADR.
 3. **Orchestration-time interception.** Capability is resolved before the delivery loop runs; a
