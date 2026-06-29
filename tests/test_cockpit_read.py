@@ -474,6 +474,12 @@ class TestFilterPortfolio(unittest.TestCase):
             for lane in payload["swimlanes"]
         }
 
+    def _ids_by_column(self, lane):
+        return {
+            column["name"]: {card["github_id"] for card in column["issues"]}
+            for column in lane["columns"]
+        }
+
     def test_filter_portfolio_narrows_to_one_person_key(self):
         """filter_portfolio keeps one swimlane per project and, within each, only
         the cards whose surfaced personKey matches: alice renders her alpha/beta
@@ -520,6 +526,18 @@ class TestFilterPortfolio(unittest.TestCase):
                 lanes = {lane["project"]: lane for lane in filtered["swimlanes"]}
                 for project, ids in expected["ids"].items():
                     self.assertEqual(lanes[project]["total"], len(ids))
+
+                # The kept cards stay in their stored columns, not just in the
+                # flattened set: a regression that redistributed alice's cards
+                # across columns would reconcile on the sum yet fail here.
+                if person_key == "alice@example.com":
+                    alpha_columns = self._ids_by_column(lanes["alpha"])
+                    self.assertEqual(alpha_columns["Backlog"], {"a1"})
+                    self.assertEqual(alpha_columns["In Progress"], {"a2"})
+                    self.assertEqual(alpha_columns["Done"], {"a3"})
+                    beta_columns = self._ids_by_column(lanes["beta"])
+                    self.assertEqual(beta_columns["Ready"], {"b1"})
+                    self.assertEqual(beta_columns["QA"], {"b2"})
 
                 # The portfolio total and the seven column counts re-sum over the
                 # matched set; filteredUser names the subject.
@@ -1114,9 +1132,10 @@ class TestPortfolioPayload(unittest.TestCase):
             self.assertEqual(guard.write_calls, [])
         self.assertEqual(payload["aggregateStatus"], 200)
 
-    def test_portfolio_payload_person_none_is_unfiltered_no_op(self):
-        """portfolio_payload(person=None) returns today's unfiltered payload:
-        the no-op contract that keeps every existing caller unchanged."""
+    def test_portfolio_payload_falsy_person_is_unfiltered_no_op(self):
+        """portfolio_payload no-ops on any falsy person (None or ""): both return
+        today's unfiltered payload, so the seam matches the route/CLI that map a
+        falsy value to no filter and no caller narrows-to-empty by accident."""
         issues = {
             "alpha": [
                 {"github_id": "a1", "status": "Backlog", "assignee": "alice@example.com"},
@@ -1134,8 +1153,15 @@ class TestPortfolioPayload(unittest.TestCase):
         explicit_none = cockpit_read.portfolio_payload(
             client_factory=factory, person=None
         )
+        empty_person = cockpit_read.portfolio_payload(
+            client_factory=factory, person=""
+        )
 
         self.assertEqual(unfiltered, explicit_none)
+        # An empty person string narrows to nothing if treated as a filter; the
+        # seam must no-op it instead of stamping filteredUser="" with total 0.
+        self.assertEqual(unfiltered, empty_person)
+        self.assertNotIn("filteredUser", empty_person)
         self.assertNotIn("filteredUser", unfiltered)
         self.assertEqual(unfiltered["total"], 3)
 

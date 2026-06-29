@@ -453,8 +453,9 @@ def portfolio_payload(
     pool with a per-project read timeout, and composes the per-project outcomes
     into one portfolio board. When ``person`` is given, the composed payload is
     narrowed to that person key through ``filter_portfolio`` (server-side, so a
-    non-matching tenant's rows never reach the wire); ``person=None`` is a no-op,
-    so every existing caller is unchanged. The whole read is wrapped in a
+    non-matching tenant's rows never reach the wire); a falsy ``person`` (``None``
+    or ``""``) is a no-op, so every existing caller is unchanged. The whole read
+    is wrapped in a
     ``cockpit.portfolio`` span that records the per-project statuses for the audit
     trace. Read-only: every tenant is read through the read port and nothing is
     joined or written.
@@ -472,7 +473,9 @@ def portfolio_payload(
         payload = compose_portfolio(results)
         payload["overflow"] = overflow_count
         payload["notice"] = _overflow_notice(overflow_count)
-        if person is not None:
+        # A falsy person (None or "") is a no-op, matching the route/CLI that map
+        # a falsy filter value to no narrowing; only a real key narrows the board.
+        if person:
             payload = filter_portfolio(payload, person)
 
         span.set_attribute("cockpit.project_count", len(available))
