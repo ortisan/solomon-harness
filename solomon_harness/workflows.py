@@ -66,8 +66,8 @@ def run_stage(
         print(f"Error: unknown stage '{stage}'. Stages: {', '.join(STAGES)}", file=sys.stderr)
         return 1
     engine = (engine or os.environ.get("SOLOMON_ENGINE") or "claude").lower()
-    if engine not in ("claude", "gemini"):
-        print(f"Error: unknown engine '{engine}'. Use 'claude' or 'gemini'.", file=sys.stderr)
+    if engine not in ("claude", "gemini", "agy"):
+        print(f"Error: unknown engine '{engine}'. Use 'claude', 'gemini' or 'agy'.", file=sys.stderr)
         return 1
     try:
         prompt = build_prompt(workspace_root, stage, args)
@@ -125,7 +125,14 @@ def run_stage(
     print(f"Running /solomon-{stage} headless via {engine}...")
     try:
         try:
-            if engine == "gemini":
+            if engine == "agy":
+                exec_path = os.path.expanduser("~/.local/bin/agy")
+                if not os.path.isfile(exec_path):
+                    exec_path = "agy"
+                cmd = [exec_path, "-p", "Execute prompt from stdin", "--dangerously-skip-permissions"]
+                if capture_cost:
+                    cmd.extend(["-o", "json"])
+            elif engine == "gemini":
                 cmd = [engine, "-p", "Execute prompt from stdin", "--skip-trust"]
                 if capture_cost:
                     cmd.extend(["--output-format", "json"])
