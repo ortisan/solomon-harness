@@ -194,6 +194,14 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     mem_up.add_argument("--wait", type=int, default=25, help="Seconds to wait for the backend port after starting")
     subparsers.add_parser("memory-down", help="Stop the memory backend (docker compose down)")
 
+    memory_parser = subparsers.add_parser(
+        "memory", help="Memory store maintenance (reconcile the write-through mirror)"
+    )
+    memory_sub = memory_parser.add_subparsers(dest="memory_command", help="Memory subcommands")
+    memory_sub.add_parser(
+        "sync", help="Replay pending mirror records to SurrealDB and report the counts"
+    )
+
     ig_parser = subparsers.add_parser(
         "install-global",
         help="Install agents, /solomon commands, the session hook, and the shared memory home into ~/.claude and ~/.solomon-harness",
@@ -297,6 +305,18 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         result = stop_memory(workspace_root)
         print(_describe(result))
         sys.exit(0 if result.get("ok") else 1)
+    elif args.command == "memory":
+        from solomon_harness.voice import say
+        if args.memory_command == "sync":
+            from solomon_harness.tools.database_client import DatabaseClient
+            with DatabaseClient(harness_dir=workspace_root) as db:
+                counts = db.reconcile()
+            print(say(
+                f"memory sync: {counts['synced']} reconciled, "
+                f"{counts['remaining']} pending"
+            ))
+        else:
+            memory_parser.print_help()
     elif args.command == "install-global":
         from solomon_harness.install_global import describe, install_global
         result = install_global(register_mcp=not args.no_mcp)

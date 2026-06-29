@@ -148,6 +148,32 @@ def ensure_home_compose() -> Optional[str]:
     return dest
 
 
+def reconcile_pending(workspace_root: str) -> Optional[dict]:
+    """Best-effort replay of pending write-through mirror records to SurrealDB.
+
+    Called once the backend is confirmed up (memory-up / SessionStart) so a write
+    captured locally during a prior outage is healed automatically, not only via a
+    manual ``solomon-harness memory sync`` (ADR-0002, issue #35). It is bounded and
+    swallowing -- it must never raise or block the session-start hook -- so any
+    failure (including a backend that drops again) is reported on stderr and
+    ignored. A cheap pending-count pre-check skips building a client (and opening a
+    socket) when there is nothing to reconcile, which is the common case. Returns
+    the reconcile counts, or None when it could not run.
+    """
+    try:
+        from solomon_harness import healthcheck
+
+        if healthcheck.pending_reconcile_count(workspace_root) == 0:
+            return {"synced": 0, "remaining": 0}
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            return db.reconcile()
+    except Exception as exc:  # never break the session-start hook
+        sys.stderr.write(f"memory reconcile skipped: {exc}\n")
+        return None
+
+
 def ensure_memory_up(
     workspace_root: Optional[str] = None, wait_seconds: int = 25
 ) -> dict:
@@ -168,6 +194,8 @@ def ensure_memory_up(
         return {"ok": True, "skipped": f"backend host '{host}' is not local"}
 
     if is_serving(host, port):
+        # The backend is up: replay anything stranded by a prior outage.
+        reconcile_pending(workspace_root)
         return {"ok": True, "already_running": True}
 
     # The port is open but it is not SurrealDB: a foreign process holds it.
@@ -210,6 +238,8 @@ def ensure_memory_up(
     waited = 0.0
     while waited < wait_seconds:
         if is_serving(host, port):
+            # Newly serving: replay anything stranded by a prior outage.
+            reconcile_pending(workspace_root)
             return {"ok": True, "started": True}
         time.sleep(1.0)
         waited += 1.0
