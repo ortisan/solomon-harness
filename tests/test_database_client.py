@@ -795,6 +795,35 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIs(annotated["116-R-01"], False)
         self.assertIs(annotated[""], False)
 
+    def test_get_open_issues_predicate_unchanged_after_annotation(self):
+        """The bucket annotation changed no row membership: get_open_issues still
+        returns exactly the non-terminal set, and a terminal numeric id (999,
+        closed) never leaks into the GitHub bucket. Pins that the {closed, done,
+        Done} predicate (ADR-0006) is unchanged in meaning after the annotation."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            conn.executemany(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("116", "Numeric open", "feature", "in_progress", None),
+                    ("116-R-01", "Composite open", "task", "open", None),
+                    ("n1", "Null status", "task", None, None),
+                    ("999", "Terminal numeric", "feature", "closed", None),
+                    ("L1", "Legacy terminal", "bug", "Done", None),
+                ],
+            )
+            conn.commit()
+
+        rows = client.get_open_issues()
+        client.close()
+        returned = {row["github_id"] for row in rows}
+        github_bucket = {row["github_id"] for row in rows if row["is_github_issue"]}
+        self.assertEqual(returned, {"116", "116-R-01", "n1"})
+        self.assertNotIn("999", returned)
+        self.assertNotIn("999", github_bucket)
+        self.assertEqual(github_bucket, {"116"})
+
     def test_get_open_issues_surreal_query_tolerates_null_status(self):
         """On SurrealDB the open predicate keeps NULL/NONE-status rows (consistent
         with is_terminal(None) being False), still binding the terminal set as a
