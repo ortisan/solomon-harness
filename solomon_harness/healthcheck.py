@@ -175,6 +175,38 @@ def check_shared_home(home: Optional[str] = None) -> Dict:
     )
 
 
+def check_git_config(workspace_root: str) -> Dict:
+    """Check for stray core.worktree or core.bare=true in .git/config (issue #38)."""
+    from solomon_harness.worktree import _clean_git_env
+
+    # Check core.worktree
+    proc_wt = subprocess.run(
+        ["git", "-C", workspace_root, "config", "--local", "--get", "core.worktree"],
+        capture_output=True, text=True, check=False, env=_clean_git_env()
+    )
+    # Check core.bare
+    proc_bare = subprocess.run(
+        ["git", "-C", workspace_root, "config", "--local", "--get", "core.bare"],
+        capture_output=True, text=True, check=False, env=_clean_git_env()
+    )
+
+    has_wt = proc_wt.returncode == 0 and proc_wt.stdout.strip() != ""
+    is_bare_true = proc_bare.returncode == 0 and proc_bare.stdout.strip().lower() == "true"
+
+    if has_wt or is_bare_true:
+        details = []
+        if has_wt:
+            details.append(f"core.worktree={proc_wt.stdout.strip()}")
+        if is_bare_true:
+            details.append("core.bare=true")
+        detail_msg = f"stray git configuration found ({', '.join(details)}); checkout is corrupted"
+        return _check(
+            "Git config", WARN, detail_msg,
+            "Run 'solomon-harness git-repair' to restore local config."
+        )
+    return _check("Git config", OK, "clean (no stray core.worktree or core.bare=true)")
+
+
 def run_checks(workspace_root: Optional[str] = None) -> List[Dict]:
     workspace_root = workspace_root or os.getcwd()
     specs = [
@@ -184,6 +216,7 @@ def run_checks(workspace_root: Optional[str] = None) -> List[Dict]:
         ("Memory reconcile", lambda: check_pending_reconcile(workspace_root)),
         ("Global install", check_global_install),
         ("GitHub auth", check_github),
+        ("Git config", lambda: check_git_config(workspace_root)),
     ]
     checks = []
     for label, fn in specs:
