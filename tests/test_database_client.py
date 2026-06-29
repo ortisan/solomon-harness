@@ -787,6 +787,100 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIn("assignee: $assignee", captured["query"])
         self.assertEqual(captured["params"]["assignee"], "alice@example.com")
 
+    def test_assignee_migration_is_idempotent_on_a_real_store(self):
+        """Running the additive assignee migration twice on the same store is a
+        no-op the second time (the PRAGMA guard short-circuits): it never raises
+        and the column exists exactly once."""
+        db_path = os.path.join(self.temp_dir.name, "idem.db")
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("CREATE TABLE issues (github_id TEXT PRIMARY KEY, title TEXT)")
+            DatabaseClient._ensure_issue_assignee_column(conn)
+            DatabaseClient._ensure_issue_assignee_column(conn)  # must not raise
+            columns = [row["name"] for row in conn.execute("PRAGMA table_info(issues)")]
+        self.assertEqual(columns.count("assignee"), 1)
+
+    def test_concurrent_duplicate_column_race_is_treated_as_migrated(self):
+        """On the shared store two first-opens can both pass the PRAGMA guard before
+        either ALTERs; the losing ALTER then raises 'duplicate column name'. The
+        migration absorbs that as already-migrated and never raises."""
+
+        class _RaceConn:
+            """PRAGMA reports the column absent (guard passes), but the ALTER loses
+            the race with a concurrent writer that already added it."""
+
+            def execute(self, sql, *args):
+                if sql.startswith("PRAGMA table_info"):
+                    return [{"name": "github_id"}, {"name": "title"}]
+                if sql.startswith("ALTER TABLE issues ADD COLUMN assignee"):
+                    raise sqlite3.OperationalError("duplicate column name: assignee")
+                raise AssertionError(f"unexpected sql: {sql}")
+
+        DatabaseClient._ensure_issue_assignee_column(_RaceConn())  # must not raise
+
+    def test_non_duplicate_alter_error_still_propagates(self):
+        """A non-duplicate ALTER failure is a real error and must still propagate;
+        the race guard absorbs only the duplicate-column case."""
+
+        class _BrokenConn:
+            def execute(self, sql, *args):
+                if sql.startswith("PRAGMA table_info"):
+                    return [{"name": "github_id"}]
+                if sql.startswith("ALTER TABLE issues ADD COLUMN assignee"):
+                    raise sqlite3.OperationalError("disk I/O error")
+                raise AssertionError(f"unexpected sql: {sql}")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            DatabaseClient._ensure_issue_assignee_column(_BrokenConn())
+
+    def test_sqlite_write_error_logs_type_only_not_message(self):
+        """A SQLite issue-write failure logs the exception type and record id, never
+        str(e). The issue row now carries the person key (an email when public), so a
+        backend error string must not leak it into logs (STRIDE: info disclosure)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        secret = "alice@example.com"
+        fields = {
+            "github_id": "issue-1", "title": "T", "type_": "bug",
+            "status": "open", "milestone_id": None, "assignee": secret,
+        }
+        with patch.object(
+            client, "_sqlite_conn",
+            side_effect=sqlite3.OperationalError(f"disk error near {secret}"),
+        ):
+            with self.assertLogs(level="ERROR") as logs:
+                with self.assertRaises(RuntimeError):
+                    client._db_log_issue("issue-1", fields)
+        client.close()
+        joined = "\n".join(logs.output)
+        self.assertIn("OperationalError", joined)  # the exception type is logged
+        self.assertIn("issue-1", joined)  # and the record id
+        self.assertNotIn(secret, joined)  # but never the message (no person key leak)
+
+    def test_surreal_write_error_logs_type_only_not_message(self):
+        """The SurrealDB issue-write branch logs the exception type and record id,
+        never str(e), so a backend error string cannot leak the person key."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.backend = "surrealdb"
+        secret = "alice@example.com"
+
+        def boom(query, params=None):
+            raise ValueError(f"surreal blew up on {secret}")
+
+        client._run_surreal = boom
+        fields = {
+            "github_id": "issue-9", "title": "T", "type_": "bug",
+            "status": "open", "milestone_id": None, "assignee": secret,
+        }
+        with self.assertLogs(level="ERROR") as logs:
+            with self.assertRaises(RuntimeError):
+                client._db_log_issue("issue-9", fields)
+        client.backend = "sqlite"
+        client.close()
+        joined = "\n".join(logs.output)
+        self.assertIn("ValueError", joined)  # the exception type is logged
+        self.assertIn("issue-9", joined)  # and the record id
+        self.assertNotIn(secret, joined)  # but never the message (no person key leak)
+
     def test_get_open_issues_surreal_uses_parameterized_not_in(self):
         """On SurrealDB the open predicate is a parameterized NOT IN over the
         terminal-literal set, never a string-interpolated literal (STRIDE)."""

@@ -151,7 +151,12 @@ total and deterministic:
   construction — the key is computed and stored within each tenant store and portfolio
   reads are composed per tenant, never joined (ADR-0002 R-01); the migration is
   expand/contract — a nullable, additive `assignee` field, so no existing 5-arg
-  `log_issue` caller breaks and old rows read back as `unassigned`.
+  `log_issue` caller breaks and old rows read back as `unassigned`. Consumers
+  (e.g. #54, #55) MUST read the key via
+  `person_key_or_unassigned(row.get("assignee"))` and never index
+  `row["assignee"]` directly: a pre-migration SurrealDB SCHEMALESS record lacks the
+  field entirely (the SQLite fallback has it as NULL), so a direct index would
+  raise on those rows.
 - Negative: because the key is computed on write, a wrong contract baked into rows is
   expensive to undo (RAID R-02), mitigated by pinning the contract here and gating
   capture behind green normalization tests; email is commonly private (A-01), so most

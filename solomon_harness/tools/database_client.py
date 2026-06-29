@@ -779,10 +779,22 @@ class DatabaseClient:
         store created before the column gains it additively (no destructive rewrite
         of existing rows, which keep assignee NULL), while a fresh store whose
         CREATE TABLE already declared the column skips the ALTER.
+
+        Concurrency-safe on the shared multi-agent store: two simultaneous
+        first-opens can both pass the PRAGMA guard before either ALTERs, so the
+        losing ALTER raises ``OperationalError: duplicate column name``. That means
+        a concurrent open already added the column, so it is treated as
+        already-migrated; any other OperationalError is a real failure and
+        propagates.
         """
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(issues)")}
-        if "assignee" not in existing:
+        if "assignee" in existing:
+            return
+        try:
             conn.execute("ALTER TABLE issues ADD COLUMN assignee TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def _resolve_sqlite_path(self) -> str:
         """Resolve the SQLite store path.
@@ -1802,7 +1814,12 @@ class DatabaseClient:
             except _ConnectionLost:
                 raise
             except Exception as e:
-                logging.error(f"Failed to log issue in SurrealDB: {e}")
+                # Log the exception type and record id, never str(e): the issue row
+                # carries the person key (an email when public), so a backend error
+                # string must not leak it into logs (STRIDE: information disclosure).
+                logging.error(
+                    "Failed to log issue %s in SurrealDB: %s", record_id, type(e).__name__
+                )
                 raise RuntimeError(f"Failed to log issue in SurrealDB: {e}")
         else:
             query = """
@@ -1830,7 +1847,10 @@ class DatabaseClient:
                     )
                     conn.commit()
             except sqlite3.Error as e:
-                logging.error(f"Failed to log issue: {e}")
+                # Type and record id only, never str(e): the row carries the person
+                # key, so a backend error string must not leak it (STRIDE: info
+                # disclosure).
+                logging.error("Failed to log issue %s: %s", record_id, type(e).__name__)
                 raise RuntimeError(f"Failed to log issue: {e}")
 
     def save_backtest(
