@@ -77,9 +77,23 @@ def build_digest(
     open_issues: List[Dict[str, Any]],
     last_loop_run: Optional[Dict[str, Any]],
     prs: Optional[List[Dict[str, Any]]],
+    backend: str = "surrealdb",
 ) -> List[str]:
-    """Render the digest lines from already-collected facts (pure)."""
+    """Render the digest lines from already-collected facts (pure).
+
+    ``backend`` is the memory backend the facts were read from. When it is the
+    SQLite fallback (SurrealDB unreachable), the digest leads with a banner so a
+    stale or seeded local store is never silently presented as the canonical
+    board — the failure mode that made a fixture row (``gh-1``) look like the
+    real project state at session start.
+    """
     lines: List[str] = []
+
+    if backend == "sqlite":
+        lines.append(
+            "NOTE: memory is on the SQLite fallback (SurrealDB unreachable). "
+            "The board below is the local fallback and may be stale."
+        )
 
     if resume:
         lines.append(
@@ -270,7 +284,11 @@ def build_digest(
 
 
 def _run_with_timeout(func, *args, timeout: float = 1.5, default=None):
-    """Executes a function in a background thread to prevent local DoS if SurrealDB is unresponsive."""
+    """Executes a function in a background thread to prevent local DoS if SurrealDB is unresponsive.
+
+    Since the CLI process prints the digest and exits immediately, daemon threads
+    that hang will be terminated automatically by the OS on process exit.
+    """
     result = {"val": default, "done": False}
 
     def worker():
@@ -283,7 +301,7 @@ def _run_with_timeout(func, *args, timeout: float = 1.5, default=None):
     t = threading.Thread(target=worker, daemon=True)
     t.start()
     t.join(timeout)
-    if not result["done"]:
+    if t.is_alive():
         sys.stderr.write(f"WARNING: database operation {func.__name__} timed out after {timeout} seconds.\n")
     return result["val"]
 
@@ -295,4 +313,8 @@ def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> Li
     runs = _run_with_timeout(db.list_loop_runs, 1, timeout=1.5, default=[]) or []
     last_loop = runs[0] if runs else None
     prs = _best_effort_prs(workspace_root) if fetch_github else None
-    return build_digest(resume, open_issues, last_loop, prs)
+    # Read the backend AFTER the queries: a mid-call ConnectionLost can flip the
+    # client to the SQLite fallback, and the banner must reflect where the facts
+    # above actually came from.
+    backend = getattr(db, "backend", "surrealdb")
+    return build_digest(resume, open_issues, last_loop, prs, backend=backend)

@@ -82,6 +82,42 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("Last loop:", text)
         self.assertIn("Open issues: 1", text)
 
+    def test_build_digest_flags_sqlite_fallback(self):
+        """When memory is on the SQLite fallback (SurrealDB unreachable), the
+        digest must say so loudly, so fallback rows are never mistaken for the
+        canonical board state."""
+        text = "\n".join(
+            digest.build_digest(
+                resume=None, open_issues=[], last_loop_run=None, prs=None, backend="sqlite"
+            )
+        )
+        self.assertIn("SQLite fallback", text)
+        self.assertIn("may be stale", text)
+
+    def test_build_digest_no_banner_on_surreal(self):
+        text = "\n".join(
+            digest.build_digest(
+                resume=None, open_issues=[], last_loop_run=None, prs=None, backend="surrealdb"
+            )
+        )
+        self.assertNotIn("SQLite fallback", text)
+
+    def test_gather_digest_surfaces_sqlite_fallback(self):
+        class FallbackDB:
+            backend = "sqlite"
+
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return []
+
+            def list_loop_runs(self, n):
+                return []
+
+        text = "\n".join(digest.gather_digest(".", FallbackDB(), fetch_github=False))
+        self.assertIn("SQLite fallback", text)
+
     def test_gather_digest_survives_a_broken_db(self):
         class BrokenDB:
             def get_latest_activity(self):
@@ -223,6 +259,32 @@ class TestBuildDigest(unittest.TestCase):
         ]
         text = "\n".join(digest.build_digest(resume=None, open_issues=issues, last_loop_run=None, prs=[]))
         self.assertIn("- [badid] issue title", text)
+
+    def test_run_with_timeout_distinguishes_immediate_failure_from_timeout(self):
+        import io
+        import time
+        from unittest.mock import patch
+        
+        # Test 1: Immediate failure (should NOT print warning to stderr)
+        def fail_immediately():
+            raise RuntimeError("DB failed")
+            
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            res = digest._run_with_timeout(fail_immediately, timeout=0.1, default="fallback")
+            self.assertEqual(res, "fallback")
+            self.assertEqual(stderr_capture.getvalue(), "")
+
+        # Test 2: Timeout/Hang (should print warning to stderr)
+        def hang_long():
+            time.sleep(0.5)
+            return "ok"
+            
+        stderr_capture2 = io.StringIO()
+        with patch("sys.stderr", stderr_capture2):
+            res2 = digest._run_with_timeout(hang_long, timeout=0.1, default="fallback")
+            self.assertEqual(res2, "fallback")
+            self.assertIn("timed out after 0.1 seconds", stderr_capture2.getvalue())
 
 
 if __name__ == "__main__":
