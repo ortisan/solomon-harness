@@ -115,6 +115,19 @@ class TestCatalog(CapabilityRouterTestBase):
         self.assertIn("blankrole", by_name)
         self.assertEqual(by_name["blankrole"], "")
 
+    def test_role_file_with_giant_line_is_read_capped(self):
+        role_dir = os.path.join(self.root, "agents", "giantline", "agents")
+        os.makedirs(role_dir)
+        giant_desc = "A" * 20000
+        with open(os.path.join(role_dir, "giantline.md"), "w", encoding="utf-8") as f:
+            f.write(f"# giantline\n\n{giant_desc}\n")
+        catalog = cr.load_catalog(self.root)
+        by_name = {a.name: a.description for a in catalog}
+        self.assertIn("giantline", by_name)
+        # It should cap at 8192 bytes/chars
+        self.assertEqual(len(by_name["giantline"]), 8192)
+
+
 
 class TestGap(CapabilityRouterTestBase):
     def test_missing_skill_on_an_existing_agent_is_an_adapt_gap(self):

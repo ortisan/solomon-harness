@@ -80,14 +80,30 @@ def _default_workspace_root() -> str:
 def _role_description(role_path: str) -> str:
     """First non-heading, non-empty line of a role file (its advertised summary)."""
     try:
+        if os.path.getsize(role_path) > 1024 * 1024:
+            return ""
         with open(role_path, "r", encoding="utf-8") as f:
-            for line in f:
+            in_skipped_line = False
+            while True:
+                line = f.readline(8192)
+                if not line:
+                    break
+                is_continuation = in_skipped_line
+                if line.endswith("\n"):
+                    in_skipped_line = False
+                else:
+                    in_skipped_line = True
+                if is_continuation:
+                    continue
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#"):
                     return stripped
+                if stripped.startswith("#"):
+                    in_skipped_line = not line.endswith("\n")
     except OSError:
         return ""
     return ""
+
 
 
 def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
