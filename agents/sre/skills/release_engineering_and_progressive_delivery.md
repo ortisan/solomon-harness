@@ -1,5 +1,7 @@
 # Release Engineering and Progressive Delivery
 
+This skill applies only when a deployed, running service ships: canary, blue-green or rolling rollouts gated by SLO burn-rate and on-call. It does **not** apply to solomon-harness itself — a source-distributed library released as a git tag plus GitHub Release with no running service, so the canary/blue-green/rolling controllers (Argo Rollouts, Flagger), the SLO burn-rate gates, and the on-call Production Readiness Review described below do **not** govern it; for that case the real release mechanics live in the sibling skill `tag_release_and_changelog` and in `docs/release-policy.md`. Everything below is correct and kept intact for the deployed-service case — read it only when shipping such a service.
+
 Ship every change to a small, observed slice first, let automated analysis against SLOs decide whether to promote or abort, and keep a rollback that is one command and completes in minutes. The job is to make a bad release boring: bound its blast radius, detect it from error-budget burn, and undo it before users notice. This skill is the rollout mechanics; reliability targets and the error-budget policy come from sibling skill `reliability_targets_sli_slo_sla_error_budgets`, the surrounding CI/CD and IaC from `infrastructure_and_deployment_pipelines`, and the application-level rollout sequencing (expand/contract, dual-run, strangler) from software_architect's `incremental_migration_and_delivery`.
 
 ## Choosing a strategy

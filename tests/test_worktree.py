@@ -87,6 +87,21 @@ class TestEnsureWorktree(WorktreeTestBase):
         head = _git(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         self.assertEqual(head, "develop")
 
+    def test_default_base_is_main_not_develop(self):
+        # Trunk-only migration: the default base must be main, not the removed
+        # develop. Advance main past develop so the resolved base is observable.
+        _git(self.repo, "branch", "main")
+        _git(self.repo, "checkout", "-q", "main")
+        with open(os.path.join(self.repo, "main.txt"), "w", encoding="utf-8") as f:
+            f.write("main only\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "advance main")
+        main_sha = _git(self.repo, "rev-parse", "main").stdout.strip()
+        _git(self.repo, "checkout", "-q", "develop")  # leave the primary off main
+        path = worktree.ensure_worktree(self.repo, "feature/on-main")  # no base -> default
+        wt_sha = _git(path, "rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(wt_sha, main_sha)
+
     def test_succeeds_when_primary_checkout_is_dirty(self):
         with open(os.path.join(self.repo, "README.md"), "a", encoding="utf-8") as f:
             f.write("uncommitted\n")
