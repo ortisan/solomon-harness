@@ -224,3 +224,4 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `software_architect` — C4 diagrams, Architectural Decision Records, design contracts.
 - `software_engineer` — TDD implementation, clean code, debugging, Git Flow.
 - `sre` — high availability, deployment pipelines, incident runbooks, disaster recovery, SLA/SLO.
+- `ux_designer` — UX and UI design: user research and usability testing, information architecture, interaction design and interface states, visual design, the design system and DTCG design tokens, accessibility by design (WCAG 2.2 AA); hands implementation-ready specs and tokens to the `frontend` agent.
