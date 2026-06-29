@@ -83,9 +83,18 @@ trap cleanup EXIT
 
 # Clone the wiki repository
 echo "Cloning wiki repository..."
-if ! git clone "$WIKI_URL" "$TEMP_DIR"; then
-  echo "Error: Failed to clone wiki repository from $WIKI_URL" >&2
-  exit 2
+INITIALIZED_FRESH=false
+if ! git clone "$WIKI_URL" "$TEMP_DIR" 2>/dev/null; then
+  echo "Warning: Failed to clone wiki repository from $WIKI_URL. It might be uninitialized." >&2
+  echo "Attempting to initialize a fresh wiki repository locally..." >&2
+  
+  # Ensure TEMP_DIR exists and initialize git in it
+  mkdir -p "$TEMP_DIR"
+  cd "$TEMP_DIR"
+  git init -b main
+  git remote add origin "$WIKI_URL"
+  INITIALIZED_FRESH=true
+  cd "$REPO_ROOT"
 fi
 
 # Sync markdown files (flat structure)
@@ -108,7 +117,7 @@ fi
 git add .
 
 # Check if there are any changes to commit
-if git diff --quiet && git diff --staged --quiet; then
+if [[ "$INITIALIZED_FRESH" = "false" ]] && git diff --quiet && git diff --staged --quiet; then
   echo "No changes detected. Wiki is already up-to-date."
   exit 0
 fi
@@ -117,9 +126,16 @@ echo "Committing changes..."
 git commit -m "sync: update wiki pages from repository docs"
 
 echo "Pushing changes..."
-if ! git push origin HEAD; then
-  echo "Error: Failed to push changes to wiki remote" >&2
-  exit 3
+if [[ "$INITIALIZED_FRESH" = "true" ]]; then
+  if ! git push -u origin main; then
+    echo "Error: Failed to push changes to initialize wiki remote" >&2
+    exit 3
+  fi
+else
+  if ! git push origin HEAD; then
+    echo "Error: Failed to push changes to wiki remote" >&2
+    exit 3
+  fi
 fi
 
 echo "Wiki synchronized successfully."

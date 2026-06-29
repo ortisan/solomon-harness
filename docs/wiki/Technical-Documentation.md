@@ -1,12 +1,12 @@
 # Technical Documentation
 
-This document describes the architectural patterns, technology stack, data models, and integration specifications for **{{PROJECT_NAME}}**.
+This document describes the architectural patterns, technology stack, data models, and integration specifications for **solomon-harness**.
 
 ---
 
 ## 1. System Architecture
 
-Describe the architectural pattern of {{PROJECT_NAME}} (e.g., Hexagonal/Ports & Adapters, Clean Architecture, or Event-Driven).
+Describe the architectural pattern of solomon-harness (Hexagonal/Ports & Adapters).
 
 ```mermaid
 graph TD
@@ -24,10 +24,11 @@ graph TD
 The project utilizes the following technologies for runtime execution, persistence, and telemetry:
 
 * **Languages & Runtimes:**
-{{TECH_STACK_LIST}}
+  - JavaScript/TypeScript
+  - Python
 * **Database & Persistence:**
-  * SurrealDB (Primary memory and graph knowledge store)
-  * SQLite (Fallback file-based database for local testing and offline support)
+  - SurrealDB (Primary memory and graph knowledge store)
+  - SQLite (Fallback file-based database for local testing and offline support)
 * **Observability:** OpenTelemetry (Distributed tracing, metric gathering, and span analysis)
 
 ---
@@ -42,7 +43,7 @@ Outline the primary data collections/tables, relations, and indexing strategies:
 +------------------+         +------------------+
 | - id (UUID)      |<>------>| - id (UUID)      |
 | - agent_name     |         | - title          |
-| - budget         |         | - context        |
+| - context        |         | - context        |
 +------------------+         +------------------+
 ```
 
@@ -60,5 +61,5 @@ Specify interface definitions and communication protocols (e.g., OpenAPI specifi
 ## 5. Development & Deployment Procedures
 
 For instructions on building, running test suites, and executing local checks:
-* Refer to **[CLAUDE.md]({{WEB_REPO_URL}}/blob/main/CLAUDE.md)** for local testing commands and linters.
+* Refer to **[CLAUDE.md](https://github.com/ortisan/solomon-harness/blob/main/CLAUDE.md)** for local testing commands and linters.
 * Refer to **[Development Workflow Guide](Development-Workflow)** for detailed TDD and branching cycles.

@@ -1,0 +1,41 @@
+# Quick Start Guide
+
+This guide will help you onboard onto **{{PROJECT_NAME}}** and execute your first development cycle.
+
+---
+
+## 1. Installation & Environment
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository_url> && cd {{PROJECT_NAME}}
+   ```
+2. **Setup virtual environment:**
+   ```bash
+   uv sync
+   ```
+3. **Install the project CLI or dependencies:**
+   Ensure all local packages are built and exposed on your path.
+
+---
+
+## 2. Setting Up Solomon Harness
+
+Initialize the harness in this project by running:
+
+```bash
+solomon-harness init
+```
+
+This will run a diagnostic check, link the GitHub Project board, scaffold required folders, and index the codebase into your memory store.
+
+---
+
+## 3. Running Workflows
+
+Drive development using the `/solomon-*` commands in your host agent (Claude Code or Gemini CLI):
+
+* Run **`/solomon-loop`** to scan project memory and automatically run the next logical step.
+* Run **`/solomon-issue <summary>`** to create a new ticket in the Backlog.
+* Run **`/solomon-start <issue_id>`** to begin implementing an issue using TDD.
+* Run **`/solomon-release <issue_id>`** to merge and release.
