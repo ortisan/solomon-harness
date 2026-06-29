@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import urllib.request
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 DEFAULT_WEBHOOK_ENV = "SOLOMON_NOTIFY_WEBHOOK"
 
@@ -65,11 +65,11 @@ def _read_notify_config(workspace_root: str) -> Dict[str, Any]:
 
 def get_notifier(workspace_root: str, env: Optional[Dict[str, str]] = None) -> Optional[Notifier]:
     """Select an adapter from config + env; None (no-op) when nothing is configured."""
-    env = os.environ if env is None else env
+    resolved_env: Mapping[str, str] = os.environ if env is None else env
     cfg = _read_notify_config(workspace_root)
     if cfg.get("enabled") is False:
         return None
-    url = env.get(cfg.get("webhook_env", DEFAULT_WEBHOOK_ENV))
+    url = resolved_env.get(cfg.get("webhook_env", DEFAULT_WEBHOOK_ENV))
     mode = cfg.get("mode")
     if url and url.lower().startswith(("http://", "https://")) and mode in (None, "webhook"):
         return WebhookNotifier(url)

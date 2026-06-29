@@ -18,7 +18,7 @@ automation and cadence.
 import fnmatch
 import json
 import os
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
 from solomon_harness.loop_lock import resolve_common_file
 
@@ -78,9 +78,9 @@ class LoopPolicy:
     # -- construction -------------------------------------------------------
     @classmethod
     def from_config(cls, workspace_root: str, env: Optional[Dict[str, str]] = None) -> "LoopPolicy":
-        env = os.environ if env is None else env
+        resolved_env: Mapping[str, str] = os.environ if env is None else env
         cfg = _read_loop_config(workspace_root)
-        level = env.get("SOLOMON_LOOP_AUTONOMY") or cfg.get("autonomy") or "human"
+        level = resolved_env.get("SOLOMON_LOOP_AUTONOMY") or cfg.get("autonomy") or "human"
         return cls(
             workspace_root,
             level=str(level),
