@@ -12,6 +12,8 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from opentelemetry import trace
@@ -31,6 +33,38 @@ _tracer = trace.get_tracer("solomon_harness.cockpit_read")
 # here, so this read side and the board adapter share one source of truth
 # (ADR-0006). An issue whose status maps to none of these is not coerced into a
 # column; it is counted in ``unmapped`` so nothing is dropped.
+
+# Per-project read outcomes for the cross-tenant fan-out (slice 1b). A clean read
+# is OK; a permission failure is FORBIDDEN; a timeout or any other read failure is
+# UNREACHABLE. Degraded (non-OK) projects carry no issue rows.
+STATUS_OK = "OK"
+STATUS_UNREACHABLE = "UNREACHABLE"
+STATUS_FORBIDDEN = "FORBIDDEN"
+
+# A FORBIDDEN swimlane carries 403 per-project semantics inside the 207 envelope.
+FORBIDDEN_HTTP_STATUS = 403
+
+# Aggregate HTTP status: 200 when every project read cleanly, else 207 Multi-Status.
+AGGREGATE_OK = 200
+AGGREGATE_MULTI_STATUS = 207
+
+# The portfolio fan-out is capped so a host with many tenants cannot blow the
+# p95 latency envelope (R-06): at most this many projects are read and rendered,
+# the rest reported as an overflow count. The cap is on the sorted set, so the
+# excluded tail is stable across loads.
+MAX_PROJECTS = 25
+
+# Bounded concurrency for the fan-out: at most this many tenants are read at once
+# so the reads run in parallel without unbounded thread or connection growth.
+MAX_FANOUT_WORKERS = 8
+
+# A per-project read that blocks past this many seconds is classified UNREACHABLE
+# rather than allowed to stall the fan-out (DoS mitigation, R-04).
+PER_PROJECT_TIMEOUT_S = 5.0
+
+# Read-failure messages matching one of these patterns are treated as an access
+# denial (FORBIDDEN) rather than an unreachable tenant.
+_PERMISSION_PATTERNS = ("permission", "forbidden", "denied", "unauthor", "not allowed")
 
 
 def build_board(client: Any, project: str) -> Dict[str, Any]:
@@ -77,6 +111,11 @@ def build_board(client: Any, project: str) -> Dict[str, Any]:
         }
 
 
+def _zero_columns() -> List[Dict[str, Any]]:
+    """Return the seven board columns at count zero with no issues."""
+    return [{"name": name, "count": 0, "issues": []} for name in BOARD_COLUMNS]
+
+
 def empty_board(project: str) -> Dict[str, Any]:
     """Return the seven columns at count zero for ``project``.
 
@@ -85,10 +124,163 @@ def empty_board(project: str) -> Dict[str, Any]:
     """
     return {
         "project": project,
-        "columns": [{"name": n, "count": 0, "issues": []} for n in BOARD_COLUMNS],
+        "columns": _zero_columns(),
         "total": 0,
         "unmapped": 0,
     }
+
+
+def _ok_swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build an ``OK`` swimlane from a per-project board, carrying its issues."""
+    board = result["board"]
+    return {
+        "project": result["project"],
+        "status": STATUS_OK,
+        "columns": board["columns"],
+        "total": board["total"],
+        "unmapped": board["unmapped"],
+    }
+
+
+def _degraded_swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a degraded swimlane that carries its status and no issue rows.
+
+    Both UNREACHABLE and FORBIDDEN render the seven column headers at count 0 so
+    the lane is visible, but neither carries any issue data (information
+    disclosure mitigation). FORBIDDEN additionally stamps the per-project 403.
+    """
+    swimlane = {
+        "project": result["project"],
+        "status": result["status"],
+        "columns": _zero_columns(),
+        "total": 0,
+        "unmapped": 0,
+    }
+    if result["status"] == STATUS_FORBIDDEN:
+        swimlane["httpStatus"] = FORBIDDEN_HTTP_STATUS
+    return swimlane
+
+
+def _swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the swimlane for one per-project outcome, OK or degraded."""
+    if result["status"] == STATUS_OK:
+        return _ok_swimlane(result)
+    return _degraded_swimlane(result)
+
+
+def _portfolio_columns(swimlanes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sum the seven column counts across swimlanes, keeping the fixed order.
+
+    Degraded swimlanes carry zero-count columns, so they contribute nothing to
+    the portfolio totals by construction; only ``OK`` rows move the counts.
+    """
+    counts = {name: 0 for name in BOARD_COLUMNS}
+    for swimlane in swimlanes:
+        for column in swimlane["columns"]:
+            counts[column["name"]] += column["count"]
+    return [{"name": name, "count": counts[name]} for name in BOARD_COLUMNS]
+
+
+def _assert_reconciles(total: int, columns: List[Dict[str, Any]], unmapped: int) -> None:
+    """Guard the portfolio reconciliation invariant against a future regression."""
+    column_total = sum(column["count"] for column in columns)
+    if total != column_total + unmapped:
+        raise RuntimeError(
+            "portfolio reconciliation failed: "
+            f"total={total} columns={column_total} unmapped={unmapped}"
+        )
+
+
+def compose_portfolio(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compose per-project read outcomes into one portfolio board (pure).
+
+    Builds one swimlane per project in the given order, each carrying only its
+    own issues, so cross-tenant isolation holds by construction (nothing is
+    joined or merged). Sums the seven portfolio column counts and the portfolio
+    ``total``/``unmapped`` across swimlanes, asserts the reconciliation invariant
+    (``total == sum(column counts) + unmapped``), and sets ``aggregateStatus`` to
+    200 when every project is ``OK`` else 207 (Multi-Status). No threads or I/O.
+    """
+    swimlanes = [_swimlane(result) for result in results]
+    columns = _portfolio_columns(swimlanes)
+    total = sum(swimlane["total"] for swimlane in swimlanes)
+    unmapped = sum(swimlane["unmapped"] for swimlane in swimlanes)
+    _assert_reconciles(total, columns, unmapped)
+    aggregate_status = (
+        AGGREGATE_OK
+        if all(result["status"] == STATUS_OK for result in results)
+        else AGGREGATE_MULTI_STATUS
+    )
+    return {
+        "swimlanes": swimlanes,
+        "columns": columns,
+        "total": total,
+        "unmapped": unmapped,
+        "aggregateStatus": aggregate_status,
+    }
+
+
+def _is_permission_failure(error: Exception) -> bool:
+    """Report whether a read failure reads as an access denial (FORBIDDEN)."""
+    message = str(error).lower()
+    return any(pattern in message for pattern in _PERMISSION_PATTERNS)
+
+
+def _read_tenant_board(
+    client_factory: Callable[[], Any], project: str
+) -> Dict[str, Any]:
+    """Own one tenant's whole read lifecycle inside the timed worker.
+
+    Creating the client (``client_factory``), binding the tenant (``use_tenant``),
+    and reading its board (``build_board``) all run here, so a connect-phase
+    failure or hang is bounded by the per-project timeout that wraps this worker
+    rather than propagating out to collapse the fan-out. The worker owns its
+    client and closes it in a ``finally``, so even an abandoned (timed-out) worker
+    closes its own connection when the read finally returns or errors, and the
+    outer path never closes a client mid-read (no close-during-read race).
+    """
+    client = client_factory()
+    try:
+        client.use_tenant(project)
+        return build_board(client, project)
+    finally:
+        client.close()
+
+
+def read_tenant_swimlane(
+    project: str,
+    client_factory: Callable[[], Any],
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Read exactly one tenant and classify the outcome (OK/FORBIDDEN/UNREACHABLE).
+
+    Runs the entire per-tenant lifecycle (connect, bind, read, close) inside a
+    single one-shot worker bounded by ``timeout``, so per-tenant isolation
+    (ADR-0002) holds by construction (a fresh ``DatabaseClient`` bound to exactly
+    one tenant via ``use_tenant``) and every phase, connect included, is bounded
+    by the per-project deadline. A clean read returns ``OK`` with the grouped
+    board; a ``PermissionError`` or a permission-pattern failure (at connect or
+    read) returns ``FORBIDDEN`` with no data; a read past ``timeout`` or any other
+    failure returns ``UNREACHABLE`` with no data. The worker owns and closes its
+    own client, so a timed-out worker is abandoned (not joined) and closes itself
+    when its read returns; the outer path never closes a client mid-read. The
+    result is the ``compose_portfolio`` input element.
+    """
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(_read_tenant_board, client_factory, project)
+        board = future.result(timeout=timeout)
+    except PermissionError:
+        return {"project": project, "status": STATUS_FORBIDDEN, "board": None}
+    except FuturesTimeoutError:
+        return {"project": project, "status": STATUS_UNREACHABLE, "board": None}
+    except Exception as error:
+        status = STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE
+        return {"project": project, "status": status, "board": None}
+    else:
+        return {"project": project, "status": STATUS_OK, "board": board}
+    finally:
+        pool.shutdown(wait=False)
 
 
 def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
@@ -144,11 +336,95 @@ def board_payload(
         client.close()
 
 
+def _discover_with(client_factory: Callable[[], Any]) -> List[str]:
+    """Open one client only to discover the sorted tenant set, then close it."""
+    client = client_factory()
+    try:
+        return discover_projects(client.list_databases)
+    finally:
+        client.close()
+
+
+def _overflow_notice(count: int) -> Optional[str]:
+    """Render the "N project(s) not shown" notice, or None when nothing spills."""
+    if count <= 0:
+        return None
+    noun = "project" if count == 1 else "projects"
+    return f"{count} {noun} not shown"
+
+
+def _fan_out(
+    projects: Sequence[str],
+    client_factory: Callable[[], Any],
+    max_workers: int,
+    timeout: float,
+) -> List[Dict[str, Any]]:
+    """Read the projects in parallel under a bounded pool, preserving their order.
+
+    Each project is read by ``read_tenant_swimlane`` with its own fresh client, so
+    no connection is shared across workers. The results are returned in the input
+    (sorted) order regardless of completion order, so the render is deterministic.
+    """
+    if not projects:
+        return []
+    results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(read_tenant_swimlane, project, client_factory, timeout): project
+            for project in projects
+        }
+        for future, project in futures.items():
+            results[project] = future.result()
+    return [results[project] for project in projects]
+
+
+def portfolio_payload(
+    harness_dir: Optional[str] = None,
+    client_factory: Optional[Callable[[], Any]] = None,
+    max_projects: int = MAX_PROJECTS,
+    max_workers: int = MAX_FANOUT_WORKERS,
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Build the cross-tenant portfolio board by fanning out over the tenants.
+
+    Discovers the sorted tenant set, caps it at ``max_projects`` (recording the
+    overflow count and a stable notice), fans the capped set out under a bounded
+    pool with a per-project read timeout, and composes the per-project outcomes
+    into one portfolio board. The whole read is wrapped in a ``cockpit.portfolio``
+    span that records the per-project statuses for the audit trace. Read-only:
+    every tenant is read through the read port and nothing is joined or written.
+
+    ``client_factory`` lets a test inject fakes; by default each call opens a
+    fresh ``DatabaseClient`` for the harness directory.
+    """
+    factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
+    with _tracer.start_as_current_span("cockpit.portfolio") as span:
+        available = _discover_with(factory)
+        shown = list(available[:max_projects])
+        overflow_count = len(available) - len(shown)
+
+        results = _fan_out(shown, factory, max_workers, timeout)
+        payload = compose_portfolio(results)
+        payload["overflow"] = overflow_count
+        payload["notice"] = _overflow_notice(overflow_count)
+
+        span.set_attribute("cockpit.project_count", len(available))
+        span.set_attribute("cockpit.shown_count", len(shown))
+        span.set_attribute("cockpit.overflow_count", overflow_count)
+        span.set_attribute("cockpit.aggregate_status", payload["aggregateStatus"])
+        span.set_attribute(
+            "cockpit.project_statuses",
+            [f"{s['project']}:{s['status']}" for s in payload["swimlanes"]],
+        )
+        return payload
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """JSON CLI for the Node-to-Python read bridge.
 
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
-    board for one tenant. Output is JSON on stdout so the Next route can parse it.
+    board for one tenant; ``portfolio`` prints the cross-tenant aggregate board.
+    Output is JSON on stdout so the Next route can parse it.
     """
     if "traceparent" in os.environ:
         from opentelemetry import trace
@@ -170,6 +446,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub.add_parser("projects", help="list the harness-managed tenants")
     board_parser = sub.add_parser("board", help="render one tenant's board")
     board_parser.add_argument("--project", default=None, help="the tenant/project name")
+    sub.add_parser("portfolio", help="render the cross-tenant portfolio board")
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -180,6 +457,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             client.close()
     elif args.command == "board":
         print(json.dumps(board_payload(args.project, harness_dir=args.harness_dir)))
+    elif args.command == "portfolio":
+        print(json.dumps(portfolio_payload(harness_dir=args.harness_dir)))
     return 0
 
 
