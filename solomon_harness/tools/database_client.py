@@ -149,6 +149,19 @@ def is_terminal(status: Optional[str]) -> bool:
     return normalize_status(status) in TERMINAL_STATUSES
 
 
+def is_github_issue(github_id: Optional[str]) -> bool:
+    """True when ``github_id`` is a real GitHub issue id (a non-empty, ASCII,
+    all-digits string), False for a composite RAID/follow-up slug (``116-R-01``),
+    an empty or null id, a unicode-digit string, or any other tracking item.
+
+    This is the single source of truth for the digits-only rule that segregates
+    real GitHub work from internal tracking rows (#116). It is total: it never
+    raises, defaulting any unknown shape to the tracking bucket (False).
+    """
+    s = str(github_id)
+    return s.isdigit() and s.isascii()
+
+
 # ---------------------------------------------------------------------------
 # Canonical person key (ADR-0012).
 #
@@ -2306,6 +2319,18 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve backtest run: {e}")
                 raise RuntimeError(f"Failed to retrieve backtest run: {e}")
 
+    @staticmethod
+    def _annotate_issue_bucket(row: Dict[str, Any]) -> Dict[str, Any]:
+        """Add the derived ``is_github_issue`` bucket flag to an issue row in place.
+
+        Purely additive (#116): the row's stored fields are untouched and the set of
+        rows returned is unchanged; callers gain a derived view field so they can
+        segregate real GitHub issues from tracking items without re-parsing
+        ``github_id``. No DB row is written, deleted, or mutated.
+        """
+        row["is_github_issue"] = is_github_issue(row.get("github_id"))
+        return row
+
     @_resilient
     def get_open_issues(self) -> List[Dict[str, Any]]:
         """Retrieves the open issues, defined as every non-terminal row.
@@ -2319,7 +2344,10 @@ class DatabaseClient:
         string-formatted, so the predicate carries no injection surface.
 
         Returns:
-            A list of dictionaries containing the non-terminal issues.
+            A list of dictionaries, one per non-terminal issue, each carrying the
+            stored fields plus a derived ``is_github_issue`` boolean (#116): True for
+            a numeric GitHub id, False for a RAID/follow-up tracking row. The derived
+            field is additive -- the stored row and the returned set are unchanged.
         """
         if self.backend == "surrealdb":
             query = (
@@ -2328,7 +2356,7 @@ class DatabaseClient:
             )
             try:
                 res = self._run_surreal(query, {"terminal": list(TERMINAL_STATUSES)})
-                return self._extract_list(res)
+                return [self._annotate_issue_bucket(row) for row in self._extract_list(res)]
             except _ConnectionLost:
                 raise
             except Exception as e:
@@ -2346,7 +2374,7 @@ class DatabaseClient:
                     cursor = conn.cursor()
                     cursor.execute(query, tuple(TERMINAL_STATUSES))
                     rows = cursor.fetchall()
-                    return [dict(row) for row in rows]
+                    return [self._annotate_issue_bucket(dict(row)) for row in rows]
             except sqlite3.Error as e:
                 logging.error(f"Failed to retrieve open issues: {e}")
                 raise RuntimeError(f"Failed to retrieve open issues: {e}")

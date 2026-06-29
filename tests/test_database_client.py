@@ -17,10 +17,30 @@ from solomon_harness.tools.database_client import (  # noqa: E402
     TERMINAL_STATUSES,
     DatabaseClient,
     _resolve_database,
+    is_github_issue,
     is_terminal,
     normalize_status,
     person_key_or_unassigned,
 )
+
+
+class TestIsGithubIssue(unittest.TestCase):
+    def test_is_github_issue_classifies_by_digits_only(self):
+        """is_github_issue is True only for a non-empty, ASCII, all-digits id, so a
+        numeric GitHub id counts while a composite slug, empty, null, unicode-digit,
+        or padded id is a tracking item (digits-only, not "contains a number")."""
+        cases = {
+            "116": True,
+            "0": True,
+            "116-R-01": False,
+            "bug-x": False,
+            "": False,
+            None: False,
+            "²": False,
+            " 12 ": False,
+        }
+        for github_id, expected in cases.items():
+            self.assertIs(is_github_issue(github_id), expected, msg=repr(github_id))
 
 
 class TestResolveDatabase(unittest.TestCase):
@@ -913,6 +933,59 @@ class TestDatabaseClient(unittest.TestCase):
         client.close()
         self.assertIn("n1", open_ids)
         self.assertNotIn("t1", open_ids)
+
+    def test_get_open_issues_annotates_github_vs_tracking(self):
+        """get_open_issues annotates each non-terminal row with a derived
+        is_github_issue boolean, so a numeric GitHub id (116) is True while a
+        composite RAID slug (116-R-01) and an empty id are tracking (False). The
+        annotation is additive: it never changes which rows are returned."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            conn.executemany(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("116", "Numeric GitHub issue", "feature", "in_progress", None),
+                    ("116-R-01", "RAID follow-up", "task", "open", None),
+                    ("", "Empty id tracking", "task", None, None),
+                ],
+            )
+            conn.commit()
+
+        annotated = {row["github_id"]: row["is_github_issue"] for row in client.get_open_issues()}
+        client.close()
+        self.assertIs(annotated["116"], True)
+        self.assertIs(annotated["116-R-01"], False)
+        self.assertIs(annotated[""], False)
+
+    def test_get_open_issues_predicate_unchanged_after_annotation(self):
+        """The bucket annotation changed no row membership: get_open_issues still
+        returns exactly the non-terminal set, and a terminal numeric id (999,
+        closed) never leaks into the GitHub bucket. Pins that the {closed, done,
+        Done} predicate (ADR-0006) is unchanged in meaning after the annotation."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            conn.executemany(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("116", "Numeric open", "feature", "in_progress", None),
+                    ("116-R-01", "Composite open", "task", "open", None),
+                    ("n1", "Null status", "task", None, None),
+                    ("999", "Terminal numeric", "feature", "closed", None),
+                    ("L1", "Legacy terminal", "bug", "Done", None),
+                ],
+            )
+            conn.commit()
+
+        rows = client.get_open_issues()
+        client.close()
+        returned = {row["github_id"] for row in rows}
+        github_bucket = {row["github_id"] for row in rows if row["is_github_issue"]}
+        self.assertEqual(returned, {"116", "116-R-01", "n1"})
+        self.assertNotIn("999", returned)
+        self.assertNotIn("999", github_bucket)
+        self.assertEqual(github_bucket, {"116"})
 
     def test_get_open_issues_surreal_query_tolerates_null_status(self):
         """On SurrealDB the open predicate keeps NULL/NONE-status rows (consistent

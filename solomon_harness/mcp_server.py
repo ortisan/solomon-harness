@@ -63,7 +63,7 @@ def build_server() -> Any:
 
     @server.tool()
     def get_open_issues() -> dict:
-        """List the open issues."""
+        """List the open issues. Each row carries a derived ``is_github_issue`` flag: True for a numeric GitHub id, False for a RAID/follow-up tracking row."""
         return service.get_open_issues()
 
     @server.tool()
