@@ -205,6 +205,100 @@ class FakeTenantClient:
         self.calls.append("close")
 
 
+class _IssuesOnlyClient:
+    """A minimal read port that yields a fixed issue list for one tenant.
+
+    Used to build a real ``build_board`` result for the pure ``compose_portfolio``
+    tests without standing up a SQLite store: it answers only ``list_issues``.
+    """
+
+    def __init__(self, issues):
+        self._issues = issues
+
+    def list_issues(self):
+        return list(self._issues)
+
+
+def _ok_result(project, issues):
+    """An ``OK`` per-project portfolio outcome carrying that tenant's board."""
+    board = cockpit_read.build_board(_IssuesOnlyClient(issues), project)
+    return {"project": project, "status": "OK", "board": board}
+
+
+class TestComposePortfolio(unittest.TestCase):
+    def test_compose_portfolio_reconciles_and_isolates(self):
+        """compose_portfolio builds one swimlane per project in order, each
+        carrying only its own issues (no cross-tenant leak), and reconciles:
+        portfolio total == sum of swimlane totals == sum of the seven portfolio
+        column counts + unmapped, with aggregateStatus 200 when all OK."""
+        alpha_issues = [
+            {"github_id": "a1", "status": "Backlog"},
+            {"github_id": "a2", "status": "Backlog"},
+            {"github_id": "a3", "status": "In Progress"},
+            {"github_id": "a4", "status": "QA"},
+            {"github_id": "a5", "status": "Done"},
+        ]
+        beta_issues = [
+            {"github_id": "b1", "status": "Ready"},
+            {"github_id": "b2", "status": "Ready"},
+            {"github_id": "b3", "status": "Code Review"},
+            {"github_id": "b4", "status": "Done"},
+        ]
+        gamma_issues = [
+            {"github_id": "g1", "status": "Ideas"},
+            {"github_id": "g2", "status": "Backlog"},
+            {"github_id": "g3", "status": "In Progress"},
+            {"github_id": "g4", "status": "In Progress"},
+            {"github_id": "g5", "status": "QA"},
+            {"github_id": "g6", "status": "Done"},
+        ]
+        results = [
+            _ok_result("alpha", alpha_issues),
+            _ok_result("beta", beta_issues),
+            _ok_result("gamma", gamma_issues),
+        ]
+
+        portfolio = cockpit_read.compose_portfolio(results)
+
+        # One swimlane per project, in the given order, all OK.
+        self.assertEqual(
+            [s["project"] for s in portfolio["swimlanes"]],
+            ["alpha", "beta", "gamma"],
+        )
+        self.assertTrue(all(s["status"] == "OK" for s in portfolio["swimlanes"]))
+        self.assertEqual(portfolio["aggregateStatus"], 200)
+
+        # Reconciliation: total == sum of swimlane totals == columns + unmapped.
+        self.assertEqual(portfolio["total"], 15)
+        self.assertEqual(
+            portfolio["total"], sum(s["total"] for s in portfolio["swimlanes"])
+        )
+        column_total = sum(c["count"] for c in portfolio["columns"])
+        self.assertEqual(
+            portfolio["total"], column_total + portfolio["unmapped"]
+        )
+        self.assertEqual(
+            [c["name"] for c in portfolio["columns"]], SEVEN_COLUMNS
+        )
+
+        # No cross-tenant leak: every issue id lives only under its own swimlane.
+        ids_by_project = {}
+        for swimlane in portfolio["swimlanes"]:
+            ids_by_project[swimlane["project"]] = {
+                issue["github_id"]
+                for column in swimlane["columns"]
+                for issue in column["issues"]
+            }
+        self.assertEqual(ids_by_project["alpha"], {"a1", "a2", "a3", "a4", "a5"})
+        self.assertEqual(ids_by_project["beta"], {"b1", "b2", "b3", "b4"})
+        self.assertEqual(
+            ids_by_project["gamma"], {"g1", "g2", "g3", "g4", "g5", "g6"}
+        )
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["beta"], set())
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["gamma"], set())
+        self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
+
+
 class TestBoardPayloadTenantTargeting(unittest.TestCase):
     def test_board_payload_reads_selected_tenant_not_host(self):
         """board_payload binds the selected tenant before reading, so two

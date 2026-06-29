@@ -35,6 +35,20 @@ BOARD_COLUMNS: List[str] = [
     "Done",
 ]
 
+# Per-project read outcomes for the cross-tenant fan-out (slice 1b). A clean read
+# is OK; a permission failure is FORBIDDEN; a timeout or any other read failure is
+# UNREACHABLE. Degraded (non-OK) projects carry no issue rows.
+STATUS_OK = "OK"
+STATUS_UNREACHABLE = "UNREACHABLE"
+STATUS_FORBIDDEN = "FORBIDDEN"
+
+# A FORBIDDEN swimlane carries 403 per-project semantics inside the 207 envelope.
+FORBIDDEN_HTTP_STATUS = 403
+
+# Aggregate HTTP status: 200 when every project read cleanly, else 207 Multi-Status.
+AGGREGATE_OK = 200
+AGGREGATE_MULTI_STATUS = 207
+
 
 def build_board(client: Any, project: str) -> Dict[str, Any]:
     """Group one tenant's issues into the seven ordered board columns.
@@ -86,6 +100,70 @@ def empty_board(project: str) -> Dict[str, Any]:
         "columns": [{"name": n, "count": 0, "issues": []} for n in BOARD_COLUMNS],
         "total": 0,
         "unmapped": 0,
+    }
+
+
+def _ok_swimlane(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build an ``OK`` swimlane from a per-project board, carrying its issues."""
+    board = result["board"]
+    return {
+        "project": result["project"],
+        "status": STATUS_OK,
+        "columns": board["columns"],
+        "total": board["total"],
+        "unmapped": board["unmapped"],
+    }
+
+
+def _portfolio_columns(swimlanes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sum the seven column counts across swimlanes, keeping the fixed order.
+
+    Degraded swimlanes carry zero-count columns, so they contribute nothing to
+    the portfolio totals by construction; only ``OK`` rows move the counts.
+    """
+    counts = {name: 0 for name in BOARD_COLUMNS}
+    for swimlane in swimlanes:
+        for column in swimlane["columns"]:
+            counts[column["name"]] += column["count"]
+    return [{"name": name, "count": counts[name]} for name in BOARD_COLUMNS]
+
+
+def _assert_reconciles(total: int, columns: List[Dict[str, Any]], unmapped: int) -> None:
+    """Guard the portfolio reconciliation invariant against a future regression."""
+    column_total = sum(column["count"] for column in columns)
+    if total != column_total + unmapped:
+        raise RuntimeError(
+            "portfolio reconciliation failed: "
+            f"total={total} columns={column_total} unmapped={unmapped}"
+        )
+
+
+def compose_portfolio(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compose per-project read outcomes into one portfolio board (pure).
+
+    Builds one swimlane per project in the given order, each carrying only its
+    own issues, so cross-tenant isolation holds by construction (nothing is
+    joined or merged). Sums the seven portfolio column counts and the portfolio
+    ``total``/``unmapped`` across swimlanes, asserts the reconciliation invariant
+    (``total == sum(column counts) + unmapped``), and sets ``aggregateStatus`` to
+    200 when every project is ``OK`` else 207 (Multi-Status). No threads or I/O.
+    """
+    swimlanes = [_ok_swimlane(result) for result in results]
+    columns = _portfolio_columns(swimlanes)
+    total = sum(swimlane["total"] for swimlane in swimlanes)
+    unmapped = sum(swimlane["unmapped"] for swimlane in swimlanes)
+    _assert_reconciles(total, columns, unmapped)
+    aggregate_status = (
+        AGGREGATE_OK
+        if all(result["status"] == STATUS_OK for result in results)
+        else AGGREGATE_MULTI_STATUS
+    )
+    return {
+        "swimlanes": swimlanes,
+        "columns": columns,
+        "total": total,
+        "unmapped": unmapped,
+        "aggregateStatus": aggregate_status,
     }
 
 
