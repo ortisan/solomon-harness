@@ -17,3 +17,4 @@ A running log of delivered issues, newest first. Versions are cut per release; s
 | 2026-06-28 | #11 | qa skills to canonical depth | v0.2.0 | #22 |
 | 2026-06-28 | #10 | scrum_master skills to canonical depth | v0.2.0 | #17 |
 | 2026-06-28 | #9 | product_owner skills to canonical depth | v0.2.0 | #13 |
+Issue #85 | chore(agents): capability-router hardening follow-ups | merged | 2026-06-29
