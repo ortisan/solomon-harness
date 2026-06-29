@@ -117,6 +117,60 @@ class TestInstallGlobal(unittest.TestCase):
             )
         self.assertIsNone(res["mcp_claude"])
 
+    def test_gemini_extension_installed_with_manifest(self):
+        with patch("solomon_harness.install_global.shutil.which", return_value=None):
+            res = self._install()
+            
+        ext_dir = os.path.join(self.gemini, "extensions", "solomon")
+        self.assertTrue(os.path.isdir(os.path.join(ext_dir, "commands")))
+        self.assertTrue(os.path.isfile(os.path.join(ext_dir, "commands", "solomon-loop.toml")))
+        
+        manifest_path = os.path.join(ext_dir, "gemini-extension.json")
+        self.assertTrue(os.path.isfile(manifest_path))
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertEqual(manifest["name"], "solomon")
+        self.assertEqual(manifest["version"], "1.0.0")
+        self.assertTrue(res.get("gemini_extension"))
+
+    def test_agy_import_triggers_on_default_gemini_path(self):
+        default_gemini = os.path.expanduser("~/.gemini")
+        with (
+            patch("solomon_harness.install_global.shutil.which", return_value="/usr/local/bin/agy"),
+            patch("solomon_harness.install_global.subprocess.run") as mock_run,
+        ):
+            res = ig.install_global(
+                source_root=self.src.name,
+                claude_dir=self.claude,
+                gemini_dir=default_gemini,
+                home_dir=self.home,
+                register_mcp=False,
+            )
+            
+            self.assertTrue(res.get("gemini_extension"))
+            self.assertTrue(res.get("agy_imported"))
+            mock_run.assert_called_once()
+            args, kwargs = mock_run.call_args
+            self.assertEqual(args[0], ["/usr/local/bin/agy", "plugin", "import", "gemini", "--force"])
+
+    def test_agy_import_skips_when_agy_absent(self):
+        default_gemini = os.path.expanduser("~/.gemini")
+        with (
+            patch("solomon_harness.install_global.shutil.which", return_value=None),
+            patch("solomon_harness.install_global.os.path.isfile", return_value=False),
+            patch("solomon_harness.install_global.subprocess.run") as mock_run,
+        ):
+            res = ig.install_global(
+                source_root=self.src.name,
+                claude_dir=self.claude,
+                gemini_dir=default_gemini,
+                home_dir=self.home,
+                register_mcp=False,
+            )
+            self.assertIsNone(res.get("agy_imported"))
+            mock_run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
+
