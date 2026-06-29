@@ -27,6 +27,7 @@ from solomon_harness.wiki_bootstrap import (
     bootstrap_wiki,
     choose_tier,
     is_github_remote,
+    main,
     remote_host,
     resolve_web_wiki_url,
     resolve_wiki_clone_url,
@@ -644,6 +645,67 @@ class TestBootstrapWiki(unittest.TestCase):
         self.assertNotIn("x-access-token", result.message)
         self.assertIn("https://github.com/o/r.wiki.git", result.message)
         self.assertIn("https://github.com/o/r/wiki/_new", result.message)
+
+
+class TestDetectCli(unittest.TestCase):
+    """The detect entrypoint that scripts/wiki-sync.sh calls, so detection, the
+    message text, the timeout, and the exit code have a single source. The git
+    probe is stubbed so these stay hermetic; the live bash path is covered in
+    tests/test_wiki_sync.py.
+    """
+
+    def _detect(self, remote, **patch_kwargs):
+        err = io.StringIO()
+        with (
+            patch("solomon_harness.wiki_bootstrap.wiki_refs_present", **patch_kwargs),
+            contextlib.redirect_stderr(err),
+        ):
+            code = main(["detect", remote])
+        return code, err.getvalue()
+
+    def test_refs_present_exits_zero_and_is_silent(self):
+        code, err = self._detect(REMOTE, return_value=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+
+    def test_zero_refs_exits_4_with_the_actionable_message(self):
+        code, err = self._detect(REMOTE, return_value=False)
+        self.assertEqual(code, 4)
+        self.assertIn("not been initialized", err)
+        self.assertIn("https://github.com/o/r/wiki/_new", err)
+        self.assertNotIn("Repository not found", err)
+
+    def test_inconclusive_exits_4_with_the_inconclusive_message(self):
+        code, err = self._detect(REMOTE, return_value=None)
+        self.assertEqual(code, 4)
+        self.assertIn("inconclusive", err.lower())
+        self.assertIn("/wiki/_new", err)
+
+    def test_redacts_url_credentials_in_the_message(self):
+        code, err = self._detect(
+            "https://x-access-token:SECRET@github.com/o/r.git", return_value=False
+        )
+        self.assertEqual(code, 4)
+        self.assertNotIn("SECRET", err)
+        self.assertIn("https://github.com/o/r.wiki.git", err)
+
+    def test_reads_the_timeout_from_the_environment(self):
+        seen = {}
+
+        def _probe(url, timeout=10.0):
+            seen["timeout"] = timeout
+            return True
+
+        with patch.dict(os.environ, {"WIKI_SYNC_LSREMOTE_TIMEOUT": "3"}):
+            self._detect(REMOTE, side_effect=_probe)
+        self.assertEqual(seen["timeout"], 3.0)
+
+    def test_unknown_invocation_returns_usage_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = main(["bogus"])
+        self.assertEqual(code, 2)
+        self.assertIn("usage", err.getvalue().lower())
 
 
 class TestConfirmViaInput(unittest.TestCase):

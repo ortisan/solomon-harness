@@ -22,7 +22,9 @@ this module and in scripts/wiki-sync.sh stands alone without the browser tier.
 from __future__ import annotations
 
 import enum
+import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -402,3 +404,47 @@ def _verify(
     return WikiBootstrapResult(
         tier, proceed=False, exit_code=4, message=_degrade_message(clone_url, web_url, refs_after)
     )
+
+
+def _detect(remote: str) -> int:
+    """Detection entrypoint for scripts/wiki-sync.sh: probe the wiki and report.
+
+    This is the single source of the no-browser detection that the bash floor
+    used to re-derive: the wiki URLs, the ``git ls-remote`` ref check, its
+    timeout, and the actionable exit-4 message. It prints nothing on success and
+    the actionable message (with any URL credentials redacted) to stderr on
+    failure. Returns 0 when at least one ref is advertised (initialized), or 4
+    when the wiki has zero refs (uninitialized) or detection was inconclusive
+    (timeout or network). The timeout is read from ``WIKI_SYNC_LSREMOTE_TIMEOUT``
+    (seconds, default 10). It runs no browser and never blocks on input.
+    """
+    clone_url = resolve_wiki_clone_url(remote)
+    web_url = resolve_web_wiki_url(remote)
+    if not clone_url or not web_url:
+        print("Error: no usable git remote to check the wiki against.", file=sys.stderr)
+        return 4
+    try:
+        timeout = float(os.environ.get("WIKI_SYNC_LSREMOTE_TIMEOUT", "10"))
+    except ValueError:
+        timeout = 10.0
+    refs = wiki_refs_present(clone_url, timeout=timeout)
+    if refs is True:
+        return 0
+    print(_degrade_message(clone_url, web_url, refs), file=sys.stderr)
+    return 4
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Tiny CLI so the bash floor can call detection: ``detect <git-remote>``."""
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) == 2 and args[0] == "detect":
+        return _detect(args[1])
+    print(
+        "usage: python -m solomon_harness.wiki_bootstrap detect <git-remote>",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -11,6 +11,7 @@ initialized wiki syncs unchanged and exits 0.
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -129,6 +130,14 @@ class WikiSyncFixture(unittest.TestCase):
     def _run(self, extra_env=None, timeout=120):
         env = {k: v for k, v in os.environ.items() if k not in _GIT_LEAK_VARS}
         env["GIT_TERMINAL_PROMPT"] = "0"
+        # The script shells out to `python -m solomon_harness.wiki_bootstrap
+        # detect` for the initialization check. Pin the interpreter to the one
+        # running the tests and point PYTHONPATH at the repo so the module
+        # imports without an installed package (the fixture copies only the
+        # script into its throwaway workspace).
+        env["PYTHON"] = sys.executable
+        existing_pp = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = REPO_ROOT + (os.pathsep + existing_pp if existing_pp else "")
         if extra_env:
             env.update(extra_env)
         script = os.path.join(self.root, "scripts", "wiki-sync.sh")

@@ -65,68 +65,43 @@ else
   WIKI_URL="${REMOTE_URL}.wiki.git"
 fi
 
-echo "Resolved wiki remote URL: $WIKI_URL"
+# Strip any user:secret@ userinfo from a URL before echoing it, so a token
+# embedded in a remote cannot leak into the logs. Leaves scp-style git@host:path
+# remotes (no `//`) untouched, since that user is not a secret.
+strip_userinfo() {
+  local url="$1"
+  if [[ "$url" == *"://"* ]]; then
+    local scheme="${url%%://*}"
+    local rest="${url#*://}"
+    local authority="${rest%%/*}"
+    local path="${rest#"$authority"}"
+    [[ "$authority" == *"@"* ]] && authority="${authority##*@}"
+    printf '%s' "${scheme}://${authority}${path}"
+  else
+    printf '%s' "$url"
+  fi
+}
+
+echo "Resolved wiki remote URL: $(strip_userinfo "$WIKI_URL")"
 
 # --- Wiki initialization detection (no-browser degrade floor, issue #117) ------
 # GitHub creates the <repo>.wiki.git content repo only after the first wiki page
-# is saved through the web UI, and exposes no API for that first page. Probe the
-# remote for refs under a short timeout BEFORE any clone or push. This is the
-# observable gate: an uninitialized wiki must terminate in an actionable message,
-# never a raw clone/push error. The probe runs no browser action and never blocks
-# on input, so a headless or CI invocation degrades deterministically.
-WIKI_LSREMOTE_TIMEOUT="${WIKI_SYNC_LSREMOTE_TIMEOUT:-10}"
-
-# Derive the human web URL of the first-page editor the operator must open. Work
-# from the repo remote (not the .wiki.git form) and normalize the common SSH and
-# https shapes to an https URL.
-WEB_REPO="${REMOTE_URL%.git}"
-if [[ "$WEB_REPO" =~ ^git@([^:]+):(.+)$ ]]; then
-  WEB_REPO="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-elif [[ "$WEB_REPO" =~ ^ssh://git@(.+)$ ]]; then
-  WEB_REPO="https://${BASH_REMATCH[1]}"
-fi
-WIKI_NEW_URL="${WEB_REPO}/wiki/_new"
-
-# Resolve a portable timeout wrapper: GNU coreutils `timeout` or homebrew
-# `gtimeout`. Without one the probe cannot be bounded, so detection is treated as
-# inconclusive below rather than risking an indefinite hang.
-TIMEOUT_BIN=""
-if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-elif command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-fi
-
-# Probe for heads. Capture the status without tripping `set -e`, and suppress git
-# stderr so a raw remote error never reaches the operator on this path.
+# is saved through the web UI, and exposes no API for that first page. Detection
+# -- the ls-remote ref probe, its ~10s timeout, the actionable message, and the
+# exit code -- lives in solomon_harness.wiki_bootstrap so the harness and this
+# script share one source; call it here rather than re-deriving it. It runs no
+# browser action and never blocks on input, so a headless or CI invocation
+# degrades deterministically with exit 4 and surfaces no raw git error. The
+# timeout is read from WIKI_SYNC_LSREMOTE_TIMEOUT. REPO_ROOT carries the bundled
+# solomon_harness package in an installed project; PYTHON pins the interpreter
+# when set.
 set +e
-if [[ -n "$TIMEOUT_BIN" ]]; then
-  WIKI_REFS=$("$TIMEOUT_BIN" "$WIKI_LSREMOTE_TIMEOUT" git ls-remote --heads "$WIKI_URL" 2>/dev/null)
-  LSREMOTE_STATUS=$?
-else
-  WIKI_REFS=""
-  LSREMOTE_STATUS=124
-fi
+PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+  "${PYTHON:-python3}" -m solomon_harness.wiki_bootstrap detect "$REMOTE_URL"
+DETECT_STATUS=$?
 set -e
-
-if [[ "$LSREMOTE_STATUS" -eq 124 || "$LSREMOTE_STATUS" -eq 137 ]]; then
-  echo "Error: could not determine whether the GitHub wiki is initialized." >&2
-  echo "Detection was inconclusive (network or timeout): the wiki content" >&2
-  echo "repository ($WIKI_URL) did not respond within ${WIKI_LSREMOTE_TIMEOUT}s." >&2
-  echo "If the wiki has never been opened, initialize it once: open" >&2
-  echo "  ${WIKI_NEW_URL}" >&2
-  echo "and save a page (any content), then re-run the wiki step." >&2
-  exit 4
-fi
-
-if [[ -z "$WIKI_REFS" ]]; then
-  echo "Error: the GitHub wiki has not been initialized." >&2
-  echo "GitHub creates the wiki content repository ($WIKI_URL) only after the" >&2
-  echo "first page is saved through the web UI, and exposes no API for that page." >&2
-  echo "Initialize it once: open" >&2
-  echo "  ${WIKI_NEW_URL}" >&2
-  echo "and save a page (any content), then re-run the wiki step to publish docs." >&2
-  exit 4
+if [[ "$DETECT_STATUS" -ne 0 ]]; then
+  exit "$DETECT_STATUS"
 fi
 
 echo "Wiki content repository detected. Proceeding to sync."
@@ -145,20 +120,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Clone the wiki repository
+# Clone the wiki repository. Detection above already exited 4 on an uninitialized
+# wiki, so the remote is known to carry refs here; a clone failure is a genuine
+# error (network or permissions), not an uninitialized wiki, so there is no
+# local-init-then-push fallback to attempt.
 echo "Cloning wiki repository..."
-INITIALIZED_FRESH=false
 if ! git clone "$WIKI_URL" "$TEMP_DIR" 2>/dev/null; then
-  echo "Warning: Failed to clone wiki repository from $WIKI_URL. It might be uninitialized." >&2
-  echo "Attempting to initialize a fresh wiki repository locally..." >&2
-  
-  # Ensure TEMP_DIR exists and initialize git in it
-  mkdir -p "$TEMP_DIR"
-  cd "$TEMP_DIR"
-  git init -b main
-  git remote add origin "$WIKI_URL"
-  INITIALIZED_FRESH=true
-  cd "$REPO_ROOT"
+  echo "Error: Failed to clone the wiki repository." >&2
+  exit 3
 fi
 
 # Sync markdown files (flat structure)
@@ -181,7 +150,7 @@ fi
 git add .
 
 # Check if there are any changes to commit
-if [[ "$INITIALIZED_FRESH" = "false" ]] && git diff --quiet && git diff --staged --quiet; then
+if git diff --quiet && git diff --staged --quiet; then
   echo "No changes detected. Wiki is already up-to-date."
   exit 0
 fi
@@ -190,16 +159,9 @@ echo "Committing changes..."
 git commit -m "sync: update wiki pages from repository docs"
 
 echo "Pushing changes..."
-if [[ "$INITIALIZED_FRESH" = "true" ]]; then
-  if ! git push -u origin main; then
-    echo "Error: Failed to push changes to initialize wiki remote" >&2
-    exit 3
-  fi
-else
-  if ! git push origin HEAD; then
-    echo "Error: Failed to push changes to wiki remote" >&2
-    exit 3
-  fi
+if ! git push origin HEAD; then
+  echo "Error: Failed to push changes to wiki remote" >&2
+  exit 3
 fi
 
 echo "Wiki synchronized successfully."
