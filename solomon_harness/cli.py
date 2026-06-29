@@ -8,7 +8,7 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 
 def _subagent_description(filepath: str) -> str:
@@ -301,23 +301,29 @@ def handle_log(workspace_root: str, last: int) -> None:
 _GH_ISSUE_LIMIT = 1000
 
 
-def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
-    """Read every issue's GitHub state via gh, validated as data, never interpolated.
+def _fetch_gh_states(
+    list_args: List[str],
+    valid_states: Tuple[str, ...],
+    kind_label: str,
+    workspace_root: str,
+) -> List[dict]:
+    """Run a bulk ``gh <list_args> --state all`` query and return validated records.
 
-    Returns a list of ``{"number": "<int-as-str>", "state": "OPEN"|"CLOSED"}``.
+    Returns a list of ``{"number": "<int-as-str>", "state": <one of valid_states>}``.
     gh output is treated strictly as data across the trust boundary (STRIDE): the
-    number is coerced to ``str(int(...))`` and the state must be one of GitHub's
-    literals, so a malformed record is skipped rather than trusted, and no field
-    is interpolated into a query. Raises ``RuntimeError`` when gh is unavailable
-    or its output cannot be parsed, so the caller reports instead of repairing
-    nothing silently.
+    number is coerced to ``str(int(...))`` and the state must be one of the accepted
+    GitHub literals, so a malformed record is skipped rather than trusted, and no
+    field is interpolated into a query. Raises ``RuntimeError`` when gh is
+    unavailable or its output cannot be parsed, so the caller reports instead of
+    repairing nothing silently. This is the single fetch core shared by the issue
+    and PR fetchers, which differ only in the subcommand and the accepted state set.
     """
     import json as _json
     import subprocess
 
     try:
         proc = subprocess.run(
-            ["gh", "issue", "list", "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
+            ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
         )
@@ -326,7 +332,9 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
             "gh CLI not found; install and authenticate the GitHub CLI."
         ) from exc
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout).strip() or "gh issue list failed")
+        raise RuntimeError(
+            (proc.stderr or proc.stdout).strip() or f"gh {kind_label} list failed"
+        )
     try:
         raw = _json.loads(proc.stdout or "[]")
     except _json.JSONDecodeError as exc:
@@ -334,8 +342,9 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
 
     if isinstance(raw, list) and len(raw) >= _GH_ISSUE_LIMIT:
         print(
-            f"warning: gh returned the {_GH_ISSUE_LIMIT}-issue cap; the listing may "
-            "be truncated, so reconcile could miss closed issues beyond it.",
+            f"warning: gh returned the {_GH_ISSUE_LIMIT}-record {kind_label} cap; the "
+            "listing may be truncated, so reconcile could miss resolved parents "
+            "beyond it.",
             file=sys.stderr,
         )
 
@@ -351,10 +360,63 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
         except (TypeError, ValueError):
             continue
         state = str(item.get("state", "")).upper()
-        if state not in ("OPEN", "CLOSED"):
+        if state not in valid_states:
             continue
         states.append({"number": number, "state": state})
     return states
+
+
+def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
+    """Read every issue's GitHub state via gh (``OPEN``/``CLOSED``), as data.
+
+    Thin config over ``_fetch_gh_states``; the validation and STRIDE handling live
+    in that shared core.
+    """
+    return _fetch_gh_states(["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root)
+
+
+def _fetch_gh_pr_states(workspace_root: str) -> List[dict]:
+    """Read every PR's GitHub state via gh (``OPEN``/``CLOSED``/``MERGED``), as data.
+
+    The extra ``MERGED`` literal is why a PR parent needs its own fetch: a merged
+    PR resolves its tracking children just as a closed issue does (#127). Thin
+    config over ``_fetch_gh_states``.
+    """
+    return _fetch_gh_states(
+        ["pr", "list"], ("OPEN", "CLOSED", "MERGED"), "pull request", workspace_root
+    )
+
+
+def _build_resolved_map(
+    issue_states: List[dict], pr_states: List[dict]
+) -> Dict[str, bool]:
+    """Merge issue and PR states into a number-keyed resolved map (#127).
+
+    Issues and PRs share one GitHub number sequence, so the map is keyed by number.
+    A number is RESOLVED (True) when its issue state is ``CLOSED`` or its PR state
+    is ``MERGED`` or ``CLOSED``; an ``OPEN`` issue or ``OPEN`` PR records the number
+    as not-yet-resolved (False) without overriding a resolved signal from the other
+    source, so the merge is an order-independent OR. A number absent from both is
+    simply not a key, which the close pass treats exactly like an open parent.
+    """
+    resolved: Dict[str, bool] = {}
+    for entry in issue_states:
+        number = entry.get("number")
+        if number is None:
+            continue
+        if entry.get("state") == "CLOSED":
+            resolved[number] = True
+        else:
+            resolved.setdefault(number, False)
+    for entry in pr_states:
+        number = entry.get("number")
+        if number is None:
+            continue
+        if entry.get("state") in ("CLOSED", "MERGED"):
+            resolved[number] = True
+        else:
+            resolved.setdefault(number, False)
+    return resolved
 
 
 def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:

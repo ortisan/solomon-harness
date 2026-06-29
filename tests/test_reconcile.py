@@ -260,6 +260,73 @@ class TestFetchGhIssueStates(unittest.TestCase):
         self.assertEqual(len(states), 2)
 
 
+class TestFetchGhPrStates(unittest.TestCase):
+    """The PR-state fetch mirrors the issue fetch but accepts the extra MERGED
+    literal: a parent PR counts as resolved when MERGED or CLOSED (#127)."""
+
+    def test_fetches_pr_list_and_validates_states_as_data(self):
+        payload = json.dumps(
+            [
+                {"number": 45, "state": "MERGED"},
+                {"number": 50, "state": "CLOSED"},
+                {"number": 60, "state": "OPEN"},
+                {"number": "nope", "state": "MERGED"},  # bad number -> skipped
+                {"number": 7, "state": "DRAFT"},        # not a state literal -> skipped
+                {"state": "MERGED"},                     # missing number -> skipped
+            ]
+        )
+        with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
+            states = cli._fetch_gh_pr_states(".")
+        # The bulk PR listing is fetched with `gh pr list`, not a per-row call.
+        self.assertEqual(run.call_args.args[0][:3], ["gh", "pr", "list"])
+        self.assertEqual(
+            states,
+            [
+                {"number": "45", "state": "MERGED"},
+                {"number": "50", "state": "CLOSED"},
+                {"number": "60", "state": "OPEN"},
+            ],
+        )
+
+    def test_gh_failure_raises(self):
+        with patch("subprocess.run", return_value=_Proc(1, "", "boom")):
+            with self.assertRaises(RuntimeError):
+                cli._fetch_gh_pr_states(".")
+
+
+class TestBuildResolvedMap(unittest.TestCase):
+    """A number is RESOLVED when its issue is CLOSED or its PR is MERGED/CLOSED;
+    an OPEN issue or OPEN PR records the number as not-yet-resolved (#127)."""
+
+    def test_merges_issue_closed_or_pr_merged_or_closed(self):
+        issue_states = [
+            {"number": "68", "state": "CLOSED"},  # resolved via closed issue
+            {"number": "100", "state": "OPEN"},   # open issue -> not resolved
+        ]
+        pr_states = [
+            {"number": "45", "state": "MERGED"},  # resolved via merged PR
+            {"number": "50", "state": "CLOSED"},  # resolved via closed PR
+            {"number": "60", "state": "OPEN"},    # open PR -> not resolved
+        ]
+        resolved = cli._build_resolved_map(issue_states, pr_states)
+        self.assertTrue(resolved["68"])
+        self.assertTrue(resolved["45"])
+        self.assertTrue(resolved["50"])
+        self.assertFalse(resolved["100"])
+        self.assertFalse(resolved["60"])
+        # A number absent from both lists is not a key (treated as unresolved).
+        self.assertNotIn("999", resolved)
+
+    def test_pr_resolution_does_not_get_overridden_by_an_open_signal(self):
+        # Order-independent OR: a resolved PR signal wins even if an OPEN signal
+        # for the same number is seen first.
+        resolved = cli._build_resolved_map(
+            [{"number": "45", "state": "OPEN"}],
+            [{"number": "45", "state": "MERGED"}],
+        )
+        self.assertTrue(resolved["45"])
+
+
 class _FakeSqliteClient:
     """A fake memory client reporting the SQLite-fallback backend.
 
