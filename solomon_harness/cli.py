@@ -295,6 +295,146 @@ def handle_log(workspace_root: str, last: int) -> None:
         print(line)
 
 
+# Upper bound on the issues a single `gh issue list` returns. When the result hits
+# this cap the listing may be truncated, so reconcile warns instead of silently
+# missing closed issues beyond it.
+_GH_ISSUE_LIMIT = 1000
+
+
+def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
+    """Read every issue's GitHub state via gh, validated as data, never interpolated.
+
+    Returns a list of ``{"number": "<int-as-str>", "state": "OPEN"|"CLOSED"}``.
+    gh output is treated strictly as data across the trust boundary (STRIDE): the
+    number is coerced to ``str(int(...))`` and the state must be one of GitHub's
+    literals, so a malformed record is skipped rather than trusted, and no field
+    is interpolated into a query. Raises ``RuntimeError`` when gh is unavailable
+    or its output cannot be parsed, so the caller reports instead of repairing
+    nothing silently.
+    """
+    import json as _json
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["gh", "issue", "list", "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
+             "--json", "number,state"],
+            cwd=workspace_root, capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "gh CLI not found; install and authenticate the GitHub CLI."
+        ) from exc
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout).strip() or "gh issue list failed")
+    try:
+        raw = _json.loads(proc.stdout or "[]")
+    except _json.JSONDecodeError as exc:
+        raise RuntimeError(f"could not parse gh JSON output: {exc}") from exc
+
+    if isinstance(raw, list) and len(raw) >= _GH_ISSUE_LIMIT:
+        print(
+            f"warning: gh returned the {_GH_ISSUE_LIMIT}-issue cap; the listing may "
+            "be truncated, so reconcile could miss closed issues beyond it.",
+            file=sys.stderr,
+        )
+
+    states: List[dict] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        raw_number = item.get("number")
+        if raw_number is None:
+            continue
+        try:
+            number = str(int(raw_number))
+        except (TypeError, ValueError):
+            continue
+        state = str(item.get("state", "")).upper()
+        if state not in ("OPEN", "CLOSED"):
+            continue
+        states.append({"number": number, "state": state})
+    return states
+
+
+def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
+    """Set each GitHub-CLOSED issue's non-terminal memory row to "closed".
+
+    GitHub is the source of truth (ADR-0006): a row is repaired only when GitHub
+    reports the issue CLOSED and the memory row exists and is not already
+    terminal; GitHub-open rows are left untouched. The write is a read-modify-
+    write through the unchanged 5-arg ``log_issue`` (UPSERT on github_id),
+    preserving the title, type and milestone. Idempotent: a second run finds the
+    rows terminal and writes nothing. With ``dry_run`` the stale ids are collected
+    and reported, and nothing is written.
+
+    Returns ``{"repaired", "would_repair", "scanned"}``.
+    """
+    from solomon_harness.tools.database_client import is_terminal
+
+    would_repair: List[str] = []
+    repaired = 0
+    for entry in gh_states:
+        if entry.get("state") != "CLOSED":
+            continue
+        number = entry["number"]
+        row = db.get_issue(number)
+        if row is None or is_terminal(row.get("status")):
+            continue
+        would_repair.append(number)
+        if dry_run:
+            continue
+        db.log_issue(
+            number,
+            row.get("title"),
+            row.get("type_"),
+            "closed",
+            row.get("milestone_id"),
+        )
+        repaired += 1
+    return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
+
+
+def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
+    """Reconcile the memory issue rows against GitHub (GitHub is the source of truth).
+
+    Targets the shared SurrealDB only: on a SQLite-fallback backend it warns and
+    skips the whole repair rather than half-repairing a per-worktree store
+    (ADR-0006 / RAID R1). Run it from a fresh process so it never inherits the
+    dead MCP write socket of bug #37.
+    """
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    with DatabaseClient(harness_dir=workspace_root) as db:
+        if db.backend != "surrealdb":
+            print(
+                "reconcile skipped: memory is on the SQLite fallback, not the shared "
+                "SurrealDB. Run it from a process that reaches the shared store so a "
+                "per-worktree DB is never half-repaired.",
+                file=sys.stderr,
+            )
+            return
+        try:
+            states = _fetch_gh_issue_states(workspace_root)
+        except RuntimeError as exc:
+            print(f"reconcile failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        result = reconcile_memory(db, states, dry_run=dry_run)
+
+    if dry_run:
+        ids = ", ".join(f"#{n}" for n in result["would_repair"])
+        suffix = f": {ids}" if ids else ""
+        print(
+            f"reconcile --dry-run: {len(result['would_repair'])} issue(s) would be "
+            f"set to closed ({result['scanned']} GitHub issues scanned){suffix}"
+        )
+    else:
+        print(
+            f"reconcile: {result['repaired']} issue(s) set to closed "
+            f"({result['scanned']} GitHub issues scanned)"
+        )
+
+
 def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
     """Parser setup and command dispatching.
 
@@ -334,6 +474,14 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         "sync", help="Replay pending mirror records to SurrealDB and report the counts"
     )
 
+    reconcile_parser = subparsers.add_parser(
+        "reconcile",
+        help="Repair memory issue rows from GitHub state (set GitHub-closed issues to closed in memory). Run from a fresh process against the shared SurrealDB.",
+    )
+    reconcile_parser.add_argument(
+        "--dry-run", action="store_true", help="Report the stale rows without writing"
+    )
+
     ig_parser = subparsers.add_parser(
         "install-global",
         help="Install agents, /solomon commands, the session hook, and the shared memory home into ~/.claude and ~/.solomon-harness",
@@ -344,6 +492,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     doctor_parser.add_argument("--no-install", action="store_true", help="Only report; do not install")
 
     subparsers.add_parser("healthcheck", help="Report runtime readiness and pending init items (Docker, memory, board, global install)")
+
+    subparsers.add_parser("git-repair", help="Repair local git config by unsetting stray core.worktree and setting core.bare to false")
 
     loop_lock_parser = subparsers.add_parser(
         "loop-lock", help="Inspect or clear the single-driver loop lock"
@@ -454,6 +604,11 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         checks = run_checks(workspace_root)
         print(format_report(checks))
         sys.exit(1 if any(c["status"] == "fail" for c in checks) else 0)
+    elif args.command == "git-repair":
+        from solomon_harness.worktree import repair_git_config
+        repair_git_config(workspace_root)
+        print("Git local configuration repaired successfully.")
+        sys.exit(0)
     elif args.command == "loop-lock":
         handle_loop_lock(workspace_root, args.action)
     elif args.command == "loop-guard":
@@ -468,6 +623,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_loop_budget(workspace_root)
     elif args.command == "log":
         handle_log(workspace_root, args.last)
+    elif args.command == "reconcile":
+        handle_reconcile(workspace_root, args.dry_run)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
         sys.exit(run_stage(workspace_root, args.stage, args.dev_args))

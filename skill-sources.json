@@ -5,7 +5,8 @@
       "name": "anthropic-skills",
       "type": "git",
       "url": "https://github.com/anthropics/skills",
-      "note": "Anthropic's public Agent Skills. Adjust the URL if the repository moves."
+      "note": "Anthropic's public Agent Skills. Adjust the URL if the repository moves.",
+      "pin": "35414756ca55738e050562e272a6bbc6273aa926"
     }
   ]
 }

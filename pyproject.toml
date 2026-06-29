@@ -1,6 +1,6 @@
 [project]
 name = "solomon-harness"
-version = "0.7.0"
+version = "0.8.0"
 description = "Multi-agent software-development harness with a SurrealDB/SQLite memory layer."
 requires-python = ">=3.10"
 dependencies = [
@@ -40,6 +40,11 @@ target-version = "py310"
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+# tests/ has no __init__.py (pytest uses rootdir import mode), so mypy must be
+# told to treat package bases explicitly; otherwise a test file imported both as
+# `tests.foo` and bare `foo` is reported as found twice under two module names.
+explicit_package_bases = true
+namespace_packages = true
 
 [tool.setuptools]
 packages = ["solomon_harness"]

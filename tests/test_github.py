@@ -1,8 +1,10 @@
 import json
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 from solomon_harness import github
+from solomon_harness.tools.database_client import DatabaseClient
 
 
 class _Proc:
@@ -155,6 +157,149 @@ class TestRecordTransition(unittest.TestCase):
         with patch("solomon_harness.tools.database_client.DatabaseClient", side_effect=RuntimeError):
             # Best-effort: a DB failure must not propagate.
             github.record_transition(1, "Done")
+
+
+def _fake_db_cm(fake_db):
+    """Wrap a fake DatabaseClient as the context manager record_terminal_status uses."""
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_db
+    cm.__exit__.return_value = False
+    return cm
+
+
+class TestRecordTerminalStatus(unittest.TestCase):
+    # create_autospec(DatabaseClient) pins the real method signatures, so a drift
+    # in the 5-arg log_issue contract fails these tests instead of passing silently
+    # against a permissive bare MagicMock.
+    def test_writes_one_closed_preserving_fields(self):
+        """A non-terminal row is read then written once as closed, preserving the
+        title, type and milestone (read-modify-write through the 5-arg log_issue)."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = {
+            "github_id": "34",
+            "title": "Deliver the thing",
+            "type_": "bug",
+            "status": "code_review",
+            "milestone_id": "m1",
+        }
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_terminal_status(34)
+        fake_db.get_issue.assert_called_once_with("34")
+        fake_db.log_issue.assert_called_once_with("34", "Deliver the thing", "bug", "closed", "m1")
+
+    def test_already_terminal_row_triggers_no_write(self):
+        """An already-terminal row is idempotent: no log_issue write occurs."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = {
+            "github_id": "9",
+            "title": "Done already",
+            "type_": "feature",
+            "status": "closed",
+            "milestone_id": None,
+        }
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_terminal_status(9)
+        fake_db.log_issue.assert_not_called()
+
+    def test_missing_row_triggers_no_write(self):
+        """No memory row for the issue means nothing to repair (no row is created)."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = None
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_terminal_status(404)
+        fake_db.log_issue.assert_not_called()
+
+    def test_memory_error_is_swallowed_and_logged(self):
+        """A raised memory error must never propagate out of the merge path, and the
+        failure is logged at warning level (not silently swallowed). The log carries
+        only the exception type, never its message, so a backend error string cannot
+        leak store internals (STRIDE: information disclosure)."""
+        # Constructor failure: caught, never raised, logged at warning.
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            side_effect=RuntimeError("backend down"),
+        ):
+            with self.assertLogs(level="WARNING") as cm:
+                github.record_terminal_status(1)  # must not raise
+        self.assertTrue(any("terminal write-through" in m for m in cm.output))
+
+        # Write failure: log_issue is reached (the row is non-terminal), and its
+        # error is caught, not raised, and logged at warning by exception type.
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = {
+            "github_id": "2",
+            "title": "T",
+            "type_": "bug",
+            "status": "in_progress",
+            "milestone_id": None,
+        }
+        fake_db.log_issue.side_effect = RuntimeError("write failed")
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            with self.assertLogs(level="WARNING") as cm:
+                github.record_terminal_status(2)  # must not raise
+        fake_db.log_issue.assert_called_once()  # log_issue was reached
+        joined = "\n".join(cm.output)
+        self.assertIn("RuntimeError", joined)  # the exception type is logged
+        self.assertNotIn("write failed", joined)  # the message is not
+
+
+class TestRecordTerminalStatusRealStore(unittest.TestCase):
+    def test_persists_closed_against_a_real_store(self):
+        """A real DatabaseClient (not a wholesale mock) is opened and exercises real
+        backend selection: record_terminal_status reads the seeded row and persists
+        status=closed, preserving the title, type and milestone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("os.getcwd", return_value=tmp):
+                with DatabaseClient(harness_dir=tmp) as db:
+                    db.log_issue("77", "Deliver feature", "feature", "code_review", "mile-7")
+                github.record_terminal_status(77)
+                with DatabaseClient(harness_dir=tmp) as db:
+                    row = db.get_issue("77")
+                    open_ids = {i["github_id"] for i in db.get_open_issues()}
+        self.assertEqual(row["status"], "closed")
+        self.assertEqual(row["title"], "Deliver feature")
+        self.assertEqual(row["type_"], "feature")
+        self.assertEqual(str(row["milestone_id"]), "mile-7")
+        self.assertNotIn("77", open_ids)
+
+
+class TestSetStatusWriteThroughGate(unittest.TestCase):
+    def test_done_transition_triggers_write_through(self):
+        """The CLI set-status dispatch fires the terminal write-through only on Done,
+        alongside the existing record_transition."""
+        with (
+            patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
+            patch("solomon_harness.github.record_transition") as rt,
+            patch("solomon_harness.github.record_terminal_status") as rts,
+        ):
+            rc = github.main(["set-status", "--issue", "5", "--status", "Done"])
+        self.assertEqual(rc, 0)
+        rt.assert_called_once_with(5, "Done")
+        rts.assert_called_once_with(5)
+
+    def test_non_done_transition_does_not_trigger_write_through(self):
+        """A non-Done transition records the transition but never the terminal write."""
+        with (
+            patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
+            patch("solomon_harness.github.record_transition") as rt,
+            patch("solomon_harness.github.record_terminal_status") as rts,
+        ):
+            rc = github.main(["set-status", "--issue", "5", "--status", "Code Review"])
+        self.assertEqual(rc, 0)
+        rt.assert_called_once_with(5, "Code Review")
+        rts.assert_not_called()
 
 
 class TestBoardTitleAndLink(unittest.TestCase):

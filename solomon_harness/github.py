@@ -14,14 +14,20 @@ CLI:
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
+# The board columns have one canonical definition in the memory adapter (the
+# lowest-level module); importing it here keeps github.py and cockpit_read.py from
+# re-declaring the names and drifting (ADR-0006). database_client takes no
+# dependency on this module, so this import direction carries no cycle.
+from solomon_harness.tools.database_client import BOARD_COLUMNS
+
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
-BOARD_COLUMNS = ["Ideas", "Backlog", "Ready", "In Progress", "Code Review", "QA", "Done"]
 
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
@@ -284,6 +290,48 @@ def record_transition(issue_number, column) -> None:
         pass
 
 
+def record_terminal_status(issue_number) -> None:
+    """Write the delivered issue's terminal status through to the project memory.
+
+    Fired on the Done board transition (the merge critical path) so the memory row
+    converges to GitHub the moment a card is delivered, instead of waiting for
+    reconcile. It read-modify-writes through the unchanged 5-arg log_issue (UPSERT
+    on github_id): it reads the current row and, only when that row exists and is
+    not already terminal, re-writes it as "closed" while preserving the title, type
+    and milestone. Best-effort and idempotent (ADR-0006): it MUST NOT raise on the
+    merge path, so any failure is caught and logged as a warning, leaving the row
+    at its pre-delivery value for reconcile to repair.
+    """
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient, is_terminal
+
+        github_id = str(issue_number)
+        # Targets whatever backend DatabaseClient resolves (the shared SurrealDB in
+        # normal operation; the SQLite fallback only when SurrealDB is unreachable).
+        # Unlike reconcile, this single best-effort mirror write does not gate on the
+        # backend: it needs no bulk-repair guard, and reconcile against the shared
+        # store remains the convergence backstop (ADR-0006).
+        with DatabaseClient(harness_dir=os.getcwd()) as db:
+            row = db.get_issue(github_id)
+            if row is None or is_terminal(row.get("status")):
+                return
+            db.log_issue(
+                github_id,
+                row.get("title"),
+                row.get("type_"),
+                "closed",
+                row.get("milestone_id"),
+            )
+    except Exception as exc:  # noqa: BLE001 - never break the merge critical path
+        # Log the exception type, not str(exc): a backend error message can carry
+        # store internals and must not leak into logs (STRIDE: info disclosure).
+        logging.warning(
+            "terminal write-through for issue %s failed: %s",
+            issue_number,
+            type(exc).__name__,
+        )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="solomon GitHub board helper")
     sub = parser.add_subparsers(dest="command")
@@ -331,6 +379,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = set_issue_status(args.issue, args.status, title=args.title)
         if result.get("ok"):
             record_transition(args.issue, args.status)
+            # On delivery (Done) also write the terminal status through to memory
+            # so memory-only consumers converge to GitHub immediately (ADR-0006).
+            if args.status == "Done":
+                record_terminal_status(args.issue)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
     else:

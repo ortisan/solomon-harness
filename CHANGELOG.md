@@ -2,6 +2,16 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.8.0] - 2026-06-29
+
+### Added
+- implement apply_proposal in curator with validations
+
+### Fixed
+- record delivered issues as terminal and define open by a canonical predicate (#107)
+- green the CI pipeline — uv dependency group, mypy module resolution, and 8 type errors (#110)
+- check and repair stray core.worktree and core.bare=true config (#98)
+
 ## [0.7.0] - 2026-06-29
 
 ### Added

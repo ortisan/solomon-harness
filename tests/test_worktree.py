@@ -225,5 +225,45 @@ class TestCliMainWiring(WorktreeTestBase):
         self.assertTrue(os.path.isdir(buf.getvalue().strip()))
 
 
+class TestGitRepair(WorktreeTestBase):
+    def test_repair_removes_stray_config(self):
+        _git(self.repo, "config", "--local", "core.worktree", "/tmp/stray")
+        _git(self.repo, "config", "--local", "core.bare", "true")
+        
+        wt = _git(self.repo, "config", "--local", "--get", "core.worktree").stdout.strip()
+        self.assertEqual(wt, "/tmp/stray")
+        bare = _git(self.repo, "config", "--local", "--get", "core.bare").stdout.strip()
+        self.assertEqual(bare, "true")
+        
+        worktree.repair_git_config(self.repo)
+        
+        proc_wt = subprocess.run(
+            ["git", "-C", self.repo, "config", "--local", "--get", "core.worktree"],
+            capture_output=True, text=True, check=False, env=_clean_env()
+        )
+        self.assertNotEqual(proc_wt.returncode, 0)
+        
+        bare = _git(self.repo, "config", "--local", "--get", "core.bare").stdout.strip()
+        self.assertEqual(bare, "false")
+
+    def test_cli_git_repair_wiring(self):
+        from solomon_harness import cli
+        
+        _git(self.repo, "config", "--local", "core.worktree", "/tmp/stray")
+        
+        with self.assertRaises(SystemExit) as ctx:
+            cli.main(
+                harness_dir=self.repo,
+                argv=["git-repair"],
+            )
+        self.assertEqual(ctx.exception.code, 0)
+        
+        proc_wt = subprocess.run(
+            ["git", "-C", self.repo, "config", "--local", "--get", "core.worktree"],
+            capture_output=True, text=True, check=False, env=_clean_env()
+        )
+        self.assertNotEqual(proc_wt.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

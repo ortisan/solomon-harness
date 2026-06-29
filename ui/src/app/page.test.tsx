@@ -123,3 +123,117 @@ describe("cockpit board page", () => {
     expect(screen.queryAllByTestId("issue-card")).toHaveLength(0);
   });
 });
+
+function issue(id: string): Issue {
+  return { github_id: id, title: `title-${id}`, type_: "feature", status: "Backlog" };
+}
+
+function okSwimlane(project: string, byColumn: Record<string, Issue[]> = {}) {
+  const cols = columns(byColumn);
+  const total = cols.reduce((acc, c) => acc + c.count, 0);
+  return { project, status: "OK", total, unmapped: 0, columns: cols };
+}
+
+function degradedSwimlane(project: string, status: string) {
+  const lane: {
+    project: string;
+    status: string;
+    total: number;
+    unmapped: number;
+    columns: ReturnType<typeof columns>;
+    httpStatus?: number;
+  } = { project, status, total: 0, unmapped: 0, columns: columns() };
+  if (status === "FORBIDDEN") {
+    lane.httpStatus = 403;
+  }
+  return lane;
+}
+
+function portfolioPayload(
+  swimlanes: ReturnType<typeof okSwimlane>[] | ReturnType<typeof degradedSwimlane>[],
+  overrides: Record<string, unknown> = {},
+) {
+  const total = swimlanes
+    .filter((s) => s.status === "OK")
+    .reduce((acc, s) => acc + s.total, 0);
+  return {
+    swimlanes,
+    columns: SEVEN.map((name) => ({ name, count: 0 })),
+    total,
+    unmapped: 0,
+    aggregateStatus: swimlanes.every((s) => s.status === "OK") ? 200 : 207,
+    overflow: 0,
+    notice: null,
+    ...overrides,
+  };
+}
+
+describe("cockpit portfolio page", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders one swimlane per project with columns, cards, the total, and only GETs", async () => {
+    const fetchMock = mockFetch(
+      portfolioPayload([
+        okSwimlane("alpha", { Backlog: [issue("a1"), issue("a2")] }),
+        okSwimlane("beta", { Done: [issue("b1")] }),
+      ]),
+    );
+
+    render(<Home />);
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("swimlane")).toHaveLength(2),
+    );
+    // Each swimlane carries its project as a heading (distinct from the selector).
+    expect(screen.getByRole("heading", { name: "alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "beta" })).toBeInTheDocument();
+    // Seven columns render in each of the two swimlanes (the names repeat).
+    expect(screen.getAllByText("Backlog")).toHaveLength(2);
+    // The portfolio total sums the OK swimlanes (2 + 1).
+    expect(screen.getByTestId("portfolio-total")).toHaveTextContent("3");
+    // All three OK issue cards render.
+    expect(screen.getAllByTestId("issue-card")).toHaveLength(3);
+
+    // The portfolio view is observe-only: every request is a GET.
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit | undefined;
+      expect((init?.method ?? "GET").toUpperCase()).toBe("GET");
+    }
+  });
+
+  it("shows a degraded badge and no cards for UNREACHABLE and FORBIDDEN tenants", async () => {
+    mockFetch(
+      portfolioPayload([
+        okSwimlane("alpha", { Backlog: [issue("a1")] }),
+        degradedSwimlane("beta", "UNREACHABLE"),
+        degradedSwimlane("gamma", "FORBIDDEN"),
+      ]),
+    );
+
+    render(<Home />);
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("swimlane")).toHaveLength(3),
+    );
+    // The unreachable tenant surfaces its state; the forbidden one is denied.
+    expect(screen.getByText(/unreachable/i)).toBeInTheDocument();
+    expect(screen.getByText(/access denied/i)).toBeInTheDocument();
+    // Only the OK tenant's single card renders; degraded tenants show none.
+    expect(screen.getAllByTestId("issue-card")).toHaveLength(1);
+  });
+
+  it("renders the overflow notice when projects are not shown", async () => {
+    mockFetch(
+      portfolioPayload([okSwimlane("alpha", { Backlog: [issue("a1")] })], {
+        overflow: 1,
+        notice: "1 project not shown",
+      }),
+    );
+
+    render(<Home />);
+
+    expect(await screen.findByText("1 project not shown")).toBeInTheDocument();
+  });
+});

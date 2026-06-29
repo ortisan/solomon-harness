@@ -2,9 +2,12 @@ import contextlib
 import io
 import json
 import os
+import random
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -129,6 +132,31 @@ class TestBuildBoard(unittest.TestCase):
         self.assertEqual(client.list_issues(), [])
         client.close()
 
+    def test_canonical_tokens_and_legacy_values_bucket_into_columns(self):
+        """Issues stored as canonical snake_case tokens (in_progress, code_review,
+        qa, closed) land in the In Progress / Code Review / QA / Done columns, and
+        a legacy display value (In Progress, Done) lands in the same column. The
+        invariant total == sum(column counts) + unmapped still holds (RAID R3)."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("c1", "Active token", "feature", "in_progress", None)
+        client.log_issue("c2", "Review token", "feature", "code_review", None)
+        client.log_issue("c3", "QA token", "feature", "qa", None)
+        client.log_issue("c4", "Done token", "feature", "closed", None)
+        client.log_issue("c5", "Legacy active", "feature", "In Progress", None)
+        client.log_issue("c6", "Legacy done", "feature", "Done", None)
+
+        board = cockpit_read.build_board(client, "alpha")
+        client.close()
+
+        counts = {c["name"]: c["count"] for c in board["columns"]}
+        self.assertEqual(counts["In Progress"], 2)  # in_progress + legacy In Progress
+        self.assertEqual(counts["Code Review"], 1)
+        self.assertEqual(counts["QA"], 1)
+        self.assertEqual(counts["Done"], 2)  # closed + legacy Done
+        self.assertEqual(board["unmapped"], 0)
+        self.assertEqual(board["total"], 6)
+        self.assertEqual(board["total"], sum(counts.values()) + board["unmapped"])
+
     def test_issue_with_status_outside_columns_counts_as_unmapped(self):
         """An issue whose status is not one of the seven columns is not coerced
         into a column; it is counted in unmapped so no issue is dropped and
@@ -203,6 +231,662 @@ class FakeTenantClient:
 
     def close(self):
         self.calls.append("close")
+
+
+class _IssuesOnlyClient:
+    """A minimal read port that yields a fixed issue list for one tenant.
+
+    Used to build a real ``build_board`` result for the pure ``compose_portfolio``
+    tests without standing up a SQLite store: it answers only ``list_issues``.
+    """
+
+    def __init__(self, issues):
+        self._issues = issues
+
+    def list_issues(self):
+        return list(self._issues)
+
+
+def _ok_result(project, issues):
+    """An ``OK`` per-project portfolio outcome carrying that tenant's board."""
+    board = cockpit_read.build_board(_IssuesOnlyClient(issues), project)
+    return {"project": project, "status": "OK", "board": board}
+
+
+class TestComposePortfolio(unittest.TestCase):
+    def test_compose_portfolio_reconciles_and_isolates(self):
+        """compose_portfolio builds one swimlane per project in order, each
+        carrying only its own issues (no cross-tenant leak), and reconciles:
+        portfolio total == sum of swimlane totals == sum of the seven portfolio
+        column counts + unmapped, with aggregateStatus 200 when all OK."""
+        alpha_issues = [
+            {"github_id": "a1", "status": "Backlog"},
+            {"github_id": "a2", "status": "Backlog"},
+            {"github_id": "a3", "status": "In Progress"},
+            {"github_id": "a4", "status": "QA"},
+            {"github_id": "a5", "status": "Done"},
+        ]
+        beta_issues = [
+            {"github_id": "b1", "status": "Ready"},
+            {"github_id": "b2", "status": "Ready"},
+            {"github_id": "b3", "status": "Code Review"},
+            {"github_id": "b4", "status": "Done"},
+        ]
+        gamma_issues = [
+            {"github_id": "g1", "status": "Ideas"},
+            {"github_id": "g2", "status": "Backlog"},
+            {"github_id": "g3", "status": "In Progress"},
+            {"github_id": "g4", "status": "In Progress"},
+            {"github_id": "g5", "status": "QA"},
+            {"github_id": "g6", "status": "Done"},
+        ]
+        results = [
+            _ok_result("alpha", alpha_issues),
+            _ok_result("beta", beta_issues),
+            _ok_result("gamma", gamma_issues),
+        ]
+
+        portfolio = cockpit_read.compose_portfolio(results)
+
+        # One swimlane per project, in the given order, all OK.
+        self.assertEqual(
+            [s["project"] for s in portfolio["swimlanes"]],
+            ["alpha", "beta", "gamma"],
+        )
+        self.assertTrue(all(s["status"] == "OK" for s in portfolio["swimlanes"]))
+        self.assertEqual(portfolio["aggregateStatus"], 200)
+
+        # Reconciliation: total == sum of swimlane totals == columns + unmapped.
+        self.assertEqual(portfolio["total"], 15)
+        self.assertEqual(
+            portfolio["total"], sum(s["total"] for s in portfolio["swimlanes"])
+        )
+        column_total = sum(c["count"] for c in portfolio["columns"])
+        self.assertEqual(
+            portfolio["total"], column_total + portfolio["unmapped"]
+        )
+        self.assertEqual(
+            [c["name"] for c in portfolio["columns"]], SEVEN_COLUMNS
+        )
+
+        # No cross-tenant leak: every issue id lives only under its own swimlane.
+        ids_by_project = {}
+        for swimlane in portfolio["swimlanes"]:
+            ids_by_project[swimlane["project"]] = {
+                issue["github_id"]
+                for column in swimlane["columns"]
+                for issue in column["issues"]
+            }
+        self.assertEqual(ids_by_project["alpha"], {"a1", "a2", "a3", "a4", "a5"})
+        self.assertEqual(ids_by_project["beta"], {"b1", "b2", "b3", "b4"})
+        self.assertEqual(
+            ids_by_project["gamma"], {"g1", "g2", "g3", "g4", "g5", "g6"}
+        )
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["beta"], set())
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["gamma"], set())
+        self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
+
+
+    def test_compose_portfolio_degraded_carry_status_no_rows_and_207(self):
+        """A mix of OK + UNREACHABLE + FORBIDDEN yields degraded swimlanes that
+        carry their status and no issue rows; the FORBIDDEN swimlane carries
+        httpStatus 403; the portfolio total sums OK projects only; and the
+        aggregateStatus is 207 (Multi-Status)."""
+        alpha_issues = [
+            {"github_id": "a1", "status": "Backlog"},
+            {"github_id": "a2", "status": "In Progress"},
+            {"github_id": "a3", "status": "Done"},
+        ]
+        results = [
+            _ok_result("alpha", alpha_issues),
+            {"project": "beta", "status": "UNREACHABLE", "board": None},
+            {"project": "gamma", "status": "FORBIDDEN", "board": None},
+        ]
+
+        portfolio = cockpit_read.compose_portfolio(results)
+
+        lanes = {s["project"]: s for s in portfolio["swimlanes"]}
+        self.assertEqual(
+            [s["project"] for s in portfolio["swimlanes"]],
+            ["alpha", "beta", "gamma"],
+        )
+
+        # The degraded lanes carry their status and seven columns but no rows.
+        self.assertEqual(lanes["beta"]["status"], "UNREACHABLE")
+        self.assertEqual(lanes["gamma"]["status"], "FORBIDDEN")
+        for project in ("beta", "gamma"):
+            self.assertEqual(
+                [c["name"] for c in lanes[project]["columns"]], SEVEN_COLUMNS
+            )
+            self.assertTrue(all(c["count"] == 0 for c in lanes[project]["columns"]))
+            self.assertEqual(
+                [i for c in lanes[project]["columns"] for i in c["issues"]], []
+            )
+            self.assertEqual(lanes[project]["total"], 0)
+
+        # FORBIDDEN carries the per-project 403; UNREACHABLE carries no upgrade.
+        self.assertEqual(lanes["gamma"]["httpStatus"], 403)
+        self.assertNotIn("httpStatus", lanes["beta"])
+
+        # The total is over OK projects only, and the aggregate is 207.
+        self.assertEqual(portfolio["total"], 3)
+        column_total = sum(c["count"] for c in portfolio["columns"])
+        self.assertEqual(portfolio["total"], column_total + portfolio["unmapped"])
+        self.assertEqual(portfolio["aggregateStatus"], 207)
+
+    def test_compose_portfolio_raises_when_reconciliation_is_violated(self):
+        """The critical reconciliation guard fires: an OK result whose board total
+        does not match its column counts plus unmapped raises RuntimeError instead
+        of silently composing a portfolio whose totals do not add up."""
+        broken = {
+            "project": "alpha",
+            "status": "OK",
+            "board": {
+                "project": "alpha",
+                "columns": [
+                    {"name": name, "count": 0, "issues": []}
+                    for name in SEVEN_COLUMNS
+                ],
+                # total claims 99 while the columns sum to 0 and unmapped is 0.
+                "total": 99,
+                "unmapped": 0,
+            },
+        }
+
+        with self.assertRaises(RuntimeError):
+            cockpit_read.compose_portfolio([broken])
+
+
+class _CleanTenantClient:
+    """A per-tenant read port that returns a fixed issue list and closes once."""
+
+    def __init__(self, issues):
+        self._issues = issues
+        self.closed = False
+        self.bound = None
+
+    def use_tenant(self, database):
+        self.bound = database
+
+    def list_issues(self):
+        return list(self._issues)
+
+    def close(self):
+        self.closed = True
+
+
+class _RaisingTenantClient:
+    """A per-tenant read port whose ``list_issues`` raises a given error."""
+
+    def __init__(self, error):
+        self._error = error
+        self.closed = False
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        raise self._error
+
+    def close(self):
+        self.closed = True
+
+
+class _SlowTenantClient:
+    """A per-tenant read port whose read blocks longer than the read timeout."""
+
+    def __init__(self, delay):
+        self._delay = delay
+        self.closed = False
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        time.sleep(self._delay)
+        return []
+
+    def close(self):
+        self.closed = True
+
+
+class _CloseRecordingSlowClient:
+    """A per-tenant read port whose read blocks and that records its close timing.
+
+    Used to prove the outer read path never closes a client mid-read on timeout:
+    ``list_issues`` flags itself as in-progress while it blocks, and ``close``
+    records whether a read was still running when it was called. The owning worker
+    must close it only after the read returns, so ``closed_during_read`` stays
+    False and the outer path never triggers a close-during-read on the socket.
+    """
+
+    def __init__(self, delay):
+        self._delay = delay
+        self.closed = False
+        self.closed_during_read = None
+        self._reading = False
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        self._reading = True
+        try:
+            time.sleep(self._delay)
+            return []
+        finally:
+            self._reading = False
+
+    def close(self):
+        self.closed_during_read = self._reading
+        self.closed = True
+
+
+class TestReadTenantSwimlane(unittest.TestCase):
+    def test_read_tenant_swimlane_classifies_ok_forbidden_unreachable(self):
+        """read_tenant_swimlane reads one tenant through its own client and
+        classifies the outcome: a clean read is OK with the board; a
+        PermissionError or a permission-pattern read failure is FORBIDDEN with
+        no data; a read exceeding the timeout or any other failure is
+        UNREACHABLE with no data."""
+        # A clean read binds the tenant and returns OK with the grouped board.
+        clean = _CleanTenantClient([{"github_id": "a1", "status": "Backlog"}])
+        ok = cockpit_read.read_tenant_swimlane("alpha", lambda: clean, timeout=1.0)
+        self.assertEqual(ok["status"], "OK")
+        self.assertEqual(ok["project"], "alpha")
+        self.assertEqual(ok["board"]["total"], 1)
+        self.assertEqual(clean.bound, "alpha")
+        self.assertTrue(clean.closed)
+
+        # A PermissionError is FORBIDDEN and carries no board data.
+        forbidden = cockpit_read.read_tenant_swimlane(
+            "beta", lambda: _RaisingTenantClient(PermissionError("access denied")),
+            timeout=1.0,
+        )
+        self.assertEqual(forbidden["status"], "FORBIDDEN")
+        self.assertIsNone(forbidden["board"])
+
+        # A permission-pattern read failure is also FORBIDDEN, no data.
+        pattern = cockpit_read.read_tenant_swimlane(
+            "beta",
+            lambda: _RaisingTenantClient(RuntimeError("permission denied for tenant")),
+            timeout=1.0,
+        )
+        self.assertEqual(pattern["status"], "FORBIDDEN")
+        self.assertIsNone(pattern["board"])
+
+        # A read that exceeds the timeout is UNREACHABLE, no data.
+        slow = cockpit_read.read_tenant_swimlane(
+            "gamma", lambda: _SlowTenantClient(0.5), timeout=0.05
+        )
+        self.assertEqual(slow["status"], "UNREACHABLE")
+        self.assertIsNone(slow["board"])
+
+        # A non-permission read failure (a dead connection) is UNREACHABLE.
+        unreachable = cockpit_read.read_tenant_swimlane(
+            "delta",
+            lambda: _RaisingTenantClient(
+                RuntimeError("Failed to list issues: connection lost")
+            ),
+            timeout=1.0,
+        )
+        self.assertEqual(unreachable["status"], "UNREACHABLE")
+        self.assertIsNone(unreachable["board"])
+
+    def test_read_tenant_swimlane_classifies_connect_phase_failure(self):
+        """A connect-phase failure (the client_factory itself raises) is bounded
+        by the per-project timeout and classified like a read failure: a generic
+        connect error is UNREACHABLE, a permission-flavored connect error is
+        FORBIDDEN, and neither propagates out to collapse the fan-out."""
+        def refused_factory():
+            raise RuntimeError("connection refused")
+
+        refused = cockpit_read.read_tenant_swimlane(
+            "alpha", refused_factory, timeout=1.0
+        )
+        self.assertEqual(refused["status"], "UNREACHABLE")
+        self.assertIsNone(refused["board"])
+
+        def denied_factory():
+            raise RuntimeError("permission denied connecting to tenant")
+
+        denied = cockpit_read.read_tenant_swimlane(
+            "beta", denied_factory, timeout=1.0
+        )
+        self.assertEqual(denied["status"], "FORBIDDEN")
+        self.assertIsNone(denied["board"])
+
+    def test_read_tenant_swimlane_never_closes_a_timed_out_client_mid_read(self):
+        """On timeout the outer path abandons the worker and never closes the
+        client mid-read; the worker that owns the client closes it only after its
+        read finally returns, so there is no close-during-read race on the socket."""
+        client = _CloseRecordingSlowClient(0.5)
+
+        result = cockpit_read.read_tenant_swimlane(
+            "gamma", lambda: client, timeout=0.05
+        )
+
+        self.assertEqual(result["status"], "UNREACHABLE")
+        # The worker is still reading right after the timeout; the outer path has
+        # not closed the client (a mid-read close would race the live socket).
+        self.assertFalse(client.closed)
+        # The owning worker closes it once the read returns, never during it.
+        deadline = time.time() + 2.0
+        while not client.closed and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(client.closed)
+        self.assertFalse(client.closed_during_read)
+
+
+class _ConcurrencyTracker:
+    """Track the peak number of per-tenant reads running at the same time."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def enter(self):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+
+    def leave(self):
+        with self._lock:
+            self.active -= 1
+
+
+class _ConcurrentTenantClient:
+    """A per-tenant read port whose read holds briefly and records concurrency.
+
+    Shared across the fan-out via a single tracker, it proves the reads overlap
+    (run in parallel) and that their peak count never exceeds the bounded pool.
+    """
+
+    def __init__(self, tenants, tracker, hold):
+        self._tenants = tenants
+        self._tracker = tracker
+        self._hold = hold
+
+    def list_databases(self):
+        return list(self._tenants)
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        self._tracker.enter()
+        try:
+            time.sleep(self._hold)
+            return []
+        finally:
+            self._tracker.leave()
+
+    def close(self):
+        pass
+
+
+class _DiscoveryOnlyClient:
+    """A read port used only for discovery: it lists the tenants and closes."""
+
+    def __init__(self, tenants):
+        self._tenants = tenants
+
+    def list_databases(self):
+        return list(self._tenants)
+
+    def close(self):
+        pass
+
+
+class _ConnectFailingFactory:
+    """Serves discovery on the first call, then raises on every per-tenant connect.
+
+    ``portfolio_payload`` calls the factory once for discovery (which completes
+    before the fan-out begins) and then once per tenant inside each timed worker.
+    Raising on those per-tenant connects models a connection outage that strikes
+    after discovery, and proves a connect-phase failure is classified within the
+    worker rather than propagated out to collapse the portfolio to a 500.
+    """
+
+    def __init__(self, tenants, error):
+        self._tenants = tenants
+        self._error = error
+        self._lock = threading.Lock()
+        self._calls = 0
+
+    def __call__(self):
+        with self._lock:
+            self._calls += 1
+            is_discovery = self._calls == 1
+        if is_discovery:
+            return _DiscoveryOnlyClient(self._tenants)
+        raise self._error
+
+
+class TestPortfolioPayload(unittest.TestCase):
+    def test_portfolio_payload_caps_at_25_with_stable_overflow(self):
+        """portfolio_payload caps the fan-out at 25 swimlanes (the first 25 in
+        sorted order), emits a deterministic overflow notice, excludes the same
+        26th project on every load, and totals over the 25 shown."""
+        names = [f"proj-{index:02d}" for index in range(26)]
+        # Shuffle the discovery order so the cap is proven to run on the sorted
+        # set: a cap-before-sort bug would keep a different 25 than sorted(names),
+        # which a pre-sorted source would hide. A fixed seed keeps it repeatable.
+        discovery_order = list(names)
+        random.Random(20260629).shuffle(discovery_order)
+        issues = {
+            name: [{"github_id": f"{name}-1", "status": "Backlog"}]
+            for name in discovery_order
+        }
+
+        def factory():
+            return FakeTenantClient(issues)
+
+        first = cockpit_read.portfolio_payload(client_factory=factory)
+        second = cockpit_read.portfolio_payload(client_factory=factory)
+
+        expected_shown = sorted(names)[:25]
+        self.assertEqual(len(first["swimlanes"]), 25)
+        self.assertEqual([s["project"] for s in first["swimlanes"]], expected_shown)
+        self.assertEqual(first["overflow"], 1)
+        self.assertEqual(first["notice"], "1 project not shown")
+        self.assertEqual(first["total"], 25)
+        self.assertEqual(first["aggregateStatus"], 200)
+
+        # The excluded 26th tenant (sorted last) never appears, on either load.
+        self.assertNotIn("proj-25", [s["project"] for s in first["swimlanes"]])
+        self.assertEqual(
+            [s["project"] for s in first["swimlanes"]],
+            [s["project"] for s in second["swimlanes"]],
+        )
+
+    def test_portfolio_payload_survives_a_connect_outage(self):
+        """A connection outage that makes every per-tenant connect raise is
+        classified within the per-project timeout: the portfolio still composes
+        (every lane UNREACHABLE with no rows, aggregateStatus 207) instead of
+        propagating the connect exception out to a 500."""
+        factory = _ConnectFailingFactory(
+            ["alpha", "beta", "gamma"], RuntimeError("connection refused")
+        )
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory, timeout=1.0)
+
+        self.assertEqual(
+            [s["project"] for s in payload["swimlanes"]], ["alpha", "beta", "gamma"]
+        )
+        self.assertTrue(
+            all(s["status"] == "UNREACHABLE" for s in payload["swimlanes"])
+        )
+        self.assertTrue(all(s["total"] == 0 for s in payload["swimlanes"]))
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["aggregateStatus"], 207)
+
+    def test_portfolio_payload_fans_out_bounded_concurrently(self):
+        """portfolio_payload reads tenants in parallel (the in-flight reads
+        overlap) while never exceeding the bounded worker count, so 25 reads do
+        not serialize and one slow tenant cannot stall the rest."""
+        names = [f"t{index:02d}" for index in range(16)]
+        tracker = _ConcurrencyTracker()
+
+        def factory():
+            return _ConcurrentTenantClient(names, tracker, hold=0.05)
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory)
+
+        self.assertEqual(len(payload["swimlanes"]), 16)
+        # Reads overlap (parallel) and their peak never exceeds the worker cap.
+        self.assertGreater(tracker.max_active, 1)
+        self.assertLessEqual(tracker.max_active, cockpit_read.MAX_FANOUT_WORKERS)
+
+    def test_portfolio_payload_empty_single_and_exact_cap(self):
+        """portfolio_payload handles the boundaries: an empty portfolio yields no
+        swimlanes (total 0, no notice, 200); a single project yields one swimlane
+        whose total is the portfolio total; exactly 25 projects yields 25
+        swimlanes with no overflow notice."""
+        def empty_factory():
+            return FakeTenantClient({})
+
+        empty = cockpit_read.portfolio_payload(client_factory=empty_factory)
+        self.assertEqual(empty["swimlanes"], [])
+        self.assertEqual(empty["total"], 0)
+        self.assertEqual(empty["overflow"], 0)
+        self.assertIsNone(empty["notice"])
+        self.assertEqual(empty["aggregateStatus"], 200)
+
+        def single_factory():
+            return FakeTenantClient(
+                {
+                    "solo": [
+                        {"github_id": "s1", "status": "Backlog"},
+                        {"github_id": "s2", "status": "Done"},
+                    ]
+                }
+            )
+
+        single = cockpit_read.portfolio_payload(client_factory=single_factory)
+        self.assertEqual([s["project"] for s in single["swimlanes"]], ["solo"])
+        self.assertEqual(single["total"], 2)
+        self.assertIsNone(single["notice"])
+        self.assertEqual(single["aggregateStatus"], 200)
+
+        names = [f"p{index:02d}" for index in range(25)]
+        issues = {
+            name: [{"github_id": f"{name}-1", "status": "Ready"}] for name in names
+        }
+
+        def exact_factory():
+            return FakeTenantClient(issues)
+
+        exact = cockpit_read.portfolio_payload(client_factory=exact_factory)
+        self.assertEqual(len(exact["swimlanes"]), 25)
+        self.assertEqual(exact["overflow"], 0)
+        self.assertIsNone(exact["notice"])
+        self.assertEqual(exact["total"], 25)
+
+    def test_portfolio_payload_is_read_only_across_all_tenants(self):
+        """Driving the whole fan-out through a ReadOnlyGuard for every tenant
+        records zero write calls; because the guard raises on any write, a
+        write attempt would degrade a swimlane, so the all-OK 200 result also
+        proves no tenant was written."""
+        issues = {
+            "alpha": [
+                {"github_id": "a1", "status": "Backlog"},
+                {"github_id": "a2", "status": "Done"},
+            ],
+            "beta": [{"github_id": "b1", "status": "In Progress"}],
+            "gamma": [
+                {"github_id": "g1", "status": "Ready"},
+                {"github_id": "g2", "status": "QA"},
+                {"github_id": "g3", "status": "Done"},
+            ],
+        }
+        guards = []
+
+        def factory():
+            guard = ReadOnlyGuard(FakeTenantClient(issues))
+            guards.append(guard)
+            return guard
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory)
+
+        # A guard wrapped every client opened on the path (discovery + per-tenant).
+        self.assertGreaterEqual(len(guards), 4)
+        for guard in guards:
+            self.assertEqual(guard.write_calls, [])
+        # All OK and reconciled: no write degraded any swimlane.
+        self.assertEqual(payload["aggregateStatus"], 200)
+        self.assertTrue(all(s["status"] == "OK" for s in payload["swimlanes"]))
+        self.assertEqual(payload["total"], 6)
+
+    def test_portfolio_payload_no_cross_tenant_leak_through_the_fan_out(self):
+        """Driving the real portfolio_payload/_fan_out with per-tenant distinct,
+        identifiable ids, each swimlane carries exactly its own tenant's id set and
+        the sets are pairwise disjoint. A mis-bind that returned one tenant's rows
+        for every lane would fail here, where the cap test (names and counts only)
+        would not, because the leak only shows in the per-row identities."""
+        issues = {
+            "alpha": [{"github_id": f"a{n}", "status": "Backlog"} for n in range(1, 6)],
+            "beta": [{"github_id": f"b{n}", "status": "Ready"} for n in range(1, 5)],
+            "gamma": [{"github_id": f"g{n}", "status": "Done"} for n in range(1, 7)],
+        }
+
+        def factory():
+            return FakeTenantClient(issues)
+
+        payload = cockpit_read.portfolio_payload(client_factory=factory)
+
+        ids_by_project = {
+            lane["project"]: {
+                issue["github_id"]
+                for column in lane["columns"]
+                for issue in column["issues"]
+            }
+            for lane in payload["swimlanes"]
+        }
+        # Each lane carries exactly its own tenant's ids, bound per worker.
+        self.assertEqual(ids_by_project["alpha"], {"a1", "a2", "a3", "a4", "a5"})
+        self.assertEqual(ids_by_project["beta"], {"b1", "b2", "b3", "b4"})
+        self.assertEqual(
+            ids_by_project["gamma"], {"g1", "g2", "g3", "g4", "g5", "g6"}
+        )
+        # Pairwise disjoint: no tenant's row appears under another lane.
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["beta"], set())
+        self.assertEqual(ids_by_project["alpha"] & ids_by_project["gamma"], set())
+        self.assertEqual(ids_by_project["beta"] & ids_by_project["gamma"], set())
+
+
+class TestPortfolioCli(unittest.TestCase):
+    def setUp(self):
+        _SPAN_EXPORTER.clear()
+
+    def test_portfolio_cli_outputs_aggregate_json(self):
+        """main(["portfolio"]) prints the aggregate portfolio JSON (swimlanes,
+        total, aggregateStatus) for the Node bridge and emits the
+        cockpit.portfolio span for the audit trace."""
+        issues = {
+            "alpha": [{"github_id": "a1", "status": "Backlog"}],
+            "beta": [{"github_id": "b1", "status": "Done"}],
+        }
+        out = io.StringIO()
+        with patch(
+            "solomon_harness.cockpit_read.DatabaseClient",
+            side_effect=lambda *args, **kwargs: FakeTenantClient(issues),
+        ):
+            with contextlib.redirect_stdout(out):
+                rc = cockpit_read.main(["portfolio"])
+
+        self.assertEqual(rc, 0)
+        printed = json.loads(out.getvalue())
+        self.assertIn("swimlanes", printed)
+        self.assertEqual(
+            sorted(s["project"] for s in printed["swimlanes"]), ["alpha", "beta"]
+        )
+        self.assertEqual(printed["total"], 2)
+        self.assertEqual(printed["aggregateStatus"], 200)
+
+        span_names = [s.name for s in _SPAN_EXPORTER.get_finished_spans()]
+        self.assertIn("cockpit.portfolio", span_names)
 
 
 class TestBoardPayloadTenantTargeting(unittest.TestCase):
