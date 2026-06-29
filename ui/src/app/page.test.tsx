@@ -93,11 +93,33 @@ describe("cockpit board page", () => {
     // An empty project shows no issue cards (nothing is fabricated/seeded).
     expect(screen.queryAllByTestId("issue-card")).toHaveLength(0);
 
-    // The page is observe-only: it never issues a write request.
+    // The page is observe-only: every request is a GET, never a write of any
+    // kind (POST/PUT/PATCH/DELETE are all rejected, not just POST).
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     for (const call of fetchMock.mock.calls) {
       const init = call[1] as RequestInit | undefined;
-      expect((init?.method ?? "GET").toUpperCase()).not.toBe("POST");
+      expect((init?.method ?? "GET").toUpperCase()).toBe("GET");
     }
+  });
+
+  it("renders a distinct project-not-found notice when found is false", async () => {
+    mockFetch({
+      projects: ["alpha"],
+      selectedProject: "ghost",
+      board: {
+        project: "ghost",
+        found: false,
+        total: 0,
+        unmapped: 0,
+        columns: columns(),
+      },
+    });
+
+    render(<Home />);
+
+    // A 404/not-found board shows an explicit notice, not a silent all-zero
+    // board that looks like a real but empty project.
+    expect(await screen.findByText(/project not found/i)).toBeInTheDocument();
+    expect(screen.queryAllByTestId("issue-card")).toHaveLength(0);
   });
 });

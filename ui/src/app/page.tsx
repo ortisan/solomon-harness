@@ -80,6 +80,7 @@ export default function Home() {
 
   const projects = data?.projects ?? [];
   const selectedProject = data?.selectedProject ?? "";
+  const notFound = data?.board?.found === false;
   const boardColumns = data?.board?.columns ?? fallbackColumns();
 
   return (
@@ -119,37 +120,45 @@ export default function Home() {
         )}
         {loading && !data && <p>Loading board...</p>}
 
-        <div className="board-columns">
-          {boardColumns.map((column) => (
-            <div key={column.name} className="board-column">
-              <div className="column-header">
-                <div className="column-title">
-                  <span>{column.name}</span>
-                  <span className="column-badge">{column.count}</span>
+        {notFound ? (
+          // A not-found project gets an explicit notice, never a silent all-zero
+          // board that would be indistinguishable from a real but empty project.
+          <p className="text-warning" role="status">
+            Project not found
+          </p>
+        ) : (
+          <div className="board-columns">
+            {boardColumns.map((column) => (
+              <div key={column.name} className="board-column">
+                <div className="column-header">
+                  <div className="column-title">
+                    <span>{column.name}</span>
+                    <span className="column-badge">{column.count}</span>
+                  </div>
+                </div>
+                <div className="column-cards">
+                  {column.issues.map((issue) => (
+                    <div
+                      key={issue.github_id}
+                      className="issue-card"
+                      data-testid="issue-card"
+                    >
+                      <span
+                        className={`card-type-badge type-${(issue.type_ ?? "").toLowerCase()}`}
+                      >
+                        {issue.type_}
+                      </span>
+                      <h4 className="card-title">{issue.title}</h4>
+                      <div className="card-meta">
+                        <span className="card-id text-mono">#{issue.github_id}</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-              <div className="column-cards">
-                {column.issues.map((issue) => (
-                  <div
-                    key={issue.github_id}
-                    className="issue-card"
-                    data-testid="issue-card"
-                  >
-                    <span
-                      className={`card-type-badge type-${(issue.type_ ?? "").toLowerCase()}`}
-                    >
-                      {issue.type_}
-                    </span>
-                    <h4 className="card-title">{issue.title}</h4>
-                    <div className="card-meta">
-                      <span className="card-id text-mono">#{issue.github_id}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );
