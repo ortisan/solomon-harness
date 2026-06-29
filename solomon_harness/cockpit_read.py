@@ -444,15 +444,20 @@ def portfolio_payload(
     max_projects: int = MAX_PROJECTS,
     max_workers: int = MAX_FANOUT_WORKERS,
     timeout: float = PER_PROJECT_TIMEOUT_S,
+    person: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the cross-tenant portfolio board by fanning out over the tenants.
 
     Discovers the sorted tenant set, caps it at ``max_projects`` (recording the
     overflow count and a stable notice), fans the capped set out under a bounded
     pool with a per-project read timeout, and composes the per-project outcomes
-    into one portfolio board. The whole read is wrapped in a ``cockpit.portfolio``
-    span that records the per-project statuses for the audit trace. Read-only:
-    every tenant is read through the read port and nothing is joined or written.
+    into one portfolio board. When ``person`` is given, the composed payload is
+    narrowed to that person key through ``filter_portfolio`` (server-side, so a
+    non-matching tenant's rows never reach the wire); ``person=None`` is a no-op,
+    so every existing caller is unchanged. The whole read is wrapped in a
+    ``cockpit.portfolio`` span that records the per-project statuses for the audit
+    trace. Read-only: every tenant is read through the read port and nothing is
+    joined or written.
 
     ``client_factory`` lets a test inject fakes; by default each call opens a
     fresh ``DatabaseClient`` for the harness directory.
@@ -467,6 +472,8 @@ def portfolio_payload(
         payload = compose_portfolio(results)
         payload["overflow"] = overflow_count
         payload["notice"] = _overflow_notice(overflow_count)
+        if person is not None:
+            payload = filter_portfolio(payload, person)
 
         span.set_attribute("cockpit.project_count", len(available))
         span.set_attribute("cockpit.shown_count", len(shown))
@@ -483,8 +490,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """JSON CLI for the Node-to-Python read bridge.
 
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
-    board for one tenant; ``portfolio`` prints the cross-tenant aggregate board.
-    Output is JSON on stdout so the Next route can parse it.
+    board for one tenant; ``portfolio`` prints the cross-tenant aggregate board,
+    narrowed to one person key when ``--user <key>`` is given. Output is JSON on
+    stdout so the Next route can parse it.
     """
     if "traceparent" in os.environ:
         from opentelemetry import trace
@@ -506,7 +514,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub.add_parser("projects", help="list the harness-managed tenants")
     board_parser = sub.add_parser("board", help="render one tenant's board")
     board_parser.add_argument("--project", default=None, help="the tenant/project name")
-    sub.add_parser("portfolio", help="render the cross-tenant portfolio board")
+    portfolio_parser = sub.add_parser(
+        "portfolio", help="render the cross-tenant portfolio board"
+    )
+    portfolio_parser.add_argument(
+        "--user", default=None, help="narrow the portfolio to one person key"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -518,7 +531,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     elif args.command == "board":
         print(json.dumps(board_payload(args.project, harness_dir=args.harness_dir)))
     elif args.command == "portfolio":
-        print(json.dumps(portfolio_payload(harness_dir=args.harness_dir)))
+        print(
+            json.dumps(
+                portfolio_payload(harness_dir=args.harness_dir, person=args.user)
+            )
+        )
     return 0
 
 
