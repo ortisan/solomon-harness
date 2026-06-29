@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from solomon_harness import install_global as ig
 
@@ -73,6 +73,9 @@ class TestInstallGlobal(unittest.TestCase):
     def test_session_hook_is_added_then_idempotent(self):
         res1 = self._install()
         self.assertTrue(res1["hook_installed"])
+        self.assertTrue(res1["gemini_hook_installed"])
+        
+        # Verify Claude
         settings_path = os.path.join(self.claude, "settings.json")
         with open(settings_path) as f:
             settings = json.load(f)
@@ -80,12 +83,24 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertIn("memory-up", cmds)
         self.assertIn("solomon_harness.cli run", cmds)
 
+        # Verify Gemini
+        gemini_settings_path = os.path.join(self.gemini, "settings.json")
+        with open(gemini_settings_path) as f:
+            gemini_settings = json.load(f)
+        gemini_cmds = json.dumps(gemini_settings["hooks"]["SessionStart"])
+        self.assertIn("memory-up", gemini_cmds)
+        self.assertIn("solomon_harness.cli run", gemini_cmds)
+
         # Second install must not duplicate the hook.
         res2 = self._install()
         self.assertFalse(res2["hook_installed"])
+        self.assertFalse(res2["gemini_hook_installed"])
         with open(settings_path) as f:
             settings2 = json.load(f)
         self.assertEqual(len(settings2["hooks"]["SessionStart"]), 1)
+        with open(gemini_settings_path) as f:
+            gemini_settings2 = json.load(f)
+        self.assertEqual(len(gemini_settings2["hooks"]["SessionStart"]), 1)
 
     def test_preserves_existing_settings(self):
         os.makedirs(self.claude, exist_ok=True)
@@ -169,6 +184,132 @@ class TestInstallGlobal(unittest.TestCase):
             )
             self.assertIsNone(res.get("agy_imported"))
             mock_run.assert_not_called()
+
+    def test_describe_formatting(self):
+        # Case 1: All values present
+        res_val = {
+            "memory_port": 8099,
+            "home_agents": True,
+            "home_compose": True,
+            "claude_agents": ["qa.md"],
+            "claude_commands": ["cmd1"],
+            "gemini_commands": ["cmd2"],
+            "gemini_extension": True,
+            "agy_imported": True,
+            "hook_installed": True,
+            "gemini_hook_installed": True,
+            "mcp_claude": True,
+            "mcp_gemini": True,
+        }
+        summary = ig.describe(res_val)
+        self.assertIn("SurrealDB host port 8099", summary)
+        self.assertIn("successfully imported and converted", summary)
+        self.assertIn("session hook (claude): installed", summary)
+        self.assertIn("session hook (gemini): installed", summary)
+        self.assertIn("MCP (claude, user scope): registered", summary)
+        self.assertIn("MCP (gemini, user scope): registered", summary)
+
+        # Case 2: MCPs missing (None) and agy failed
+        res_val2 = {
+            "gemini_extension": True,
+            "agy_imported": False,
+            "hook_installed": False,
+            "gemini_hook_installed": False,
+            "mcp_claude": None,
+            "mcp_gemini": None,
+        }
+        summary2 = ig.describe(res_val2)
+        self.assertIn("import run failed", summary2)
+        self.assertIn("session hook (claude): already present", summary2)
+        self.assertIn("MCP (claude): claude CLI not found", summary2)
+        self.assertIn("MCP (gemini): gemini CLI not found", summary2)
+
+        # Case 3: agy_imported is None and gemini_extension is True
+        res_val3 = {
+            "gemini_extension": True,
+            "agy_imported": None,
+        }
+        summary3 = ig.describe(res_val3)
+        self.assertIn("agy CLI not found or non-default path", summary3)
+
+    def test_merge_settings_hook_json_decode_error(self):
+        settings_path = os.path.join(self.claude, "settings.json")
+        os.makedirs(self.claude, exist_ok=True)
+        with open(settings_path, "w") as f:
+            f.write("{invalid_json")
+        res = ig._merge_session_start_hook(settings_path)
+        self.assertTrue(res)
+        with open(settings_path) as f:
+            settings = json.load(f)
+        self.assertIn("hooks", settings)
+
+    def test_merge_settings_hook_permission_error(self):
+        settings_path = os.path.join(self.claude, "settings.json")
+        os.makedirs(self.claude, exist_ok=True)
+        with open(settings_path, "w") as f:
+            f.write("{}")
+        with patch("builtins.open", side_effect=PermissionError("denied")):
+            res = ig._merge_session_start_hook(settings_path)
+            self.assertFalse(res)
+
+    def test_register_mcp_success_and_failure(self):
+        with (
+            patch("solomon_harness.install_global.shutil.which", return_value="/usr/bin/claude"),
+            patch("solomon_harness.install_global.subprocess.run") as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_run.return_value = mock_proc
+            
+            res_ok = ig._register_mcp(["args"], "claude")
+            self.assertTrue(res_ok)
+            
+            mock_proc.returncode = 1
+            res_fail = ig._register_mcp(["args"], "claude")
+            self.assertFalse(res_fail)
+
+    def test_register_mcp_exception(self):
+        with (
+            patch("solomon_harness.install_global.shutil.which", return_value="/usr/bin/claude"),
+            patch("solomon_harness.install_global.subprocess.run", side_effect=RuntimeError("exec error")),
+        ):
+            res = ig._register_mcp(["args"], "claude")
+            self.assertFalse(res)
+
+    def test_install_global_agy_fallback_and_exception(self):
+        from os.path import isfile as real_isfile
+        default_gemini = os.path.expanduser("~/.gemini")
+        def custom_isfile(path):
+            if "agy" in str(path):
+                return True
+            return real_isfile(path)
+            
+        with (
+            patch("solomon_harness.install_global.shutil.which", return_value=None),
+            patch("solomon_harness.install_global.os.path.isfile", side_effect=custom_isfile),
+            patch("solomon_harness.install_global.os.access", return_value=True),
+            patch("solomon_harness.install_global.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=0)]
+            res = ig.install_global(
+                source_root=self.src.name,
+                claude_dir=self.claude,
+                gemini_dir=default_gemini,
+                home_dir=self.home,
+                register_mcp=False,
+            )
+            self.assertTrue(res.get("agy_imported"))
+            
+            # Exception scenario
+            mock_run.side_effect = RuntimeError("import failed")
+            res_exc = ig.install_global(
+                source_root=self.src.name,
+                claude_dir=self.claude,
+                gemini_dir=default_gemini,
+                home_dir=self.home,
+                register_mcp=False,
+            )
+            self.assertFalse(res_exc.get("agy_imported"))
 
 
 if __name__ == "__main__":
