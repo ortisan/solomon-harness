@@ -1,8 +1,10 @@
 import json
+import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 from solomon_harness import github
+from solomon_harness.tools.database_client import DatabaseClient
 
 
 class _Proc:
@@ -166,10 +168,13 @@ def _fake_db_cm(fake_db):
 
 
 class TestRecordTerminalStatus(unittest.TestCase):
+    # create_autospec(DatabaseClient) pins the real method signatures, so a drift
+    # in the 5-arg log_issue contract fails these tests instead of passing silently
+    # against a permissive bare MagicMock.
     def test_writes_one_closed_preserving_fields(self):
         """A non-terminal row is read then written once as closed, preserving the
         title, type and milestone (read-modify-write through the 5-arg log_issue)."""
-        fake_db = MagicMock()
+        fake_db = create_autospec(DatabaseClient, instance=True)
         fake_db.get_issue.return_value = {
             "github_id": "34",
             "title": "Deliver the thing",
@@ -187,7 +192,7 @@ class TestRecordTerminalStatus(unittest.TestCase):
 
     def test_already_terminal_row_triggers_no_write(self):
         """An already-terminal row is idempotent: no log_issue write occurs."""
-        fake_db = MagicMock()
+        fake_db = create_autospec(DatabaseClient, instance=True)
         fake_db.get_issue.return_value = {
             "github_id": "9",
             "title": "Done already",
@@ -204,7 +209,7 @@ class TestRecordTerminalStatus(unittest.TestCase):
 
     def test_missing_row_triggers_no_write(self):
         """No memory row for the issue means nothing to repair (no row is created)."""
-        fake_db = MagicMock()
+        fake_db = create_autospec(DatabaseClient, instance=True)
         fake_db.get_issue.return_value = None
         with patch(
             "solomon_harness.tools.database_client.DatabaseClient",
@@ -213,16 +218,23 @@ class TestRecordTerminalStatus(unittest.TestCase):
             github.record_terminal_status(404)
         fake_db.log_issue.assert_not_called()
 
-    def test_memory_error_is_swallowed(self):
-        """A raised memory error must never propagate out of the merge path."""
+    def test_memory_error_is_swallowed_and_logged(self):
+        """A raised memory error must never propagate out of the merge path, and the
+        failure is logged at warning level (not silently swallowed). The log carries
+        only the exception type, never its message, so a backend error string cannot
+        leak store internals (STRIDE: information disclosure)."""
+        # Constructor failure: caught, never raised, logged at warning.
         with patch(
             "solomon_harness.tools.database_client.DatabaseClient",
             side_effect=RuntimeError("backend down"),
         ):
-            # Must not raise.
-            github.record_terminal_status(1)
+            with self.assertLogs(level="WARNING") as cm:
+                github.record_terminal_status(1)  # must not raise
+        self.assertTrue(any("terminal write-through" in m for m in cm.output))
 
-        fake_db = MagicMock()
+        # Write failure: log_issue is reached (the row is non-terminal), and its
+        # error is caught, not raised, and logged at warning by exception type.
+        fake_db = create_autospec(DatabaseClient, instance=True)
         fake_db.get_issue.return_value = {
             "github_id": "2",
             "title": "T",
@@ -235,8 +247,32 @@ class TestRecordTerminalStatus(unittest.TestCase):
             "solomon_harness.tools.database_client.DatabaseClient",
             return_value=_fake_db_cm(fake_db),
         ):
-            # A write failure on the critical path is caught, not raised.
-            github.record_terminal_status(2)
+            with self.assertLogs(level="WARNING") as cm:
+                github.record_terminal_status(2)  # must not raise
+        fake_db.log_issue.assert_called_once()  # log_issue was reached
+        joined = "\n".join(cm.output)
+        self.assertIn("RuntimeError", joined)  # the exception type is logged
+        self.assertNotIn("write failed", joined)  # the message is not
+
+
+class TestRecordTerminalStatusRealStore(unittest.TestCase):
+    def test_persists_closed_against_a_real_store(self):
+        """A real DatabaseClient (not a wholesale mock) is opened and exercises real
+        backend selection: record_terminal_status reads the seeded row and persists
+        status=closed, preserving the title, type and milestone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("os.getcwd", return_value=tmp):
+                with DatabaseClient(harness_dir=tmp) as db:
+                    db.log_issue("77", "Deliver feature", "feature", "code_review", "mile-7")
+                github.record_terminal_status(77)
+                with DatabaseClient(harness_dir=tmp) as db:
+                    row = db.get_issue("77")
+                    open_ids = {i["github_id"] for i in db.get_open_issues()}
+        self.assertEqual(row["status"], "closed")
+        self.assertEqual(row["title"], "Deliver feature")
+        self.assertEqual(row["type_"], "feature")
+        self.assertEqual(str(row["milestone_id"]), "mile-7")
+        self.assertNotIn("77", open_ids)
 
 
 class TestSetStatusWriteThroughGate(unittest.TestCase):

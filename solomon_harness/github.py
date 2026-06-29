@@ -306,6 +306,11 @@ def record_terminal_status(issue_number) -> None:
         from solomon_harness.tools.database_client import DatabaseClient, is_terminal
 
         github_id = str(issue_number)
+        # Targets whatever backend DatabaseClient resolves (the shared SurrealDB in
+        # normal operation; the SQLite fallback only when SurrealDB is unreachable).
+        # Unlike reconcile, this single best-effort mirror write does not gate on the
+        # backend: it needs no bulk-repair guard, and reconcile against the shared
+        # store remains the convergence backstop (ADR-0006).
         with DatabaseClient(harness_dir=os.getcwd()) as db:
             row = db.get_issue(github_id)
             if row is None or is_terminal(row.get("status")):
@@ -318,8 +323,12 @@ def record_terminal_status(issue_number) -> None:
                 row.get("milestone_id"),
             )
     except Exception as exc:  # noqa: BLE001 - never break the merge critical path
+        # Log the exception type, not str(exc): a backend error message can carry
+        # store internals and must not leak into logs (STRIDE: info disclosure).
         logging.warning(
-            "terminal write-through for issue %s failed: %s", issue_number, exc
+            "terminal write-through for issue %s failed: %s",
+            issue_number,
+            type(exc).__name__,
         )
 
 
