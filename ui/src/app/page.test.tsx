@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Home from "./page";
@@ -19,6 +19,7 @@ interface Issue {
   title: string;
   type_: string;
   status: string;
+  personKey?: string;
 }
 
 function columns(populate: Record<string, Issue[]> = {}) {
@@ -128,6 +129,10 @@ function issue(id: string): Issue {
   return { github_id: id, title: `title-${id}`, type_: "feature", status: "Backlog" };
 }
 
+function personIssue(id: string, personKey: string): Issue {
+  return { github_id: id, title: `title-${id}`, type_: "feature", status: "Backlog", personKey };
+}
+
 function okSwimlane(project: string, byColumn: Record<string, Issue[]> = {}) {
   const cols = columns(byColumn);
   const total = cols.reduce((acc, c) => acc + c.count, 0);
@@ -235,5 +240,96 @@ describe("cockpit portfolio page", () => {
     render(<Home />);
 
     expect(await screen.findByText("1 project not shown")).toBeInTheDocument();
+  });
+});
+
+describe("cockpit cross-user filter", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("offers a user filter and re-fetches with ?user= when a user is picked", async () => {
+    const fetchMock = mockFetch(
+      portfolioPayload([
+        okSwimlane("alpha", { Backlog: [personIssue("a1", "alice@example.com")] }),
+        okSwimlane("beta", { Done: [personIssue("b1", "bob@example.com")] }),
+      ]),
+    );
+
+    render(<Home />);
+
+    // The user filter control is present by its accessible label and lists the
+    // people surfaced across the loaded swimlanes.
+    const userSelect = (await screen.findByLabelText("User")) as HTMLSelectElement;
+    expect(
+      screen.getByRole("option", { name: "alice@example.com" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "bob@example.com" }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(userSelect, { target: { value: "alice@example.com" } });
+
+    // Picking a user re-fetches, threading the chosen key as ?user=.
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.some((url) => url.includes("user=alice%40example.com"))).toBe(true);
+    });
+
+    // Every request is a GET: the filter never mutates state.
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit | undefined;
+      expect((init?.method ?? "GET").toUpperCase()).toBe("GET");
+    }
+  });
+
+  it("narrows the swimlanes to one user, keeping an empty lane present", async () => {
+    mockFetch(
+      portfolioPayload(
+        [
+          okSwimlane("alpha", {
+            Backlog: [personIssue("a1", "alice@example.com")],
+            "In Progress": [personIssue("a2", "alice@example.com")],
+            Done: [personIssue("a3", "alice@example.com")],
+          }),
+          okSwimlane("beta", {
+            Ready: [personIssue("b1", "alice@example.com")],
+            QA: [personIssue("b2", "alice@example.com")],
+          }),
+          okSwimlane("gamma", {}),
+        ],
+        { filteredUser: "alice@example.com" },
+      ),
+    );
+
+    render(<Home />);
+
+    // One lane per project survives: gamma stays present (not hidden), just empty.
+    await waitFor(() => expect(screen.getAllByTestId("swimlane")).toHaveLength(3));
+    expect(screen.getByRole("heading", { name: "gamma" })).toBeInTheDocument();
+    // alice's five cards render across alpha and beta.
+    expect(screen.getAllByTestId("issue-card")).toHaveLength(5);
+    // The empty matched lane shows a per-lane affordance naming the user.
+    expect(
+      screen.getByText(/0 issues for alice@example.com/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the cross-project empty state when the filtered total is 0", async () => {
+    mockFetch(
+      portfolioPayload(
+        [okSwimlane("alpha", {}), okSwimlane("beta", {}), okSwimlane("gamma", {})],
+        { filteredUser: "carol@example.com", total: 0 },
+      ),
+    );
+
+    render(<Home />);
+
+    // A distinct cross-project empty state names the subject and the lane count.
+    expect(
+      await screen.findByText(/no issues for carol@example.com across 3 projects/i),
+    ).toBeInTheDocument();
+    // No issue card renders anywhere under the empty filter.
+    expect(screen.queryAllByTestId("issue-card")).toHaveLength(0);
   });
 });
