@@ -96,21 +96,32 @@ def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
     return sorted(list_databases())
 
 
-def board_payload(project: str, harness_dir: Optional[str] = None) -> Dict[str, Any]:
+def board_payload(
+    project: str,
+    harness_dir: Optional[str] = None,
+    client_factory: Optional[Callable[[], Any]] = None,
+) -> Dict[str, Any]:
     """Build the board for ``project`` after validating it against discovery.
 
     The requested project is checked against the discovered-tenant allowlist
     before any board is read. An unknown (or shell-injection) value is never run
     as a command: it yields an empty board flagged ``found: false`` so the driving
-    adapter can return 404. A known tenant yields the grouped board, ``found: true``.
+    adapter can return 404. A known tenant binds that exact tenant on the read
+    port via ``use_tenant`` before the read, so the board is keyed to the selected
+    project and never the host tenant, then yields the grouped board, ``found: true``.
+
+    ``client_factory`` lets a test inject a fake read port; by default it opens a
+    real ``DatabaseClient`` for the harness directory.
     """
-    client = DatabaseClient(harness_dir=harness_dir)
+    factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
+    client = factory()
     try:
         available = discover_projects(client.list_databases)
         if project not in available:
             payload = empty_board(project)
             payload["found"] = False
             return payload
+        client.use_tenant(project)
         payload = build_board(client, project)
         payload["found"] = True
         return payload

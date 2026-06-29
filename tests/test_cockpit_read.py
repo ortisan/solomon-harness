@@ -173,6 +173,74 @@ class TestDiscoverProjects(unittest.TestCase):
         self.assertGreaterEqual(len(discovered), 1)
 
 
+class FakeTenantClient:
+    """A fake read port whose issues depend on the currently bound tenant.
+
+    Proves the board read is keyed to the selected tenant rather than the host:
+    list_issues reflects whichever tenant use_tenant last bound. Records the
+    ordered call sequence so a test can assert the bind happens before the read.
+    """
+
+    def __init__(self, issues_by_tenant):
+        self._issues_by_tenant = dict(issues_by_tenant)
+        self._bound = None
+        self.calls = []
+
+    def list_databases(self):
+        self.calls.append("list_databases")
+        return list(self._issues_by_tenant.keys())
+
+    def use_tenant(self, database):
+        self.calls.append(("use_tenant", database))
+        self._bound = database
+
+    def list_issues(self):
+        self.calls.append("list_issues")
+        return list(self._issues_by_tenant.get(self._bound, []))
+
+    def close(self):
+        self.calls.append("close")
+
+
+class TestBoardPayloadTenantTargeting(unittest.TestCase):
+    def test_board_payload_reads_selected_tenant_not_host(self):
+        """board_payload binds the selected tenant before reading, so two
+        distinct tenants yield distinct boards each labeled with its own
+        project, not the host tenant's content."""
+        fake = FakeTenantClient(
+            {
+                "alpha": [{"github_id": "a1", "status": "Backlog"}],
+                "beta": [
+                    {"github_id": "b1", "status": "In Progress"},
+                    {"github_id": "b2", "status": "Done"},
+                ],
+            }
+        )
+
+        alpha = cockpit_read.board_payload("alpha", client_factory=lambda: fake)
+        beta = cockpit_read.board_payload("beta", client_factory=lambda: fake)
+
+        # Each board is labeled with its requested tenant and is keyed to it.
+        self.assertEqual(alpha["project"], "alpha")
+        self.assertEqual(beta["project"], "beta")
+        self.assertTrue(alpha["found"])
+        self.assertTrue(beta["found"])
+        # Selecting a different tenant produces different column content.
+        self.assertNotEqual(alpha["columns"], beta["columns"])
+        alpha_counts = {c["name"]: c["count"] for c in alpha["columns"]}
+        beta_counts = {c["name"]: c["count"] for c in beta["columns"]}
+        self.assertEqual(alpha_counts["Backlog"], 1)
+        self.assertEqual(beta_counts["In Progress"], 1)
+        self.assertEqual(beta_counts["Done"], 1)
+        # The selected tenant is bound before the issue read on each request.
+        self.assertIn(("use_tenant", "alpha"), fake.calls)
+        self.assertIn(("use_tenant", "beta"), fake.calls)
+        self.assertLess(
+            fake.calls.index(("use_tenant", "alpha")),
+            fake.calls.index("list_issues"),
+        )
+
+
 class TestReadPathInstrumentation(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
