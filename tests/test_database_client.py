@@ -14,8 +14,11 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from solomon_harness.tools.database_client import (  # noqa: E402
+    TERMINAL_STATUSES,
     DatabaseClient,
     _resolve_database,
+    is_terminal,
+    normalize_status,
 )
 
 
@@ -620,8 +623,10 @@ class TestDatabaseClient(unittest.TestCase):
     def test_list_issues_returns_all_statuses_including_done(self):
         """list_issues returns every issue regardless of status, including Done.
 
-        get_open_issues only returns status='open', but the cockpit board must
+        get_open_issues returns only non-terminal rows, but the cockpit board must
         render the full seven columns, so the read port needs an all-status read.
+        Statuses are normalized on write (ADR-0006): In Progress -> in_progress and
+        Done -> closed, while Backlog passes through unchanged.
         """
         client = DatabaseClient(db_path=self.sqlite_db_path)
         client.log_issue("gh-1", "Backlog item", "feature", "Backlog", None)
@@ -634,8 +639,118 @@ class TestDatabaseClient(unittest.TestCase):
         by_id = {i["github_id"]: i["status"] for i in issues}
         self.assertEqual(
             by_id,
-            {"gh-1": "Backlog", "gh-2": "In Progress", "gh-3": "Done"},
+            {"gh-1": "Backlog", "gh-2": "in_progress", "gh-3": "closed"},
         )
+
+    def test_log_issue_normalizes_status_on_write(self):
+        """log_issue collapses board display names and casing aliases to one
+        canonical token per logical status, so no two rows differ only by casing."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        cases = {
+            "In Progress": "in_progress",
+            "in_progress": "in_progress",
+            "Code Review": "code_review",
+            "QA": "qa",
+            "Done": "closed",
+            "done": "closed",
+            "closed": "closed",
+            "Backlog": "Backlog",
+            "open": "open",
+        }
+        for index, (written, expected) in enumerate(cases.items()):
+            gid = f"norm-{index}"
+            client.log_issue(gid, "Issue", "feature", written, None)
+            self.assertEqual(client.get_issue(gid)["status"], expected)
+        client.close()
+
+    def test_get_open_issues_returns_non_terminal_rows(self):
+        """get_open_issues is a non-terminal predicate, not a literal status='open'
+        filter: it returns open/Backlog/in_progress and excludes closed/done."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("o1", "Open literal", "feature", "open", None)
+        client.log_issue("o2", "Backlog item", "feature", "Backlog", None)
+        client.log_issue("o3", "Active", "feature", "in_progress", None)
+        client.log_issue("t1", "Closed", "feature", "closed", None)
+        client.log_issue("t2", "Done token", "feature", "done", None)
+
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        client.close()
+        self.assertEqual(open_ids, {"o1", "o2", "o3"})
+
+    def test_get_open_issues_excludes_legacy_unnormalized_terminal_rows(self):
+        """The non-terminal predicate excludes legacy rows that carry done/Done
+        verbatim (written before normalization), so the terminal-literal set has
+        teeth on rows that bypass log_issue."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            conn.executemany(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("L1", "legacy done", "bug", "done", None),
+                    ("L2", "legacy Done", "bug", "Done", None),
+                    ("L3", "legacy closed", "bug", "closed", None),
+                ],
+            )
+            conn.commit()
+        client.log_issue("o1", "Open one", "feature", "open", None)
+
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        client.close()
+        self.assertEqual(open_ids, {"o1"})
+
+    def test_status_flip_to_terminal_leaves_no_duplicate_row(self):
+        """A row flipped from any prior status to closed ends terminal, by
+        github_id, with no duplicate row, and falls out of get_open_issues."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        priors = ["in_progress", "QA", "code_review", "Backlog", "open"]
+        for prior in priors:
+            gid = f"flip-{prior}"
+            client.log_issue(gid, "Issue", "feature", prior, None)
+            client.log_issue(gid, "Issue", "feature", "closed", None)
+            self.assertEqual(client.get_issue(gid)["status"], "closed")
+
+        ids = [r["github_id"] for r in client.list_issues() if r["github_id"].startswith("flip-")]
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        client.close()
+
+        self.assertEqual(len(ids), len(priors))  # one UPSERT row per id, no duplicates
+        self.assertEqual(len(set(ids)), len(priors))
+        self.assertEqual(open_ids & set(ids), set())
+
+    def test_get_open_issues_surreal_uses_parameterized_not_in(self):
+        """On SurrealDB the open predicate is a parameterized NOT IN over the
+        terminal-literal set, never a string-interpolated literal (STRIDE)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.backend = "surrealdb"
+        captured = {}
+
+        def fake_run(query, params=None):
+            captured["query"] = query
+            captured["params"] = params
+            return []
+
+        client._run_surreal = fake_run
+        client.get_open_issues()
+        client.backend = "sqlite"
+        client.close()
+
+        self.assertIn("NOT IN", captured["query"])
+        self.assertEqual(captured["params"], {"terminal": list(TERMINAL_STATUSES)})
+
+    def test_status_vocabulary_helpers(self):
+        """normalize_status and is_terminal agree on the canonical vocabulary."""
+        self.assertEqual(normalize_status("In Progress"), "in_progress")
+        self.assertEqual(normalize_status("Code Review"), "code_review")
+        self.assertEqual(normalize_status("Done"), "closed")
+        self.assertEqual(normalize_status("open"), "open")
+        self.assertIsNone(normalize_status(None))
+        self.assertTrue(is_terminal("closed"))
+        self.assertTrue(is_terminal("done"))
+        self.assertTrue(is_terminal("Done"))
+        self.assertFalse(is_terminal("in_progress"))
+        self.assertFalse(is_terminal("open"))
+        self.assertFalse(is_terminal(None))
 
     def test_list_databases_is_read_only(self):
         """list_databases discovers the tenant(s) without mutating the store.

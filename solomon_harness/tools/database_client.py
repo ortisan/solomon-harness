@@ -1556,14 +1556,16 @@ class DatabaseClient:
             github_id: Numeric or string ID of the GitHub issue.
             title: Title of the issue.
             type_: Type of issue (e.g., bug, feature, refactor).
-            status: Status (e.g., open, closed).
+            status: Status (e.g., open, closed). Normalized to one canonical token
+                per logical status on write (ADR-0006), so no two rows differ only
+                by casing for the same status.
             milestone_id: Associated milestone ID in the database.
         """
         fields = {
             "github_id": github_id,
             "title": title,
             "type_": type_,
-            "status": status,
+            "status": normalize_status(status),
             "milestone_id": milestone_id,
         }
         # github_id is already a stable id, reused for the RecordID and filename.
@@ -2073,15 +2075,21 @@ class DatabaseClient:
 
     @_resilient
     def get_open_issues(self) -> List[Dict[str, Any]]:
-        """Retrieves all open issues.
+        """Retrieves the open issues, defined as every non-terminal row.
+
+        "Open" is a non-terminal predicate (ADR-0006), not the literal
+        status='open' filter no lifecycle step writes: a row is open when its
+        status is not one of the terminal literals (closed/done/Done). The
+        terminal set is bound as a query parameter on both backends, never
+        string-formatted, so the predicate carries no injection surface.
 
         Returns:
-            A list of dictionaries containing open issues.
+            A list of dictionaries containing the non-terminal issues.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM issues WHERE status = 'open'"
+            query = "SELECT * FROM issues WHERE status NOT IN $terminal"
             try:
-                res = self._run_surreal(query)
+                res = self._run_surreal(query, {"terminal": list(TERMINAL_STATUSES)})
                 return self._extract_list(res)
             except _ConnectionLost:
                 raise
@@ -2091,11 +2099,12 @@ class DatabaseClient:
                     f"Failed to retrieve open issues from SurrealDB: {e}"
                 )
         else:
-            query = "SELECT * FROM issues WHERE status = 'open'"
+            placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
+            query = f"SELECT * FROM issues WHERE status NOT IN ({placeholders})"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query)
+                    cursor.execute(query, tuple(TERMINAL_STATUSES))
                     rows = cursor.fetchall()
                     return [dict(row) for row in rows]
             except sqlite3.Error as e:
