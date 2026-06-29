@@ -3,7 +3,27 @@ import shutil
 import tempfile
 import unittest
 import hashlib
+import subprocess
+from unittest import mock
 from solomon_harness import curator
+
+REAL_SUBPROCESS_RUN = subprocess.run
+
+def _clean_env():
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith("GIT_"):
+            env.pop(key, None)
+    return env
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", cwd, *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_clean_env(),
+    )
 
 def _write_agent(root, name, description):
     role_dir = os.path.join(root, "agents", name, "agents")
@@ -185,3 +205,120 @@ class TestSweep(unittest.TestCase):
         result = curator.sweep_fleet("baseline", analyzer, NullMockDBClient(), self.root)
         self.assertEqual(len(result.proposals), 1)
         self.assertIsNone(result.proposals[0].decision_id)
+
+
+class TestApplyProposal(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="curator-apply-")
+        # Write AGENTS.md
+        with open(os.path.join(self.root, "AGENTS.md"), "w", encoding="utf-8") as f:
+            f.write("# solomon-harness — Agent Rules and Definitions\n\n- Strict TDD is mandatory.\n- Emojis are strictly prohibited.\n")
+        _write_agent(self.root, "qa", "The QA Specialist.")
+        self.db = MockDBClient()
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_apply_proposal_raises_for_insufficient_sources(self):
+        proposal = curator.Proposal(
+            agent="qa",
+            drift_description="Add contract testing",
+            sources=("RFC 2119 (1997)",),
+            rationale="Rationale"
+        )
+        with self.assertRaisesRegex(ValueError, "insufficient sources"):
+            curator.apply_proposal(proposal, self.db, self.root)
+
+    def test_apply_proposal_raises_for_restating_shared_rules(self):
+        proposal = curator.Proposal(
+            agent="qa",
+            drift_description="Strict TDD is mandatory.",
+            sources=("RFC 2119 (1997)", "SemVer 2.0.0 (2013)"),
+            rationale="We must enforce TDD."
+        )
+        with self.assertRaisesRegex(ValueError, "restates shared rules"):
+            curator.apply_proposal(proposal, self.db, self.root)
+
+    def test_apply_proposal_raises_for_invalid_agent_count(self):
+        proposal = curator.Proposal(
+            agent="invalid_agent",
+            drift_description="Add contract testing",
+            sources=("RFC 2119 (1997)", "SemVer 2.0.0 (2013)"),
+            rationale="Rationale"
+        )
+        with self.assertRaisesRegex(ValueError, "invalid agent target"):
+            curator.apply_proposal(proposal, self.db, self.root)
+
+    @mock.patch("solomon_harness.curator.subprocess.run")
+    def test_apply_proposal_creates_branch_edits_files_and_opens_pr(self, mock_run):
+        # Mock subprocess.run for the compile scripts and gh CLI
+        def side_effect(args, **kwargs):
+            cmd_str = " ".join(args)
+            if "gh" in args and "pr" in args and "create" in args:
+                mock_proc = mock.Mock()
+                mock_proc.returncode = 0
+                mock_proc.stdout = "https://github.com/ortisan/solomon-harness/pull/999\n"
+                return mock_proc
+            # For compilation hooks, just return success mock
+            if "document-skills.py" in cmd_str or "compile" in cmd_str:
+                mock_proc = mock.Mock()
+                mock_proc.returncode = 0
+                return mock_proc
+            # Execute git commands on local temp repo
+            return REAL_SUBPROCESS_RUN(args, **kwargs)
+            
+        mock_run.side_effect = side_effect
+        repo_dir = tempfile.mkdtemp(prefix="curator-git-")
+        try:
+            # Initialize Git
+            _git(repo_dir, "init", "-q")
+            _git(repo_dir, "config", "user.email", "t@example.com")
+            _git(repo_dir, "config", "user.name", "Test")
+            _git(repo_dir, "checkout", "-q", "-b", "main")
+            
+            # Write seed files
+            with open(os.path.join(repo_dir, "README.md"), "w", encoding="utf-8") as f:
+                f.write("seed\n")
+            _git(repo_dir, "add", "-A")
+            _git(repo_dir, "commit", "-q", "-m", "init")
+            
+            # Write AGENTS.md
+            with open(os.path.join(repo_dir, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# solomon-harness — Agent Rules\n\n- Strict TDD is mandatory.\n")
+            
+            # Create agent
+            _write_agent(repo_dir, "qa", "The QA Specialist.")
+            _git(repo_dir, "add", "-A")
+            _git(repo_dir, "commit", "-q", "-m", "add qa agent")
+            
+            # Define proposal
+            proposal = curator.Proposal(
+                agent="qa",
+                drift_description="Add contract testing validation",
+                sources=("RFC 2119 (1997)", "SemVer 2.0.0 (2013)"),
+                rationale="Rationale for contract testing.",
+                github_id="123"
+            )
+
+            
+            pr_url = curator.apply_proposal(proposal, self.db, repo_dir)
+            self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/999")
+            
+            # Check that the branch was created and checked out
+            branch_out = _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            self.assertTrue(branch_out.startswith("feature/"))
+            
+            # Check that the new skill file was written
+            skills_dir = os.path.join(repo_dir, "agents", "qa", "skills")
+            skill_files = os.listdir(skills_dir)
+            self.assertEqual(len(skill_files), 1)
+            skill_file_path = os.path.join(skills_dir, skill_files[0])
+            with open(skill_file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                self.assertIn("Add contract testing validation", content)
+                self.assertIn("## Common pitfalls", content)
+                self.assertIn("## Definition of done", content)
+                
+        finally:
+            shutil.rmtree(repo_dir, ignore_errors=True)
+
