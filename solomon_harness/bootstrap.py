@@ -319,7 +319,13 @@ def scaffold_agents(workspace_root: str) -> None:
                 f.write(content)
 
 
-def scaffold_new_agent(workspace_root: str, name: str, description: str) -> None:
+def scaffold_new_agent(
+    workspace_root: str,
+    name: str,
+    description: str,
+    title: Optional[str] = None,
+    duties: Optional[List[str]] = None,
+) -> None:
     """Scaffold a new agent directory from templates (create-only)."""
     import re
     if not re.match(r"^[a-z0-9_]+$", name):
@@ -343,7 +349,8 @@ def scaffold_new_agent(workspace_root: str, name: str, description: str) -> None
     os.makedirs(os.path.join(real_agent_dir, "skills"), exist_ok=True)
 
     # Write persona.md
-    title = name.replace("_", " ").title()
+    if title is None:
+        title = name.replace("_", " ").title()
     persona_content = f"""# {title} Persona
 
 {description}
@@ -354,13 +361,29 @@ This agent is the {name} brain for solomon-harness. It reasons within the shared
         f.write(persona_content)
 
     # Write role file
+    if duties is None:
+        duties = [
+            "Adhere strictly to the Git Flow branching guidelines, utilizing feature/* or bugfix/* branches.",
+            "Commit all code and documentation changes using Conventional Commits rules."
+        ]
+    duties_str = "\n".join(f"- {d}" for d in duties)
     role_content = f"""# {title} Profile
 
 {description}
 
 ## Core Duties
-- Adhere strictly to the Git Flow branching guidelines, utilizing feature/* or bugfix/* branches.
-- Commit all code and documentation changes using Conventional Commits rules.
+{duties_str}
+
+## Active Skills
+
+No local skills configured.
+
+## External Skills
+
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent {name}
+```
 """
     with open(os.path.join(real_agent_dir, "agents", f"{name}.md"), "w", encoding="utf-8") as f:
         f.write(role_content)
