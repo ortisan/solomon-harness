@@ -162,6 +162,26 @@ def is_github_issue(github_id: Optional[str]) -> bool:
     return s.isdigit() and s.isascii()
 
 
+def recover_parent(github_id: Optional[str], title: Optional[str]) -> Optional[str]:
+    """Recover a tracking row's parent GitHub number from its slug id, else title.
+
+    Tracking rows carry a composite slug id (``68-R-01``, ``45-M2``) and a human
+    title (``RAID R-01 (#68)``). The parent number is read id-first -- the run of
+    digits before the slug's first hyphen -- because the id is the structural key;
+    failing that, the first ``#<digits>`` reference in the title is used, which
+    subsumes the ``PR #45`` spelling. Returns the number as a string, or None when
+    neither yields one. Pure and total (#127): it never raises and never invents a
+    number, so a row with no recoverable parent is left open rather than guessed.
+    """
+    id_match = re.match(r"(\d+)-", str(github_id))
+    if id_match:
+        return id_match.group(1)
+    title_match = re.search(r"#(\d+)", str(title))
+    if title_match:
+        return title_match.group(1)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Canonical person key (ADR-0012).
 #
