@@ -344,6 +344,146 @@ describe("dashboard portfolio route", () => {
   });
 });
 
+// Drive the mocked subprocess for the velocity path: the `velocity` subcommand
+// returns the composed per-user velocity JSON the Python composer would print.
+function wireVelocity(velocity: unknown) {
+  vi.mocked(execFile).mockImplementation(((
+    _file: string,
+    args: string[],
+    _options: unknown,
+    callback: (err: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    if (args.includes("velocity")) {
+      callback(null, JSON.stringify(velocity), "");
+    } else {
+      callback(new Error(`unexpected args: ${args.join(" ")}`), "", "");
+    }
+    return {} as never;
+  }) as never);
+}
+
+function velocityRow(personKey: string, count: number, overrides: Record<string, unknown> = {}) {
+  return {
+    personKey,
+    count,
+    perTenant: {},
+    excluded: 0,
+    doneAt: [],
+    partial: false,
+    partialTenants: [],
+    ...overrides,
+  };
+}
+
+function getView(view: string, window: string) {
+  return routeModule.GET(
+    new Request(`http://localhost/api/dashboard?view=${view}&window=${window}`),
+  );
+}
+
+describe("dashboard velocity route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("bridges ?view=velocity&window=14 to the velocity subcommand and returns 200", async () => {
+    wireVelocity({
+      rows: [velocityRow("alice@example.com", 7, { perTenant: { alpha: 4, beta: 3 } })],
+      aggregateStatus: 200,
+      degraded: [],
+      window: 14,
+    });
+
+    const res = await getView("velocity", "14");
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.window).toBe(14);
+    expect(body.rows[0].personKey).toBe("alice@example.com");
+    expect(body.rows[0].count).toBe(7);
+
+    // The window reaches execFile as one inert argv element after --window, with
+    // shell disabled; no shell-string command path is ever used.
+    const call = vi
+      .mocked(execFile)
+      .mock.calls.find((c) => (c[1] as string[]).includes("velocity"));
+    expect(call).toBeDefined();
+    const argv = call![1] as string[];
+    expect(argv.includes("velocity")).toBe(true);
+    expect(argv[argv.indexOf("--window") + 1]).toBe("14");
+    expect((call![2] as { shell?: boolean }).shell).toBe(false);
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  it("maps a degraded velocity aggregate to 207 and names the degraded tenant", async () => {
+    wireVelocity({
+      rows: [
+        velocityRow("alice@example.com", 7, {
+          perTenant: { alpha: 4, beta: 3 },
+          partial: true,
+          partialTenants: ["gamma"],
+        }),
+      ],
+      aggregateStatus: 207,
+      degraded: ["gamma"],
+      window: 14,
+    });
+
+    const res = await getView("velocity", "14");
+
+    expect(res.status).toBe(207);
+    const body = await res.json();
+    expect(body.degraded).toEqual(["gamma"]);
+    expect(body.rows[0].partial).toBe(true);
+  });
+
+  it("leaves the board path unchanged for a window outside {7,14,30}", async () => {
+    wirePortfolio({
+      swimlanes: [
+        { project: "alpha", status: "OK", total: 0, unmapped: 0, columns: zeroColumns() },
+      ],
+      columns: zeroColumns().map(({ name, count }) => ({ name, count })),
+      total: 0,
+      unmapped: 0,
+      aggregateStatus: 200,
+      overflow: 0,
+      notice: null,
+    });
+
+    const res = await getView("velocity", "9");
+
+    // An out-of-set window is the no-op: the existing portfolio path runs and the
+    // velocity subcommand is never bridged.
+    expect(res.status).toBe(200);
+    const calls = vi.mocked(execFile).mock.calls;
+    expect(calls.some((c) => (c[1] as string[]).includes("velocity"))).toBe(false);
+    expect(calls.some((c) => (c[1] as string[]).includes("portfolio"))).toBe(true);
+  });
+
+  it("leaves the board path unchanged when view=velocity carries no window", async () => {
+    wirePortfolio({
+      swimlanes: [
+        { project: "alpha", status: "OK", total: 0, unmapped: 0, columns: zeroColumns() },
+      ],
+      columns: zeroColumns().map(({ name, count }) => ({ name, count })),
+      total: 0,
+      unmapped: 0,
+      aggregateStatus: 200,
+      overflow: 0,
+      notice: null,
+    });
+
+    const res = await routeModule.GET(
+      new Request("http://localhost/api/dashboard?view=velocity"),
+    );
+
+    expect(res.status).toBe(200);
+    const calls = vi.mocked(execFile).mock.calls;
+    expect(calls.some((c) => (c[1] as string[]).includes("velocity"))).toBe(false);
+    expect(calls.some((c) => (c[1] as string[]).includes("portfolio"))).toBe(true);
+  });
+});
+
 describe("dashboard route tracing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
