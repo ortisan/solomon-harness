@@ -636,11 +636,77 @@ def cmd_wiki_page(
     return 0
 
 
+def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int:
+    """Invokes Slice 1's audit on the delivered artifact and files the gap report.
+    Degrade-safe: any failure logs 'audit skipped: sourcing unavailable' and exits 0.
+    """
+    try:
+        if not version:
+            pyproject = os.path.join(workspace_root, "pyproject.toml")
+            if os.path.isfile(pyproject):
+                version = read_pyproject_version(pyproject)
+            else:
+                version = "unknown"
+
+        prompt = (
+            f"You are the `practice_curator` agent. Perform Slice 1's audit on the delivered artifact for version v{version}.\n"
+            f"Follow the instructions in your skill `auditing_delivered_work.md` exactly:\n"
+            f"- Identify the competency domains touched by the changes in version v{version}.\n"
+            f"- Quote the approaches taken and compare them against the best-practice approaches.\n"
+            f"- Source the evidence with at least two dated, credible references using `sourcing_the_state_of_the_art.md`.\n"
+            f"- File a gap report (or 'no gap found' status) by persisting the audit in project memory with `save_decision`.\n"
+            f"Do not modify any code files."
+        )
+
+        engine = (os.environ.get("SOLOMON_ENGINE") or "claude").lower()
+        if engine == "agy":
+            exec_path = os.path.expanduser("~/.local/bin/agy")
+            if not os.path.isfile(exec_path):
+                exec_path = "agy"
+            cmd = [exec_path, "-p", "Execute prompt from stdin", "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
+        elif engine == "gemini":
+            cmd = [engine, "-p", "Execute prompt from stdin", "--skip-trust"]
+        elif engine == "claude":
+            cmd = [engine, "-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
+        else:
+            cmd = [engine, "-p"]
+
+        curator_dir = os.path.join(workspace_root, "agents", "practice_curator")
+        if not os.path.isdir(curator_dir):
+            print("audit skipped: curator agent directory not found")
+            return 0
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = workspace_root
+
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            text=True,
+            cwd=curator_dir,
+            env=env,
+            capture_output=True,
+            check=False,
+            timeout=300,
+        )
+        
+        if proc.returncode != 0:
+            print("audit skipped: sourcing unavailable")
+            return 0
+
+        print("Autonomous audit trigger completed successfully.")
+        return 0
+
+    except Exception:
+        print("audit skipped: sourcing unavailable")
+        return 0
+
+
 def run(workspace_root: str, args: List[str]) -> int:
-    """Dispatch ``release <plan|prep|check|wiki-page>``."""
+    """Dispatch ``release <plan|prep|check|wiki-page|audit-trigger>``."""
     if not args:
         print(
-            "Usage: solomon-harness release <plan|prep|check|wiki-page> [version]",
+            "Usage: solomon-harness release <plan|prep|check|wiki-page|audit-trigger> [version]",
             file=sys.stderr,
         )
         return 1
@@ -653,8 +719,10 @@ def run(workspace_root: str, args: List[str]) -> int:
         return cmd_prep(workspace_root, rest[0] if rest else None)
     if sub == "wiki-page":
         return cmd_wiki_page(workspace_root, rest[0] if rest else None)
+    if sub == "audit-trigger":
+        return cmd_audit_trigger(workspace_root, rest[0] if rest else None)
     print(
-        f"Unknown release subcommand {sub!r}. Use plan, prep, check, or wiki-page.",
+        f"Unknown release subcommand {sub!r}. Use plan, prep, check, wiki-page, or audit-trigger.",
         file=sys.stderr,
     )
     return 1
@@ -706,6 +774,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     _with_root(sub.add_parser("check"))
     prep = _with_root(sub.add_parser("prep"))
     prep.add_argument("version", nargs="?", default=None)
+    audit_trig = _with_root(sub.add_parser("audit-trigger"))
+    audit_trig.add_argument("version", nargs="?", default=None)
 
     args = parser.parse_args(argv)
     root = getattr(args, "root", None) or os.getcwd()
@@ -717,6 +787,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_check(root)
     if args.command == "prep":
         return cmd_prep(root, args.version)
+    if args.command == "audit-trigger":
+        return cmd_audit_trigger(root, args.version)
     return 1
 
 
