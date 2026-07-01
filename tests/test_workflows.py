@@ -80,7 +80,12 @@ class TestRunStageDriverLock(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             rc = workflows.run_stage(root, "start", ["1"], engine="claude")
         self.assertEqual(rc, 1)
-        mock_run.assert_not_called()  # never reach the engine while another driver holds the lock
+        # Never reach the engine while another driver holds the lock. Staleness
+        # checking may itself shell out to `ps` (through this same seam) to
+        # compare process start times, so assert on the engine call specifically.
+        self.assertFalse(
+            [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        )
 
     def test_mutating_stage_acquires_and_releases_the_lock(self):
         root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
@@ -133,7 +138,10 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
         with patch("subprocess.run", return_value=_Proc()) as mock_run:
             rc = workflows.run_stage(root, "start", ["1"], engine="claude")
         self.assertEqual(rc, 0)
-        mock_run.assert_called_once()
+        # The lock also shells out to `ps` (through this same seam) to record
+        # the holder's process start time, so assert on the engine call itself.
+        engine_calls = [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        self.assertEqual(len(engine_calls), 1)
 
     def test_kill_switch_blocks_everything(self):
         root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
@@ -151,7 +159,11 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
         self.assertEqual(rc, 1)
-        mock_run.assert_not_called()
+        # Staleness checking may itself shell out to `ps` (through this same
+        # seam) to compare process start times; assert the engine specifically.
+        self.assertFalse(
+            [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        )
 
     def test_budget_ceiling_blocks_at_l2(self):
         root = _workspace_with_loop(
