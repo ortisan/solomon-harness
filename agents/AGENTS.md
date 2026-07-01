@@ -47,6 +47,14 @@ own model loop.
 - Avoid typical AI cliches such as "delve", "leverage", "testament to", "feel free
   to", "dive into", "in summary", or other redundant and flowery terms. Get
   straight to the point professionally.
+- Decisions and next steps are enumerated, never prose to copy. Whenever you offer the
+  user a choice — which option, which target, or the closing "what next" at the end of a
+  turn — present it as a numbered, selectable menu (in Claude Code, the AskUserQuestion
+  tool with an automatic "Other" escape hatch; in the Gemini CLI, a numbered list inviting
+  a free-text reply), recommended option first and mutually exclusive. Never end a turn
+  with a next step the user must copy and paste (for example "run `/solomon-start 5`");
+  make the candidate actions clickable. Canonical detail in `docs/solomon-workflow.md`
+  ("Interaction style").
 
 ## Specialist competencies
 
