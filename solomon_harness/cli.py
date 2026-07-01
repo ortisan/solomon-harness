@@ -321,11 +321,14 @@ def _fetch_gh_states(
     import json as _json
     import subprocess
 
+    from solomon_harness.subprocess_env import clean_git_env
+
     try:
         proc = subprocess.run(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
+            env=clean_git_env(),
         )
     except FileNotFoundError as exc:
         raise RuntimeError(

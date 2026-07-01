@@ -83,8 +83,13 @@ def _clean_git_env() -> dict:
     friends) are exported and would redirect a ``git -C <other>`` call back to the
     enclosing repository. Stripping them makes git resolve the repo from the given
     working directory, so tenant resolution stays correct in worktrees and hooks.
+
+    Delegates to :func:`solomon_harness.subprocess_env.clean_git_env`, the single
+    canonical implementation shared by every subprocess call site in the codebase.
     """
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    from solomon_harness.subprocess_env import clean_git_env
+
+    return clean_git_env()
 
 
 def _git_remote(workspace_root: str) -> Optional[str]:

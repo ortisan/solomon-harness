@@ -389,6 +389,23 @@ class TestApplyProposal(unittest.TestCase):
         curator.apply_proposal(p, edit_callback, self.root, gh_runner=gh_runner)
         self.assertFalse(any("--reviewer" in a for a in captured))
 
+    def test_apply_proposal_raises_clear_error_when_gh_not_found(self):
+        # Bug: apply_proposal used to hardcode PATH to
+        # "/opt/homebrew/bin:/usr/bin:/bin" before invoking gh, which breaks on
+        # Intel Mac Homebrew (/usr/local/bin), most non-Debian Linux, and macOS
+        # GitHub Actions runners. gh must be resolved via shutil.which, and a
+        # missing gh must raise a clear, actionable error -- not a bare
+        # FileNotFoundError with no context.
+        def edit_callback(agent_dir):
+            skill_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skill_dir, exist_ok=True)
+            with open(os.path.join(skill_dir, "new_skill.md"), "w", encoding="utf-8") as f:
+                f.write("New skill content")
+
+        with mock.patch.object(curator.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "gh CLI"):
+                curator.apply_proposal(self.proposal, edit_callback, self.root)
+
 
 class TestPinnedClone(unittest.TestCase):
     def setUp(self):

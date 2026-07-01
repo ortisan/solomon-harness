@@ -141,11 +141,14 @@ def run_stage(
                 if capture_cost:
                     cmd.extend(["--output-format", "json"])
 
+            from solomon_harness.subprocess_env import clean_git_env
+
             if capture_cost:
                 # Capture the engine's reported cost into the budget ledger.
                 proc = subprocess.run(
                     cmd,
                     input=prompt, text=True, capture_output=True, check=False,
+                    env=clean_git_env(),
                 )
                 out = getattr(proc, "stdout", None)
                 if out:
@@ -156,7 +159,7 @@ def run_stage(
                 if cost is not None:
                     loop_budget.record(workspace_root, cost, stage=stage)
             else:
-                proc = subprocess.run(cmd, input=prompt, text=True, check=False)
+                proc = subprocess.run(cmd, input=prompt, text=True, check=False, env=clean_git_env())
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
             return 1
