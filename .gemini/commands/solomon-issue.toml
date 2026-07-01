@@ -62,4 +62,6 @@ Steps:
 
 8. Output the issue URL and a one-line summary (number, title, priority, area).
    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
 '''
