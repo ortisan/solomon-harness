@@ -2470,10 +2470,19 @@ class DatabaseClient:
         loss propagates as ``_ConnectionLost`` so the resilient decorator reconnects
         or falls back, and a genuinely empty store still returns None (issue #37).
 
+        The winning row (session or handoff, whichever has the later timestamp)
+        shapes the 'type', 'agent', 'task', and 'status' fields. Every /solomon-*
+        command logs a handoff immediately followed by a session save, so the
+        session row routinely wins by timestamp; regardless of which row wins,
+        'contract_path' is populated from the latest handoff if one exists, so
+        the handoff contract (docs/solomon-workflow.md, "Handoff contracts") is
+        never silently dropped.
+
         Returns:
             A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
-            (and 'contract_path' for handoffs, pointing to the handoff contract
-            artifact), or None if no activity exists.
+            (and 'contract_path', pointing to the latest handoff contract
+            artifact if any handoff has been logged), or None if no activity
+            exists.
         """
         latest_session = None
         if self.backend == "surrealdb":
@@ -2546,13 +2555,21 @@ class DatabaseClient:
 
         if t_session >= t_handoff:
             assert latest_session is not None
-            return {
+            result: Dict[str, Any] = {
                 "type": "session",
                 "agent": latest_session.get("agent_name"),
                 "task": latest_session.get("task"),
                 "status": "active",
                 "timestamp": latest_session.get("timestamp"),
             }
+            # Every /solomon-* command logs a handoff immediately followed by a
+            # session save, so the session row routinely wins this comparison.
+            # Surface the latest handoff's contract_path regardless, so the
+            # bounded-context handoff mechanism (docs/solomon-workflow.md,
+            # "Handoff contracts") is never silently dropped by that ordering.
+            if latest_handoff is not None:
+                result["contract_path"] = latest_handoff.get("contract_path")
+            return result
         else:
             assert latest_handoff is not None
             return {

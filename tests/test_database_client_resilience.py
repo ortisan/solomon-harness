@@ -234,6 +234,42 @@ class TestGetLatestActivityNeverSilentNull(ResilienceTestBase):
         self.assertEqual(client.backend, "surrealdb", "a true empty must not fall back")
 
 
+class TestGetLatestActivityPreservesContractPath(ResilienceTestBase):
+    def test_handoff_then_session_still_surfaces_contract_path(self):
+        # Every /solomon-* command logs a handoff immediately followed by a
+        # session save (see .claude/commands/solomon-start.md and friends), so
+        # in the ordinary case the session row's timestamp is equal to or later
+        # than the handoff row's. get_latest_activity must not let the
+        # session-shaped result silently drop the handoff's contract_path --
+        # doing so defeats the bounded-context handoff mechanism documented in
+        # docs/solomon-workflow.md ("Handoff contracts").
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+
+        client.log_handoff(
+            sender="product_owner",
+            recipient="scrum_master",
+            contract_type="plan",
+            contract_path="/some/path/plan.md",
+            status="pending",
+        )
+        client.save_session(
+            session_id="sess-1",
+            agent_name="scrum_master",
+            task="Refine backlog",
+            messages=[],
+        )
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity)
+        self.assertIsNotNone(
+            activity.get("contract_path"),
+            "the latest handoff's contract_path must survive even when the "
+            "session row wins the timestamp comparison",
+        )
+        self.assertEqual(activity["contract_path"], "/some/path/plan.md")
+
+
 class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
     def test_run_surreal_classifies_transport_versus_query_error(self):
         # _run_surreal converts only a transport fault into _ConnectionLost; a
