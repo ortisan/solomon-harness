@@ -400,6 +400,51 @@ class DatabaseClient:
     busy_timeout_seconds: float
     harness_dir: str
 
+    # SurrealDB is used as a true multi-model store: relational tables with
+    # indexes, graph RELATION edges, a timeseries metrics table, and an HNSW
+    # vector index for semantic memory. Every DEFINE is IF NOT EXISTS
+    # (idempotent) and SCHEMALESS, so it never rejects the existing
+    # string-typed writes. Kept as ONE STATEMENT PER LIST ENTRY (not one
+    # concatenated multi-statement string): the surrealdb SDK's ``.query()``
+    # only surfaces the FIRST statement's result of whatever string it is
+    # given, so a single call with everything concatenated would silently
+    # accept a failure in any later DEFINE (an index, a RELATION table, the
+    # HNSW vector index). Executing one statement per call makes every
+    # statement the "first" (and only) result of its own call, so a failing
+    # statement is never swallowed.
+    _SURREAL_SCHEMA_STATEMENTS: List[str] = [
+        "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS metrics SCHEMALESS;",
+        # Graph: typed RELATION edge tables.
+        "DEFINE TABLE IF NOT EXISTS blocks TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS supersedes TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION;",
+        # Relational: indexes for the hot lookups. github_id is the record
+        # key, so it is unique by construction.
+        "DEFINE INDEX IF NOT EXISTS issues_github_id "
+        "ON issues FIELDS github_id UNIQUE;",
+        "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
+        "DEFINE INDEX IF NOT EXISTS decisions_created_at "
+        "ON decisions FIELDS created_at;",
+        # Timeseries: composite index on (name, time) for metrics.
+        "DEFINE INDEX IF NOT EXISTS metrics_name_time "
+        "ON metrics FIELDS name, time;",
+        # Vector: HNSW index over the 256-dim memory embedding.
+        "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+        f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
+        "DIST COSINE TYPE F32;",
+    ]
+
     def __init__(
         self,
         db_path: Optional[str] = None,
@@ -553,45 +598,12 @@ class DatabaseClient:
                     try:
                         # Initialize SurrealDB tables. IF NOT EXISTS makes this
                         # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
-                        # SurrealDB is used as a true multi-model store: relational
-                        # tables with indexes, graph RELATION edges, a timeseries
-                        # metrics table, and an HNSW vector index for semantic memory.
-                        # Every DEFINE is IF NOT EXISTS (idempotent) and SCHEMALESS, so
-                        # it never rejects the existing string-typed writes.
-                        init_query = (
-                            "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS metrics SCHEMALESS; "
-                            # Graph: typed RELATION edge tables.
-                            "DEFINE TABLE IF NOT EXISTS blocks TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS supersedes TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION; "
-                            # Relational: indexes for the hot lookups. github_id is the
-                            # record key, so it is unique by construction.
-                            "DEFINE INDEX IF NOT EXISTS issues_github_id "
-                            "ON issues FIELDS github_id UNIQUE; "
-                            "DEFINE INDEX IF NOT EXISTS issues_status "
-                            "ON issues FIELDS status; "
-                            "DEFINE INDEX IF NOT EXISTS decisions_created_at "
-                            "ON decisions FIELDS created_at; "
-                            # Timeseries: composite index on (name, time) for metrics.
-                            "DEFINE INDEX IF NOT EXISTS metrics_name_time "
-                            "ON metrics FIELDS name, time; "
-                            # Vector: HNSW index over the 256-dim memory embedding.
-                            "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
-                            f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
-                            "DIST COSINE TYPE F32;"
-                        )
-                        self.db.query(init_query)
+                        # Executed statement-by-statement (not as one concatenated
+                        # multi-statement string): see _SURREAL_SCHEMA_STATEMENTS for
+                        # why, and _bootstrap_surreal_schema for the raise-on-any-
+                        # failure contract. The backend is marked ready only after
+                        # every statement has actually succeeded.
+                        self._bootstrap_surreal_schema()
                         self.backend = "surrealdb"
 
                         # Initialize Spectron if URL and API Key are configured
@@ -891,6 +903,22 @@ class DatabaseClient:
             return False
         self.db = db
         return True
+
+    def _bootstrap_surreal_schema(self) -> None:
+        """Execute every schema DDL statement, raising if any one fails.
+
+        The surrealdb SDK's ``.query()`` only surfaces the FIRST statement's
+        result of whatever string it is given (it checks ``response["result"][0]``
+        only), so a single call with every DEFINE concatenated would silently
+        accept a failure in a later statement (an index, a RELATION table, the
+        HNSW vector index). Calling ``.query()`` once per statement makes each
+        statement the first (and only) result of its own call, so a failing
+        statement raises here and the constructor's caller can abort the
+        SurrealDB bootstrap and fall back to SQLite instead of marking a
+        partially-applied schema "ready".
+        """
+        for statement in self._SURREAL_SCHEMA_STATEMENTS:
+            self.db.query(statement)
 
     @staticmethod
     def _is_connection_error(exc: Exception) -> bool:

@@ -418,6 +418,81 @@ class TestDatabaseClient(unittest.TestCase):
             client.close()
             mock_surreal_instance.close.assert_called_once()
 
+    def test_schema_bootstrap_raises_on_a_later_ddl_statement_failure(self):
+        """A failure in any DEFINE statement -- not just the first -- must abort
+        the SurrealDB schema bootstrap, so the backend is never marked "surrealdb"
+        on a partially-applied schema (e.g. a missing HNSW vector index).
+
+        The real surrealdb SDK's ``.query()`` only surfaces the FIRST statement's
+        result when a multi-statement string is passed in one call, so a failure
+        buried in a later statement is silently accepted. The mock below
+        reproduces exactly that contract (it only inspects the first statement of
+        whatever string it is given), which is what makes this test discriminate
+        between the old single-call bootstrap (falsely reports success) and the
+        fixed statement-by-statement bootstrap (the failing statement is index 0
+        of its own call, so it is caught).
+        """
+        mock_surreal_class = MagicMock()
+        mock_surreal_instance = MagicMock()
+        mock_surreal_class.return_value = mock_surreal_instance
+
+        def fails_if_first_statement_matches(marker):
+            def _query(query_str, *args, **kwargs):
+                statements = [s.strip() for s in query_str.split(";") if s.strip()]
+                if statements and marker in statements[0]:
+                    raise RuntimeError(f"simulated DDL failure: {statements[0][:60]}")
+                return []
+
+            return _query
+
+        # The marker sits in the LAST schema statement (the HNSW vector index).
+        mock_surreal_instance.query.side_effect = fails_if_first_statement_matches("HNSW")
+
+        config_data = {
+            "database": {
+                "provider": "surrealdb",
+                "url": "ws://localhost:8000/rpc",
+                "namespace": "solomon",
+                "database": "harness",
+                "username": "root",
+                "password": "root",
+            }
+        }
+
+        mock_surrealdb = MagicMock()
+        mock_surrealdb.Surreal = mock_surreal_class
+
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "surrealdb":
+                return mock_surrealdb
+            return original_import(name, *args, **kwargs)
+
+        def mock_isfile(path):
+            if path.endswith("config.json"):
+                return True
+            return os.path.isfile(path)
+
+        original_open = builtins.open
+
+        def mock_open(path, *args, **kwargs):
+            if str(path).endswith("config.json"):
+                return io.StringIO(json.dumps(config_data))
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch("builtins.__import__", side_effect=mock_import),
+            patch("os.path.isfile", side_effect=mock_isfile),
+            patch("builtins.open", side_effect=mock_open),
+            patch("solomon_harness.home.derive_tenant", return_value="acme-widget"),
+        ):
+            client = DatabaseClient()
+            # A DDL failure anywhere in the schema must fail the bootstrap and
+            # fall back to SQLite, never falsely report "surrealdb" as ready.
+            self.assertEqual(client.backend, "sqlite")
+            client.close()
+
     def test_spectron_initialization_and_usage(self):
         """Test that the client initializes Spectron when configured and routes calls through it."""
         mock_surreal_class = MagicMock()
