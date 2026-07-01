@@ -669,9 +669,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         "loop-budget", help="Show today's autonomous-loop cost spend versus the ceiling"
     )
 
-    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, idea, issue, bug, refine, start, review, release)")
+    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, loop-auto, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
-    dev_parser.add_argument("dev_args", nargs=argparse.REMAINDER, help="Arguments passed to the workflow")
+    dev_parser.add_argument(
+        "dev_args", nargs=argparse.REMAINDER,
+        help="Arguments passed to the workflow (loop-auto accepts --concurrency N to run N loop iterations)",
+    )
 
     release_parser = subparsers.add_parser(
         "release",

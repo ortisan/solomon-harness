@@ -11,7 +11,7 @@ import sys
 from typing import List, Optional
 
 STAGES = [
-    "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
+    "loop", "loop-auto", "idea", "issue", "bug", "refine", "start", "review", "release",
     # Standing maintenance loops (Phase 3): generative, open draft PRs only.
     "scan-arch", "scan-dedup",
 ]
@@ -20,7 +20,47 @@ STAGES = [
 # under a single driver. The lock is a portable Python gate run on both hosts —
 # the documented concurrent-driver race produced premature merges that bypassed
 # the review gate, so honoring an advisory markdown "Step 0" was not enough.
-LOCKED_STAGES = {"loop", "start", "review", "release", "scan-arch", "scan-dedup"}
+LOCKED_STAGES = {"loop", "loop-auto", "start", "review", "release", "scan-arch", "scan-dedup"}
+
+# `loop-auto` is the headless cadence entrypoint: `dev loop-auto --concurrency N`
+# drives N iterations of the `loop` stage's own scan/propose/advance logic — the
+# same one confirmed step per `/solomon-loop` invocation, repeated in a bounded,
+# auditable for-loop rather than a new self-scheduling mechanism.
+DEFAULT_CONCURRENCY = 1
+
+
+def _parse_concurrency(args: List[str]) -> "tuple[int, List[str]]":
+    """Split ``--concurrency N`` (or ``--concurrency=N``) out of a stage's args.
+
+    Returns ``(concurrency, remaining_args)``; ``remaining_args`` is what gets
+    substituted into the `loop` stage's ``$ARGUMENTS`` so the flag never leaks
+    into the prompt text. Defaults to `DEFAULT_CONCURRENCY` (one iteration —
+    identical to running `loop` directly) when the flag is absent.
+    """
+    concurrency = DEFAULT_CONCURRENCY
+    remaining: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--concurrency":
+            if i + 1 >= len(args):
+                raise ValueError("--concurrency requires a value")
+            value = args[i + 1]
+            i += 2
+        elif arg.startswith("--concurrency="):
+            value = arg.split("=", 1)[1]
+            i += 1
+        else:
+            remaining.append(arg)
+            i += 1
+            continue
+        try:
+            concurrency = int(value)
+        except ValueError:
+            raise ValueError(f"--concurrency must be an integer, got {value!r}")
+        if concurrency < 1:
+            raise ValueError("--concurrency must be >= 1")
+    return concurrency, remaining
 
 
 def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, session_id: str) -> None:
@@ -69,8 +109,24 @@ def run_stage(
     if engine not in ("claude", "gemini", "agy"):
         print(f"Error: unknown engine '{engine}'. Use 'claude', 'gemini' or 'agy'.", file=sys.stderr)
         return 1
+
+    # `loop-auto` has no command file of its own: it drives N iterations of the
+    # `loop` stage's existing prompt/logic, so the engine sees the same
+    # `/solomon-loop` instructions on every iteration and `--concurrency` never
+    # leaks into $ARGUMENTS.
+    prompt_stage = stage
+    iterations = 1
+    prompt_args = args
+    if stage == "loop-auto":
+        try:
+            iterations, prompt_args = _parse_concurrency(args)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        prompt_stage = "loop"
+
     try:
-        prompt = build_prompt(workspace_root, stage, args)
+        prompt = build_prompt(workspace_root, prompt_stage, prompt_args)
     except FileNotFoundError as exc:
         print(f"Error: command file not found ({exc}). Run 'solomon-harness init' first.", file=sys.stderr)
         return 1
@@ -141,26 +197,34 @@ def run_stage(
                 if capture_cost:
                     cmd.extend(["--output-format", "json"])
 
-            if capture_cost:
-                # Capture the engine's reported cost into the budget ledger.
-                proc = subprocess.run(
-                    cmd,
-                    input=prompt, text=True, capture_output=True, check=False,
-                )
-                out = getattr(proc, "stdout", None)
-                if out:
-                    print(out)
-                from solomon_harness import loop_budget
+            rc = 0
+            for i in range(iterations):
+                if iterations > 1:
+                    print(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
+                if capture_cost:
+                    # Capture the engine's reported cost into the budget ledger.
+                    proc = subprocess.run(
+                        cmd,
+                        input=prompt, text=True, capture_output=True, check=False,
+                    )
+                    out = getattr(proc, "stdout", None)
+                    if out:
+                        print(out)
+                    from solomon_harness import loop_budget
 
-                cost = loop_budget.parse_engine_cost(out or "")
-                if cost is not None:
-                    loop_budget.record(workspace_root, cost, stage=stage)
-            else:
-                proc = subprocess.run(cmd, input=prompt, text=True, check=False)
+                    cost = loop_budget.parse_engine_cost(out or "")
+                    if cost is not None:
+                        loop_budget.record(workspace_root, cost, stage=stage)
+                else:
+                    proc = subprocess.run(cmd, input=prompt, text=True, check=False)
+                rc = proc.returncode
+                if rc != 0:
+                    # A failed iteration stops the run rather than plowing ahead —
+                    # consistent with the single confirmed step `loop` takes today.
+                    break
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
             return 1
-        rc = proc.returncode
         if lock is not None:
             _record_loop_run(workspace_root, stage, args, rc, lock.session_id)
         if rc == 0 and stage in LOCKED_STAGES:
