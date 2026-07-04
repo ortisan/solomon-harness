@@ -57,7 +57,7 @@ After the prep PR is merged and CI has tagged and published:
 - `mcp__solomon-memory__save_decision` for the release: title `Release vX.Y.Z`, the computed bump and the milestone scope, the readiness verdict and any conditions, outcome, author `sre`, branch **main** (not develop), and the `chore(release): vX.Y.Z` commit SHA.
 - Write the compact release → done handoff contract to `.solomon/handoffs/release-vX.Y.Z-to-done.md` using the template in `docs/solomon-workflow.md` (release notes, the version/tag, what shipped across the milestone, and any GO-WITH-CONDITIONS follow-ups).
 - `mcp__solomon-memory__log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/release-vX.Y.Z-to-done.md", status="completed")`; keep the returned handoff id.
-- `mcp__solomon-memory__save_session` to checkpoint the released milestone and the readiness baseline for the next release; pass `issues=[<epic or representative issue>]` so the session carries the worked_on edge (ADR-0017), then `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` to record the produced edge.
+- `mcp__solomon-memory__save_session` to checkpoint the released milestone and the readiness baseline for the next release; pass `issues=[<epic or representative issue>]` so the session carries the worked_on edge (ADR-0018), then `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` to record the produced edge.
 
 Report the released version and tag, the prep-PR merge commit, the milestone closed, the board move, and any GO-WITH-CONDITIONS follow-ups. Output direct, professional English, no emojis.
 

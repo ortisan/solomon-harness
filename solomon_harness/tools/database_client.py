@@ -563,7 +563,7 @@ class DatabaseClient:
         "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION;",
         "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION;",
         "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION;",
-        # Episodic work graph (ADR-0017): sessions and loop_runs link to the
+        # Episodic work graph (ADR-0018): sessions and loop_runs link to the
         # issues they advance, so resume is a graph query, not a prose regex.
         "DEFINE TABLE IF NOT EXISTS worked_on TYPE RELATION;",
         # Relational: indexes for the hot lookups. github_id is the record
@@ -1007,7 +1007,7 @@ class DatabaseClient:
             "ON transitions (record_id);",
             "CREATE INDEX IF NOT EXISTS transitions_issue_entered "
             "ON transitions (github_id, entered_at);",
-            # worked_on parity link table (ADR-0017). On SurrealDB the edge is
+            # worked_on parity link table (ADR-0018). On SurrealDB the edge is
             # a RELATE through the mirrored funnel; whenever a link write does
             # not land on the primary (pure-SQLite or degraded fallback) this
             # table keeps graph-based resume working. ``source_table`` is
@@ -2546,7 +2546,7 @@ class DatabaseClient:
                 unchanged and get_latest_activity reads the stored value
                 instead of hardcoding it.
             issues: Optional GitHub issue numbers this session worked on. Each
-                becomes a ``worked_on`` edge (session -> issue, ADR-0017) after
+                becomes a ``worked_on`` edge (session -> issue, ADR-0018) after
                 the session row lands, so resume is a graph query instead of a
                 regex over the free-text task string. Validated numeric before
                 any write; a missing issue row is created minimally via the
@@ -3386,7 +3386,7 @@ class DatabaseClient:
             if latest_handoff is not None:
                 result["contract_path"] = latest_handoff.get("contract_path")
             # The linked issue numbers from the session's worked_on edges
-            # (ADR-0017), added only when edges exist so consumers pinned on
+            # (ADR-0018), added only when edges exist so consumers pinned on
             # the exact legacy shape are untouched by pre-edge rows.
             linked = self._session_issue_numbers(latest_session.get("session_id"))
             if linked:
@@ -3410,7 +3410,7 @@ class DatabaseClient:
     def _session_issue_numbers(self, session_id: Any) -> List[int]:
         """GitHub issue numbers linked from a session by worked_on edges.
 
-        Best-effort by design (ADR-0017): a graph read failure reports no
+        Best-effort by design (ADR-0018): a graph read failure reports no
         links, because the resume shape must never break when the graph is
         unreachable -- the session row itself was already fetched.
         """
@@ -3461,7 +3461,7 @@ class DatabaseClient:
 
     @_resilient
     def latest_activity_per_issue(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """The most recent linked activity per non-terminal issue (ADR-0017).
+        """The most recent linked activity per non-terminal issue (ADR-0018).
 
         For each issue that has worked_on edges and is not terminal, returns
         the most recent linked session or loop run. One graph query on
@@ -3604,7 +3604,7 @@ class DatabaseClient:
 
         ``target_issue`` is the GitHub issue number this run advanced, when the
         stage carries one. It is stored on the row and also written as a
-        ``worked_on`` edge (loop_run -> issue, ADR-0017), the same edge table
+        ``worked_on`` edge (loop_run -> issue, ADR-0018), the same edge table
         sessions use, so per-issue resume sees loop runs too.
         """
         gid = (
@@ -3959,7 +3959,7 @@ class DatabaseClient:
     def _record_worked_on(self, source_table: str, source_key: str, gid: str) -> None:
         """Link one episodic row (session or loop run) to the issue it advanced.
 
-        The worked_on edge (ADR-0017): ``<source_table>:<source_key> ->
+        The worked_on edge (ADR-0018): ``<source_table>:<source_key> ->
         worked_on -> issues:<gid>``. A missing issue row is first created
         minimally through the log_issue path so the edge never dangles. On
         SurrealDB the edge rides the wave-1 mirrored relate funnel (ADR-0016

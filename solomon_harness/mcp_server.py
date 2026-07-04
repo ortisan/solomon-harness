@@ -137,7 +137,7 @@ def build_server() -> Any:
         status: str = "active",
         issues: Optional[List[int]] = None,
     ) -> dict:
-        """Persist a session (conversation state) for later resume. Status is active or done. Pass the GitHub issue numbers the session worked on as issues; each becomes a worked_on edge so resume is a graph query (ADR-0017)."""
+        """Persist a session (conversation state) for later resume. Status is active or done. Pass the GitHub issue numbers the session worked on as issues; each becomes a worked_on edge so resume is a graph query (ADR-0018)."""
         return service.save_session(
             session_id, agent_name, task, messages, status, issues
         )

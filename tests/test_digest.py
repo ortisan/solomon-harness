@@ -285,7 +285,7 @@ class TestBuildDigest(unittest.TestCase):
         self.assertEqual(digest._sanitize_title(None), "")
 
     def test_resume_uses_graph_linked_issue_over_task_text(self):
-        # ADR-0017: the worked_on edges name the issue; no number in the task
+        # ADR-0018: the worked_on edges name the issue; no number in the task
         # text is needed (the legacy regex would have found nothing here).
         resume = {
             "type": "session", "agent": "software_engineer",
@@ -341,7 +341,7 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("/solomon-start 9", text)
 
     def test_resume_without_graph_rows_falls_back_to_the_regex(self):
-        # The deprecated free-text branch (ADR-0017) still resolves legacy
+        # The deprecated free-text branch (ADR-0018) still resolves legacy
         # sessions with no worked_on edges.
         resume = {"type": "session", "agent": "qa", "task": "start #55", "status": "active"}
         text = "\n".join(

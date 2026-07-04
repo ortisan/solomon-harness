@@ -1,4 +1,4 @@
-"""Tests for the worked_on episodic edge and graph-based resume (ADR-0017, #167).
+"""Tests for the worked_on episodic edge and graph-based resume (ADR-0018, #167).
 
 Sessions and loop runs link to the issues they advance through a typed
 ``worked_on`` edge, written through the wave-1 mirrored relate funnel on

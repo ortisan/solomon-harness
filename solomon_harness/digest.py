@@ -91,7 +91,7 @@ def build_digest(
     board — the failure mode that made a fixture row (``gh-1``) look like the
     real project state at session start.
 
-    ``per_issue`` is ``latest_activity_per_issue`` from memory (ADR-0017): the
+    ``per_issue`` is ``latest_activity_per_issue`` from memory (ADR-0018): the
     most recent worked_on-linked activity per non-terminal issue, most recent
     first. When rows exist, the resume target comes from this graph; the
     free-text regex over the task string is only the fallback for legacy
@@ -197,7 +197,7 @@ def build_digest(
         elif resume and resume.get("status") == "active":
             task_str = resume.get("task", "")
             cmd = "/solomon-workflow"
-            # Graph-based resume (ADR-0017): the worked_on edges name the
+            # Graph-based resume (ADR-0018): the worked_on edges name the
             # issue directly. Prefer the resume row's own linked issues, then
             # the most recent per-issue activity row; the issue's status picks
             # the stage command the same way the in-flight branch does.
@@ -219,7 +219,7 @@ def build_digest(
                 else:
                     cmd = f"/solomon-start {issue_id}"
             elif "start" in str(task_str).lower():
-                # DEPRECATED (ADR-0017): free-text fallback for legacy sessions
+                # DEPRECATED (ADR-0018): free-text fallback for legacy sessions
                 # written before the worked_on edge existed. Scheduled for
                 # deletion next release (expand/contract); every new session
                 # carries typed links instead.
@@ -353,7 +353,7 @@ def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> Li
     open_issues = _run_with_timeout(db.get_open_issues, timeout=0.5, default=[]) or []
     runs = _run_with_timeout(db.list_loop_runs, 1, timeout=0.5, default=[]) or []
     last_loop = runs[0] if runs else None
-    # The per-issue activity graph (ADR-0017). getattr-guarded so an older or
+    # The per-issue activity graph (ADR-0018). getattr-guarded so an older or
     # fake client without the method degrades to the legacy resume path.
     per_issue_fn = getattr(db, "latest_activity_per_issue", None)
     per_issue = (

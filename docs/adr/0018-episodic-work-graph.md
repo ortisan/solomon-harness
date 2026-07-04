@@ -1,4 +1,4 @@
-# ADR-0017: Episodic work graph: worked_on edges and graph-based resume
+# ADR-0018: Episodic work graph: worked_on edges and graph-based resume
 
 - Status: accepted
 - Date: 2026-07-04

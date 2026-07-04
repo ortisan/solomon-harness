@@ -121,7 +121,7 @@ def test_docs_reframe_loop_as_host_orchestrated_human_gated():
         assert "human-gated" in low, rel
 
 
-# --- Episodic work graph wired into the commands (ADR-0017) ------------------
+# --- Episodic work graph wired into the commands (ADR-0018) ------------------
 
 
 def test_commands_wire_worked_on_and_produced_edges():
