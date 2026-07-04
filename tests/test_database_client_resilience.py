@@ -8,6 +8,7 @@ genuine query/data error, so the reconnect/fallback policy is verified without a
 live backend or Docker (coordinating with the hermeticity guard from #36).
 """
 
+import glob
 import io
 import os
 import sys
@@ -234,6 +235,42 @@ class TestGetLatestActivityNeverSilentNull(ResilienceTestBase):
         self.assertEqual(client.backend, "surrealdb", "a true empty must not fall back")
 
 
+class TestGetLatestActivityPreservesContractPath(ResilienceTestBase):
+    def test_handoff_then_session_still_surfaces_contract_path(self):
+        # Every /solomon-* command logs a handoff immediately followed by a
+        # session save (see .claude/commands/solomon-start.md and friends), so
+        # in the ordinary case the session row's timestamp is equal to or later
+        # than the handoff row's. get_latest_activity must not let the
+        # session-shaped result silently drop the handoff's contract_path --
+        # doing so defeats the bounded-context handoff mechanism documented in
+        # docs/solomon-workflow.md ("Handoff contracts").
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+
+        client.log_handoff(
+            sender="product_owner",
+            recipient="scrum_master",
+            contract_type="plan",
+            contract_path="/some/path/plan.md",
+            status="pending",
+        )
+        client.save_session(
+            session_id="sess-1",
+            agent_name="scrum_master",
+            task="Refine backlog",
+            messages=[],
+        )
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity)
+        self.assertIsNotNone(
+            activity.get("contract_path"),
+            "the latest handoff's contract_path must survive even when the "
+            "session row wins the timestamp comparison",
+        )
+        self.assertEqual(activity["contract_path"], "/some/path/plan.md")
+
+
 class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
     def test_run_surreal_classifies_transport_versus_query_error(self):
         # _run_surreal converts only a transport fault into _ConnectionLost; a
@@ -386,6 +423,150 @@ class TestConnectIsBoundedAndCannotHang(ResilienceTestBase):
         )
         # The handle is never adopted from a timed-out attempt.
         self.assertIsNone(client.db)
+
+
+class MirroredMutationTestBase(ResilienceTestBase):
+    """Base for tests that assert on the write-through mirror of a mutation.
+
+    Same hermetic setup as the other resilience tests, plus a temp mirror root
+    and a client marked as having SurrealDB configured as its primary so the
+    synced/reconcile logic behaves like a real two-store client.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.mirror_root = os.path.join(self.temp_dir.name, "mirror")
+
+    def _configured_client(self, fake, connect=None):
+        client = DatabaseClient(db_path=self.sqlite_db_path, mirror_root=self.mirror_root)
+        client._surreal_class = object()  # mark SurrealDB as the configured primary
+        client.backend = "surrealdb"
+        client.db = fake
+        if connect is not None:
+            client._connect_surreal = connect
+        return client
+
+    def _mirror_files(self, kind):
+        return sorted(glob.glob(os.path.join(self.mirror_root, kind, "*.md")))
+
+    def _read(self, path):
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+
+class TestSaveLoopRunResilience(MirroredMutationTestBase):
+    def test_outage_falls_back_to_sqlite_and_mirrors_pending(self):
+        # The connection is dropped and the server stays unreachable: the write
+        # must fall back to SQLite (never raise) and leave a pending mirror entry
+        # so reconcile can replay it to the primary on recovery.
+        broken = FakeSurreal()
+        broken.always_fail = True
+        client = self._configured_client(broken, connect=lambda: False)
+
+        with redirect_stderr(io.StringIO()):
+            run_id = client.save_loop_run(
+                stage="dev", target="42", decision="ran dev", status="ok", session_id="s1"
+            )
+
+        self.assertIsNotNone(run_id, "the fallback write must persist and return an id")
+        self.assertEqual(client.backend, "sqlite")
+        rows = client.list_loop_runs()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["stage"], "dev")
+
+        files = self._mirror_files("loop_run")
+        self.assertEqual(len(files), 1, "an outage write must still land in the mirror")
+        text = self._read(files[0])
+        self.assertIn("kind: loop_run", text)
+        self.assertIn("synced: false", text)
+        self.assertIn('"stage": "dev"', text)
+
+    def test_healthy_write_mirrors_synced_true_and_upserts_by_minted_id(self):
+        fake = FakeSurreal(result=[[{"id": "loop_runs:1"}]])
+        client = self._configured_client(fake)
+
+        run_id = client.save_loop_run(
+            stage="review", target="7", decision="ran review", status="ok", session_id="s2"
+        )
+
+        self.assertEqual(run_id, "loop_runs:1")
+        files = self._mirror_files("loop_run")
+        self.assertEqual(len(files), 1)
+        self.assertIn("synced: true", self._read(files[0]))
+        # The DB write is an UPSERT keyed by the minted id (== the mirror
+        # filename) so a reconcile replay can never duplicate the record.
+        minted = os.path.basename(files[0])[:-3]
+        upserts = [(q, p) for q, p in fake.calls if "UPSERT" in q]
+        self.assertEqual(len(upserts), 1)
+        self.assertIn(minted, str(upserts[0][1]["id"]))
+        self.assertTrue(str(upserts[0][1]["id"]).startswith("loop_runs:"))
+
+
+class TestDeleteMemoryMirror(MirroredMutationTestBase):
+    def test_delete_during_outage_tombstones_mirror_and_replay_deletes(self):
+        # The resurrection scenario: a save that only reached the SQLite fallback
+        # leaves a pending mirror; the delete that follows must replace it with a
+        # deletion tombstone, so the recovery reconcile replays a DELETE instead
+        # of UPSERTing the deleted row back into the primary.
+        broken = FakeSurreal()
+        broken.always_fail = True
+        client = self._configured_client(broken, connect=lambda: False)
+
+        with redirect_stderr(io.StringIO()):
+            client.save_memory("k1", "v1", "c")
+        self.assertEqual(client.backend, "sqlite")
+
+        client.delete_memory("k1")
+        self.assertIsNone(client.get_memory("k1"))
+
+        # The key's single mirror file is now a pending deletion tombstone; the
+        # stale saved value must be gone from it.
+        files = self._mirror_files("memory")
+        self.assertEqual(len(files), 1)
+        text = self._read(files[0])
+        self.assertIn("synced: false", text)
+        self.assertIn('"deleted": true', text)
+        self.assertNotIn('"v1"', text)
+
+        # On recovery the reconcile replays the deletion, never the old row.
+        recovered = FakeSurreal(result=[])
+
+        def connect():
+            client.db = recovered
+            return True
+
+        client._connect_surreal = connect
+
+        result = client.reconcile()
+
+        self.assertEqual(result, {"synced": 1, "remaining": 0})
+        upserts = [q for q, _ in recovered.calls if "UPSERT" in q]
+        self.assertEqual(upserts, [], "a replayed deletion must never UPSERT the row back")
+        deletes = [(q, p) for q, p in recovered.calls if "DELETE" in q]
+        self.assertEqual(len(deletes), 1)
+        self.assertIn("k1", str(deletes[0][1]))
+        # The tombstone is re-stamped synced and stays a tombstone.
+        text = self._read(files[0])
+        self.assertIn("synced: true", text)
+        self.assertIn('"deleted": true', text)
+
+    def test_healthy_delete_overwrites_mirror_with_tombstone(self):
+        fake = FakeSurreal(result=[])
+        client = self._configured_client(fake)
+
+        client.save_memory("k2", "v2", "c")
+        client.delete_memory("k2")
+
+        # Still exactly one mirror file for the key: the tombstone reuses the
+        # key-derived filename, so no stale save survives to be replayed.
+        files = self._mirror_files("memory")
+        self.assertEqual(len(files), 1)
+        text = self._read(files[0])
+        self.assertIn("synced: true", text)
+        self.assertIn('"deleted": true', text)
+        self.assertNotIn('"v2"', text)
+        # The live delete still hit the primary.
+        self.assertTrue(any("DELETE" in q for q, _ in fake.calls))
 
 
 if __name__ == "__main__":

@@ -171,6 +171,17 @@ every `chore/release-*` PR:
 `ruff` are a separate gate (the `ci.yml` suite and the library readiness gate), not part
 of `release check` — `check` is purely the version/tag/CHANGELOG consistency invariant.
 
+`check` only proves internal agreement (tag == pyproject == CHANGELOG); it says nothing
+about whether the window those three still describe is the right one. A `feat`/`fix`
+commit that lands on `main` after the prep PR opens but before it merges would pass
+`check` (the prep PR's own three copies still agree with each other) while silently
+missing from the changelog and the version it computed. `release verify-window` closes
+that gap: right before CI tags, it re-runs the same commit-window computation `plan`
+uses — `<last-tag>..HEAD --first-parent` on the just-pushed `main` — and fails loudly if
+that disagrees with what `pyproject.toml`/`CHANGELOG.md` already declare, even when the
+bump level (and so the version number) happens not to change. Better to abort the tag
+than publish one with a stale changelog.
+
 Humans never hand-edit `pyproject.toml` `version` and never add a `CHANGELOG.md`
 heading by hand. `release prep` writes both. A complementary CI check rejects any
 non-release PR that touches `pyproject.toml` `version` or adds a `CHANGELOG.md` heading.
@@ -180,7 +191,7 @@ the three copies agree before either side acts.
 
 ## CLI surface
 
-`solomon-harness release plan | prep | check`.
+`solomon-harness release plan | prep | check | verify-window`.
 
 - `release plan` — read-only, headless-safe. Compute the SemVer bump from the commit
   window on trunk since the last tag (`<last-tag>..main --first-parent`) and print the
@@ -193,6 +204,9 @@ the three copies agree before either side acts.
   `chore(release): vX.Y.Z`, open the PR, then stop. The human takes it from there.
 - `release check` — the fail-closed gate above. Read-only; non-zero exit on any
   mismatch. Runs locally and in CI on every `chore/release-*` PR.
+- `release verify-window` — the merge-time recompute above. Read-only; non-zero exit
+  when the commit window recomputed against the current trunk `HEAD` disagrees with the
+  declared version or CHANGELOG. Runs in CI's `release` job, right before it tags.
 
 The split is the safety boundary: `plan` and `prep` can be automated because they only
 read or open a PR; merging, tagging, and publishing stay human-and-CI-gated.

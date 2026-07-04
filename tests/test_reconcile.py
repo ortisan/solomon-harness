@@ -204,7 +204,10 @@ class TestReconcileTrackingRows(unittest.TestCase):
         proving the close only rewrites the status and never drops the milestone or
         owner of a resolved tracking item."""
         client = DatabaseClient(db_path=self.db_path)
-        client.log_issue("68-R-03", "RAID R-03 (#68)", "raid", "in_progress", 7, "marcelo")
+        milestone_id = client.create_milestone("M1", "goals", "2026-07-01", "active")
+        client.log_issue(
+            "68-R-03", "RAID R-03 (#68)", "raid", "in_progress", milestone_id, "marcelo"
+        )
 
         result = cli.reconcile_tracking_rows(client, {"68": True})
 
@@ -212,7 +215,7 @@ class TestReconcileTrackingRows(unittest.TestCase):
         closed_row = client.get_issue("68-R-03")
         self.assertTrue(is_terminal(closed_row["status"]))
         # The non-status fields survived the close unchanged.
-        self.assertEqual(closed_row["milestone_id"], 7)
+        self.assertEqual(closed_row["milestone_id"], str(milestone_id))
         self.assertEqual(closed_row["assignee"], "marcelo")
         # Read back through the open-issue view as well: the row is gone from it
         # (terminal), so the survival is confirmed via the direct get_issue read.
@@ -266,6 +269,19 @@ class TestFetchGhIssueStates(unittest.TestCase):
         with patch("subprocess.run", return_value=_Proc(0, payload)):
             states = cli._fetch_gh_issue_states(".")
         self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
+
+    def test_strips_inherited_git_env_before_shelling_out(self):
+        # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
+        # worktree) must not be forwarded to the gh subprocess.
+        payload = json.dumps([{"number": 6, "state": "CLOSED"}])
+        leaked = {"GIT_DIR": "/tmp/leaked/.git", "GIT_WORK_TREE": "/tmp/leaked"}
+        with patch.dict(os.environ, leaked):
+            with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
+                cli._fetch_gh_issue_states(".")
+        _, kwargs = run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
+        self.assertFalse(any(k.startswith("GIT_") for k in env))
 
     def test_warns_when_gh_returns_the_issue_cap(self):
         """When gh returns exactly the --limit cap, reconcile may miss closed issues

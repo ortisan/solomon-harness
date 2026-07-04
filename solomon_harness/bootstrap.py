@@ -62,14 +62,16 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
 
     # Git Remote
     try:
+        from solomon_harness.subprocess_env import clean_git_env
+
         git_remote = subprocess.check_output(
             ["git", "remote", "get-url", "origin"],
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
             text=True,
             # Strip GIT_* so a worktree/hook context does not redirect this to the
-            # enclosing repo (see solomon_harness.home._clean_git_env / issue #24).
-            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            # enclosing repo (see solomon_harness.subprocess_env.clean_git_env / issue #24).
+            env=clean_git_env(),
         ).strip()
     except Exception:
         git_remote = "none"
@@ -317,6 +319,159 @@ def scaffold_agents(workspace_root: str) -> None:
                 content = f.read().replace("{{AGENT_NAME}}", name)
             with open(config_dst, "w", encoding="utf-8") as f:
                 f.write(content)
+
+
+def scaffold_new_agent(
+    workspace_root: str,
+    name: str,
+    description: str,
+    title: Optional[str] = None,
+    duties: Optional[List[str]] = None,
+) -> None:
+    """Scaffold a new agent directory from templates (create-only)."""
+    import re
+    if not re.match(r"^[a-z0-9_]+$", name):
+        raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    agents_dir = os.path.join(workspace_root, "agents")
+    agent_dir = os.path.join(agents_dir, name)
+    real_agents_dir = os.path.realpath(agents_dir)
+    real_agent_dir = os.path.realpath(agent_dir)
+
+    # Confinement check
+    if not real_agent_dir.startswith(real_agents_dir + os.sep) and real_agent_dir != real_agents_dir:
+        raise ValueError("Path confinement violation: agent folder must be inside agents/")
+
+    if os.path.exists(real_agent_dir):
+        print(f"Agent '{name}' already exists. Skipping scaffolding.")
+        return
+
+    # Create directories
+    os.makedirs(os.path.join(real_agent_dir, "agents"), exist_ok=True)
+    os.makedirs(os.path.join(real_agent_dir, "skills"), exist_ok=True)
+
+    # Write persona.md
+    if title is None:
+        title = name.replace("_", " ").title()
+    persona_content = f"""# {title} Persona
+
+{description}
+
+This agent is the {name} brain for solomon-harness. It reasons within the shared rules in agents/AGENTS.md and its contract in agents/{name}/agents/{name}.md, applies the skills in agents/{name}/skills/, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
+"""
+    with open(os.path.join(real_agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+        f.write(persona_content)
+
+    # Write role file
+    if duties is None:
+        duties = [
+            "Adhere strictly to the Git Flow branching guidelines, utilizing feature/* or bugfix/* branches.",
+            "Commit all code and documentation changes using Conventional Commits rules."
+        ]
+    duties_str = "\n".join(f"- {d}" for d in duties)
+    role_content = f"""# {title} Profile
+
+{description}
+
+## Core Duties
+{duties_str}
+
+## Active Skills
+
+No local skills configured.
+
+## External Skills
+
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent {name}
+```
+"""
+    with open(os.path.join(real_agent_dir, "agents", f"{name}.md"), "w", encoding="utf-8") as f:
+        f.write(role_content)
+
+    # Write scope_and_mandate.md skill
+    skill_content = f"""# {title} Best Practices
+
+Reference standard for the {name} specialist.
+
+## Scope and mandate
+
+This skill covers the {name} role's duties.
+"""
+    with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
+        f.write(skill_content)
+
+    # Copy main.py and config.json via scaffold_agents
+    scaffold_agents(workspace_root)
+
+    # Register in agents/AGENTS.md
+    agents_md_path = os.path.join(agents_dir, "AGENTS.md")
+    if os.path.isfile(agents_md_path):
+        with open(agents_md_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        pattern = r"(## The specialist agents\n+)([\s\S]*)"
+        match = re.search(pattern, content)
+        if match:
+            list_content = match.group(2)
+
+            lines = list_content.splitlines()
+            agent_lines = []
+            other_lines = []
+            in_list = True
+            for line in lines:
+                if in_list and (line.strip().startswith("- `") or not line.strip()):
+                    if line.strip():
+                        agent_lines.append(line.strip())
+                else:
+                    in_list = False
+                    other_lines.append(line)
+
+            formatted_desc = description
+            if formatted_desc:
+                formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
+
+            new_line = f"- `{name}` — {formatted_desc}"
+            agent_lines.append(new_line)
+
+            def extract_name(entry):
+                m = re.search(r"- `([^`]+)`", entry)
+                return m.group(1) if m else entry
+
+            seen = set()
+            unique_agent_lines = []
+            for line in sorted(agent_lines, key=extract_name):
+                n_ = extract_name(line)
+                if n_ not in seen:
+                    seen.add(n_)
+                    unique_agent_lines.append(line)
+
+            new_list_content = "\n".join(unique_agent_lines)
+            if other_lines:
+                while other_lines and not other_lines[0].strip():
+                    other_lines.pop(0)
+                new_list_content += "\n\n" + "\n".join(other_lines)
+            else:
+                new_list_content += "\n"
+
+            new_content = content[:match.start()] + "## The specialist agents\n\n" + new_list_content
+            with open(agents_md_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+
+    # Run document-skills script to compile the new agent's skills
+    doc_skills_script = os.path.join(workspace_root, "scripts", "document-skills.py")
+    if os.path.isfile(doc_skills_script):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, doc_skills_script], cwd=workspace_root, check=True)
+
+    # Run generate-integrations script to compile Claude agents and Gemini commands
+    gen_integrations_script = os.path.join(workspace_root, "scripts", "generate-integrations.py")
+    if os.path.isfile(gen_integrations_script):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, gen_integrations_script], cwd=workspace_root, check=True)
 
 
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:

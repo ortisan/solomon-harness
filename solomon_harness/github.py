@@ -39,30 +39,94 @@ GH_TIMEOUT_SECONDS = 15
 
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
-    """Run a gh command and return {'ok', 'data'|'stdout', 'error'}."""
+    """Run a gh command and return {'ok', 'data'|'stdout', 'error'}.
+
+    Retries once on a transient failure (a non-zero exit or a timeout): a momentary
+    keyring race with a concurrent driver, or a network blip, can fail one call
+    while the very next one succeeds (bug #138). The retry, and only the retry,
+    heals a credential blip by injecting a freshly resolved token (see
+    :func:`_heal_token_env`). A missing gh (FileNotFoundError) is deterministic and
+    is not retried; a JSON parse error only follows a successful call and is
+    likewise not retried. The retry at most doubles a single call's worst-case time.
+    """
+    cmd = ["gh", *args]
+    # Reached only if both attempts fail transiently; each failing attempt overwrites
+    # it with the specific error, so the generic default is a defensive fallback.
+    transient_error: Dict[str, Any] = {"ok": False, "error": "gh command failed."}
+    for attempt in range(2):
+        env = _heal_token_env() if attempt == 1 else None
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=GH_TIMEOUT_SECONDS,
+                env=env,
+            )
+        except FileNotFoundError:
+            return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
+        except subprocess.TimeoutExpired:
+            # A fixed message, never str(exc): treat a hung gh as a transient failed
+            # call so the caller degrades gracefully instead of blocking or raising.
+            transient_error = {"ok": False, "error": f"gh command timed out after {GH_TIMEOUT_SECONDS}s."}
+            continue
+        if proc.returncode != 0:
+            transient_error = {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
+            continue
+        return _parse_gh_stdout(proc.stdout, parse_json)
+    return transient_error
+
+
+def _parse_gh_stdout(stdout: str, parse_json: bool) -> Dict[str, Any]:
+    """Shape a successful gh stdout into the public _gh result dict."""
+    out = stdout.strip()
+    if not parse_json:
+        return {"ok": True, "stdout": out}
+    try:
+        return {"ok": True, "data": json.loads(out) if out else None}
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "error": f"could not parse gh JSON output: {exc}"}
+
+
+def _resolve_gh_token() -> Optional[str]:
+    """Best-effort resolve a token via ``gh auth token`` for the heal retry.
+
+    Returns the token, or None when gh cannot resolve one (the retry then runs
+    without injection, still a useful network retry). Bounded by the same timeout
+    and tolerant of any failure: resolving a token must never break the retry.
+    """
     try:
         proc = subprocess.run(
-            ["gh", *args],
+            ["gh", "auth", "token"],
             capture_output=True,
             text=True,
             check=False,
             timeout=GH_TIMEOUT_SECONDS,
         )
-    except FileNotFoundError:
-        return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
-    except subprocess.TimeoutExpired:
-        # A fixed message, never str(exc): treat a hung gh as a failed call so the
-        # caller degrades gracefully instead of blocking or raising.
-        return {"ok": False, "error": f"gh command timed out after {GH_TIMEOUT_SECONDS}s."}
+    except Exception:  # noqa: BLE001 - best-effort heal; any failure falls back to a plain retry
+        return None
     if proc.returncode != 0:
-        return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
-    out = proc.stdout.strip()
-    if parse_json:
-        try:
-            return {"ok": True, "data": json.loads(out) if out else None}
-        except json.JSONDecodeError as exc:
-            return {"ok": False, "error": f"could not parse gh JSON output: {exc}"}
-    return {"ok": True, "stdout": out}
+        return None
+    return proc.stdout.strip() or None
+
+
+def _heal_token_env() -> Optional[Dict[str, str]]:
+    """The environment for the heal retry, or None to inherit the parent's.
+
+    Only when the env carries neither GITHUB_TOKEN nor GH_TOKEN does it resolve a
+    fresh token and return a copy of ``os.environ`` with GH_TOKEN set, healing a
+    credential blip. When a token is already present, or none can be resolved, it
+    returns None so the retry inherits the existing environment unchanged.
+    """
+    if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
+        return None
+    token = _resolve_gh_token()
+    if not token:
+        return None
+    env = os.environ.copy()
+    env["GH_TOKEN"] = token
+    return env
 
 
 def repo_owner() -> Optional[str]:

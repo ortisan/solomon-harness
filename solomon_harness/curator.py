@@ -1,4 +1,5 @@
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
@@ -128,9 +129,13 @@ def apply_proposal(
         raise ValueError("evidence regressed")
 
     # Validation 2: target exactly one agent
-    agent_names = discover_agents(root)
-    if not proposal.agent or proposal.agent not in agent_names:
-        raise ValueError("targets multiple or invalid agent")
+    if proposal.kind == "create_agent":
+        if not proposal.agent or os.sep in proposal.agent or "/" in proposal.agent or ".." in proposal.agent:
+            raise ValueError("targets multiple or invalid agent")
+    else:
+        agent_names = discover_agents(root)
+        if not proposal.agent or proposal.agent not in agent_names:
+            raise ValueError("targets multiple or invalid agent")
         
     # Validation 3: rule duplicate detection
     agents_md_path = os.path.join(root, "agents", "AGENTS.md")
@@ -165,7 +170,7 @@ def apply_proposal(
     if branch_exists:
         subprocess.run(["git", "checkout", branch_name], cwd=root, env=env, check=True)
     else:
-        subprocess.run(["git", "checkout", "-b", branch_name], cwd=root, env=env, check=True)
+        subprocess.run(["git", "-C", root, "checkout", "-b", branch_name], cwd=root, env=env, check=True)
     
     try:
         # edit agent files
@@ -203,12 +208,33 @@ def apply_proposal(
         elif os.environ.get("MOCK_GH") == "1":
             pr_url = f"https://github.com/ortisan/solomon-harness/pull/mock-{proposal.decision_id}"
         else:
-            # Clean environment for gh command
+            # Resolve gh from PATH instead of hardcoding one; a fixed
+            # "/opt/homebrew/bin:/usr/bin:/bin" breaks Intel Mac Homebrew
+            # (/usr/local/bin), most non-Debian Linux, and macOS GitHub Actions
+            # runners, where gh lives elsewhere. Fail with a clear, actionable
+            # error rather than letting subprocess raise a bare FileNotFoundError.
+            gh_path = shutil.which("gh")
+            if not gh_path:
+                raise RuntimeError(
+                    "gh CLI not found on PATH; install and authenticate the "
+                    "GitHub CLI (https://cli.github.com) before applying a proposal."
+                )
+            gh_cmd[0] = gh_path
             gh_env = os.environ.copy()
-            gh_env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
             gh_env["PYTHONPATH"] = root
-            res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
-            pr_url = res.stdout.strip()
+            try:
+                res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
+                pr_url = res.stdout.strip()
+            except subprocess.CalledProcessError as e:
+                if "already exists" in e.stderr or "already exists" in e.stdout:
+                    view_cmd = ["gh", "pr", "view", branch_name, "--json", "url", "--template", "{{.url}}"]
+                    view_res = subprocess.run(view_cmd, cwd=root, capture_output=True, text=True, env=gh_env)
+                    if view_res.returncode == 0 and view_res.stdout.strip():
+                        pr_url = view_res.stdout.strip()
+                    else:
+                        raise
+                else:
+                    raise
             
         return pr_url
     except Exception:
@@ -441,4 +467,52 @@ def broker_skill(
             kind=ADAPT_SKILL_KIND,
         )
         return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
+
+
+def broker_agent(
+    workspace_root: str,
+    agent_name: str,
+    title: str,
+    description: str,
+    duties: List[str],
+    gh_runner: Optional[Callable[[List[str]], Any]] = None
+) -> str:
+    """Acquires a new agent by scaffolding its directories, files, and default skill,
+
+    registering it, compiling the integrations, and opening a draft PR via apply_proposal.
+    """
+    import os
+    import re
+    from solomon_harness.bootstrap import scaffold_new_agent
+
+    # Validate agent name strictly to prevent path traversal/confinement escape
+    if not re.match(r"^[a-z0-9_]+$", agent_name):
+        raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    def edit_callback(agent_dir: str) -> None:
+        # Confinement check
+        target_realpath = os.path.realpath(agent_dir)
+        agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
+        if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
+            raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
+
+        # Delegate directly to scaffold_new_agent
+        scaffold_new_agent(
+            workspace_root,
+            agent_name,
+            description,
+            title=title,
+            duties=duties,
+        )
+
+    proposal = Proposal(
+        agent=agent_name,
+        drift_description=f"Create agent {agent_name}",
+        sources=(f"demand@{agent_name}", f"template@{agent_name}"),
+        rationale=f"Creating missing agent {agent_name} for capability",
+        decision_id=None,
+        kind="create_agent",
+    )
+    return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
+
 

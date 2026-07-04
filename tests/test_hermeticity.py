@@ -74,11 +74,15 @@ class TestHermeticityGuard(unittest.TestCase):
 
         # Patching subprocess.run must fully intercept the engine spawn: if a
         # regression added a non-mockable real-exec path, the patch would not be
-        # called (or a real process would run).
+        # called (or a real process would run). The loop lock also shells out to
+        # `ps` (through this same seam) to record the holder's process start
+        # time, so we assert on the specific engine invocation rather than the
+        # total call count.
         with patch("subprocess.run", return_value=_Proc()) as mock_run:
             rc = workflows.run_stage(root, "start", ["42"], engine="claude")
         self.assertEqual(rc, 0)
-        mock_run.assert_called_once()
+        engine_calls = [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        self.assertEqual(len(engine_calls), 1)
 
 
 if __name__ == "__main__":

@@ -197,6 +197,8 @@ def run_stage(
                 if capture_cost:
                     cmd.extend(["--output-format", "json"])
 
+            from solomon_harness.subprocess_env import clean_git_env
+
             rc = 0
             for i in range(iterations):
                 if iterations > 1:
@@ -206,6 +208,7 @@ def run_stage(
                     proc = subprocess.run(
                         cmd,
                         input=prompt, text=True, capture_output=True, check=False,
+                        env=clean_git_env(),
                     )
                     out = getattr(proc, "stdout", None)
                     if out:
@@ -216,7 +219,7 @@ def run_stage(
                     if cost is not None:
                         loop_budget.record(workspace_root, cost, stage=stage)
                 else:
-                    proc = subprocess.run(cmd, input=prompt, text=True, check=False)
+                    proc = subprocess.run(cmd, input=prompt, text=True, check=False, env=clean_git_env())
                 rc = proc.returncode
                 if rc != 0:
                     # A failed iteration stops the run rather than plowing ahead —

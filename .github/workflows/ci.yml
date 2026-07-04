@@ -15,9 +15,36 @@ jobs:
   validate:
     name: Validate Custom Scripts and Workspace
     runs-on: ubuntu-latest
+    # Mirrors docker-compose.yml's surrealdb service so the live-integration
+    # tests (gated on a reachable server, see tests/test_database_client_multimodel.py,
+    # tests/test_memory_service.py and tests/test_harness_invariants.py) run
+    # against a real backend here instead of silently skipping. The image
+    # ships no shell, so `command` (not a Dockerfile HEALTHCHECK) starts the
+    # server and readiness is confirmed by the "Wait for SurrealDB" step below
+    # rather than a --health-cmd (which would need /bin/sh).
+    services:
+      surrealdb:
+        image: surrealdb/surrealdb:v3.1.5
+        ports: [8099:8000]
+        env:
+          SURREAL_ROCKSDB_BLOCK_CACHE_SIZE: "268435456"
+        command: start --username root --password root --log info rocksdb:/data/solomon.db
+        options: --tmpfs /data:rw,mode=1777
     steps:
       - name: Checkout repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Wait for SurrealDB
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8099/health >/dev/null; then
+              echo "SurrealDB is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "SurrealDB did not become ready in time" >&2
+          exit 1
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -39,6 +66,18 @@ jobs:
         run: uv run mypy solomon_harness tests
 
       - name: Run Python test suite
+        env:
+          # tests/test_database_client_multimodel.py and test_memory_service.py
+          # already default SURREAL_URL to ws://localhost:8099/rpc (this
+          # service's published port) with hardcoded root/root credentials, and
+          # DatabaseClient defaults SURREAL_USER/SURREAL_PASS to root/root for
+          # any localhost URL, so only the one var with no built-in default
+          # needs to be set here: SURREAL_TEST_URL gates
+          # tests/test_harness_invariants.py's TestSurrealIntegration. Setting
+          # SURREAL_URL/SURREAL_USER/SURREAL_PASS unconditionally here would
+          # override the values several unit tests construct on purpose to
+          # exercise config-driven (non-default) URLs and credentials.
+          SURREAL_TEST_URL: ws://localhost:8099/rpc
         run: uv run pytest
 
       - name: Validate workspace (ADRs, workflows, agents, templates, skills)

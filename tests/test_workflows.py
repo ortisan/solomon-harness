@@ -65,6 +65,51 @@ class TestWorkflows(unittest.TestCase):
         self.assertIn("Do work on 42", kwargs["input"])
 
 
+class TestRunStageGitEnvHygiene(unittest.TestCase):
+    """run_stage's two engine launches must not leak inherited GIT_* vars into
+    the child process (they would redirect a git call the engine makes back to
+    whatever repo/worktree the harness happened to be invoked from)."""
+
+    def _leaked_git_env(self):
+        return patch.dict(
+            os.environ,
+            {"GIT_DIR": "/tmp/leaked/.git", "GIT_WORK_TREE": "/tmp/leaked", "GIT_INDEX_FILE": "/tmp/leaked/index"},
+        )
+
+    def test_default_path_strips_git_env(self):
+        # Human level (default): the plain, non-cost-capturing subprocess.run call.
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with self._leaked_git_env():
+            with patch("subprocess.run", return_value=_Proc()) as mock_run:
+                rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env, "run_stage must pass an explicit, scrubbed env")
+        self.assertFalse(any(k.startswith("GIT_") for k in env))
+
+    def test_cost_capture_path_strips_git_env(self):
+        # L2: the cost-capturing subprocess.run call (a second, separate call site).
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L2"})
+
+        class _Proc:
+            returncode = 0
+            stdout = '{"total_cost_usd": 0.5}'
+
+        with self._leaked_git_env():
+            with patch("subprocess.run", return_value=_Proc()) as mock_run:
+                rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env, "run_stage must pass an explicit, scrubbed env")
+        self.assertFalse(any(k.startswith("GIT_") for k in env))
+
+
 class TestRunStageDriverLock(unittest.TestCase):
     """The portable single-driver gate lives in run_stage (both hosts run it)."""
 
@@ -80,7 +125,12 @@ class TestRunStageDriverLock(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             rc = workflows.run_stage(root, "start", ["1"], engine="claude")
         self.assertEqual(rc, 1)
-        mock_run.assert_not_called()  # never reach the engine while another driver holds the lock
+        # Never reach the engine while another driver holds the lock. Staleness
+        # checking may itself shell out to `ps` (through this same seam) to
+        # compare process start times, so assert on the engine call specifically.
+        self.assertFalse(
+            [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        )
 
     def test_mutating_stage_acquires_and_releases_the_lock(self):
         root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
@@ -133,7 +183,10 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
         with patch("subprocess.run", return_value=_Proc()) as mock_run:
             rc = workflows.run_stage(root, "start", ["1"], engine="claude")
         self.assertEqual(rc, 0)
-        mock_run.assert_called_once()
+        # The lock also shells out to `ps` (through this same seam) to record
+        # the holder's process start time, so assert on the engine call itself.
+        engine_calls = [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        self.assertEqual(len(engine_calls), 1)
 
     def test_kill_switch_blocks_everything(self):
         root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
@@ -151,7 +204,11 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
         self.assertEqual(rc, 1)
-        mock_run.assert_not_called()
+        # Staleness checking may itself shell out to `ps` (through this same
+        # seam) to compare process start times; assert the engine specifically.
+        self.assertFalse(
+            [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        )
 
     def test_budget_ceiling_blocks_at_l2(self):
         root = _workspace_with_loop(
