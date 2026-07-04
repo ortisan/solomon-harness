@@ -707,5 +707,60 @@ class TestBoardTitleAndLink(unittest.TestCase):
         self.assertIn("acme/widget", links[0])
 
 
+class TestMergePrAndClose(unittest.TestCase):
+    """#172: the owning stage for the merge-to-Done transition. On a successful
+    merge it must complete the Done transition in the same call (board move +
+    the ADR-0006 write-through), with no separate reconcile step. On a failed
+    merge it must leave board/memory untouched -- no partial state."""
+
+    def test_successful_merge_completes_the_done_transition(self):
+        with (
+            patch("solomon_harness.github._gh", return_value={"ok": True}) as gh,
+            patch("solomon_harness.github.set_issue_status") as set_status,
+            patch("solomon_harness.github.record_terminal_status") as record_terminal,
+        ):
+            res = github.merge_pr_and_close(42, 172)
+        gh.assert_called_once_with(["pr", "merge", "42", "--squash"])
+        set_status.assert_called_once_with(172, "Done")
+        record_terminal.assert_called_once_with(172)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["pr"], 42)
+        self.assertEqual(res["issue"], 172)
+
+    def test_failed_merge_does_not_touch_board_or_memory(self):
+        with (
+            patch(
+                "solomon_harness.github._gh",
+                return_value={"ok": False, "error": "not mergeable"},
+            ),
+            patch("solomon_harness.github.set_issue_status") as set_status,
+            patch("solomon_harness.github.record_terminal_status") as record_terminal,
+        ):
+            res = github.merge_pr_and_close(42, 172)
+        set_status.assert_not_called()
+        record_terminal.assert_not_called()
+        self.assertFalse(res["ok"])
+        self.assertIn("error", res)
+
+
+class TestGithubCliMerge(unittest.TestCase):
+    def test_merge_subcommand_parses_and_dispatches(self):
+        with patch(
+            "solomon_harness.github.merge_pr_and_close",
+            return_value={"ok": True, "pr": 42, "issue": 172},
+        ) as merge:
+            rc = github.main(["merge", "--pr", "42", "--issue", "172"])
+        merge.assert_called_once_with(42, 172)
+        self.assertEqual(rc, 0)
+
+    def test_merge_subcommand_returns_nonzero_on_failure(self):
+        with patch(
+            "solomon_harness.github.merge_pr_and_close",
+            return_value={"ok": False, "error": "not mergeable"},
+        ):
+            rc = github.main(["merge", "--pr", "42", "--issue", "172"])
+        self.assertEqual(rc, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
