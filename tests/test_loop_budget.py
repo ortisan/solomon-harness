@@ -33,6 +33,13 @@ class TestBudget(unittest.TestCase):
             os.path.join(self.root, ".solomon", "loop-budget.jsonl"),
         )
 
+    def test_legacy_loop_auto_stage_is_normalized_on_read(self):
+        # Pre-rename ledgers carry stage "loop-auto"; the read path reports the
+        # current stage name so existing local state keeps working unchanged.
+        loop_budget.record(self.root, 0.1, stage="loop-auto", day="2026-06-28")
+        entries = loop_budget._entries(self.root)
+        self.assertEqual(entries[0]["stage"], "loop")
+
     def test_parse_engine_cost(self):
         self.assertEqual(loop_budget.parse_engine_cost('{"total_cost_usd": 0.34, "x": 1}'), 0.34)
         self.assertEqual(loop_budget.parse_engine_cost('{"cost_usd": 1.2}'), 1.2)

@@ -279,6 +279,22 @@ For Apple in Authlib, sign the `client_secret` JWT with the `.p8` key (ES256, `a
 - Cover the linking matrix: existing verified-email user + verified-email provider (auto-link), existing user + unverified provider email (must not link), and email collision attack (attacker registers victim's email on an untrusted provider, then the victim signs in — must not merge).
 - Use TDD: write the rejecting test first (red), implement the guard (green), then refactor the provider adapter behind a single interface.
 
+## Common pitfalls
+
+- Keying user identity on email. Emails are mutable and reusable; the moment a user changes theirs at the provider, or a provider recycles an address, accounts merge or orphan. The key is `(provider, provider_subject)`, full stop.
+- Auto-linking accounts on an email the provider never verified. Enabling `allowDangerousEmailAccountLinking` (or hand-rolling the equivalent) for GitHub or Facebook lets an attacker register the victim's email at that provider and take over the existing account — the pre-account-takeover class.
+- Assuming `GET /user` on GitHub returns an email. It is `null` for private-email users even with the `user:email` scope; skipping `GET /user/emails` (verified + primary) breaks valid users or, worse, links on an unverified address.
+- Leaving the Microsoft `common` authority unvalidated, so any Entra tenant signs in; or matching users on `email`/`preferred_username`, which is the nOAuth takeover exactly. Validate `tid` against an allowlist, key on `oid+tid`, and require `xms_edov` before trusting an org email.
+- Treating Microsoft `sub` as a portable user key. It is pairwise per (app, tenant, user) and differs between your own apps; migrations built on it strand every user.
+- Discarding Apple's first-auth `user` form field. Name and email arrive exactly once; if the first callback does not persist them, they are gone until the user removes the app at appleid.apple.com.
+- Setting the state cookie `SameSite=Lax` for the Apple callback. Apple posts the callback (`response_mode=form_post` when `name email` scope is requested), so the cookie is not sent and the flow fails intermittently. It must be `SameSite=None; Secure`.
+- Minting the Apple `client_secret` JWT with `exp` beyond six months (rejected), or generating it once at deploy time and letting it expire in production.
+- Emailing `@privaterelay.appleid.com` addresses from an unregistered sender: the mail bounces silently and "we sent you a link" is a lie for every Hide My Email user.
+- Making Apple (or any single provider) a user's only identity anchor. The 2025 `sub`-rotation and issuer-redirect incidents detached users from their accounts for weeks; always offer a second sign-in method and an authenticated recovery path.
+- Echoing a user-supplied `returnTo` into the redirect target without an allowlist check — an open redirect that launders phishing through your own domain.
+- Skipping `nonce` verification because "the library probably does it". Parsing the `id_token` yourself instead of the library's validated path drops the replay protection silently.
+- Assuming Facebook users have an email. Phone-number signups have none, the `email` permission needs App Review, and no verification is asserted either way. A no-email path is mandatory, not an edge case.
+
 ## Definition of done
 
 - [ ] Every provider uses Authorization Code + PKCE (S256); no implicit/hybrid flow remains.

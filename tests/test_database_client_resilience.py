@@ -159,7 +159,7 @@ class TestGetLatestActivityNeverSilentNull(ResilienceTestBase):
     def test_reconnects_and_returns_real_activity(self):
         # The read fires on a dropped connection; the reconnect succeeds and the
         # real recorded activity is returned -- never a masked None (the dangerous
-        # fault that drove /solomon-loop to the wrong resume point).
+        # fault that drove /solomon-workflow to the wrong resume point).
         broken = FakeSurreal()
         broken.always_fail = True
         client = self._surreal_client(broken)

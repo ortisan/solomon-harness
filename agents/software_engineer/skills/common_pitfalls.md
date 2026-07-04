@@ -1,4 +1,4 @@
-## Common pitfalls for this role
+## Common pitfalls
 
 
 - Writing the implementation first and back-filling tests. It produces tests that confirm the code instead of specifying behavior.

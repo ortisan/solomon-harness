@@ -14,7 +14,7 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 
 | Stage | Workflow | Driving agents | Board move |
 | --- | --- | --- | --- |
-| Orchestrate (scan + next) | `/solomon-loop` | scrum_master | proposes the next step |
+| Orchestrate (scan + next) | `/solomon-workflow` | scrum_master | proposes the next step |
 | Capture an idea | `/solomon-idea` | product_owner | → `Ideas` |
 | Create a feature/story | `/solomon-issue` | product_owner | → `Backlog` |
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
@@ -45,7 +45,7 @@ stage is what the work is doing — so this table reconciles them:
 
 ## The loop and session resumption
 
-`/solomon-loop` is the orchestrator. It scans the project memory and the board to
+`/solomon-workflow` is the orchestrator. It scans the project memory and the board to
 find where work stopped, then proposes the single best next step — one of the
 workflows above — and runs it on confirmation. It advances one stage per
 invocation: when work is in flight it proposes development, review, or release;
@@ -78,7 +78,7 @@ context focused and prevent dispersion.
 
 This applies to the **closing "next step" recommendation of every turn**, not only the
 big branching choices. Never end a report with prose the user must copy (for example
-"run `/solomon-start 5` or `/solomon-loop`"): present the candidate next actions as the
+"run `/solomon-start 5` or `/solomon-workflow`"): present the candidate next actions as the
 enumerated menu itself — in Claude Code an AskUserQuestion the user clicks — so advancing
 the lifecycle costs one selection, not a copy-paste. The same holds for every small
 "proceed / retry / push-or-PR" confirmation. A turn that ends by offering what to do next
@@ -265,12 +265,12 @@ Each stage also persists the lifecycle facts to the project memory:
 
 Loop engineering turns the harness into a system that can advance work on a
 cadence, so two drivers must never act on one repository at once. A documented
-incident — two concurrent `/solomon-loop` drivers — produced premature merges
+incident — two concurrent `/solomon-workflow` drivers — produced premature merges
 that bypassed the review gate and flipped `core.bare=true` on a worktree. The
 safety floor prevents that by construction:
 
 - **Single-driver lock.** Before a stage that touches git/board state runs
-  (`loop`, `loop-auto`, `start`, `review`, `release`, and the `scan-arch` /
+  (`workflow`, `loop`, `start`, `review`, `release`, and the `scan-arch` /
   `scan-dedup` maintenance loops — and, at L3, every stage the policy's
   `requires_lock` names), the headless runner acquires one advisory lock anchored at the git
   *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of

@@ -1,4 +1,4 @@
-## Common pitfalls to reject
+## Common pitfalls
 
 
 - Tests that assert nothing, or assert only "did not raise".

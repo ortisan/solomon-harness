@@ -11,21 +11,25 @@ import sys
 from typing import List, Optional
 
 STAGES = [
-    "loop", "loop-auto", "idea", "issue", "bug", "refine", "start", "review", "release",
+    "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
     # Standing maintenance loops (Phase 3): generative, open draft PRs only.
     "scan-arch", "scan-dedup",
 ]
+
+# Renamed stages, still accepted on input with a deprecation notice:
+# `loop-auto` became `loop` when the orchestrator moved from `loop` to `workflow`.
+DEPRECATED_STAGE_ALIASES = {"loop-auto": "loop"}
 
 # Stages that drive git/board state (branch, push, merge, release) and must run
 # under a single driver. The lock is a portable Python gate run on both hosts —
 # the documented concurrent-driver race produced premature merges that bypassed
 # the review gate, so honoring an advisory markdown "Step 0" was not enough.
-LOCKED_STAGES = {"loop", "loop-auto", "start", "review", "release", "scan-arch", "scan-dedup"}
+LOCKED_STAGES = {"workflow", "loop", "start", "review", "release", "scan-arch", "scan-dedup"}
 
-# `loop-auto` is the headless cadence entrypoint: `dev loop-auto --concurrency N`
-# drives N iterations of the `loop` stage's own scan/propose/advance logic — the
-# same one confirmed step per `/solomon-loop` invocation, repeated in a bounded,
-# auditable for-loop rather than a new self-scheduling mechanism.
+# `loop` is the headless cadence entrypoint: `dev loop --concurrency N` drives
+# N iterations of the `workflow` stage's own scan/propose/advance logic — the
+# same one confirmed step per `/solomon-workflow` invocation, repeated in a
+# bounded, auditable for-loop rather than a new self-scheduling mechanism.
 DEFAULT_CONCURRENCY = 1
 
 
@@ -33,9 +37,9 @@ def _parse_concurrency(args: List[str]) -> "tuple[int, List[str]]":
     """Split ``--concurrency N`` (or ``--concurrency=N``) out of a stage's args.
 
     Returns ``(concurrency, remaining_args)``; ``remaining_args`` is what gets
-    substituted into the `loop` stage's ``$ARGUMENTS`` so the flag never leaks
-    into the prompt text. Defaults to `DEFAULT_CONCURRENCY` (one iteration —
-    identical to running `loop` directly) when the flag is absent.
+    substituted into the `workflow` stage's ``$ARGUMENTS`` so the flag never
+    leaks into the prompt text. Defaults to `DEFAULT_CONCURRENCY` (one iteration
+    — identical to running `workflow` directly) when the flag is absent.
     """
     concurrency = DEFAULT_CONCURRENCY
     remaining: List[str] = []
@@ -102,6 +106,13 @@ def run_stage(
     engine: Optional[str] = None,
 ) -> int:
     """Run one workflow stage headless through the selected engine."""
+    if stage in DEPRECATED_STAGE_ALIASES:
+        replacement = DEPRECATED_STAGE_ALIASES[stage]
+        print(
+            f"Warning: stage '{stage}' is deprecated; running it as '{replacement}'.",
+            file=sys.stderr,
+        )
+        stage = replacement
     if stage not in STAGES:
         print(f"Error: unknown stage '{stage}'. Stages: {', '.join(STAGES)}", file=sys.stderr)
         return 1
@@ -110,20 +121,20 @@ def run_stage(
         print(f"Error: unknown engine '{engine}'. Use 'claude', 'gemini' or 'agy'.", file=sys.stderr)
         return 1
 
-    # `loop-auto` has no command file of its own: it drives N iterations of the
-    # `loop` stage's existing prompt/logic, so the engine sees the same
-    # `/solomon-loop` instructions on every iteration and `--concurrency` never
-    # leaks into $ARGUMENTS.
+    # `loop` has no command file of its own: it drives N iterations of the
+    # `workflow` stage's existing prompt/logic, so the engine sees the same
+    # `/solomon-workflow` instructions on every iteration and `--concurrency`
+    # never leaks into $ARGUMENTS.
     prompt_stage = stage
     iterations = 1
     prompt_args = args
-    if stage == "loop-auto":
+    if stage == "loop":
         try:
             iterations, prompt_args = _parse_concurrency(args)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
-        prompt_stage = "loop"
+        prompt_stage = "workflow"
 
     try:
         prompt = build_prompt(workspace_root, prompt_stage, prompt_args)
@@ -147,7 +158,7 @@ def run_stage(
 
     # Budget governor: at L2/L3, an exhausted daily cost ceiling degrades the
     # automation path to report-only (it stops drafting/merging), never a human.
-    if policy.level in ("L2", "L3") and stage != "loop":
+    if policy.level in ("L2", "L3") and stage != "workflow":
         from solomon_harness import loop_budget
 
         if loop_budget.over_ceiling(workspace_root, policy.daily_cost_ceiling):

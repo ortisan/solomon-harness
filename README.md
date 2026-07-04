@@ -93,12 +93,12 @@ at `http://localhost:3000`.
 In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
 
 ```text
-/solomon-loop    (orchestrate/scan)
-/solomon-issue   add rate limiting to the public API
-/solomon-refine  42
-/solomon-start    42
-/solomon-review   17
-/solomon-release  17
+/solomon-workflow  (orchestrate/scan)
+/solomon-issue     add rate limiting to the public API
+/solomon-refine    42
+/solomon-start     42
+/solomon-review    17
+/solomon-release   17
 ```
 
 Or headlessly, for CI and automation:
@@ -124,7 +124,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 
 | Workflow | Stage | Driving agents |
 | --- | --- | --- |
-| `/solomon-loop` | orchestrate/scan | loop_engineer |
+| `/solomon-workflow` | orchestrate/scan | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
 | `/solomon-issue` | create a feature/story | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |
@@ -143,7 +143,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-four role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-six role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed to the host tools as Claude Code
 subagents and Gemini commands. The count above is the number of `agents/*/agents/*.md`
@@ -167,6 +167,8 @@ from that directory listing.
 | `flutter` | Flutter/Dart, clean architecture, widget and integration tests |
 | `ml_engineer` | model training/validation, statistical modeling, leakage checks |
 | `quant_trader` | strategies, backtests, slippage/cost, Sharpe/drawdown risk |
+| `long_run_strategist` | long-horizon strategies: trend/momentum, factors, allocation, rebalancing |
+| `scalper` | intraday scalping: microstructure, order flow, execution, tick-data backtests |
 | `data_analyst` | SQL analytics, big data (Spark/ClickHouse), reporting |
 | `dba` | data modeling, performance tuning, migrations, replication |
 | `documenter` | technical and business docs, user guides, design docs |
@@ -194,7 +196,7 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 Eleven `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
 guarded by `tests/test_readme_sync.py` — are authored once as Claude Code
 commands under `.claude/commands/` and mirrored to Gemini commands under
-`.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop-auto`
+`.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop`
 runs the autonomous parallel loop over Ready issues; and the remaining two,
 `/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
 scan the codebase for architectural drift and duplication (see
@@ -229,7 +231,7 @@ to `docs/adr/NNNN-*.md` and persist it with `save_decision`.
 
 `solomon_harness/agent_selection.py` inspects the project's files and manifests and
 enables only the agents the stack needs (a core delivery/planning set plus platform
-and domain agents on detected signals), instead of all twenty-four.
+and domain agents on detected signals), instead of all twenty-six.
 
 ### GitHub project board
 

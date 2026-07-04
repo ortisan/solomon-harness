@@ -1,4 +1,4 @@
-## Cross-cutting mandatory competencies
+## Scope and non-negotiables
 
 
 These project rules apply to the observability code and configs this agent ships:

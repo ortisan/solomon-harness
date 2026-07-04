@@ -2,7 +2,7 @@
 
 The digest is facts-only: it renders what the harness already knows (resume
 point, open work, the last loop run, PRs awaiting review) and points at
-/solomon-loop to decide the next step. It never computes the next step itself —
+/solomon-workflow to decide the next step. It never computes the next step itself —
 that stays the canonical prose ladder in the loop command.
 """
 
@@ -114,7 +114,7 @@ class TestBuildDigest(unittest.TestCase):
                 return [{"github_id": "x", "title": "T"}]
 
             def list_loop_runs(self, n):
-                return [{"stage": "loop", "target": "", "status": "ok", "created_at": "2026-06-28T10:00:00"}]
+                return [{"stage": "workflow", "target": "", "status": "ok", "created_at": "2026-06-28T10:00:00"}]
 
         text = "\n".join(digest.gather_digest(".", FakeDB(), fetch_github=False))
         self.assertIn("Resume:", text)
@@ -217,6 +217,11 @@ class TestBuildDigest(unittest.TestCase):
         text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
         self.assertIn("Resume last activity: qa is working on 'start 42'", text)
         self.assertIn("/solomon-start 42", text)
+
+    def test_digest_resume_without_issue_hint_points_at_the_orchestrator(self):
+        resume = {"type": "session", "agent": "qa", "task": "triaging things", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-workflow", text)
 
     def test_digest_shows_ready_issues(self):
         issues = [

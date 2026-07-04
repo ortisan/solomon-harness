@@ -48,9 +48,14 @@ def _entries(workspace_root: str) -> List[dict]:
                 line = line.strip()
                 if line:
                     try:
-                        out.append(json.loads(line))
+                        entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    # Pre-rename ledgers recorded the autonomous stage as
+                    # "loop-auto"; normalize on read so old state reads the same.
+                    if entry.get("stage") == "loop-auto":
+                        entry["stage"] = "loop"
+                    out.append(entry)
     except FileNotFoundError:
         return []
     return out

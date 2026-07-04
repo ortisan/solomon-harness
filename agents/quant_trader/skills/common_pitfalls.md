@@ -10,4 +10,4 @@
 - Ignoring capacity: an edge that vanishes above a small notional.
 - Zero or flat-fee cost assumptions on a high-turnover strategy.
 - One-regime PnL presented as all-weather.
-- Full Kelly or uncapped leverage.
+- Full Kelly or uncapped gearing.
