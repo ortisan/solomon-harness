@@ -236,5 +236,119 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
         self.assertAlmostEqual(loop_budget.daily_spend(root), 0.5)
 
 
+def _answering_ps_probes(engine_procs):
+    """side_effect for a subprocess.run mock: answer the loop-lock's
+    ``ps -o lstart=`` staleness probes with a fixed start time and hand the
+    queued fake procs to every other (engine) invocation."""
+    queue = list(engine_procs)
+
+    class _PsProc:
+        returncode = 0
+        stdout = "boot\n"
+
+    def run(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "ps":
+            return _PsProc()
+        return queue.pop(0)
+
+    return run
+
+
+def _engine_calls(mock_run):
+    """The subprocess.run calls that reached an engine, ignoring lock probes."""
+    return [c for c in mock_run.call_args_list if c.args[0][0] != "ps"]
+
+
+class TestLoopAutoStage(unittest.TestCase):
+    """`loop-auto` drives N iterations of the existing `loop` stage logic — it
+    must not build a new orchestration mechanism, just repeat what `loop` does
+    per-iteration under the same single-driver lock."""
+
+    def test_loop_auto_is_registered_and_dispatches(self):
+        self.assertIn("loop-auto", workflows.STAGES)
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run:
+            rc = workflows.run_stage(root, "loop-auto", [], engine="claude")
+        self.assertEqual(rc, 0)
+        calls = _engine_calls(mock_run)
+        self.assertEqual(len(calls), 1)
+        args, kwargs = calls[0]
+        self.assertEqual(args[0], ["claude", "-p"])
+        self.assertIn("Scan", kwargs["input"])
+
+    def test_loop_auto_respects_the_concurrency_argument(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch(
+            "subprocess.run", side_effect=_answering_ps_probes([_Proc(), _Proc(), _Proc()])
+        ) as mock_run:
+            rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "3"], engine="claude")
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(_engine_calls(mock_run)), 3)
+
+    def test_loop_auto_strips_concurrency_before_building_the_prompt(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "loop-auto", ["--concurrency", "2", "42"], engine="claude")
+        _, kwargs = mock_run.call_args
+        self.assertIn("Scan 42", kwargs["input"])
+        self.assertNotIn("--concurrency", kwargs["input"])
+
+    def test_loop_auto_stops_at_the_first_failed_iteration(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            def __init__(self, rc):
+                self.returncode = rc
+
+        with patch(
+            "subprocess.run", side_effect=_answering_ps_probes([_Proc(1), _Proc(0), _Proc(0)])
+        ) as mock_run:
+            rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "3"], engine="claude")
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(_engine_calls(mock_run)), 1)
+
+    def test_loop_auto_invalid_concurrency_errors_without_dispatch(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "nope"], engine="claude")
+        self.assertEqual(rc, 1)
+        mock_run.assert_not_called()
+
+    def test_loop_auto_acquires_and_releases_the_lock(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "2"], engine="claude")
+        self.assertEqual(rc, 0)
+        # The lock is released once the whole run (all iterations) completes.
+        self.assertFalse(os.path.exists(loop_lock.resolve_lock_path(root)))
+
+    def test_loop_auto_is_blocked_when_a_foreign_lock_is_held(self):
+        root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="foreign-driver", pid=os.getpid()).acquire()
+        with patch("subprocess.run") as mock_run:
+            rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "2"], engine="claude")
+        self.assertEqual(rc, 1)
+        # Never reach the engine while another driver holds the lock; the
+        # mocked calls that do appear are the lock's own ps staleness probes.
+        self.assertEqual(_engine_calls(mock_run), [])
+
+
 if __name__ == "__main__":
     unittest.main()
