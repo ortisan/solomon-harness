@@ -172,6 +172,11 @@ def build_server() -> Any:
         return service.get_latest_activity()
 
     @server.tool()
+    def get_backend_status() -> dict:
+        """Report which memory backend serves this session: surrealdb, or the sqlite fallback with the degradation reason."""
+        return service.get_backend_status()
+
+    @server.tool()
     def relate(
         edge: str, from_id: str, to_id: str, fields: Optional[dict] = None
     ) -> dict:

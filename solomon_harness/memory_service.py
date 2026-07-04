@@ -65,6 +65,10 @@ class MemoryService:
     def get_memory(self, key: str) -> Dict[str, Any]:
         return {"value": self.client.get_memory(key)}
 
+    def get_backend_status(self) -> Dict[str, Any]:
+        """Which backend serves this session's memory, and why, when degraded."""
+        return self.client.backend_status()
+
     def log_issue(
         self,
         github_id: str,

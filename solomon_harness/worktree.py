@@ -18,11 +18,9 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
-# _clean_git_env delegates to solomon_harness.subprocess_env.clean_git_env, the
-# single canonical implementation shared by every subprocess call site in the
-# codebase; kept as a module-level alias here since healthcheck.py already
-# imports this name from this module.
-from solomon_harness.subprocess_env import clean_git_env as _clean_git_env
+# The single canonical GIT_* scrubber shared by every subprocess call site in
+# the codebase (issue #163 removed the module-local aliases of it).
+from solomon_harness.subprocess_env import clean_git_env
 
 # Conservative ref grammar: git ref characters we are willing to place on the
 # command line and in a filesystem path. Path traversal, control characters, and
@@ -33,7 +31,7 @@ _REF_RE = re.compile(r"[A-Za-z0-9._/-]+")
 
 # Directory/index redirectors git sets while a hook runs. Inherited into a
 # subprocess they override ``git -C <path>`` and point every command back at the
-# outer repository, so we strip them (via _clean_git_env) before shelling out.
+# outer repository, so we strip them (via clean_git_env) before shelling out.
 # This keeps the helper correct when it (or its tests) runs inside a git hook.
 
 
@@ -51,7 +49,7 @@ def _run_git(repo_root: str, args: List[str], check: bool = True) -> subprocess.
         capture_output=True,
         text=True,
         check=False,
-        env=_clean_git_env(),
+        env=clean_git_env(),
     )
     if check and proc.returncode != 0:
         raise WorktreeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
