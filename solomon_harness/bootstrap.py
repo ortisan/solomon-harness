@@ -412,7 +412,6 @@ This skill covers the {name} role's duties.
         pattern = r"(## The specialist agents\n+)([\s\S]*)"
         match = re.search(pattern, content)
         if match:
-            heading = match.group(1)
             list_content = match.group(2)
 
             lines = list_content.splitlines()
@@ -434,9 +433,9 @@ This skill covers the {name} role's duties.
             new_line = f"- `{name}` — {formatted_desc}"
             agent_lines.append(new_line)
 
-            def extract_name(l):
-                m = re.search(r"- `([^`]+)`", l)
-                return m.group(1) if m else l
+            def extract_name(entry):
+                m = re.search(r"- `([^`]+)`", entry)
+                return m.group(1) if m else entry
 
             seen = set()
             unique_agent_lines = []
