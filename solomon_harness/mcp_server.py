@@ -130,10 +130,14 @@ def build_server() -> Any:
 
     @server.tool()
     def save_session(
-        session_id: str, agent_name: str, task: str, messages: List[Any]
+        session_id: str,
+        agent_name: str,
+        task: str,
+        messages: List[Any],
+        status: str = "active",
     ) -> dict:
-        """Persist a session (conversation state) for later resume."""
-        return service.save_session(session_id, agent_name, task, messages)
+        """Persist a session (conversation state) for later resume. Status is active or done."""
+        return service.save_session(session_id, agent_name, task, messages, status)
 
     @server.tool()
     def get_session(session_id: str) -> dict:
@@ -147,9 +151,17 @@ def build_server() -> Any:
         contract_type: str,
         contract_path: str,
         status: str,
+        summary: str = "",
     ) -> dict:
-        """Record a handoff between agents."""
-        return service.log_handoff(sender, recipient, contract_type, contract_path, status)
+        """Record a handoff between agents. The summary is a short "what this stage did" text persisted on the row so a resume survives worktree teardown."""
+        return service.log_handoff(
+            sender, recipient, contract_type, contract_path, status, summary
+        )
+
+    @server.tool()
+    def update_handoff_status(handoff_id: str, status: str) -> dict:
+        """Move a handoff along its lifecycle (open, accepted, done)."""
+        return service.update_handoff_status(handoff_id, status)
 
     @server.tool()
     def get_latest_activity() -> dict:

@@ -92,8 +92,14 @@ class HashingEmbedder:
 # ---------------------------------------------------------------------------
 
 # Lowercased board display name / alias -> canonical token. A status not listed
-# here (Ideas, Backlog, Ready, the legacy literal open) passes through unchanged.
+# here passes through unchanged. The display columns and the legacy literal
+# open carry casing aliases (ADR-0016) so the store never holds two rows
+# differing only by case for the same logical status.
 _STATUS_ALIASES = {
+    "ideas": "Ideas",
+    "backlog": "Backlog",
+    "ready": "Ready",
+    "open": "open",
     "in progress": "in_progress",
     "in_progress": "in_progress",
     "code review": "code_review",
@@ -224,6 +230,71 @@ def normalize_loop_run_status(status: Optional[str]) -> Optional[str]:
     unset status is never invented.
     """
     return _normalize_token(status, _LOOP_RUN_ALIASES)
+
+
+# The canonical handoff lifecycle: logged open, accepted by the recipient,
+# done when the receiving stage completes.
+HANDOFF_STATUSES = ("open", "accepted", "done")
+
+_HANDOFF_ALIASES = {
+    "ready": "open",
+    "pending": "open",
+    "approved": "accepted",
+    "completed": "done",
+    "closed": "done",
+}
+
+# The canonical session lifecycle: active while in flight, done when wrapped up.
+SESSION_STATUSES = ("active", "done")
+
+_SESSION_ALIASES = {
+    "completed": "done",
+    "closed": "done",
+    "finished": "done",
+}
+
+# The canonical milestone lifecycle, matching GitHub's own open/closed states.
+MILESTONE_STATES = ("open", "closed")
+
+_MILESTONE_ALIASES = {
+    "active": "open",
+    "pending": "open",
+    "complete": "closed",
+    "completed": "closed",
+    "done": "closed",
+}
+
+
+def normalize_handoff_status(status: Optional[str]) -> Optional[str]:
+    """Map a handoff status to its canonical token (open, accepted, or done)."""
+    return _normalize_token(status, _HANDOFF_ALIASES)
+
+
+def normalize_session_status(status: Optional[str]) -> Optional[str]:
+    """Map a session status to its canonical token (active or done)."""
+    return _normalize_token(status, _SESSION_ALIASES)
+
+
+def normalize_milestone_state(state: Optional[str]) -> Optional[str]:
+    """Map a milestone state to its canonical token (open or closed)."""
+    return _normalize_token(state, _MILESTONE_ALIASES)
+
+
+# The status literals a harness write can legitimately store on an issue row:
+# the canonical display/board tokens (ADR-0006) plus the legacy literals that
+# replays and reads stay tolerant of. This is the SurrealDB ASSERT set for
+# issues.status; the other kinds assert their canonical vocabulary directly.
+ISSUE_STATUS_LITERALS = tuple(STATUS_DISPLAY_COLUMNS) + ("open",) + TERMINAL_STATUSES
+
+
+def _surreal_literal_array(values: Sequence[str]) -> str:
+    """Render internal status constants as a SurrealQL string array literal.
+
+    Only ever fed the module's own vocabulary tuples (never caller input), and
+    deduplicated preserving order so overlapping legacy sets stay tidy.
+    """
+    seen = dict.fromkeys(values)
+    return "[" + ", ".join("'" + v + "'" for v in seen) + "]"
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +558,23 @@ class DatabaseClient:
         "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
         f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
         "DIST COSINE TYPE F32;",
+        # Typed states (ADR-0016): one targeted ASSERT per stateful field. The
+        # tables stay SCHEMALESS elsewhere. Harness code normalizes on write
+        # (normalize_status and friends, below every consumer), so these can
+        # never fire for harness writes; they exist to reject garbage from
+        # foreign writers. NONE stays allowed so a row that never carried the
+        # field remains writable. Each is its own list entry -- one statement
+        # per query() call -- so a failing DEFINE is never swallowed.
+        "DEFINE FIELD IF NOT EXISTS status ON issues "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(ISSUE_STATUS_LITERALS)};",
+        "DEFINE FIELD IF NOT EXISTS status ON handoffs "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(HANDOFF_STATUSES)};",
+        "DEFINE FIELD IF NOT EXISTS status ON sessions "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(SESSION_STATUSES)};",
+        "DEFINE FIELD IF NOT EXISTS status ON loop_runs "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(LOOP_RUN_STATUSES)};",
+        "DEFINE FIELD IF NOT EXISTS state ON milestones "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(MILESTONE_STATES)};",
     ]
 
     def __init__(
@@ -802,6 +890,7 @@ class DatabaseClient:
                 agent_name TEXT,
                 task TEXT,
                 messages TEXT,
+                status TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
@@ -813,6 +902,7 @@ class DatabaseClient:
                 contract_type TEXT,
                 contract_path TEXT,
                 status TEXT,
+                summary TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
@@ -861,6 +951,8 @@ class DatabaseClient:
                     cursor.execute(query)
                 self._ensure_issue_assignee_column(conn)
                 self._ensure_issue_milestone_id_is_text(conn)
+                self._ensure_column(conn, "sessions", "status", "TEXT")
+                self._ensure_column(conn, "handoffs", "summary", "TEXT")
                 conn.commit()
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
@@ -921,6 +1013,30 @@ class DatabaseClient:
             + ", created_at FROM issues_pre_text_milestone"
         )
         conn.execute("DROP TABLE issues_pre_text_milestone")
+
+    @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection, table: str, column: str, decl: str
+    ) -> None:
+        """Add a nullable column to a pre-migration table (expand/contract).
+
+        The generic form of :meth:`_ensure_issue_assignee_column` (#118), used
+        by the ADR-0016 additive columns (sessions.status, handoffs.summary,
+        record_id). Idempotent via the PRAGMA guard, and concurrency-safe on
+        the shared store: the losing ALTER of two simultaneous first-opens
+        raises ``duplicate column name``, which means a concurrent open already
+        migrated, so it is swallowed; any other OperationalError propagates.
+        ``table``, ``column`` and ``decl`` are internal constants, never caller
+        input.
+        """
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing or column in existing:
+            return
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     @staticmethod
     def _ensure_issue_assignee_column(conn: sqlite3.Connection) -> None:
@@ -1226,6 +1342,18 @@ class DatabaseClient:
         "handoff": "timestamp",
         "loop_run": "created_at",
     }
+    # Per-kind (field, normalizer) applied when a mirror record is replayed, so
+    # a legacy pending mirror carrying a pre-vocabulary token (pending, failure,
+    # active) is normalized like any other write and can never trip the typed-
+    # state ASSERTs (ADR-0016). Functions held inside a dict are plain values,
+    # not descriptors, so they never bind as methods.
+    _KIND_STATUS_NORMALIZER: Dict[str, tuple] = {
+        "issue": ("status", normalize_status),
+        "handoff": ("status", normalize_handoff_status),
+        "session": ("status", normalize_session_status),
+        "loop_run": ("status", normalize_loop_run_status),
+        "milestone": ("state", normalize_milestone_state),
+    }
 
     def _resolve_mirror_root(self, override: Optional[str]) -> str:
         """Resolve the write-through mirror root.
@@ -1432,6 +1560,14 @@ class DatabaseClient:
             return
         content = dict(payload)
         content[self._KIND_TIMEFIELD.get(kind, "created_at")] = meta.get("created_at")
+        # Replay is a write seam like any other: normalize the kind's status
+        # field so a legacy pending mirror cannot trip the typed-state ASSERTs
+        # (ADR-0016).
+        normalizer_entry = self._KIND_STATUS_NORMALIZER.get(kind)
+        if normalizer_entry is not None:
+            field, normalizer = normalizer_entry
+            if field in content:
+                content[field] = normalizer(content[field])
         self._run_surreal(
             "UPSERT $id CONTENT $content;",
             {"id": self._rid(table, meta["id"]), "content": content},
@@ -1765,7 +1901,9 @@ class DatabaseClient:
             title: Milestone title.
             description: Detailed objective list.
             due_date: Target completion date.
-            state: Active state (e.g., active, complete, pending).
+            state: Lifecycle state, normalized to the canonical vocabulary
+                (open or closed) at this write seam (ADR-0016); legacy
+                spellings (active, complete, pending) collapse to it.
 
         Returns:
             The primary key ID or record ID of the created milestone.
@@ -1774,7 +1912,7 @@ class DatabaseClient:
             "title": title,
             "description": description,
             "due_date": due_date,
-            "state": state,
+            "state": normalize_milestone_state(state),
         }
         return self._write_through(
             "milestone", self._mint_id("milestone"), fields, self._db_create_milestone
@@ -2181,6 +2319,7 @@ class DatabaseClient:
         agent_name: str,
         task: str,
         messages: Union[List[Dict[str, Any]], str],
+        status: str = "active",
     ) -> None:
         """Upserts a short-term session state.
 
@@ -2189,12 +2328,18 @@ class DatabaseClient:
             agent_name: Name of the agent.
             task: Task description.
             messages: List of message dictionaries representing conversation history.
+            status: Lifecycle status, normalized to the canonical vocabulary
+                (active or done) at this write seam (ADR-0016). Additive
+                parameter defaulting to active, so every existing caller is
+                unchanged and get_latest_activity reads the stored value
+                instead of hardcoding it.
         """
         fields = {
             "session_id": session_id,
             "agent_name": agent_name,
             "task": task,
             "messages": messages,
+            "status": normalize_session_status(status),
         }
         # session_id is already a stable id, reused for the RecordID and filename.
         self._write_through("session", session_id, fields, self._db_save_session)
@@ -2209,6 +2354,7 @@ class DatabaseClient:
                 agent_name: $agent_name,
                 task: $task,
                 messages: $messages,
+                status: $status,
                 timestamp: time::now()
             };
             """
@@ -2218,6 +2364,7 @@ class DatabaseClient:
                 "agent_name": fields["agent_name"],
                 "task": fields["task"],
                 "messages": fields["messages"],
+                "status": fields.get("status") or "active",
             }
             try:
                 self._run_surreal(query, params)
@@ -2232,12 +2379,13 @@ class DatabaseClient:
                 json.dumps(messages) if not isinstance(messages, str) else messages
             )
             query = """
-            INSERT INTO sessions (session_id, agent_name, task, messages, timestamp)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO sessions (session_id, agent_name, task, messages, status, timestamp)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(session_id) DO UPDATE SET
                 agent_name=excluded.agent_name,
                 task=excluded.task,
                 messages=excluded.messages,
+                status=excluded.status,
                 timestamp=CURRENT_TIMESTAMP
             """
             try:
@@ -2249,6 +2397,7 @@ class DatabaseClient:
                             fields["agent_name"],
                             fields["task"],
                             serialized_messages,
+                            fields.get("status") or "active",
                         ),
                     )
                     conn.commit()
@@ -2295,6 +2444,7 @@ class DatabaseClient:
         contract_type: str,
         contract_path: str,
         status: str,
+        summary: str = "",
     ) -> Union[str, int, None]:
         """Creates a handoff log entry.
 
@@ -2303,7 +2453,12 @@ class DatabaseClient:
             recipient: The recipient agent name.
             contract_type: Type of contract (e.g. plan, code).
             contract_path: File path to contract documentation.
-            status: Initial status (e.g. pending, approved).
+            status: Lifecycle status, normalized to the canonical vocabulary
+                (open, accepted, done) at this write seam (ADR-0016).
+            summary: Short "what this stage did" text persisted on the row, so a
+                resume survives worktree teardown even when the contract file at
+                ``contract_path`` is gone. Additive parameter defaulting to ""
+                so every existing 5-arg caller is unchanged.
 
         Returns:
             The primary key ID or record ID of the created handoff.
@@ -2313,7 +2468,8 @@ class DatabaseClient:
             "recipient": recipient,
             "contract_type": contract_type,
             "contract_path": contract_path,
-            "status": status,
+            "status": normalize_handoff_status(status),
+            "summary": summary,
         }
         return self._write_through(
             "handoff", self._mint_id("handoff"), fields, self._db_log_handoff
@@ -2332,6 +2488,7 @@ class DatabaseClient:
                 contract_type: $contract_type,
                 contract_path: $contract_path,
                 status: $status,
+                summary: $summary,
                 timestamp: time::now()
             };
             """
@@ -2346,8 +2503,8 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to log handoff in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO handoffs (sender, recipient, contract_type, contract_path, status)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO handoffs (sender, recipient, contract_type, contract_path, status, summary)
+            VALUES (?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
@@ -2360,6 +2517,7 @@ class DatabaseClient:
                             fields["contract_type"],
                             fields["contract_path"],
                             fields["status"],
+                            fields["summary"],
                         ),
                     )
                     conn.commit()
@@ -2367,6 +2525,89 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to log handoff: {e}")
                 raise RuntimeError(f"Failed to log handoff: {e}")
+
+    def update_handoff_status(
+        self, handoff_id: Union[str, int], status: str
+    ) -> Union[str, int, None]:
+        """Move a handoff along its lifecycle (open -> accepted -> done).
+
+        Read-modify-write through the durability funnel: the mirror is
+        re-written with the full merged row (not a partial patch), so a replay
+        after an outage reconstructs the record instead of clobbering it. The
+        status is normalized to the canonical vocabulary at this seam
+        (ADR-0016). Returns the record id, or None when the handoff does not
+        exist (never invents a row).
+        """
+        row = self.get_handoff(handoff_id)
+        if row is None:
+            return None
+        fields = {
+            "sender": row.get("sender"),
+            "recipient": row.get("recipient"),
+            "contract_type": row.get("contract_type"),
+            "contract_path": row.get("contract_path"),
+            "summary": row.get("summary") or "",
+            "status": normalize_handoff_status(status),
+        }
+        record_key = self._record_key(row.get("id"), handoff_id)
+        return self._write_through("handoff", record_key, fields, self._db_update_handoff)
+
+    @staticmethod
+    def _record_key(row_id: Any, fallback: Any) -> str:
+        """The bare record key of a fetched row, for re-keying a funnel write.
+
+        Strips the SurrealDB ``table:`` prefix and the v3.x display delimiters
+        (angle brackets or backticks) from a stringified record id, so the
+        funnel's mirror filename and UPSERT RecordID match the stored record.
+        A SQLite integer id stringifies as-is; a missing id falls back to the
+        id the caller passed.
+        """
+        value = row_id if row_id is not None else fallback
+        s = str(value)
+        if ":" in s:
+            _, _, key = s.partition(":")
+            key = key.strip()
+            if len(key) >= 2 and key[0] == "⟨" and key[-1] == "⟩":
+                key = key[1:-1]
+            elif len(key) >= 2 and key[0] == "`" and key[-1] == "`":
+                key = key[1:-1]
+            return key
+        return s
+
+    @_resilient
+    def _db_update_handoff(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a handoff status change: targeted UPDATE, never a re-insert.
+
+        SurrealDB gets ``UPDATE $id SET status = $status`` so the original
+        timestamp and the rest of the row are preserved; SQLite updates by
+        primary key. The full merged row lives in the mirror (written by the
+        funnel), which is what a replay uses.
+        """
+        if self.backend == "surrealdb":
+            query = "UPDATE $id SET status = $status;"
+            params = {"id": self._rid("handoffs", record_id), "status": fields["status"]}
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_id(res) or record_id
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to update handoff in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to update handoff in SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    conn.execute(
+                        "UPDATE handoffs SET status = ? WHERE id = ?",
+                        (fields["status"], record_id),
+                    )
+                    conn.commit()
+                    return record_id
+            except sqlite3.Error as e:
+                logging.error(f"Failed to update handoff: {e}")
+                raise RuntimeError(f"Failed to update handoff: {e}")
 
     @_resilient
     def get_handoff(self, handoff_id: Union[str, int]) -> Optional[Dict[str, Any]]:
@@ -2758,7 +2999,10 @@ class DatabaseClient:
                 "type": "session",
                 "agent": latest_session.get("agent_name"),
                 "task": latest_session.get("task"),
-                "status": "active",
+                # The stored lifecycle status (ADR-0016); legacy rows written
+                # before the status column existed read back as active, which
+                # was the previously hardcoded value.
+                "status": latest_session.get("status") or "active",
                 "timestamp": latest_session.get("timestamp"),
             }
             # Every /solomon-* command logs a handoff immediately followed by a
@@ -2777,6 +3021,10 @@ class DatabaseClient:
                 "task": latest_handoff.get("contract_type"),
                 "status": latest_handoff.get("status"),
                 "contract_path": latest_handoff.get("contract_path"),
+                # The persisted "what this stage did" text (ADR-0016), so a
+                # resume works even when the contract file is gone with its
+                # worktree.
+                "summary": latest_handoff.get("summary"),
                 "timestamp": latest_handoff.get("timestamp"),
             }
 

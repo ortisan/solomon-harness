@@ -181,7 +181,9 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIsNotNone(handoff)
         self.assertEqual(handoff["sender"], "product_owner")
         self.assertEqual(handoff["recipient"], "scrum_master")
-        self.assertEqual(handoff["status"], "pending")
+        # The legacy "pending" token normalizes to the canonical "open" at the
+        # write seam (ADR-0016).
+        self.assertEqual(handoff["status"], "open")
 
         client.close()
 

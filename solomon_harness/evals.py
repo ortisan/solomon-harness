@@ -157,7 +157,9 @@ def build_agent_suite(harness_dir: str) -> unittest.TestSuite:
             self.assertEqual(latest["type"], "handoff")
             self.assertEqual(latest["agent"], "dev_agent -> qa_agent")
             self.assertEqual(latest["task"], "plan")
-            self.assertEqual(latest["status"], "pending")
+            # The legacy "pending" token normalizes to the canonical "open" at
+            # the write seam (ADR-0016).
+            self.assertEqual(latest["status"], "open")
             # The contract artifact path must round-trip so the next stage can read it.
             self.assertEqual(latest["contract_path"], "/path/to/contract.md")
 

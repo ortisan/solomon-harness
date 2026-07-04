@@ -140,9 +140,14 @@ class MemoryService:
         return {"backtest_id": backtest_id}
 
     def save_session(
-        self, session_id: str, agent_name: str, task: str, messages: List[Any]
+        self,
+        session_id: str,
+        agent_name: str,
+        task: str,
+        messages: List[Any],
+        status: str = "active",
     ) -> Dict[str, Any]:
-        self.client.save_session(session_id, agent_name, task, messages)
+        self.client.save_session(session_id, agent_name, task, messages, status=status)
         return {"ok": True, "session_id": session_id}
 
     def get_session(self, session_id: str) -> Dict[str, Any]:
@@ -155,11 +160,16 @@ class MemoryService:
         contract_type: str,
         contract_path: str,
         status: str,
+        summary: str = "",
     ) -> Dict[str, Any]:
         handoff_id = self.client.log_handoff(
-            sender, recipient, contract_type, contract_path, status
+            sender, recipient, contract_type, contract_path, status, summary=summary
         )
         return {"handoff_id": handoff_id}
+
+    def update_handoff_status(self, handoff_id: Any, status: str) -> Dict[str, Any]:
+        result = self.client.update_handoff_status(handoff_id, status)
+        return {"ok": result is not None, "handoff_id": result}
 
     def get_latest_activity(self) -> Dict[str, Any]:
         return {"activity": self.client.get_latest_activity()}
