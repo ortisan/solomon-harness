@@ -31,7 +31,8 @@ L1_ALLOWED_STAGES = {"loop"}
 # L2/L3 may create work and draft PRs, but never the human-gated stages above.
 # The scan loops are generative maintenance: they draft PRs, so they belong here.
 AUTOMATION_ALLOWED_STAGES = {
-    "loop", "idea", "issue", "bug", "refine", "start", "review", "scan-arch", "scan-dedup",
+    "loop", "loop-auto", "idea", "issue", "bug", "refine", "start", "review",
+    "scan-arch", "scan-dedup",
 }
 
 DEFAULT_DENYLIST = [

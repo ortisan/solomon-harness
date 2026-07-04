@@ -269,9 +269,9 @@ that bypassed the review gate and flipped `core.bare=true` on a worktree. The
 safety floor prevents that by construction:
 
 - **Single-driver lock.** Before a stage that touches git/board state runs
-  (`loop`, `start`, `review`, `release`, and the `scan-arch` / `scan-dedup`
-  maintenance loops — and, at L3, every stage the policy's `requires_lock`
-  names), the headless runner acquires one advisory lock anchored at the git
+  (`loop`, `loop-auto`, `start`, `review`, `release`, and the `scan-arch` /
+  `scan-dedup` maintenance loops — and, at L3, every stage the policy's
+  `requires_lock` names), the headless runner acquires one advisory lock anchored at the git
   *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of
   the repository contends on the same file. A second driver is refused. The lock
   is a plain JSON file (the holder is auditable). Staleness favors safety: a
