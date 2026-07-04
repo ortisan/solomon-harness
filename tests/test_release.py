@@ -405,3 +405,115 @@ def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
         combined = out_err.out + out_err.err
         assert "audit skipped: sourcing unavailable" in combined
 
+
+# --- Merge-time release-window recompute (catches a prep PR going stale) ----
+
+def _pyproject(repo):
+    return str(Path(repo) / "pyproject.toml")
+
+
+def _changelog(repo):
+    return str(Path(repo) / "CHANGELOG.md")
+
+
+def test_verify_release_window_catches_commit_landed_after_prep_opened(repo):
+    # Prep time: main only has the feat that will drive the 0.4.0 minor bump.
+    (Path(repo) / "y.py").write_text("z\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: real feature on main")
+    info = release.plan(repo)
+    assert (info["level"], info["next"]) == ("minor", "0.4.0")
+
+    # The prep PR branches here and writes the 0.4.0 bump + changelog for
+    # exactly this commit window (mirrors what cmd_prep does, without pushing).
+    section = release.render_changelog_section("0.4.0", "2026-06-28", info["commits"])
+    release.set_pyproject_version(_pyproject(repo), "0.4.0")
+    release.prepend_changelog_section(_changelog(repo), section)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.4.0")
+    chore_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    feat_sha = _git(repo, "rev-parse", "HEAD~1").stdout.strip()
+
+    # ...but before that PR merges, an unrelated fix lands directly on main
+    # ahead of it (a second PR that merges first). The bump level does not
+    # change (feat already forces minor), so a version-only check would miss
+    # this: the fix's changelog line is still silently dropped.
+    _git(repo, "checkout", "-q", feat_sha)
+    (Path(repo) / "urgent.py").write_text("1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "fix: urgent bug landed while the prep PR was open")
+
+    # Replay the prep PR's chore commit on top, simulating the squash-merge
+    # tip that the release job checks out as main HEAD. (git cherry-pick has
+    # no -q/--quiet flag; redirect its stdout instead.)
+    _git(repo, "cherry-pick", chore_sha)
+    _git(repo, "checkout", "-q", "-B", "main")
+
+    problems = release.verify_release_window(repo)
+    assert problems, "expected the merge-time recompute to flag the dropped fix commit"
+    assert any("CHANGELOG" in p or "changelog" in p for p in problems)
+
+
+def test_verify_release_window_passes_when_nothing_landed_after_prep(repo):
+    (Path(repo) / "y.py").write_text("z\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: real feature on main")
+    info = release.plan(repo)
+    section = release.render_changelog_section("0.4.0", "2026-06-28", info["commits"])
+    release.set_pyproject_version(_pyproject(repo), "0.4.0")
+    release.prepend_changelog_section(_changelog(repo), section)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.4.0")
+
+    assert release.verify_release_window(repo) == []
+
+
+def test_verify_release_window_returns_clean_when_no_prior_tag(tmp_path):
+    r = tmp_path / "first_release"
+    r.mkdir()
+    _git(str(r), "init", "-q")
+    _git(str(r), "config", "user.email", "t@example.com")
+    _git(str(r), "config", "user.name", "Test")
+    _git(str(r), "checkout", "-q", "-b", "main")
+    (r / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0.1.0"\n', encoding="utf-8")
+    (r / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-06-28\n", encoding="utf-8")
+    _git(str(r), "add", "-A")
+    _git(str(r), "commit", "-q", "-m", "chore(release): v0.1.0")
+
+    assert release.verify_release_window(str(r)) == []
+
+
+def test_cmd_verify_window_reports_ok_and_dispatches_via_run(repo, capsys):
+    (Path(repo) / "y.py").write_text("z\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: real feature on main")
+    info = release.plan(repo)
+    section = release.render_changelog_section("0.4.0", "2026-06-28", info["commits"])
+    release.set_pyproject_version(_pyproject(repo), "0.4.0")
+    release.prepend_changelog_section(_changelog(repo), section)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.4.0")
+
+    assert release.run(repo, ["verify-window"]) == 0
+    assert "OK" in capsys.readouterr().out
+
+
+# --- SemVer.parse guard in plan() (prerelease current version, no tags) -----
+
+def test_cmd_plan_returns_clean_error_for_prerelease_version_without_tags(tmp_path, capsys):
+    r = tmp_path / "prerelease_proj"
+    r.mkdir()
+    _git(str(r), "init", "-q")
+    _git(str(r), "config", "user.email", "t@example.com")
+    _git(str(r), "config", "user.name", "Test")
+    _git(str(r), "checkout", "-q", "-b", "main")
+    (r / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0.1.0-rc.1"\n', encoding="utf-8"
+    )
+    _git(str(r), "add", "-A")
+    _git(str(r), "commit", "-q", "-m", "chore: seed")
+
+    assert release.cmd_plan(str(r)) == 1
+    err = capsys.readouterr().err
+    assert "release plan" in err
+    assert "0.1.0-rc.1" in err

@@ -58,6 +58,104 @@ class TestGhWrapper(unittest.TestCase):
         self.assertIn("error", res)
 
 
+class TestGhRetry(unittest.TestCase):
+    """_gh retries once on a transient failure (a non-zero exit or a timeout) and
+    heals a credential blip on the retry by injecting a freshly resolved token. A
+    deterministic failure (gh missing, or a JSON parse error after a success) is
+    never retried."""
+
+    def test_transient_nonzero_then_success_retries_and_succeeds(self):
+        """A first call that exits non-zero is retried once; a succeeding retry makes
+        _gh return ok. With a token already in the env the heal injection is skipped,
+        so exactly two subprocess.run calls occur (no `gh auth token`)."""
+        results = [_Proc(1, "", "Bad credentials"), _Proc(0, "ok")]
+
+        def fake_run(cmd, **kwargs):
+            return results.pop(0)
+
+        with patch.dict("os.environ", {"GH_TOKEN": "preset"}, clear=False):
+            with patch("subprocess.run", side_effect=fake_run) as run:
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["stdout"], "ok")
+        self.assertEqual(run.call_count, 2)
+
+    def test_retry_injects_freshly_resolved_token_when_env_has_none(self):
+        """On the heal retry, with neither GITHUB_TOKEN nor GH_TOKEN in the env, _gh
+        resolves a fresh token via `gh auth token` and passes it as GH_TOKEN in the
+        env= of the retried gh call, healing a credential blip."""
+        gh_args_envs = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "auth", "token"]:
+                return _Proc(0, "healed-token-42")
+            gh_args_envs.append(kwargs.get("env"))
+            first_attempt = len(gh_args_envs) == 1
+            return _Proc(1, "", "Bad credentials") if first_attempt else _Proc(0, "done")
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("subprocess.run", side_effect=fake_run):
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        # The first attempt inherits the env; the retry carries the healed token.
+        self.assertIsNone(gh_args_envs[0])
+        self.assertIsNotNone(gh_args_envs[1])
+        self.assertEqual(gh_args_envs[1].get("GH_TOKEN"), "healed-token-42")
+
+    def test_retry_does_not_resolve_or_override_a_preset_token(self):
+        """When GITHUB_TOKEN is already set, the heal retry neither calls
+        `gh auth token` nor overrides the token: the retried call runs with the
+        inherited env (env=None)."""
+        seen = []
+        results = [_Proc(1, "", "Bad credentials"), _Proc(0, "ok")]
+
+        def fake_run(cmd, **kwargs):
+            seen.append((cmd, kwargs.get("env")))
+            return results.pop(0)
+
+        with patch.dict("os.environ", {"GITHUB_TOKEN": "preset"}, clear=False):
+            with patch("subprocess.run", side_effect=fake_run):
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        self.assertFalse(any(cmd[:3] == ["gh", "auth", "token"] for cmd, _env in seen))
+        self.assertEqual(len(seen), 2)
+        self.assertIsNone(seen[1][1])  # the retry inherits the env, no injection
+
+    def test_retry_runs_without_injection_when_token_resolution_is_empty(self):
+        """If `gh auth token` resolves nothing (empty output), the retry still runs as
+        a plain network retry with no env override; a succeeding retry returns ok."""
+        gh_args_envs = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "auth", "token"]:
+                return _Proc(0, "")  # nothing resolved -> no injection
+            gh_args_envs.append(kwargs.get("env"))
+            first_attempt = len(gh_args_envs) == 1
+            return _Proc(1, "", "Bad credentials") if first_attempt else _Proc(0, "done")
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("subprocess.run", side_effect=fake_run):
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        self.assertIsNone(gh_args_envs[1])  # plain retry, no env override
+
+    def test_successful_first_call_does_not_retry(self):
+        """A first call that exits zero is not retried: exactly one subprocess.run."""
+        with patch("subprocess.run", return_value=_Proc(0, "ok")) as run:
+            res = github._gh(["repo", "view"])
+        self.assertTrue(res["ok"])
+        self.assertEqual(run.call_count, 1)
+
+    def test_gh_missing_is_not_retried(self):
+        """A missing gh (FileNotFoundError) is deterministic: it is not retried and
+        returns the gh-not-found error after a single attempt."""
+        with patch("subprocess.run", side_effect=FileNotFoundError()) as run:
+            res = github._gh(["repo", "view"])
+        self.assertFalse(res["ok"])
+        self.assertIn("gh CLI not found", res["error"])
+        self.assertEqual(run.call_count, 1)
+
+
 class TestEnsureBoard(unittest.TestCase):
     def test_returns_existing_without_creating(self):
         calls = []
@@ -430,7 +528,12 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("os.getcwd", return_value=tmp):
                 with DatabaseClient(harness_dir=tmp) as db:
-                    db.log_issue("77", "Deliver feature", "feature", "code_review", "mile-7")
+                    milestone_id = db.create_milestone(
+                        "M1", "goals", "2026-07-01", "active"
+                    )
+                    db.log_issue(
+                        "77", "Deliver feature", "feature", "code_review", milestone_id
+                    )
                 with patch(
                     "solomon_harness.github._gh",
                     return_value={"ok": True, "data": {"assignees": []}},
@@ -442,7 +545,7 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         self.assertEqual(row["status"], "closed")
         self.assertEqual(row["title"], "Deliver feature")
         self.assertEqual(row["type_"], "feature")
-        self.assertEqual(str(row["milestone_id"]), "mile-7")
+        self.assertEqual(str(row["milestone_id"]), str(milestone_id))
         self.assertIsNone(row["assignee"])
         self.assertNotIn("77", open_ids)
 

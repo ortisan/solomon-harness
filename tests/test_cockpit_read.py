@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from opentelemetry import trace
@@ -789,6 +790,62 @@ class TestReadTenantSwimlane(unittest.TestCase):
         self.assertFalse(client.closed_during_read)
 
 
+class TestClassifyTenantReadCancellation(unittest.TestCase):
+    """_classify_tenant_read must not fire-and-forget an abandoned worker.
+
+    ``pool.shutdown(wait=False)`` alone does not stop a worker thread that is
+    still running past its reported timeout; it keeps running in the
+    background, which can pile up across tenants. A cancellation-aware worker
+    checks the ``threading.Event`` this function hands it and stops at its next
+    checkpoint instead.
+    """
+
+    def test_classify_tenant_read_cancels_an_abandoned_worker(self):
+        """On timeout, the cancel_event handed to the worker is set; a worker
+        with a checkpointed loop that honors it stops within one checkpoint
+        instead of running all the way to completion in the background after
+        UNREACHABLE has already been reported (the fire-and-forget regression)."""
+        progress = []
+
+        def worker(cancel_event):
+            for i in range(50):
+                if cancel_event.is_set():
+                    return "cancelled"
+                progress.append(i)
+                time.sleep(0.02)
+            return "completed"
+
+        status, value = cockpit_read._classify_tenant_read(worker, timeout=0.05)
+
+        self.assertEqual(status, cockpit_read.STATUS_UNREACHABLE)
+        self.assertIsNone(value)
+
+        # The worker genuinely started (proves this isn't a crash masquerading
+        # as a cancellation) before its SLA elapsed.
+        progress_at_timeout = len(progress)
+        self.assertGreater(progress_at_timeout, 0)
+
+        # A fire-and-forget executor would keep the worker running for the full
+        # ~1s (50 * 0.02s) regardless of the timeout already reported. Give the
+        # abandoned worker one extra checkpoint's worth of time to notice the
+        # cancellation and stop, then assert it actually did.
+        time.sleep(0.2)
+        self.assertLess(len(progress), 50)
+        self.assertLessEqual(len(progress), progress_at_timeout + 2)
+
+    def test_classify_tenant_read_still_returns_ok_on_a_clean_read(self):
+        """A worker that finishes inside the timeout still returns OK with its
+        value; the cancel_event plumbing does not disturb the happy path."""
+        def worker(cancel_event):
+            self.assertFalse(cancel_event.is_set())
+            return "done"
+
+        status, value = cockpit_read._classify_tenant_read(worker, timeout=1.0)
+
+        self.assertEqual(status, cockpit_read.STATUS_OK)
+        self.assertEqual(value, "done")
+
+
 class _ConcurrencyTracker:
     """Track the peak number of per-tenant reads running at the same time."""
 
@@ -1388,6 +1445,479 @@ class TestReadOnlyContract(unittest.TestCase):
             guard.log_issue("x", "title", "feature", "Backlog", None)
         self.assertEqual(guard.write_calls, ["log_issue"])
         client.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-user velocity (issue #55, slice 3a).
+#
+# Frozen clock for every velocity test: T_NOW is naive local time, matching the
+# naive ISO strings record_transition writes for entered_at. The three windows
+# start at T_NOW - {7, 14, 30} days.
+# ---------------------------------------------------------------------------
+
+T_NOW = datetime(2026, 6, 29, 12, 0, 0)
+
+
+def _done_history(entered_at):
+    """A one-entry board_history that records a Done transition at entered_at."""
+    return [{"column": "Done", "entered_at": entered_at}]
+
+
+class _VelocityTenantClient:
+    """A per-tenant read port that answers list_issues and board_history reads.
+
+    list_issues returns the fixed issue list; get_memory_bulk answers every
+    requested board_history:<github_id> key from the supplied history map in
+    one call (a key with no tracked history is simply absent from the
+    result). Deliberately carries no per-key get_memory method, so a
+    regression to the N+1 read pattern (one get_memory call per issue) fails
+    loudly with an AttributeError rather than silently working. Records every
+    batch call so a test can assert the history read costs exactly one round
+    trip regardless of issue count. Read-only: no write method exists.
+    """
+
+    def __init__(self, issues, history_by_id=None):
+        self._issues = issues
+        self._history = dict(history_by_id or {})
+        self.bulk_calls = []
+
+    def use_tenant(self, database):
+        pass
+
+    def list_issues(self):
+        return list(self._issues)
+
+    def get_memory_bulk(self, keys):
+        self.bulk_calls.append(list(keys))
+        prefix = "board_history:"
+        result = {}
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            history = self._history.get(key[len(prefix):])
+            if history is not None:
+                result[key] = json.dumps(history)
+        return result
+
+    def close(self):
+        pass
+
+
+class TestCountTenantVelocity(unittest.TestCase):
+    def _tenant(self):
+        """One tenant whose board_history exercises every window boundary.
+
+        alice has nine Done transitions laid out so the count is 3 / 7 / 9 over
+        the 7 / 14 / 30-day windows, plus two Done-column issues with no tracked
+        history (the excluded affordance). carol's single Done sits exactly on
+        the 14-day lower bound (inclusive); dave's single Done is one second
+        before it (excluded). bob is an assignee with no in-window Done (a
+        present zero-throughput subject). Two null-assignee Done issues fall
+        under the reserved unassigned bucket.
+        """
+        alice_done = {
+            # Inside the 7-day window (>= 2026-06-22T12:00:00): three.
+            "al1": "2026-06-29T10:00:00",
+            "al2": "2026-06-25T09:00:00",
+            "al3": "2026-06-22T12:00:00",  # exactly the 7-day lower bound
+            # Inside 14 but outside 7 (>= 2026-06-15T12:00:00): four more.
+            "al4": "2026-06-21T08:00:00",
+            "al5": "2026-06-18T15:00:00",
+            "al6": "2026-06-16T11:00:00",
+            "al7": "2026-06-15T12:00:00",  # exactly the 14-day lower bound
+            # Inside 30 but outside 14 (>= 2026-05-30T12:00:00): two more.
+            "al8": "2026-06-10T09:00:00",
+            "al9": "2026-06-01T09:00:00",
+        }
+        issues = [
+            {"github_id": gid, "status": "closed", "assignee": "alice@example.com"}
+            for gid in alice_done
+        ]
+        history = {gid: _done_history(ts) for gid, ts in alice_done.items()}
+
+        # Two alice issues sit in the Done column with no tracked history: they
+        # are excluded from the count and reported, never silently dropped.
+        issues += [
+            {"github_id": "al-x1", "status": "closed", "assignee": "alice@example.com"},
+            {"github_id": "al-x2", "status": "Done", "assignee": "alice@example.com"},
+        ]
+
+        # carol: one Done exactly on the 14-day lower bound (inclusive -> 1).
+        issues.append(
+            {"github_id": "ca1", "status": "closed", "assignee": "carol@example.com"}
+        )
+        history["ca1"] = _done_history("2026-06-15T12:00:00")
+
+        # dave: one Done one second before the 14-day bound (excluded -> 0).
+        issues.append(
+            {"github_id": "da1", "status": "closed", "assignee": "dave@example.com"}
+        )
+        history["da1"] = _done_history("2026-06-15T11:59:59")
+
+        # bob: an assignee with no in-window Done (zero throughput, still a row).
+        issues.append(
+            {"github_id": "bo1", "status": "Backlog", "assignee": "gh:bob"}
+        )
+
+        # Two unassigned Done issues inside the window -> the unassigned bucket.
+        issues += [
+            {"github_id": "un1", "status": "closed", "assignee": None},
+            {"github_id": "un2", "status": "closed", "assignee": None},
+        ]
+        history["un1"] = _done_history("2026-06-24T09:00:00")
+        history["un2"] = _done_history("2026-06-20T09:00:00")
+
+        return _VelocityTenantClient(issues, history)
+
+    def test_count_tenant_velocity_counts_done_in_window_per_person(self):
+        """count_tenant_velocity counts, per canonical person key, the issues
+        whose board_history Done transition entered the window; the lower bound
+        is inclusive and one second before it is excluded; a null assignee falls
+        under the unassigned bucket; a zero-throughput assignee is still a
+        present row; and Done-column issues with no tracked history are reported
+        as excluded without ever entering the count."""
+        counts = cockpit_read.count_tenant_velocity(
+            self._tenant(), "alpha", now=T_NOW, days=14
+        )
+
+        # alice: seven Done in the 14-day window; her two history-less Done
+        # issues are excluded, not counted.
+        self.assertEqual(counts["alice@example.com"]["count"], 7)
+        self.assertEqual(counts["alice@example.com"]["excluded"], 2)
+
+        # The 14-day lower bound is inclusive (carol) and -1s is out (dave).
+        self.assertEqual(counts["carol@example.com"]["count"], 1)
+        self.assertEqual(counts["dave@example.com"]["count"], 0)
+
+        # A null assignee buckets under the reserved unassigned key, not merged.
+        self.assertEqual(counts["unassigned"]["count"], 2)
+
+        # A zero-throughput assignee is present with count 0 (not dropped).
+        self.assertIn("gh:bob", counts)
+        self.assertEqual(counts["gh:bob"]["count"], 0)
+
+    def test_count_tenant_velocity_selects_the_window(self):
+        """The same fixture yields 3 / 7 / 9 for alice across the 7 / 14 / 30-day
+        windows, so the window bound (now - days) drives the count."""
+        for days, expected in ((7, 3), (14, 7), (30, 9)):
+            with self.subTest(days=days):
+                counts = cockpit_read.count_tenant_velocity(
+                    self._tenant(), "alpha", now=T_NOW, days=days
+                )
+                self.assertEqual(counts["alice@example.com"]["count"], expected)
+
+    def test_count_tenant_velocity_reads_board_history_in_one_batch_call(self):
+        """count_tenant_velocity reads every issue's board_history through a
+        single get_memory_bulk call, not one get_memory per issue (no N+1): a
+        tenant with many issues still costs exactly one history round trip,
+        carrying every issue's key."""
+        issues = [
+            {"github_id": f"m{i}", "status": "closed", "assignee": "alice@example.com"}
+            for i in range(50)
+        ]
+        history = {
+            f"m{i}": _done_history("2026-06-28T10:00:00") for i in range(50)
+        }
+        client = _VelocityTenantClient(issues, history)
+
+        counts = cockpit_read.count_tenant_velocity(
+            client, "alpha", now=T_NOW, days=14
+        )
+
+        self.assertEqual(len(client.bulk_calls), 1)
+        self.assertEqual(
+            set(client.bulk_calls[0]),
+            {f"board_history:m{i}" for i in range(50)},
+        )
+        self.assertEqual(counts["alice@example.com"]["count"], 50)
+
+    def test_count_tenant_velocity_stops_at_the_next_issue_when_cancelled(self):
+        """A cancel_event already set before the per-issue loop starts stops
+        count_tenant_velocity at the very first checkpoint: no issue is
+        counted, proving the loop actually observes cancellation rather than
+        running to completion regardless of it."""
+        client = self._tenant()
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        counts = cockpit_read.count_tenant_velocity(
+            client, "alpha", now=T_NOW, days=14, cancel_event=cancel_event
+        )
+
+        self.assertEqual(counts, {})
+
+
+def _ok_velocity(project, velocity):
+    """An OK per-tenant velocity result carrying that tenant's per-person counts."""
+    return {"project": project, "status": "OK", "velocity": velocity}
+
+
+class TestComposeVelocity(unittest.TestCase):
+    def test_compose_velocity_sums_per_person_across_tenants(self):
+        """compose_velocity sums each person's per-tenant counts into one row:
+        alice appears once reading 7 (4 alpha + 3 beta) with perTenant
+        {alpha:4, beta:3}; a person's perTenant lists only the tenants where they
+        delivered; aggregateStatus is 200 when every tenant is OK; and no person
+        is duplicated as a separate per-tenant subject."""
+        results = [
+            _ok_velocity(
+                "alpha",
+                {
+                    "alice@example.com": {
+                        "count": 4,
+                        "excluded": 1,
+                        "doneAt": [
+                            "2026-06-28T10:00:00",
+                            "2026-06-27T10:00:00",
+                            "2026-06-26T10:00:00",
+                            "2026-06-25T10:00:00",
+                        ],
+                    },
+                    "gh:bob": {"count": 1, "excluded": 0, "doneAt": ["2026-06-24T10:00:00"]},
+                },
+            ),
+            _ok_velocity(
+                "beta",
+                {
+                    "alice@example.com": {
+                        "count": 3,
+                        "excluded": 0,
+                        "doneAt": [
+                            "2026-06-23T10:00:00",
+                            "2026-06-22T10:00:00",
+                            "2026-06-21T10:00:00",
+                        ],
+                    },
+                    "gh:bob": {"count": 0, "excluded": 0, "doneAt": []},
+                },
+            ),
+        ]
+
+        payload = cockpit_read.compose_velocity(results)
+
+        self.assertEqual(payload["aggregateStatus"], 200)
+        self.assertEqual(payload["degraded"], [])
+
+        rows = {row["personKey"]: row for row in payload["rows"]}
+        # alice once, summed across tenants, with the per-tenant breakdown.
+        person_keys = [row["personKey"] for row in payload["rows"]]
+        self.assertEqual(person_keys.count("alice@example.com"), 1)
+        self.assertEqual(rows["alice@example.com"]["count"], 7)
+        self.assertEqual(
+            rows["alice@example.com"]["perTenant"], {"alpha": 4, "beta": 3}
+        )
+        self.assertEqual(rows["alice@example.com"]["excluded"], 1)
+        # No degraded tenant, so no figure is partial.
+        self.assertFalse(rows["alice@example.com"]["partial"])
+        self.assertEqual(rows["alice@example.com"]["partialTenants"], [])
+
+        # bob appears once; perTenant lists only the tenant he delivered in.
+        self.assertEqual(person_keys.count("gh:bob"), 1)
+        self.assertEqual(rows["gh:bob"]["count"], 1)
+        self.assertEqual(rows["gh:bob"]["perTenant"], {"alpha": 1})
+
+    def test_compose_velocity_marks_partial_and_207_when_tenant_degraded(self):
+        """A degraded (UNREACHABLE) tenant lifts the aggregate to 207, contributes
+        no counts, and flags every per-person figure partial naming the degraded
+        tenant; the reachable tenants compute in full. Because the degraded tenant
+        could have held deliveries for any person, the figure is the reachable
+        subtotal, never presented as complete."""
+        results = [
+            _ok_velocity(
+                "alpha",
+                {
+                    "alice@example.com": {
+                        "count": 4,
+                        "excluded": 0,
+                        "doneAt": [
+                            "2026-06-28T10:00:00",
+                            "2026-06-27T10:00:00",
+                            "2026-06-26T10:00:00",
+                            "2026-06-25T10:00:00",
+                        ],
+                    }
+                },
+            ),
+            _ok_velocity(
+                "beta",
+                {
+                    "alice@example.com": {
+                        "count": 3,
+                        "excluded": 0,
+                        "doneAt": [
+                            "2026-06-23T10:00:00",
+                            "2026-06-22T10:00:00",
+                            "2026-06-21T10:00:00",
+                        ],
+                    }
+                },
+            ),
+            {"project": "gamma", "status": "UNREACHABLE", "velocity": None},
+        ]
+
+        payload = cockpit_read.compose_velocity(results)
+
+        # The degraded tenant lifts the aggregate to 207 and is named.
+        self.assertEqual(payload["aggregateStatus"], 207)
+        self.assertEqual(payload["degraded"], ["gamma"])
+
+        rows = {row["personKey"]: row for row in payload["rows"]}
+        alice = rows["alice@example.com"]
+        # alpha and beta compute in full; gamma contributes nothing.
+        self.assertEqual(alice["count"], 7)
+        self.assertEqual(alice["perTenant"], {"alpha": 4, "beta": 3})
+        self.assertNotIn("gamma", alice["perTenant"])
+        # Every figure is flagged partial naming the degraded tenant.
+        self.assertTrue(alice["partial"])
+        self.assertEqual(alice["partialTenants"], ["gamma"])
+
+
+class _VelocityFanoutClient:
+    """A multi-tenant read port for the velocity fan-out.
+
+    list_issues and get_memory_bulk both answer for whichever tenant use_tenant
+    last bound, so a mis-bind (reading the wrong tenant's history) would surface
+    as a wrong attribution. Deliberately carries no per-key get_memory method,
+    so a regression to the N+1 read pattern fails loudly. Records the ordered
+    call sequence so a test can assert the bind happens before the read and
+    that the history read costs one batch call, not one per issue. Read-only:
+    no write method exists.
+    """
+
+    def __init__(self, by_tenant):
+        self._by_tenant = by_tenant
+        self._bound = None
+        self.calls = []
+
+    def list_databases(self):
+        self.calls.append("list_databases")
+        return list(self._by_tenant.keys())
+
+    def use_tenant(self, database):
+        self.calls.append(("use_tenant", database))
+        self._bound = database
+
+    def list_issues(self):
+        self.calls.append("list_issues")
+        return list(self._by_tenant.get(self._bound, {}).get("issues", []))
+
+    def get_memory_bulk(self, keys):
+        self.calls.append(("get_memory_bulk", tuple(keys)))
+        prefix = "board_history:"
+        history_by_id = self._by_tenant.get(self._bound, {}).get("history", {})
+        result = {}
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            history = history_by_id.get(key[len(prefix):])
+            if history is not None:
+                result[key] = json.dumps(history)
+        return result
+
+    def close(self):
+        self.calls.append("close")
+
+
+def _alice_tenant(github_prefix, timestamps):
+    """A tenant fixture where alice delivered once per supplied in-window date."""
+    issues = [
+        {"github_id": f"{github_prefix}{index}", "status": "closed", "assignee": "alice@example.com"}
+        for index, _ in enumerate(timestamps)
+    ]
+    history = {
+        f"{github_prefix}{index}": _done_history(ts)
+        for index, ts in enumerate(timestamps)
+    }
+    return {"issues": issues, "history": history}
+
+
+class TestVelocityPayload(unittest.TestCase):
+    def test_velocity_payload_reads_each_tenant_in_isolation_and_writes_nothing(self):
+        """velocity_payload fans out over the tenants, reading each through its
+        own client bound via use_tenant before the read, composes the per-person
+        counts, and issues zero writes. Driving every tenant through a
+        ReadOnlyGuard records no write call; alice's figure is the per-tenant sum
+        with the correct breakdown, proving the lanes are composed never joined."""
+        data = {
+            "alpha": _alice_tenant(
+                "a",
+                ["2026-06-28T10:00:00", "2026-06-27T10:00:00", "2026-06-26T10:00:00", "2026-06-25T10:00:00"],
+            ),
+            "beta": _alice_tenant(
+                "b", ["2026-06-24T10:00:00", "2026-06-23T10:00:00", "2026-06-22T10:00:00"]
+            ),
+            "gamma": _alice_tenant("g", ["2026-06-21T10:00:00", "2026-06-20T10:00:00"]),
+        }
+        guards = []
+
+        def factory():
+            guard = ReadOnlyGuard(_VelocityFanoutClient(data))
+            guards.append(guard)
+            return guard
+
+        payload = cockpit_read.velocity_payload(
+            14, now=T_NOW, client_factory=factory
+        )
+
+        # Every tenant read through the velocity path issued zero writes.
+        self.assertGreaterEqual(len(guards), 4)
+        for guard in guards:
+            self.assertEqual(guard.write_calls, [])
+
+        # The aggregate is all-OK; alice's figure sums the three tenants with the
+        # per-tenant breakdown (composed, never joined).
+        self.assertEqual(payload["aggregateStatus"], 200)
+        rows = {row["personKey"]: row for row in payload["rows"]}
+        self.assertEqual(rows["alice@example.com"]["count"], 9)
+        self.assertEqual(
+            rows["alice@example.com"]["perTenant"], {"alpha": 4, "beta": 3, "gamma": 2}
+        )
+        self.assertEqual(payload["window"], 14)
+
+        # Each per-tenant client bound its tenant before reading its issues.
+        read_guards = [g for g in guards if "list_issues" in g._target.calls]
+        self.assertEqual(len(read_guards), 3)
+        for guard in read_guards:
+            calls = guard._target.calls
+            first_read = calls.index("list_issues")
+            bound_before = [
+                index
+                for index, call in enumerate(calls)
+                if isinstance(call, tuple) and call[0] == "use_tenant" and index < first_read
+            ]
+            self.assertTrue(bound_before, f"read before bind: {calls}")
+
+
+class TestVelocityCli(unittest.TestCase):
+    def test_velocity_cli_outputs_velocity_json(self):
+        """main(["velocity", "--window", "14"]) prints the per-user velocity JSON
+        (rows, window, aggregateStatus) for the Node bridge, wiring the window
+        argument through to velocity_payload."""
+        # A delivery a minute ago is inside any window relative to the wall clock,
+        # so the row count is deterministic without injecting now into the CLI.
+        recent = (datetime.now() - timedelta(seconds=60)).isoformat(timespec="seconds")
+        data = {
+            "solo": {
+                "issues": [
+                    {"github_id": "s1", "status": "closed", "assignee": "alice@example.com"}
+                ],
+                "history": {"s1": _done_history(recent)},
+            }
+        }
+        out = io.StringIO()
+        with patch(
+            "solomon_harness.cockpit_read.DatabaseClient",
+            side_effect=lambda *args, **kwargs: _VelocityFanoutClient(data),
+        ):
+            with contextlib.redirect_stdout(out):
+                rc = cockpit_read.main(["velocity", "--window", "14"])
+
+        self.assertEqual(rc, 0)
+        printed = json.loads(out.getvalue())
+        self.assertEqual(printed["window"], 14)
+        self.assertEqual(printed["aggregateStatus"], 200)
+        rows = {row["personKey"]: row for row in printed["rows"]}
+        self.assertEqual(rows["alice@example.com"]["count"], 1)
 
 
 if __name__ == "__main__":

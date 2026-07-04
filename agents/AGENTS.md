@@ -47,6 +47,34 @@ own model loop.
 - Avoid typical AI cliches such as "delve", "leverage", "testament to", "feel free
   to", "dive into", "in summary", or other redundant and flowery terms. Get
   straight to the point professionally.
+- Decisions and next steps are enumerated, never prose to copy. Whenever you offer the
+  user a choice — which option, which target, or the closing "what next" at the end of a
+  turn — present it as a numbered, selectable menu (in Claude Code, the AskUserQuestion
+  tool with an automatic "Other" escape hatch; in the Gemini CLI, a numbered list inviting
+  a free-text reply), recommended option first and mutually exclusive. Never end a turn
+  with a next step the user must copy and paste (for example "run `/solomon-start 5`");
+  make the candidate actions clickable. Canonical detail in `docs/solomon-workflow.md`
+  ("Interaction style").
+
+### Enumerable decisions (non-negotiable)
+
+Every decision or confirmation an agent puts to the user MUST be presented as an
+enumerated set of discrete options, never as an open prose question. In Claude Code
+this is the `AskUserQuestion` tool; in the Gemini CLI it is a numbered list (1, 2, 3,
+…). The rules:
+
+- Lead with the recommended option first, keep the options mutually exclusive, and let
+  the final option always be "Other" (free text). `AskUserQuestion` supplies "Other"
+  automatically.
+- This covers the small confirmations too — proceed / next-step / retry / push-or-PR /
+  which-target — not only the big branching choices.
+- The closing "what next" block of EVERY turn that offers the user a choice MUST be an
+  enumerated menu. Never end a turn with an open prose question (for example "Want me to
+  proceed, or look at X?"), and never hand the user a command to copy ("run
+  `/solomon-start 55` when you want") in place of a clickable option — that is slow and
+  disperses focus. Present the candidate next actions as the enumerated options.
+- When there is genuinely no choice to offer (a pure status report, or work fully
+  complete with nothing to decide), say so plainly instead of inventing a question.
 
 ## Specialist competencies
 

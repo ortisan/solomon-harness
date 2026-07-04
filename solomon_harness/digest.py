@@ -27,10 +27,13 @@ def _best_effort_prs(workspace_root: str, timeout: float = 2.0) -> Optional[List
     missing/slow ``gh``.
     """
     try:
+        from solomon_harness.subprocess_env import clean_git_env
+
         proc = subprocess.run(
             ["gh", "pr", "list", "--state", "open", "--limit", "20",
              "--json", "number,title,reviewDecision,isDraft"],
             cwd=workspace_root, capture_output=True, text=True, timeout=timeout, check=False,
+            env=clean_git_env(),
         )
         if proc.returncode != 0:
             return None

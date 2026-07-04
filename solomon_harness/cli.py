@@ -8,7 +8,9 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import Optional, List
+from typing import Dict, Optional, List, Tuple
+
+from solomon_harness.bootstrap import scaffold_new_agent
 
 
 def _subagent_description(filepath: str) -> str:
@@ -301,32 +303,43 @@ def handle_log(workspace_root: str, last: int) -> None:
 _GH_ISSUE_LIMIT = 1000
 
 
-def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
-    """Read every issue's GitHub state via gh, validated as data, never interpolated.
+def _fetch_gh_states(
+    list_args: List[str],
+    valid_states: Tuple[str, ...],
+    kind_label: str,
+    workspace_root: str,
+) -> List[dict]:
+    """Run a bulk ``gh <list_args> --state all`` query and return validated records.
 
-    Returns a list of ``{"number": "<int-as-str>", "state": "OPEN"|"CLOSED"}``.
+    Returns a list of ``{"number": "<int-as-str>", "state": <one of valid_states>}``.
     gh output is treated strictly as data across the trust boundary (STRIDE): the
-    number is coerced to ``str(int(...))`` and the state must be one of GitHub's
-    literals, so a malformed record is skipped rather than trusted, and no field
-    is interpolated into a query. Raises ``RuntimeError`` when gh is unavailable
-    or its output cannot be parsed, so the caller reports instead of repairing
-    nothing silently.
+    number is coerced to ``str(int(...))`` and the state must be one of the accepted
+    GitHub literals, so a malformed record is skipped rather than trusted, and no
+    field is interpolated into a query. Raises ``RuntimeError`` when gh is
+    unavailable or its output cannot be parsed, so the caller reports instead of
+    repairing nothing silently. This is the single fetch core shared by the issue
+    and PR fetchers, which differ only in the subcommand and the accepted state set.
     """
     import json as _json
     import subprocess
 
+    from solomon_harness.subprocess_env import clean_git_env
+
     try:
         proc = subprocess.run(
-            ["gh", "issue", "list", "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
+            ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
+            env=clean_git_env(),
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
             "gh CLI not found; install and authenticate the GitHub CLI."
         ) from exc
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout).strip() or "gh issue list failed")
+        raise RuntimeError(
+            (proc.stderr or proc.stdout).strip() or f"gh {kind_label} list failed"
+        )
     try:
         raw = _json.loads(proc.stdout or "[]")
     except _json.JSONDecodeError as exc:
@@ -334,8 +347,9 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
 
     if isinstance(raw, list) and len(raw) >= _GH_ISSUE_LIMIT:
         print(
-            f"warning: gh returned the {_GH_ISSUE_LIMIT}-issue cap; the listing may "
-            "be truncated, so reconcile could miss closed issues beyond it.",
+            f"warning: gh returned the {_GH_ISSUE_LIMIT}-record {kind_label} cap; the "
+            "listing may be truncated, so reconcile could miss resolved parents "
+            "beyond it.",
             file=sys.stderr,
         )
 
@@ -351,10 +365,63 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
         except (TypeError, ValueError):
             continue
         state = str(item.get("state", "")).upper()
-        if state not in ("OPEN", "CLOSED"):
+        if state not in valid_states:
             continue
         states.append({"number": number, "state": state})
     return states
+
+
+def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
+    """Read every issue's GitHub state via gh (``OPEN``/``CLOSED``), as data.
+
+    Thin config over ``_fetch_gh_states``; the validation and STRIDE handling live
+    in that shared core.
+    """
+    return _fetch_gh_states(["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root)
+
+
+def _fetch_gh_pr_states(workspace_root: str) -> List[dict]:
+    """Read every PR's GitHub state via gh (``OPEN``/``CLOSED``/``MERGED``), as data.
+
+    The extra ``MERGED`` literal is why a PR parent needs its own fetch: a merged
+    PR resolves its tracking children just as a closed issue does (#127). Thin
+    config over ``_fetch_gh_states``.
+    """
+    return _fetch_gh_states(
+        ["pr", "list"], ("OPEN", "CLOSED", "MERGED"), "pull request", workspace_root
+    )
+
+
+def _build_resolved_map(
+    issue_states: List[dict], pr_states: List[dict]
+) -> Dict[str, bool]:
+    """Merge issue and PR states into a number-keyed resolved map (#127).
+
+    Issues and PRs share one GitHub number sequence, so the map is keyed by number.
+    A number is RESOLVED (True) when its issue state is ``CLOSED`` or its PR state
+    is ``MERGED`` or ``CLOSED``; an ``OPEN`` issue or ``OPEN`` PR records the number
+    as not-yet-resolved (False) without overriding a resolved signal from the other
+    source, so the merge is an order-independent OR. A number absent from both is
+    simply not a key, which the close pass treats exactly like an open parent.
+    """
+    resolved: Dict[str, bool] = {}
+    for entry in issue_states:
+        number = entry.get("number")
+        if number is None:
+            continue
+        if entry.get("state") == "CLOSED":
+            resolved[number] = True
+        else:
+            resolved.setdefault(number, False)
+    for entry in pr_states:
+        number = entry.get("number")
+        if number is None:
+            continue
+        if entry.get("state") in ("CLOSED", "MERGED"):
+            resolved[number] = True
+        else:
+            resolved.setdefault(number, False)
+    return resolved
 
 
 def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
@@ -395,6 +462,66 @@ def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
     return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
 
 
+def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = False) -> dict:
+    """Set each tracking row whose parent number is RESOLVED to the terminal "done".
+
+    Tracking rows are the non-numeric slug rows (``is_github_issue`` False) that
+    carry RAID/follow-up items parented to a real GitHub issue or PR (#127). This
+    pass walks the non-terminal rows, skips the numeric GitHub rows untouched,
+    recovers each tracking row's parent number with ``recover_parent``, and -- when
+    that number is RESOLVED in ``resolved_map`` (its issue is CLOSED or its PR is
+    MERGED/CLOSED) -- read-modify-writes the row to "done" through the unchanged
+    6-arg ``log_issue`` UPSERT, preserving title/type/milestone/assignee. The write
+    normalizes "done" to the terminal "closed", so the row drops out of
+    ``get_open_issues``; a second pass therefore closes nothing (idempotent). A row
+    with an unresolved or absent parent is left open (never guessed); a row with no
+    recoverable parent is counted and skipped. No row is ever deleted. With
+    ``dry_run`` the would-close slugs are collected and nothing is written.
+
+    Returns ``{"closed", "would_close", "skipped_no_parent", "scanned_tracking"}``.
+    """
+    from solomon_harness.tools.database_client import is_github_issue, recover_parent
+
+    would_close: List[str] = []
+    closed = 0
+    skipped_no_parent = 0
+    scanned_tracking = 0
+    for row in db.get_open_issues():
+        github_id = row.get("github_id")
+        if is_github_issue(github_id):
+            continue
+        scanned_tracking += 1
+        parent = recover_parent(github_id, row.get("title"))
+        if parent is None:
+            skipped_no_parent += 1
+            print(
+                f"warning: tracking row {github_id!r} has no recoverable parent "
+                "number; left open.",
+                file=sys.stderr,
+            )
+            continue
+        if not resolved_map.get(parent):
+            continue
+        would_close.append(github_id)
+        if dry_run:
+            continue
+        db.log_issue(
+            github_id,
+            row.get("title"),
+            row.get("type_"),
+            "done",
+            row.get("milestone_id"),
+            row.get("assignee"),
+        )
+        closed += 1
+    return {
+        "closed": closed,
+        "would_close": would_close,
+        "skipped_no_parent": skipped_no_parent,
+        "scanned_tracking": scanned_tracking,
+    }
+
+
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
     """Reconcile the memory issue rows against GitHub (GitHub is the source of truth).
 
@@ -415,11 +542,14 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             )
             return
         try:
-            states = _fetch_gh_issue_states(workspace_root)
+            issue_states = _fetch_gh_issue_states(workspace_root)
+            pr_states = _fetch_gh_pr_states(workspace_root)
         except RuntimeError as exc:
             print(f"reconcile failed: {exc}", file=sys.stderr)
             sys.exit(1)
-        result = reconcile_memory(db, states, dry_run=dry_run)
+        result = reconcile_memory(db, issue_states, dry_run=dry_run)
+        resolved_map = _build_resolved_map(issue_states, pr_states)
+        tracking = reconcile_tracking_rows(db, resolved_map, dry_run=dry_run)
 
     if dry_run:
         ids = ", ".join(f"#{n}" for n in result["would_repair"])
@@ -428,10 +558,21 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             f"reconcile --dry-run: {len(result['would_repair'])} issue(s) would be "
             f"set to closed ({result['scanned']} GitHub issues scanned){suffix}"
         )
+        slugs = ", ".join(tracking["would_close"])
+        track_suffix = f": {slugs}" if slugs else ""
+        print(
+            f"reconcile --dry-run: {len(tracking['would_close'])} tracking row(s) "
+            f"would be set to done ({tracking['scanned_tracking']} tracking rows "
+            f"scanned){track_suffix}"
+        )
     else:
         print(
             f"reconcile: {result['repaired']} issue(s) set to closed "
             f"({result['scanned']} GitHub issues scanned)"
+        )
+        print(
+            f"reconcile: {tracking['closed']} tracking row(s) set to done "
+            f"({tracking['scanned_tracking']} tracking rows scanned)"
         )
 
 
@@ -539,12 +680,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
 
     release_parser = subparsers.add_parser(
         "release",
-        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | wiki-page [version])",
+        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | verify-window | wiki-page [version])",
     )
     release_parser.add_argument(
         "release_args",
         nargs=argparse.REMAINDER,
-        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), wiki-page [version] (write the release wiki page)",
+        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), verify-window (recompute the release window against trunk HEAD pre-tag), wiki-page [version] (write the release wiki page)",
     )
 
     wt_parser = subparsers.add_parser(
@@ -565,6 +706,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     agents_subparsers.add_parser("help", help="Display usage instructions")
     show_parser = agents_subparsers.add_parser("show", help="Show specific agent profile")
     show_parser.add_argument("agent_name", type=str, help="Agent name")
+    
+    scaffold_parser = agents_subparsers.add_parser("scaffold", help="Scaffold a new specialist agent")
+    scaffold_parser.add_argument("agent_name", type=str, help="Agent name")
+    scaffold_parser.add_argument("--description", type=str, required=True, help="Agent description")
 
     args = parser.parse_args(argv)
 
@@ -746,11 +891,21 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
             except Exception as e:
                 print(f"Error reading subagent: {e}", file=sys.stderr)
                 sys.exit(1)
+        elif args.agents_command == "scaffold":
+            if not args.agent_name:
+                print("Error: Subcommand 'scaffold' requires an agent name.", file=sys.stderr)
+                sys.exit(1)
+            try:
+                scaffold_new_agent(workspace_root, args.agent_name, args.description)
+                print(f"Agent '{args.agent_name}' scaffolded and registered successfully.")
+            except Exception as e:
+                print(f"Error scaffolding agent: {e}", file=sys.stderr)
+                sys.exit(1)
         elif args.agents_command == "help":
-            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            print("Usage: solomon-harness agents [list|show <agent_name>|scaffold <agent_name> --description <desc>]")
             sys.exit(0)
         else:
-            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            print("Usage: solomon-harness agents [list|show <agent_name>|scaffold <agent_name> --description <desc>]")
             sys.exit(1)
     else:
         parser.print_help()

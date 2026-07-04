@@ -3,6 +3,14 @@
 # Solomon Harness Local Pre-Commit Validation Loop
 echo "=== Running pre-commit validation loop ==="
 
+# This hook shells out to "uv run ..." below. Fail fast with an actionable
+# message instead of a bare "command not found" if uv is missing from PATH.
+command -v uv >/dev/null 2>&1 || {
+    echo "Error: 'uv' is not installed or not on PATH." >&2
+    echo "Install it from https://github.com/astral-sh/uv (or run 'solomon-harness doctor' to install it automatically), then retry the commit." >&2
+    exit 1
+}
+
 # 1. Update skills documentation
 echo "Auto-documenting specialist skills..."
 uv run python scripts/document-skills.py || { echo "Error: Skill auto-documentation failed."; exit 1; }

@@ -125,7 +125,9 @@ class TestDatabaseClient(unittest.TestCase):
         issue = client.get_issue("gh-42")
         self.assertIsNotNone(issue)
         self.assertEqual(issue["title"], "Issue 42")
-        self.assertEqual(issue["milestone_id"], milestone_id)
+        # milestone_id is TEXT on both issues and releases (they share one type so
+        # neither side needs a string-cast to compare), so it reads back as a string.
+        self.assertEqual(issue["milestone_id"], str(milestone_id))
 
         # Test save_backtest and get_backtest
         backtest_id = client.save_backtest(
@@ -417,6 +419,81 @@ class TestDatabaseClient(unittest.TestCase):
             # 14. Close client / context manager
             client.close()
             mock_surreal_instance.close.assert_called_once()
+
+    def test_schema_bootstrap_raises_on_a_later_ddl_statement_failure(self):
+        """A failure in any DEFINE statement -- not just the first -- must abort
+        the SurrealDB schema bootstrap, so the backend is never marked "surrealdb"
+        on a partially-applied schema (e.g. a missing HNSW vector index).
+
+        The real surrealdb SDK's ``.query()`` only surfaces the FIRST statement's
+        result when a multi-statement string is passed in one call, so a failure
+        buried in a later statement is silently accepted. The mock below
+        reproduces exactly that contract (it only inspects the first statement of
+        whatever string it is given), which is what makes this test discriminate
+        between the old single-call bootstrap (falsely reports success) and the
+        fixed statement-by-statement bootstrap (the failing statement is index 0
+        of its own call, so it is caught).
+        """
+        mock_surreal_class = MagicMock()
+        mock_surreal_instance = MagicMock()
+        mock_surreal_class.return_value = mock_surreal_instance
+
+        def fails_if_first_statement_matches(marker):
+            def _query(query_str, *args, **kwargs):
+                statements = [s.strip() for s in query_str.split(";") if s.strip()]
+                if statements and marker in statements[0]:
+                    raise RuntimeError(f"simulated DDL failure: {statements[0][:60]}")
+                return []
+
+            return _query
+
+        # The marker sits in the LAST schema statement (the HNSW vector index).
+        mock_surreal_instance.query.side_effect = fails_if_first_statement_matches("HNSW")
+
+        config_data = {
+            "database": {
+                "provider": "surrealdb",
+                "url": "ws://localhost:8000/rpc",
+                "namespace": "solomon",
+                "database": "harness",
+                "username": "root",
+                "password": "root",
+            }
+        }
+
+        mock_surrealdb = MagicMock()
+        mock_surrealdb.Surreal = mock_surreal_class
+
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "surrealdb":
+                return mock_surrealdb
+            return original_import(name, *args, **kwargs)
+
+        def mock_isfile(path):
+            if path.endswith("config.json"):
+                return True
+            return os.path.isfile(path)
+
+        original_open = builtins.open
+
+        def mock_open(path, *args, **kwargs):
+            if str(path).endswith("config.json"):
+                return io.StringIO(json.dumps(config_data))
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch("builtins.__import__", side_effect=mock_import),
+            patch("os.path.isfile", side_effect=mock_isfile),
+            patch("builtins.open", side_effect=mock_open),
+            patch("solomon_harness.home.derive_tenant", return_value="acme-widget"),
+        ):
+            client = DatabaseClient()
+            # A DDL failure anywhere in the schema must fail the bootstrap and
+            # fall back to SQLite, never falsely report "surrealdb" as ready.
+            self.assertEqual(client.backend, "sqlite")
+            client.close()
 
     def test_spectron_initialization_and_usage(self):
         """Test that the client initializes Spectron when configured and routes calls through it."""
@@ -785,6 +862,78 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIsNone(issue["assignee"])
         self.assertEqual(person_key_or_unassigned(issue["assignee"]), "unassigned")
 
+    def test_sqlite_enforces_issue_milestone_foreign_key(self):
+        """A non-existent milestone_id raises IntegrityError on the SQLite backend.
+
+        The FOREIGN KEY declared on issues.milestone_id (referencing
+        milestones.id) has no teeth unless PRAGMA foreign_keys=ON is issued on
+        the connection; without it, SQLite silently accepts a dangling
+        reference. Exercised at the raw-connection level (the same connection
+        _db_log_issue uses) so the assertion is on the actual constraint, not
+        on log_issue's outer RuntimeError wrapping of every sqlite3.Error.
+        """
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with self.assertRaises(sqlite3.IntegrityError):
+            with client._sqlite_conn() as conn:
+                conn.execute(
+                    "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ("orphan", "Orphaned", "bug", "open", 99999),
+                )
+        client.close()
+
+        # The public log_issue API wraps the same constraint failure in the
+        # RuntimeError every other SQLite write failure is wrapped in.
+        with self.assertRaises(RuntimeError):
+            client.log_issue("orphan2", "Orphaned two", "bug", "open", 99999)
+
+    def test_issues_milestone_id_column_is_text_matching_releases(self):
+        """issues.milestone_id and releases.milestone_id share the same TEXT type,
+        so a caller never needs a string-cast to compare them across tables."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("gh-text", "Item", "feature", "open", None)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            columns = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(issues)")}
+        client.close()
+        self.assertEqual(columns["milestone_id"].upper(), "TEXT")
+
+    def test_milestone_id_text_migration_preserves_existing_rows(self):
+        """A pre-migration store with milestone_id INTEGER is migrated to TEXT in
+        place, additively (#118-style expand/contract): existing rows, including
+        their milestone_id value and any already-added assignee column, survive
+        unchanged, and the store never raises during the migration."""
+        db_path = os.path.join(self.temp_dir.name, "premigration_milestone.db")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE milestones (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "title TEXT NOT NULL, description TEXT, due_date TEXT, state TEXT, "
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO milestones (title, state) VALUES (?, ?)", ("M1", "active")
+            )
+            conn.execute(
+                "CREATE TABLE issues (github_id TEXT PRIMARY KEY, title TEXT NOT NULL, "
+                "type_ TEXT, status TEXT, milestone_id INTEGER, assignee TEXT, "
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id, "
+                "assignee) VALUES (?, ?, ?, ?, ?, ?)",
+                ("old1", "Legacy issue", "bug", "open", 1, "alice@example.com"),
+            )
+            conn.commit()
+
+        client = DatabaseClient(db_path=db_path)
+        issue = client.get_issue("old1")
+        client.close()
+
+        self.assertEqual(issue["milestone_id"], "1")
+        self.assertEqual(issue["assignee"], "alice@example.com")
+        with sqlite3.connect(db_path) as conn:
+            columns = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(issues)")}
+        self.assertEqual(columns["milestone_id"].upper(), "TEXT")
+
     def test_surreal_upsert_includes_assignee_field(self):
         """On SurrealDB the issue UPSERT CONTENT carries the assignee as a bound
         parameter, additively to the existing fields (mocked _run_surreal)."""
@@ -1052,6 +1201,28 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIsNone(client.get_memory("doomed"))
         # Deleting a missing key must be a no-op, not an error.
         client.delete_memory("never_existed")
+        client.close()
+
+    def test_get_memory_bulk_sqlite(self):
+        """get_memory_bulk returns every stored key's value in one call, and a
+        key that was never saved is simply absent from the result (never a
+        raise, never a None placeholder)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.save_memory("bh:1", "one", "board_history")
+        client.save_memory("bh:2", "two", "board_history")
+        client.save_memory("bh:3", "three", "board_history")
+
+        result = client.get_memory_bulk(["bh:1", "bh:2", "bh:missing"])
+
+        self.assertEqual(result, {"bh:1": "one", "bh:2": "two"})
+        self.assertNotIn("bh:missing", result)
+        client.close()
+
+    def test_get_memory_bulk_empty_keys_is_a_no_op(self):
+        """get_memory_bulk on an empty key list returns an empty dict without
+        issuing any query."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        self.assertEqual(client.get_memory_bulk([]), {})
         client.close()
 
     def test_sqlite_uses_wal(self):
