@@ -2316,7 +2316,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self._run_surreal(
-                    f"SELECT * FROM releases ORDER BY released_at DESC LIMIT {int(limit)}"
+                    "SELECT * FROM releases ORDER BY released_at DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except _ConnectionLost:
@@ -3686,7 +3687,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    f"SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT {int(limit)}"
+                    "SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except Exception as e:
@@ -3709,7 +3711,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    f"SELECT * FROM decisions ORDER BY created_at DESC LIMIT {int(limit)}"
+                    "SELECT * FROM decisions ORDER BY created_at DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except Exception as e:
@@ -3732,7 +3735,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    f"SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT {int(limit)}"
+                    "SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except Exception as e:
@@ -4148,7 +4152,8 @@ class DatabaseClient:
                 clauses.append("time <= $until")
                 params["until"] = self._coerce_dt(until)
             where = " AND ".join(clauses)
-            query = f"SELECT * FROM metrics WHERE {where} ORDER BY time DESC LIMIT {int(limit)};"
+            params["limit"] = int(limit)
+            query = f"SELECT * FROM metrics WHERE {where} ORDER BY time DESC LIMIT $limit;"
             try:
                 res = self._run_surreal(query, params)
                 return self._extract_list(res)
