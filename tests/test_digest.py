@@ -253,6 +253,24 @@ class TestBuildDigest(unittest.TestCase):
             res = digest._best_effort_prs(".")
             self.assertIsNone(res)
 
+    def test_best_effort_prs_strips_inherited_git_env(self):
+        # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
+        # worktree) must not be forwarded to the gh subprocess.
+        import os
+        from unittest.mock import patch, MagicMock
+        leaked = {"GIT_DIR": "/tmp/leaked/.git", "GIT_WORK_TREE": "/tmp/leaked"}
+        with patch.dict(os.environ, leaked):
+            with patch("subprocess.run") as mock_run:
+                mock_proc = MagicMock()
+                mock_proc.returncode = 0
+                mock_proc.stdout = "[]"
+                mock_run.return_value = mock_proc
+                digest._best_effort_prs(".")
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
+        self.assertFalse(any(k.startswith("GIT_") for k in env))
+
     def test_safe_id_edge_cases(self):
         self.assertIsNone(digest._safe_id(None))
         self.assertIsNone(digest._safe_id("invalid; rm -rf /"))

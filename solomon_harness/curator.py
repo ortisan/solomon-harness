@@ -1,4 +1,5 @@
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
@@ -203,9 +204,19 @@ def apply_proposal(
         elif os.environ.get("MOCK_GH") == "1":
             pr_url = f"https://github.com/ortisan/solomon-harness/pull/mock-{proposal.decision_id}"
         else:
-            # Clean environment for gh command
+            # Resolve gh from PATH instead of hardcoding one; a fixed
+            # "/opt/homebrew/bin:/usr/bin:/bin" breaks Intel Mac Homebrew
+            # (/usr/local/bin), most non-Debian Linux, and macOS GitHub Actions
+            # runners, where gh lives elsewhere. Fail with a clear, actionable
+            # error rather than letting subprocess raise a bare FileNotFoundError.
+            gh_path = shutil.which("gh")
+            if not gh_path:
+                raise RuntimeError(
+                    "gh CLI not found on PATH; install and authenticate the "
+                    "GitHub CLI (https://cli.github.com) before applying a proposal."
+                )
+            gh_cmd[0] = gh_path
             gh_env = os.environ.copy()
-            gh_env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
             gh_env["PYTHONPATH"] = root
             res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
             pr_url = res.stdout.strip()
