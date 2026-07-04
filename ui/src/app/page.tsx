@@ -303,7 +303,32 @@ export function bucketDoneAt(
   return buckets;
 }
 
-function VelocityRow({ row }: { row: VelocityRowData }) {
+function VelocityChart({ buckets }: { buckets: DayBucket[] }) {
+  const max = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  return (
+    <div className="velocity-chart" data-testid="velocity-chart">
+      {buckets.map((bucket) => (
+        <span
+          key={bucket.date}
+          className="velocity-chart-bar"
+          data-testid="velocity-chart-bar"
+          title={`${bucket.date}: ${bucket.count}`}
+          style={{ height: `${(bucket.count / max) * 100}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VelocityRow({
+  row,
+  window,
+  today,
+}: {
+  row: VelocityRowData;
+  window: number;
+  today: Date;
+}) {
   return (
     <li className="velocity-row" data-testid="velocity-row">
       <span className="velocity-subject">{row.personKey}</span>
@@ -320,6 +345,17 @@ function VelocityRow({ row }: { row: VelocityRowData }) {
           partial ({row.partialTenants.join(", ")})
         </span>
       )}
+      {row.doneAt.length > 0 ? (
+        <VelocityChart buckets={bucketDoneAt(row.doneAt, window, today)} />
+      ) : (
+        <p
+          className="velocity-empty text-warning"
+          data-testid="velocity-empty"
+          role="status"
+        >
+          No activity in window
+        </p>
+      )}
     </li>
   );
 }
@@ -327,6 +363,7 @@ function VelocityRow({ row }: { row: VelocityRowData }) {
 function VelocityView({ velocity }: { velocity: Velocity }) {
   // Every figure is a reachable subtotal when a tenant is degraded; the per-row
   // partial badge names which, and this banner states the window-wide gap.
+  const today = new Date();
   return (
     <div className="velocity" data-testid="velocity">
       <div className="velocity-summary">
@@ -341,7 +378,12 @@ function VelocityView({ velocity }: { velocity: Velocity }) {
       </div>
       <ul className="velocity-rows">
         {velocity.rows.map((row) => (
-          <VelocityRow key={row.personKey} row={row} />
+          <VelocityRow
+            key={row.personKey}
+            row={row}
+            window={velocity.window}
+            today={today}
+          />
         ))}
       </ul>
     </div>

@@ -595,4 +595,71 @@ describe("cockpit velocity view", () => {
       expect((init?.method ?? "GET").toUpperCase()).toBe("GET");
     }
   });
+
+  it("renders a per-day activity chart bar for each day in the window", async () => {
+    wireByView(
+      portfolioPayload([okSwimlane("alpha", { Backlog: [issue("a1")] })]),
+      velocityPayload([
+        velocityRow("alice@example.com", 2, {
+          doneAt: ["2026-06-27T09:00:00", "2026-06-28T09:00:00"],
+        }),
+      ]),
+    );
+
+    render(<Home />);
+    const viewSelect = (await screen.findByLabelText("View")) as HTMLSelectElement;
+    fireEvent.change(viewSelect, { target: { value: "velocity" } });
+
+    const aliceRow = (
+      await screen.findByText("alice@example.com")
+    ).closest("[data-testid='velocity-row']") as HTMLElement;
+
+    const chart = within(aliceRow).getByTestId("velocity-chart");
+    expect(within(chart).getAllByTestId("velocity-chart-bar")).toHaveLength(14);
+  });
+
+  it("shows the empty state instead of a chart for a user with no activity in the window", async () => {
+    wireByView(
+      portfolioPayload([okSwimlane("alpha", { Backlog: [issue("a1")] })]),
+      velocityPayload([velocityRow("gh:bob", 0)]),
+    );
+
+    render(<Home />);
+    const viewSelect = (await screen.findByLabelText("View")) as HTMLSelectElement;
+    fireEvent.change(viewSelect, { target: { value: "velocity" } });
+
+    const bobRow = (
+      await screen.findByText("gh:bob")
+    ).closest("[data-testid='velocity-row']") as HTMLElement;
+
+    expect(within(bobRow).getByTestId("velocity-empty")).toHaveTextContent(
+      /no activity in window/i,
+    );
+    expect(within(bobRow).queryByTestId("velocity-chart")).not.toBeInTheDocument();
+  });
+
+  it("renders the chart over the reachable doneAt set alongside the existing partial badge", async () => {
+    wireByView(
+      portfolioPayload([okSwimlane("alpha", { Backlog: [issue("a1")] })]),
+      velocityPayload([
+        velocityRow("alice@example.com", 1, {
+          doneAt: ["2026-06-28T09:00:00"],
+          partial: true,
+          partialTenants: ["gamma"],
+        }),
+      ]),
+    );
+
+    render(<Home />);
+    const viewSelect = (await screen.findByLabelText("View")) as HTMLSelectElement;
+    fireEvent.change(viewSelect, { target: { value: "velocity" } });
+
+    const aliceRow = (
+      await screen.findByText("alice@example.com")
+    ).closest("[data-testid='velocity-row']") as HTMLElement;
+
+    expect(within(aliceRow).getByTestId("velocity-chart")).toBeInTheDocument();
+    expect(within(aliceRow).getByText(/partial/i)).toBeInTheDocument();
+    expect(within(aliceRow).getByText(/gamma/i)).toBeInTheDocument();
+  });
 });
