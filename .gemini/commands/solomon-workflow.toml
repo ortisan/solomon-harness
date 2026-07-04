@@ -34,6 +34,13 @@ If `{{args}}` names a specific issue or PR, evaluate that item and pick its next
 
 ## 3. Propose as an enumerated decision card, confirm, run
 
+A headless `/solomon-loop` iteration (`solomon-harness dev loop`) has no human to
+answer this card: `run_stage` prepends a directive to this prompt in that case only,
+telling the model to skip this section entirely (no `AskUserQuestion` call, no
+numbered list awaiting a reply) and enter Option 2 (Autonomous Mode) directly. A
+direct `/solomon-workflow` invocation never receives that directive, so it always
+follows the steps below unchanged.
+
 Present the next step and execution options as a decision card with the following numbered options:
 1. **Single Step (Recommended)**: Run the single recommended next workflow stage ($RECOMMENDED_CMD).
 2. **Autonomous Mode (host-orchestrated, human-gated)**: Advance every eligible ready, in-progress, and reviewable task on the board in sequence, running stages (such as start, review) without re-prompting on each step. This is host-orchestrated, not fully autonomous — the host tool runs each markdown stage in turn — and it stops at the first human-gated boundary: it never merges, releases, or moves a card to Done, and it halts when all eligible tasks are completed or blocked at the human-gated Release gate.
