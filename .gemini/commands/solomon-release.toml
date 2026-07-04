@@ -53,8 +53,8 @@ After the prep PR is merged and CI has tagged and published:
 - Record the delivered release in the project memory: `save_release(version="vX.Y.Z", tag="vX.Y.Z", notes="<changelog section>", issue_github_id="<epic or representative issue>", milestone_id="<resolved milestone>", commit_sha="<chore(release) commit on main>")`. The `milestone_id` is now always resolvable from `release plan`.
 - `save_decision` for the release: title `Release vX.Y.Z`, the computed bump and the milestone scope, the readiness verdict and any conditions, outcome, author `sre`, branch **main** (not develop), and the `chore(release): vX.Y.Z` commit SHA.
 - Write the compact release → done handoff contract to `.solomon/handoffs/release-vX.Y.Z-to-done.md` using the template in `docs/solomon-workflow.md` (release notes, the version/tag, what shipped across the milestone, and any GO-WITH-CONDITIONS follow-ups).
-- `log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/release-vX.Y.Z-to-done.md", status="completed")`.
-- `save_session` to checkpoint the released milestone and the readiness baseline for the next release.
+- `log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/release-vX.Y.Z-to-done.md", status="completed")`; keep the returned handoff id.
+- `save_session` to checkpoint the released milestone and the readiness baseline for the next release; pass `issues=[<epic or representative issue>]` so the session carries the worked_on edge (ADR-0017), then `link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` to record the produced edge.
 
 Report the released version and tag, the prep-PR merge commit, the milestone closed, the board move, and any GO-WITH-CONDITIONS follow-ups. Output direct, professional English, no emojis.
 

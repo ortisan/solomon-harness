@@ -88,7 +88,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   `In Progress` (do not advance it to Code Review). Tell the developer: implement by hand using
   PLAN.md, then re-run `/solomon-start {{args}}` to open the draft PR and move to Code Review,
   or open the PR yourself and run `/solomon-review`. Checkpoint the choice with
-  `save_session(session_id="start-{{args}}", agent_name="software_engineer", task="Manual implementation chosen for #{{args}}", messages=...)` and stop here. Skip step 6.
+  `save_session(session_id="start-{{args}}", agent_name="software_engineer", task="Manual implementation chosen for #{{args}}", messages=..., issues=[{{args}}])` and stop here. Skip step 6.
 
 ## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
@@ -99,7 +99,8 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-{{args}}-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.
-- `log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-{{args}}-start-to-review.md", status="ready")`.
-- `save_session(session_id="start-{{args}}", agent_name="software_engineer", task="Implement #{{args}}", messages=...)` to checkpoint.
+- `log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-{{args}}-start-to-review.md", status="ready")`; keep the returned handoff id.
+- `save_session(session_id="start-{{args}}", agent_name="software_engineer", task="Implement #{{args}}", messages=..., issues=[{{args}}])` to checkpoint; `issues` writes the worked_on edge so resume is a graph query, not a task-string parse (ADR-0017).
+- `link_session_handoff(session_id="start-{{args}}", handoff_id=<the returned handoff id>)` to record the produced edge.
 - Report the branch, PR URL, ADR decision, and that qa should run `/solomon-review`.
 '''

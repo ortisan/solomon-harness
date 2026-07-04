@@ -73,9 +73,11 @@ Each lens returns findings tagged blocker, major, or minor.
   `log_handoff(sender="qa", recipient="sre",
   contract_type="release-candidate",
   contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="approved")`
-  so the Release stage can resume.
+  so the Release stage can resume; keep the returned handoff id.
 - `save_session` capturing what was reviewed, the verdict, and
-  the linked decision and issue IDs.
+  the linked decision and issue IDs; pass `issues=[<issue>]` so the session carries
+  the worked_on edge and resume is a graph query (ADR-0017).
+- `link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` on approval, recording the produced edge.
 
 State explicitly whether an ADR was required and whether one exists. Do not push,
 merge, or change the board to `Done` here — Review moves the card `Code Review` →
