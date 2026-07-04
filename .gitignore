@@ -19,8 +19,12 @@ build/
 **/memory/short_term/*.json
 **/memory/surrealdb/
 **/memory/spectron/
+/memory/
 *.db-wal
 *.db-shm
+
+# Test coverage database
+.coverage
 
 # Encrypted secret vaults, at any depth
 **/.agent/secure_vault.enc
