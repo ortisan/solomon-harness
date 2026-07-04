@@ -308,6 +308,28 @@ def run_stage(
                     allowed_tools = _allowed_tools(workspace_root, prompt_stage)
                     if allowed_tools:
                         cmd.extend(["--allowed-tools", allowed_tools])
+                    if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
+                        # `start` does its real work inside a sibling worktree
+                        # (solomon_harness.worktree.worktree_root), outside
+                        # workspace_root — the nested engine's file tools are
+                        # otherwise confined to workspace_root and cannot
+                        # Read/Write/Edit anything there (#199). Widen to
+                        # exactly that directory, nothing broader. Other
+                        # LOCKED_STAGES (review/release/scan-*) work via `gh`
+                        # and git subprocess calls, not direct file access to a
+                        # worktree, so they don't need this; `workflow`/`loop`
+                        # dispatching into `start` (#196/#198) gets it via that
+                        # nested run_stage("start", ...) call, not this one.
+                        # The `.git` check keeps this a no-op (no subprocess
+                        # call at all) against a workspace_root that isn't a
+                        # real repo, e.g. this module's own tempdir-only test
+                        # fixtures.
+                        try:
+                            from solomon_harness.worktree import worktree_root
+
+                            cmd.extend(["--add-dir", worktree_root(workspace_root)])
+                        except Exception:
+                            pass
 
             from solomon_harness.subprocess_env import clean_git_env
 

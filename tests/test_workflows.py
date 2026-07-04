@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,7 @@ from solomon_harness import loop_lock
 from solomon_harness import loop_policy
 from solomon_harness import loop_budget
 from solomon_harness.loop_lock import LoopLock
+from solomon_harness.worktree import worktree_root
 
 
 def _workspace_with_loop(stage, body, loop_block):
@@ -28,6 +30,28 @@ def _workspace_with_command(stage: str, body: str) -> str:
     with open(os.path.join(cmd_dir, f"solomon-{stage}.md"), "w", encoding="utf-8") as f:
         f.write(body)
     return tmp
+
+
+def _git_workspace_with_command(stage: str, body: str) -> str:
+    # worktree_root() shells out to git to resolve the main worktree, so the
+    # --add-dir tests (#199) need a real (minimal) repo, unlike the plain
+    # tempdir _workspace_with_command uses for every other run_stage test.
+    root = _workspace_with_command(stage, body)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+    open(os.path.join(root, ".keep"), "w").close()
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=root, check=True)
+    return root
+
+
+def _git_workspace_with_loop(stage: str, body: str, loop_block: dict) -> str:
+    root = _git_workspace_with_command(stage, body)
+    os.makedirs(os.path.join(root, ".agent"), exist_ok=True)
+    with open(os.path.join(root, ".agent", "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"agent_name": "x", "loop": loop_block}, f)
+    return root
 
 
 class TestWorkflows(unittest.TestCase):
@@ -183,6 +207,59 @@ class TestWorkflows(unittest.TestCase):
             workflows.run_stage(root, "refine", ["172"], engine="gemini")
         args, _kwargs = mock_run.call_args
         self.assertNotIn("--allowed-tools", args[0])
+
+    def _run_stage_capturing_engine_cmd(self, root, stage, args, engine):
+        # worktree_root() (and LoopLock's `ps` liveness probe) call the real
+        # subprocess.run; only the actual engine launch (claude/gemini/agy)
+        # must be faked, so real git calls resolve against the git repo
+        # _git_workspace_with_command set up rather than a blanket mock.
+        real_run = subprocess.run
+        captured = []
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] in ("claude", "gemini", "agy"):
+                captured.append(cmd)
+
+                class _Proc:
+                    returncode = 0
+
+                return _Proc()
+            return real_run(cmd, *a, **kw)
+
+        with patch("subprocess.run", side_effect=fake_run):
+            workflows.run_stage(root, stage, args, engine=engine)
+        return captured[0]
+
+    def test_run_stage_grants_add_dir_for_claude_on_a_locked_stage(self):
+        # #199: the nested claude engine's file tools are confined to
+        # workspace_root; `start` (and any LOCKED_STAGES) does its real work
+        # inside a sibling worktree outside that boundary. Grant exactly that
+        # directory, nothing broader.
+        root = _git_workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "claude")
+        self.assertIn("--add-dir", cmd)
+        self.assertEqual(cmd[cmd.index("--add-dir") + 1], worktree_root(root))
+
+    def test_run_stage_omits_add_dir_for_non_claude_engine(self):
+        root = _git_workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "gemini")
+        self.assertNotIn("--add-dir", cmd)
+
+    def test_run_stage_omits_add_dir_for_a_non_locked_stage(self):
+        root = _git_workspace_with_command("idea", "body $ARGUMENTS")
+        cmd = self._run_stage_capturing_engine_cmd(root, "idea", ["x"], "claude")
+        self.assertNotIn("--add-dir", cmd)
+
+    def test_run_stage_grants_add_dir_under_l2_cost_capture(self):
+        # #199: the cmd list is built once, before the capture_cost branch
+        # picks which subprocess.run call captures cost — confirm --add-dir
+        # survives into that branch too, not just the default human-level path.
+        root = _git_workspace_with_loop(
+            "start", "---\nx\n---\nDo work on $ARGUMENTS", {"autonomy": "L2"}
+        )
+        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "claude")
+        self.assertIn("--add-dir", cmd)
+        self.assertEqual(cmd[cmd.index("--add-dir") + 1], worktree_root(root))
 
 
 class TestRunStageGitEnvHygiene(unittest.TestCase):
