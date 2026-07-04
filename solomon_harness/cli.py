@@ -11,6 +11,14 @@ import sys
 from typing import Dict, Optional, List, Tuple
 
 
+def _subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
+    """Look up a registered subcommand's parser by name, e.g. to print its help."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction) and name in action.choices:
+            return action.choices[name]
+    raise KeyError(name)
+
+
 def _subagent_description(filepath: str) -> str:
     """Return a one-line description for a generated subagent file.
 
@@ -571,13 +579,13 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
         )
 
 
-def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
-    """Parser setup and command dispatching.
+def build_parser() -> argparse.ArgumentParser:
+    """Build the top-level parser and every subcommand.
 
-    Args:
-        harness_dir: The agent directory the thin entrypoint is running from.
-            Defaults to the current working directory when omitted.
-        argv: Optional argument list (defaults to sys.argv[1:]).
+    This is the single source of truth for the CLI surface: tooling and tests
+    that need the live list of subcommands (e.g. a docs consistency check)
+    should introspect the returned parser's subparsers action here rather than
+    hand-maintaining a parallel list that can drift from this file.
     """
     parser = argparse.ArgumentParser(description="Solomon Harness Agent Command Line Interface")
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
@@ -702,6 +710,18 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     show_parser = agents_subparsers.add_parser("show", help="Show specific agent profile")
     show_parser.add_argument("agent_name", type=str, help="Agent name")
 
+    return parser
+
+
+def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) -> None:
+    """Parser setup and command dispatching.
+
+    Args:
+        harness_dir: The agent directory the thin entrypoint is running from.
+            Defaults to the current working directory when omitted.
+        argv: Optional argument list (defaults to sys.argv[1:]).
+    """
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if harness_dir is None:
@@ -806,7 +826,7 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
                 f"{counts['remaining']} pending"
             ))
         else:
-            memory_parser.print_help()
+            _subparser(parser, "memory").print_help()
     elif args.command == "install-global":
         from solomon_harness.install_global import describe, install_global
         result = install_global(register_mcp=not args.no_mcp)
