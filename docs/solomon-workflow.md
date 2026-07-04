@@ -20,7 +20,7 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
 | Refine for readiness | `/solomon-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
 | Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `Code Review` |
-| Review | `/solomon-review` | software_architect (code), then qa, security | `Code Review` → `QA` (then approved) |
+| Review | `/solomon-review` (auto-runs at the end of start) | software_architect (code), then qa, security, plus up to two diff-selected domain lenses | `Code Review` → `QA` (then approved) |
 | Deliver and release | `/solomon-release` | sre, software_engineer | `QA` → `Done` |
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
@@ -92,7 +92,9 @@ hands-on developers who want to write the code themselves. The choice uses the
 enumerated-options style above (Automatic, recommended and first; Manual; Other).
 
 - Automatic: the agent runs the TDD loop (Red/Green/Refactor) per PLAN.md, then opens the
-  draft PR and moves the card to Code Review — the existing behavior.
+  draft PR and moves the card to Code Review, then continues directly into
+  `/solomon-review` for the new PR — the review runs automatically as part of the
+  workflow; only the merge stays a human gate.
 - Manual: the agent writes no production or test code and opens no PR. It hands back the
   prepared worktree, branch, PLAN.md, and the ADR decision, and leaves the card in
   `In Progress`. The developer implements by hand, then re-runs `/solomon-start` to open the
@@ -100,6 +102,20 @@ enumerated-options style above (Automatic, recommended and first; Manual; Other)
 - Headless (`solomon-harness dev start`): with no one to answer, the stage does not block on
   the prompt — it defaults to Automatic and prints
   `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
+
+## Review staffing
+
+The Review stage always runs three mandatory gates — qa, security, and
+software_architect. In addition, `python -m solomon_harness.review_roster`
+selects up to two domain lenses deterministically from the PR's changed paths
+(`gh pr diff <n> --name-only` piped in): auth_engineer for credential-named
+files, dba for `database_client`/`.surql`/migrations, sre for CI workflows and
+deploy files, loop_engineer for `loop_*` files and `solomon_harness/workflows.py`, frontend
+for `ui/`, observability for instrumentation, practice_curator for agent skill
+and persona content, and documenter for Markdown under `docs/` (recursively).
+ux_designer joins the ui rules once its agent definition lands. The cap keeps
+reviews bounded; the mapping lives in `solomon_harness/review_roster.py` with
+covering tests, so the selection is auditable and deterministic.
 
 ## Deliver and release
 

@@ -8,8 +8,9 @@ You are running the Review stage of the solomon lifecycle for PR #$ARGUMENTS.
 
 First, read `docs/solomon-workflow.md` and `docs/adr/README.md` so the board
 columns, labels, the ADR trigger, and the memory handoff contract are exact. This
-stage is driven by three specialist agents — qa, security, and software_architect.
-Delegate the heavy analysis to each via the Task tool (the `.claude/agents`
+stage is driven by three mandatory gate agents — qa, security, and
+software_architect — plus up to two domain lenses selected from the changed
+paths (step 2). Delegate the heavy analysis to each via the Task tool (the `.claude/agents`
 subagents); do not review with a single generic pass.
 
 ## 1. Establish context
@@ -25,7 +26,7 @@ subagents); do not review with a single generic pass.
   debt and the design this change claims to implement (link any ADR referenced in the
   PR body).
 
-## 2. Run the three lenses (delegate, in parallel where possible)
+## 2. Assemble and run the lenses (delegate, in parallel where possible)
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
   `ci_quality_gates` skill, then actually run the suite —
   `uv run pytest --cov --cov-branch --cov-report=term-missing`. Confirm new and
@@ -38,6 +39,13 @@ subagents); do not review with a single generic pass.
 - software_architect agent: apply the `architecture_review_gate` checklist against
   the design contracts, the fitness functions, and any ADR the change touches.
   If the change is architecturally significant but no ADR exists, that is a blocker.
+- Domain lenses (conditional): `gh pr diff $ARGUMENTS --name-only | uv run python -m solomon_harness.review_roster`
+  prints up to two extra specialists (auth_engineer, dba, sre, loop_engineer, frontend,
+  observability, practice_curator, documenter) selected deterministically
+  from the changed paths. Spawn each returned lens as an additional reviewer scoped to
+  its own domain skills (the frontend lens reviews the UI change, the dba lens the
+  schema change, and so on). Empty output means the three gates suffice. Domain-lens
+  findings carry the same blocker/major/minor weight as the gates'.
 
 Board: the software_architect's code review is the `Code Review` gate. Once it
 passes with no blockers, move the card to `QA`
@@ -69,13 +77,15 @@ Each lens returns findings tagged blocker, major, or minor.
 
 ## 5. Persist to memory
 - `mcp__solomon-memory__save_decision` with the review outcome (title, rationale,
-  outcome go/no-go, author, branch, commit_sha) in ADR shape.
+  outcome go/no-go, author, branch, commit_sha) in ADR shape. State in the rationale
+  whether this review was auto-chained from `/solomon-start` or invoked independently
+  (ADR-0019 provenance), so the two are distinguishable in memory.
 - On approval only: write the compact review -> release handoff contract to
   `.solomon/handoffs/issue-<issue>-review-to-release.md` using the template in
   `docs/solomon-workflow.md` (go/no-go verdict, findings, what to release), then
   `mcp__solomon-memory__log_handoff(sender="qa", recipient="sre",
   contract_type="release-candidate",
-  contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="approved")`
+  contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="accepted")`
   so the Release stage can resume; keep the returned handoff id.
 - `mcp__solomon-memory__save_session` capturing what was reviewed, the verdict, and
   the linked decision and issue IDs; pass `issues=[<issue>]` so the session carries
