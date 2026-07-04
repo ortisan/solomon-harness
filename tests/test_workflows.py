@@ -375,6 +375,31 @@ class TestLoopStage(unittest.TestCase):
         self.assertEqual(args[0], ["claude", "-p"])
         self.assertIn("Scan", kwargs["input"])
 
+    def test_loop_forwards_the_workflow_stage_allowed_tools(self):
+        # #179/#181: `loop` remaps to the `workflow` stage's own command file via
+        # prompt_stage — confirm --allowed-tools is forwarded on this path too,
+        # not only on a stage invoked directly (e.g. refine/start).
+        root = _workspace_with_command(
+            "workflow",
+            "---\nallowed-tools: Bash(gh:*), mcp__solomon-memory__get_open_issues\n---\nScan $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run:
+            rc = workflows.run_stage(root, "loop", [], engine="claude")
+        self.assertEqual(rc, 0)
+        calls = _engine_calls(mock_run)
+        self.assertEqual(len(calls), 1)
+        args, _kwargs = calls[0]
+        cmd = args[0]
+        self.assertIn("--allowed-tools", cmd)
+        self.assertEqual(
+            cmd[cmd.index("--allowed-tools") + 1],
+            "Bash(gh:*), mcp__solomon-memory__get_open_issues",
+        )
+
     def test_loop_respects_the_concurrency_argument(self):
         root = _workspace_with_command("workflow", "---\nx\n---\nScan $ARGUMENTS")
 
