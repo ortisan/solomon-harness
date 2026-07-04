@@ -170,21 +170,56 @@ def _link_project_to_repo(owner: str, number, repo_with_owner: Optional[str]) ->
     return _gh(["project", "link", str(number), "--owner", owner, "--repo", repo_with_owner])
 
 
+def _list_title_matches(owner: str, title: str) -> Optional[List[Dict[str, Any]]]:
+    """Return the owner's projects whose title matches, or None when the listing
+    call itself failed.
+
+    The None/empty distinction is load-bearing: a transient gh failure must read
+    as "could not look", not "board absent", or a find-or-create caller mints a
+    duplicate board on every blip (bug #76).
+    """
+    res = _gh(
+        ["project", "list", "--owner", owner, "--limit", "100", "--format", "json"],
+        parse_json=True,
+    )
+    if not res["ok"]:
+        return None
+    projects = (res.get("data") or {}).get("projects", [])
+    return [p for p in projects if p.get("title") == title]
+
+
+def _oldest(matches: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The lowest-numbered (oldest) project: gh lists newest first, so first-match
+    would route every transition to a stray duplicate instead of the canonical board."""
+    if len(matches) > 1:
+        oldest = min(matches, key=lambda p: p.get("number") or 0)
+        logging.warning(
+            "found %d projects sharing one title; using the oldest (#%s). "
+            "Delete the duplicates so card moves cannot land on the wrong board.",
+            len(matches),
+            oldest.get("number"),
+        )
+        return oldest
+    return matches[0]
+
+
 def find_project(owner: str, title: str) -> Optional[Dict[str, Any]]:
     """Return the project dict whose title matches, or None."""
-    res = _gh(["project", "list", "--owner", owner, "--format", "json"], parse_json=True)
-    if not res["ok"] or not res.get("data"):
+    matches = _list_title_matches(owner, title)
+    if not matches:
         return None
-    for project in res["data"].get("projects", []):
-        if project.get("title") == title:
-            return project
-    return None
+    return _oldest(matches)
 
 
 def ensure_project_board(
-    title: Optional[str] = None, owner: Optional[str] = None
+    title: Optional[str] = None, owner: Optional[str] = None, create: bool = True
 ) -> Dict[str, Any]:
-    """Find or create the per-repository delivery board, linked to the repo."""
+    """Find the per-repository delivery board, creating it only when asked.
+
+    Only the explicit ``ensure-board`` command keeps ``create=True``; the
+    per-issue paths (add-issue, set-status) pass ``create=False`` so a routine
+    card move can never mint a board (bug #76).
+    """
     owner = owner or repo_owner()
     if not owner:
         return {"ok": False, "error": "could not resolve the repository owner via gh."}
@@ -192,9 +227,22 @@ def ensure_project_board(
     title = title or board_title()
     repo_with_owner = repo_name_with_owner()
 
-    existing = find_project(owner, title)
-    if existing:
-        return {"ok": True, "created": False, "owner": owner, "project": existing}
+    matches = _list_title_matches(owner, title)
+    if matches is None:
+        return {
+            "ok": False,
+            "error": "could not list the owner's projects; refusing to create a board on a failed lookup.",
+        }
+    if matches:
+        return {"ok": True, "created": False, "owner": owner, "project": _oldest(matches)}
+    if not create:
+        return {
+            "ok": False,
+            "error": (
+                f"board '{title}' not found; run `python -m solomon_harness.github "
+                "ensure-board` to create it."
+            ),
+        }
 
     res = _gh(
         ["project", "create", "--owner", owner, "--title", title, "--format", "json"],
@@ -243,8 +291,12 @@ def _configure_board_columns(owner: str, project_number) -> Dict[str, Any]:
 def add_issue_to_board(
     issue_number: int, title: Optional[str] = None, owner: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Add an issue to the board, returning the created item."""
-    board = ensure_project_board(title=title, owner=owner)
+    """Add an issue to the board, returning the created item.
+
+    Never creates the board: a per-issue operation against a missing board is a
+    setup error to surface, not a reason to mint a project (bug #76).
+    """
+    board = ensure_project_board(title=title, owner=owner, create=False)
     if not board["ok"]:
         return board
     owner = board["owner"]

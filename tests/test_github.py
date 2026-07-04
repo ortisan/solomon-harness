@@ -204,6 +204,87 @@ class TestEnsureBoard(unittest.TestCase):
             self.assertIn(f'name: "{col}"', mutation)
 
 
+class TestEnsureBoardGuards(unittest.TestCase):
+    """A failed or ambiguous project lookup must never mint a new board (bug #76).
+
+    The duplicate 'solomon-harness' board was created when a transient gh failure
+    made the lookup return empty and the find-or-create path treated 'could not
+    list' as 'absent'. Once a duplicate exists, first-match resolution silently
+    routes every transition to the newest board.
+    """
+
+    def test_listing_failure_refuses_to_create(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "auth", "token"]:
+                return _Proc(0, "")
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                return _Proc(1, "", "HTTP 401: Bad credentials")
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_project_board()
+        self.assertFalse(res["ok"])
+        self.assertIn("refusing to create", res["error"])
+        self.assertFalse(any(c[:3] == ["gh", "project", "create"] for c in calls))
+
+    def test_duplicate_titles_resolve_to_the_lowest_number(self):
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                # gh lists newest first; a stray duplicate must not shadow the
+                # canonical (oldest) board.
+                return _Proc(0, json.dumps({"projects": [
+                    {"title": "solomon", "number": 16},
+                    {"title": "solomon", "number": 5},
+                ]}))
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_project_board()
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["created"])
+        self.assertEqual(res["project"]["number"], 5)
+
+    def test_absent_board_without_create_does_not_create(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                return _Proc(0, json.dumps({"projects": []}))
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_project_board(create=False)
+        self.assertFalse(res["ok"])
+        self.assertIn("ensure-board", res["error"])
+        self.assertFalse(any(c[:3] == ["gh", "project", "create"] for c in calls))
+
+    def test_add_issue_never_creates_a_board(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                return _Proc(0, json.dumps({"projects": []}))
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.add_issue_to_board(7)
+        self.assertFalse(res["ok"])
+        self.assertFalse(any(c[:3] == ["gh", "project", "create"] for c in calls))
+
+
 class TestConfigureBoardColumns(unittest.TestCase):
     def test_missing_project_number_is_handled(self):
         res = github._configure_board_columns("acme", None)
