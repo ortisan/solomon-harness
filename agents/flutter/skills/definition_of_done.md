@@ -1,3 +1,17 @@
+# Flutter Definition of Done
+
+The completion gate for every Flutter change: what must hold before work is called done. The pitfalls below name the ways a change gets marked done while failing this checklist; check against them before ticking any box.
+
+## Common pitfalls
+
+- Tests written after the implementation and shaped to pass — the Red step never happened, so the suite cannot fail on the requirement; the TDD box is unearned without an error-path test that predates the code.
+- "Layering respected" ticked while `domain/` imports `package:flutter` or a repository throws across the boundary instead of returning `Either`/`Result` — the checkbox is about dependency direction and contracts, not folder names.
+- Coverage quoted as one overall number — the bar is >= 85% on domain plus application specifically; widget-heavy presentation code inflates the total while mappers and error paths sit untested.
+- Dispose and `mounted` guards checked off by reading the diff — without a fast-navigation widget test, emit-after-close and context-across-await bugs only surface under real route churn.
+- The frame-budget item ticked because `const` and `.builder` appear in the diff — the checklist requires profiling on a real device for performance-sensitive work; constructors alone prove nothing.
+- Accessibility and l10n marked done with hardcoded English strings still present and no 200% text-scale pump in any widget test — both are explicit gates in this checklist, not aspirations.
+- `flutter analyze` green via new `// ignore:` lines or a relaxed ruleset — the strict-analyzer gate is met when the code satisfies the rule, not when the rule is silenced.
+
 ## Definition of done
 
 

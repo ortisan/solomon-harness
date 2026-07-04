@@ -13,11 +13,11 @@ The ML Engineer designs, trains, validates, and deploys machine learning and sta
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [common_pitfalls](skills/common_pitfalls.md) — Reject any of these in review:
+- [common_pitfalls](skills/common_pitfalls.md) — The review reject list for ML and DRL deliverables: the validation, leakage, numerical, and reporting defects that invalidate a result.
 - [data_driven_reporting](skills/data_driven_reporting.md) — This skill governs the structure and honesty of analytical and model-evaluation reports.
 - [data_leakage_prevention](skills/data_leakage_prevention.md) — This skill governs how features, preprocessing, and splits are audited so no information unavailable at prediction time reaches the model.
 - [data_splitting_and_cross_validation](skills/data_splitting_and_cross_validation.md) — This skill governs how datasets are partitioned for training, model selection, and final evaluation.
-- [definition_of_done](skills/definition_of_done.md) — Model Hypothesis committed with target Sharpe, drawdown limit, profit factor, latency/slippage, dataset/features, and architecture (or the…
+- [definition_of_done](skills/definition_of_done.md) — The acceptance gate for an ML or DRL deliverable: every item below must hold before a model is called done.
 - [didactic_explanations](skills/didactic_explanations.md) — This skill governs how models, metrics, and findings are explained to non-specialist decision-makers.
 - [hyperparameters_and_tuning](skills/hyperparameters_and_tuning.md) — This skill governs how hyperparameter search is designed, budgeted, executed, and reported.
 - [model_hypothesis_state_before_training](skills/model_hypothesis_state_before_training.md) — This skill governs the written hypothesis that must be committed before any training run starts.

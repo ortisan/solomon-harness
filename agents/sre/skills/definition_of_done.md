@@ -1,3 +1,17 @@
+# SRE Definition of Done
+
+The exit gate for reliability work: a change ships only when every item below holds, from SLOs and burn-rate alerts to a drilled DR path. The pitfalls name the usual ways this checklist gets ticked on paper while the production risk remains.
+
+## Common pitfalls
+
+- SLOs declared done with one global target or a calendar-month window — a broken critical journey hides behind healthy traffic and the budget resets on the 1st, so the per-journey error-budget item is unmet.
+- Alerts that page on raw error counts instead of multiwindow burn rates, or that link to no runbook — they fire on harmless blips, miss slow budget drains, and strand the responder without a mitigation path.
+- Failover or rollback marked verified because the topology exists on paper — an N+1 multi-AZ design or a canary rollback that has never been exercised is a hypothesis, not a control.
+- Backups counted as done without a timed, verified restore — an unrestored backup can be unreadable during the real disaster, which is exactly when the 3-2-1 item is supposed to pay off.
+- RTO/RPO recorded while asynchronous replication lag silently exceeds the RPO — the design is compliant on paper and loses more data than allowed; lag must alert before the objective is breached.
+- Runbooks written but never exercised in a game day, or stored away from the alert that triggers them — responders cannot find or trust them mid-incident, so the runbook item is decorative.
+- Postmortem action items closed as discussed, with no owner or due date — the same failure recurs, failing the owned, dated action-items clause.
+
 ## Definition of done
 
 

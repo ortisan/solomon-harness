@@ -318,7 +318,7 @@ These are the OWASP API Security Top 10 (2023) authorization failures. API1:2023
 - Mock the PDP and PIP in unit tests so they are deterministic; run a contract/integration test against the real engine (OPA `opa test`, OpenFGA model assertions, Cedar policy tests, SpiceDB `zed validate` with an assertions file) so the policy itself is covered.
 - Add an automated route-coverage check that fails the build if any endpoint lacks an authorization decision. Unenforced endpoints are how BOLA ships.
 
-## Common pitfalls to reject in review
+## Common pitfalls
 
 - Authorization only in the UI or API gateway while services and the data layer trust each other implicitly.
 - Trusting an object ID, tenant, or role taken from the request body/query for the authorization decision instead of from the verified token and the system of record.

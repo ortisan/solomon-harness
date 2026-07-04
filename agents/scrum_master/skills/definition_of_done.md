@@ -1,3 +1,17 @@
+# Scrum Master Definition of Done
+
+The exit gate for work the Scrum Master tracks: what must hold before an issue, milestone, or release counts as delivered. Ready protects the sprint from ambiguity; this gate protects the increment and the project memory from fiction.
+
+## Common pitfalls
+
+- An issue closed as delivered without a milestone link or an estimate — the burndown never counted it, and the velocity data the next plan depends on is corrupted.
+- Execution started with no `PLAN.md`, then one written after the fact — the plan documents the outcome instead of gating the work, so edge cases and verification criteria were never enumerated up front.
+- A branch cut from the wrong base to save time — the Git Flow merge path breaks and the change lands outside the planned release.
+- A commit mislabeled to satisfy the `commit-msg` hook (a feature filed as `chore`) — the hook goes quiet but release-note generation and semantic versioning are silently wrong.
+- The owning specialist's quality gate (TDD, mocked services, STRIDE, quant hypothesis fields) taken on the issue's word instead of on gate evidence, so "done" means "claimed".
+- Review sign-off that judged readability and style before verifying compliance with the specification, inverting the required review order.
+- A release marked complete with `scripts/wiki-sync.sh` never run or the milestone, decisions, and handoffs never written to memory — the next session resumes against a stale picture.
+
 ## Definition of done
 
 

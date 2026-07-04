@@ -16,7 +16,7 @@ The Site Reliability Engineering (SRE) Specialist designs, maintains, and scales
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [definition_of_done](skills/definition_of_done.md) — Every critical user journey has an SLI, an SLO with an explicit rolling window, and a documented error-budget policy.
+- [definition_of_done](skills/definition_of_done.md) — The exit gate for reliability work: a change ships only when every item below holds, from SLOs and burn-rate alerts to a drilled DR path.
 - [disaster_recovery](skills/disaster_recovery.md) — Plan for the loss of a region, a database, or an entire backup, and prove the plan by exercising it on a cadence.
 - [dora_metrics_and_change_management](skills/dora_metrics_and_change_management.md) — Instrument the four DORA metrics from real delivery and incident events, read throughput and stability together rather than as a tradeoff,…
 - [high_availability](skills/high_availability.md) — Design so that any single component can fail without taking the service down, and prove it by failing components on purpose.

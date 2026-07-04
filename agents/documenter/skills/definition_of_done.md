@@ -1,3 +1,16 @@
+# Documenter Definition of Done
+
+The release gate for every documentation deliverable: the checklist below must hold before a page, guide, or reference ships. The pitfalls first — they are the specific ways documentation work gets marked done while failing that gate, and each one is grounds for sending the deliverable back.
+
+## Common pitfalls
+
+- A page marked done with no Diátaxis classification, or classified after drafting to match whatever got written — the type must drive the structure, not label it retroactively.
+- `last_reviewed` bumped in front matter without re-running the commands or re-checking versions — a fresh date on unverified content defeats the staleness sweep it feeds.
+- Code blocks pasted from a terminal session and never re-executed — "worked once on my machine" is not tested; execution in CI (doctest or extracted snippets) is the bar.
+- Reference declared complete as hand-written prose while the OpenAPI spec disagrees — only spec-generated, CI-diffed output counts as done.
+- Vale, markdownlint, or the link check skipped locally with the intent to fix in CI later — the gate is that they pass, not that they were scheduled.
+- The wiki left unsynced after merge because `scripts/wiki-sync.sh` is a manual step — the deliverable includes the sync and the changelog entry, not just the page diff.
+
 ## Definition of done
 
 

@@ -1,3 +1,17 @@
+# Product Owner Definition of Done
+
+The exit gate for product work: what must hold before a PRD and its stories are handed to engineering. The pitfalls below are the ways this checklist gets falsely satisfied; the checklist itself follows.
+
+## Common pitfalls
+
+- Template sections deleted instead of marked N/A with a one-line reason, so the reviewer cannot tell a settled question from an unasked one.
+- A success metric with a target but no baseline or measurement window, which makes the launch unfalsifiable and "done" unprovable.
+- Stories in As-a/I-want/so-that form that still fail INVEST (layer splits, unestimable epics); format compliance is not readiness.
+- Given-When-Then criteria that cover only the happy path, leaving boundary and failure behavior to be decided ad hoc in code.
+- Domain constraints stated as prose ("must be robust") instead of testable criteria (Sharpe and drawdown numbers, mocked services, named STRIDE mitigations), so QA cannot verify them.
+- A priority asserted without the MoSCoW/RICE/WSJF inputs recorded, so the ordering cannot be audited or renegotiated later.
+- The PRD declared done without decisions and milestones persisted to project memory, forcing the next session to re-litigate settled scope.
+
 ## Definition of done
 
 
