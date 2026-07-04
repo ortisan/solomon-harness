@@ -146,8 +146,11 @@ class MemoryService:
         task: str,
         messages: List[Any],
         status: str = "active",
+        issues: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
-        self.client.save_session(session_id, agent_name, task, messages, status=status)
+        self.client.save_session(
+            session_id, agent_name, task, messages, status=status, issues=issues
+        )
         return {"ok": True, "session_id": session_id}
 
     def get_session(self, session_id: str) -> Dict[str, Any]:

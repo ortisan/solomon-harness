@@ -67,6 +67,20 @@ def _parse_concurrency(args: List[str]) -> "tuple[int, List[str]]":
     return concurrency, remaining
 
 
+def _target_issue_from_args(args: List[str]) -> Optional[int]:
+    """The first purely-numeric stage argument, as the GitHub issue number.
+
+    The loop stage's per-issue workers and the start/review/release stages
+    receive a numeric target argument; anything else (flags, slugs, prose) is
+    never parsed for digits -- the episodic link must be typed input, not a
+    guess (ADR-0017).
+    """
+    for arg in args:
+        if arg.isdigit() and arg.isascii():
+            return int(arg)
+    return None
+
+
 def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, session_id: str) -> None:
     """Append one auditable loop-run entry; best-effort, never fails the stage."""
     try:
@@ -79,6 +93,7 @@ def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, 
                 decision=f"ran /solomon-{stage}",
                 status="ok" if rc == 0 else "failed",
                 session_id=session_id,
+                target_issue=_target_issue_from_args(args),
             )
     except Exception:
         # The ledger is a convenience over the durable store; a logging failure
