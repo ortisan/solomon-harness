@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import Home from "./page";
+import Home, { bucketDoneAt } from "./page";
 
 const SEVEN = [
   "Ideas",
@@ -453,6 +453,63 @@ function velocityPayload(rows: VelocityRow[], overrides: Record<string, unknown>
     ...overrides,
   };
 }
+
+describe("bucketDoneAt", () => {
+  // Alice's 9 tracked Done dates, reused from 3a's frozen background
+  // (T_now = 2026-06-29T12:00:00): the 14-day window holds 7 of them, the
+  // 7-day window 3, the 30-day window all 9.
+  const ALICE_DONE_AT = [
+    "2026-06-01T09:00:00",
+    "2026-06-05T09:00:00",
+    "2026-06-16T09:00:00",
+    "2026-06-18T09:00:00",
+    "2026-06-20T09:00:00",
+    "2026-06-21T09:00:00",
+    "2026-06-24T09:00:00",
+    "2026-06-27T09:00:00",
+    "2026-06-28T09:00:00",
+  ];
+  const TODAY = new Date(2026, 5, 29); // 2026-06-29, local
+
+  it("returns 14 zero-filled daily buckets that sum to the 14-day throughput", () => {
+    const buckets = bucketDoneAt(ALICE_DONE_AT, 14, TODAY);
+
+    expect(buckets).toHaveLength(14);
+    expect(buckets[0].date).toBe("2026-06-16");
+    expect(buckets[buckets.length - 1].date).toBe("2026-06-29");
+
+    const byDate = Object.fromEntries(buckets.map((b) => [b.date, b.count]));
+    for (const date of [
+      "2026-06-16",
+      "2026-06-18",
+      "2026-06-20",
+      "2026-06-21",
+      "2026-06-24",
+      "2026-06-27",
+      "2026-06-28",
+    ]) {
+      expect(byDate[date]).toBe(1);
+    }
+    const sum = buckets.reduce((acc, b) => acc + b.count, 0);
+    expect(sum).toBe(7);
+  });
+
+  it("spans exactly the selected window and sums to that window's throughput", () => {
+    const sevenDay = bucketDoneAt(ALICE_DONE_AT, 7, TODAY);
+    expect(sevenDay).toHaveLength(7);
+    expect(sevenDay.reduce((acc, b) => acc + b.count, 0)).toBe(3);
+
+    const thirtyDay = bucketDoneAt(ALICE_DONE_AT, 30, TODAY);
+    expect(thirtyDay).toHaveLength(30);
+    expect(thirtyDay.reduce((acc, b) => acc + b.count, 0)).toBe(9);
+  });
+
+  it("returns all-zero buckets for an empty doneAt set", () => {
+    const buckets = bucketDoneAt([], 14, TODAY);
+    expect(buckets).toHaveLength(14);
+    expect(buckets.every((b) => b.count === 0)).toBe(true);
+  });
+});
 
 describe("cockpit velocity view", () => {
   beforeEach(() => {

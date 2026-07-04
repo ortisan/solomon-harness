@@ -267,6 +267,42 @@ function PortfolioView({ portfolio }: { portfolio: Portfolio }) {
   );
 }
 
+interface DayBucket {
+  date: string;
+  count: number;
+}
+
+// Buckets `doneAt` (naive local ISO-8601 timestamps) into the last `window`
+// calendar days ending at `today`, zero-filled, oldest first. Day labels come
+// from `today`'s local getters (never `toISOString()`, which reinterprets in
+// UTC and can shift the calendar date depending on the browser's timezone);
+// `doneAt` entries are matched by their raw date-prefix string (never
+// `Date`-parsed), so there is no timezone re-coercion on either side.
+export function bucketDoneAt(
+  doneAt: string[],
+  window: number,
+  today: Date,
+): DayBucket[] {
+  const buckets: DayBucket[] = [];
+  for (let offset = window - 1; offset >= 0; offset--) {
+    const day = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - offset,
+    );
+    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    buckets.push({ date, count: 0 });
+  }
+  const indexByDate = new Map(buckets.map((bucket, i) => [bucket.date, i]));
+  for (const timestamp of doneAt) {
+    const index = indexByDate.get(timestamp.slice(0, 10));
+    if (index !== undefined) {
+      buckets[index].count += 1;
+    }
+  }
+  return buckets;
+}
+
 function VelocityRow({ row }: { row: VelocityRowData }) {
   return (
     <li className="velocity-row" data-testid="velocity-row">
