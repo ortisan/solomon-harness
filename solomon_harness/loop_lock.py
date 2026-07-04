@@ -190,6 +190,11 @@ class LoopLock:
         # lock file so a later `is_stale` check can tell a still-running
         # holder apart from an unrelated process the OS handed the same pid.
         self.pid_started_at = self._pid_start_time(self.pid)
+        # Set by `acquire()` when it finds the lock already live under this
+        # SAME session_id (a nested call from the same logical driver, #197)
+        # rather than creating or reclaiming it. A reentrant holder does not
+        # own the lock's lifecycle -- see `release()`.
+        self._reentrant = False
 
     # -- inspection ---------------------------------------------------------
     def read(self) -> Optional[Dict[str, Any]]:
@@ -276,13 +281,21 @@ class LoopLock:
         if stage is not None:
             self.stage = stage
         now = self._clock()
+        self._reentrant = False
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             info = self.read()
             if info and info.get("session_id") == self.session_id:
-                self._write_atomically(now)  # re-entrant: refresh heartbeat
+                # Re-entrant: the SAME logical driver, one level deeper (e.g. a
+                # nested `dev <stage>` shelled out from the `claude -p` child
+                # the outer driver is still synchronously waiting on, #197).
+                # Refresh the heartbeat but mark this instance as a non-owning
+                # holder: it must not remove the lock on release, since the
+                # outer call is still relying on it.
+                self._reentrant = True
+                self._write_atomically(now)
                 return self
             if info and not self.is_stale(info):
                 raise LoopLockHeld(info)
@@ -307,7 +320,18 @@ class LoopLock:
             self._write_atomically(self._clock())
 
     def release(self) -> None:
-        """Remove the lockfile only if this session owns it (or it is stale)."""
+        """Remove the lockfile only if this session owns it (or it is stale).
+
+        A reentrant acquire (this instance found the lock already live under
+        its own session_id -- a nested call from the same logical driver, not
+        a fresh one) is a no-op here: it never became the lock's owner, only a
+        deeper participant in the same run. Removing the file on its way out
+        would free the lock while the outer call that actually holds it is
+        still mid-run, reopening the concurrent-driver race the lock exists to
+        close (#197).
+        """
+        if self._reentrant:
+            return
         info = self.read()
         if info is None:
             return
