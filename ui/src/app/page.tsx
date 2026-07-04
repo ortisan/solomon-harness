@@ -294,11 +294,19 @@ export function bucketDoneAt(
     buckets.push({ date, count: 0 });
   }
   const indexByDate = new Map(buckets.map((bucket, i) => [bucket.date, i]));
+  const firstDate = buckets[0].date;
   for (const timestamp of doneAt) {
-    const index = indexByDate.get(timestamp.slice(0, 10));
-    if (index !== undefined) {
-      buckets[index].count += 1;
-    }
+    const date = timestamp.slice(0, 10);
+    // The backend's window cutoff is time-of-day-precise
+    // (now - timedelta(days) <= entered <= now), while these are whole
+    // calendar-day buckets: a doneAt entry on that partial boundary day can
+    // fall one calendar day before our first bucket. compose_velocity has
+    // already filtered doneAt to the true window, so such an entry is
+    // never actually outside it — clamp it into the first (or, sharing the
+    // same reasoning, the last) bucket rather than silently dropping it, so
+    // the buckets always sum to doneAt.length.
+    const index = indexByDate.get(date) ?? (date < firstDate ? 0 : buckets.length - 1);
+    buckets[index].count += 1;
   }
   return buckets;
 }

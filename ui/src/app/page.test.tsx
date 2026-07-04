@@ -455,39 +455,32 @@ function velocityPayload(rows: VelocityRow[], overrides: Record<string, unknown>
 }
 
 describe("bucketDoneAt", () => {
-  // Alice's 9 tracked Done dates, reused from 3a's frozen background
-  // (T_now = 2026-06-29T12:00:00): the 14-day window holds 7 of them, the
-  // 7-day window 3, the 30-day window all 9.
-  const ALICE_DONE_AT = [
-    "2026-06-01T09:00:00",
-    "2026-06-05T09:00:00",
-    "2026-06-16T09:00:00",
-    "2026-06-18T09:00:00",
-    "2026-06-20T09:00:00",
-    "2026-06-21T09:00:00",
-    "2026-06-24T09:00:00",
-    "2026-06-27T09:00:00",
-    "2026-06-28T09:00:00",
-  ];
+  // Alice's tracked Done dates, reused from 3a's frozen background
+  // (T_now = 2026-06-29T12:00:00). Each fixture below only includes the
+  // dates a real payload for that window would actually contain: the
+  // backend pre-filters `doneAt` to the requested window before the
+  // frontend ever sees it (compose_velocity), so a window's `doneAt` never
+  // holds an entry the backend itself excluded.
   const TODAY = new Date(2026, 5, 29); // 2026-06-29, local
 
   it("returns 14 zero-filled daily buckets that sum to the 14-day throughput", () => {
-    const buckets = bucketDoneAt(ALICE_DONE_AT, 14, TODAY);
+    const doneAt = [
+      "2026-06-16T09:00:00",
+      "2026-06-18T09:00:00",
+      "2026-06-20T09:00:00",
+      "2026-06-21T09:00:00",
+      "2026-06-24T09:00:00",
+      "2026-06-27T09:00:00",
+      "2026-06-28T09:00:00",
+    ];
+    const buckets = bucketDoneAt(doneAt, 14, TODAY);
 
     expect(buckets).toHaveLength(14);
     expect(buckets[0].date).toBe("2026-06-16");
     expect(buckets[buckets.length - 1].date).toBe("2026-06-29");
 
     const byDate = Object.fromEntries(buckets.map((b) => [b.date, b.count]));
-    for (const date of [
-      "2026-06-16",
-      "2026-06-18",
-      "2026-06-20",
-      "2026-06-21",
-      "2026-06-24",
-      "2026-06-27",
-      "2026-06-28",
-    ]) {
+    for (const date of doneAt.map((d) => d.slice(0, 10))) {
       expect(byDate[date]).toBe(1);
     }
     const sum = buckets.reduce((acc, b) => acc + b.count, 0);
@@ -495,12 +488,31 @@ describe("bucketDoneAt", () => {
   });
 
   it("spans exactly the selected window and sums to that window's throughput", () => {
-    const sevenDay = bucketDoneAt(ALICE_DONE_AT, 7, TODAY);
+    const sevenDay = bucketDoneAt(
+      ["2026-06-24T09:00:00", "2026-06-27T09:00:00", "2026-06-28T09:00:00"],
+      7,
+      TODAY,
+    );
     expect(sevenDay).toHaveLength(7);
     expect(sevenDay.reduce((acc, b) => acc + b.count, 0)).toBe(3);
 
-    const thirtyDay = bucketDoneAt(ALICE_DONE_AT, 30, TODAY);
+    const thirtyDayDoneAt = [
+      "2026-06-01T09:00:00",
+      "2026-06-05T09:00:00",
+      "2026-06-16T09:00:00",
+      "2026-06-18T09:00:00",
+      "2026-06-20T09:00:00",
+      "2026-06-21T09:00:00",
+      "2026-06-24T09:00:00",
+      "2026-06-27T09:00:00",
+      "2026-06-28T09:00:00",
+    ];
+    const thirtyDay = bucketDoneAt(thirtyDayDoneAt, 30, TODAY);
     expect(thirtyDay).toHaveLength(30);
+    // Crosses the May -> June boundary: the 30th day back from 06-29 is
+    // 05-31, pinning the month-rollover label, not just the length/sum.
+    expect(thirtyDay[0].date).toBe("2026-05-31");
+    expect(thirtyDay[thirtyDay.length - 1].date).toBe("2026-06-29");
     expect(thirtyDay.reduce((acc, b) => acc + b.count, 0)).toBe(9);
   });
 
@@ -508,6 +520,22 @@ describe("bucketDoneAt", () => {
     const buckets = bucketDoneAt([], 14, TODAY);
     expect(buckets).toHaveLength(14);
     expect(buckets.every((b) => b.count === 0)).toBe(true);
+  });
+
+  it("clamps a doneAt entry on the backend's precise time-boundary day into the first bucket instead of dropping it", () => {
+    // The backend's window cutoff is time-of-day-precise
+    // (now - timedelta(days=14) <= entered <= now): a Done at exactly
+    // 2026-06-15T12:00:00 is inside the true 14-day window and IS returned
+    // in doneAt (see tests/test_cockpit_read.py, carol's fixture), even
+    // though its calendar day (06-15) falls one day before this function's
+    // first whole-calendar-day bucket (06-16). It must never be silently
+    // dropped: the buckets must still sum to doneAt.length.
+    const buckets = bucketDoneAt(["2026-06-15T12:00:00"], 14, TODAY);
+
+    expect(buckets).toHaveLength(14);
+    expect(buckets[0].date).toBe("2026-06-16");
+    expect(buckets[0].count).toBe(1);
+    expect(buckets.reduce((acc, b) => acc + b.count, 0)).toBe(1);
   });
 });
 
@@ -616,6 +644,68 @@ describe("cockpit velocity view", () => {
 
     const chart = within(aliceRow).getByTestId("velocity-chart");
     expect(within(chart).getAllByTestId("velocity-chart-bar")).toHaveLength(14);
+  });
+
+  it("re-renders the chart with the selected window's day count when the window selector changes", async () => {
+    // Unlike wireByView's other uses, this test's velocity response must
+    // vary by the requested `window` (mirroring the real route), so the
+    // window selector's own effect on the chart's bar count is observable.
+    const portfolio = portfolioPayload([okSwimlane("alpha", { Backlog: [issue("a1")] })]);
+    const velocityByWindow: Record<string, unknown> = {
+      "14": velocityPayload([
+        velocityRow("alice@example.com", 2, {
+          doneAt: ["2026-06-27T09:00:00", "2026-06-28T09:00:00"],
+        }),
+      ]),
+      "7": velocityPayload([
+        velocityRow("alice@example.com", 1, { doneAt: ["2026-06-28T09:00:00"] }),
+      ], { window: 7 }),
+    };
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const asString = String(url);
+      if (!asString.includes("view=velocity")) {
+        return Promise.resolve({ ok: true, json: async () => portfolio });
+      }
+      const match = asString.match(/window=(\d+)/);
+      const body = velocityByWindow[match?.[1] ?? "14"];
+      return Promise.resolve({ ok: true, json: async () => body });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<Home />);
+    const viewSelect = (await screen.findByLabelText("View")) as HTMLSelectElement;
+    fireEvent.change(viewSelect, { target: { value: "velocity" } });
+
+    let aliceRow = (
+      await screen.findByText("alice@example.com")
+    ).closest("[data-testid='velocity-row']") as HTMLElement;
+    await waitFor(() =>
+      expect(
+        within(within(aliceRow).getByTestId("velocity-chart")).getAllByTestId(
+          "velocity-chart-bar",
+        ),
+      ).toHaveLength(14),
+    );
+
+    const windowSelect = (await screen.findByLabelText("Window")) as HTMLSelectElement;
+    fireEvent.change(windowSelect, { target: { value: "7" } });
+
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.some((url) => url.includes("view=velocity") && url.includes("window=7"))).toBe(
+        true,
+      );
+    });
+    aliceRow = (
+      await screen.findByText("alice@example.com")
+    ).closest("[data-testid='velocity-row']") as HTMLElement;
+    await waitFor(() =>
+      expect(
+        within(within(aliceRow).getByTestId("velocity-chart")).getAllByTestId(
+          "velocity-chart-bar",
+        ),
+      ).toHaveLength(7),
+    );
   });
 
   it("shows the empty state instead of a chart for a user with no activity in the window", async () => {
