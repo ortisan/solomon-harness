@@ -127,6 +127,12 @@ replaces the record) and can be swept later if needed.
   returns the minted id on both backends — never `lastrowid` — and the SQLite
   get-by-id paths match `id` or `record_id`, accepting the SurrealDB
   `table:key` spelling.
+- Consequence of backend-invariant ids: the SQLite
+  `issues.milestone_id -> milestones(id)` FOREIGN KEY is dropped (a rebuild
+  migration, `_ensure_issue_milestone_fk_dropped`). It targeted the integer
+  rowid and rejected the minted milestone record ids; the SurrealDB primary
+  never enforced it, and the authoritative milestone link is the graph
+  `contains` edge, so the linkage is soft by design.
 
 ### Explicitly deferred and rejected
 

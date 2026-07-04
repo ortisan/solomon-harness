@@ -864,30 +864,26 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIsNone(issue["assignee"])
         self.assertEqual(person_key_or_unassigned(issue["assignee"]), "unassigned")
 
-    def test_sqlite_enforces_issue_milestone_foreign_key(self):
-        """A non-existent milestone_id raises IntegrityError on the SQLite backend.
+    def test_sqlite_issue_milestone_link_is_soft(self):
+        """The issue -> milestone link is soft on SQLite too (ADR-0016).
 
-        The FOREIGN KEY declared on issues.milestone_id (referencing
-        milestones.id) has no teeth unless PRAGMA foreign_keys=ON is issued on
-        the connection; without it, SQLite silently accepts a dangling
-        reference. Exercised at the raw-connection level (the same connection
-        _db_log_issue uses) so the assertion is on the actual constraint, not
-        on log_issue's outer RuntimeError wrapping of every sqlite3.Error.
+        The FOREIGN KEY that used to target milestones.id (the integer rowid)
+        rejected the client-minted milestone record ids that backend-invariant
+        ids (F7) store in issues.milestone_id, so a rebuild migration dropped
+        it. Both the minted spelling and a dangling reference are accepted,
+        matching the SurrealDB primary, which never enforced one; the
+        authoritative link is the graph ``contains`` edge.
         """
         client = DatabaseClient(db_path=self.sqlite_db_path)
-        with self.assertRaises(sqlite3.IntegrityError):
-            with client._sqlite_conn() as conn:
-                conn.execute(
-                    "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    ("orphan", "Orphaned", "bug", "open", 99999),
-                )
+        minted = client.create_milestone("M", "d", "2026-07-01", "open")
+        client.log_issue("linked", "Linked", "feature", "open", minted)
+        client.log_issue("orphan", "Orphaned", "bug", "open", 99999)
+        linked = client.get_issue("linked")
+        orphan = client.get_issue("orphan")
         client.close()
-
-        # The public log_issue API wraps the same constraint failure in the
-        # RuntimeError every other SQLite write failure is wrapped in.
-        with self.assertRaises(RuntimeError):
-            client.log_issue("orphan2", "Orphaned two", "bug", "open", 99999)
+        assert linked is not None and orphan is not None
+        self.assertEqual(linked["milestone_id"], str(minted))
+        self.assertEqual(orphan["milestone_id"], "99999")
 
     def test_issues_milestone_id_column_is_text_matching_releases(self):
         """issues.milestone_id and releases.milestone_id share the same TEXT type,

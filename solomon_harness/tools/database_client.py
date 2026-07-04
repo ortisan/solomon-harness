@@ -845,8 +845,11 @@ class DatabaseClient:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_seconds * 1000)}")
         # SQLite does not enforce a declared FOREIGN KEY unless this pragma is set
-        # on the connection (it defaults OFF); without it, issues.milestone_id can
-        # carry a dangling reference to a milestone that never existed. Must be set
+        # on the connection (it defaults OFF). The harness schema no longer
+        # declares one (ADR-0016 dropped issues.milestone_id -> milestones.id,
+        # which rejected the minted milestone record ids), but the pragma stays
+        # ON so any store that still carries the legacy constraint keeps its
+        # original enforcement until its rebuild migration runs. Must be set
         # before any transaction begins, so it runs here, before ``with conn:``.
         conn.execute("PRAGMA foreign_keys = ON")
         try:
@@ -861,6 +864,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS decisions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 title TEXT NOT NULL,
                 rationale TEXT,
                 outcome TEXT,
@@ -881,6 +885,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS milestones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 title TEXT NOT NULL,
                 description TEXT,
                 due_date TEXT,
@@ -888,6 +893,10 @@ class DatabaseClient:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
+            # No FOREIGN KEY on milestone_id (ADR-0016): the reference now
+            # carries the minted milestone record id, which the old FK
+            # (targeting the integer rowid) rejected; the SurrealDB primary
+            # never enforced one, and the linkage is soft by design.
             """
             CREATE TABLE IF NOT EXISTS issues (
                 github_id TEXT PRIMARY KEY,
@@ -896,13 +905,13 @@ class DatabaseClient:
                 status TEXT,
                 milestone_id TEXT,
                 assignee TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (milestone_id) REFERENCES milestones (id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
             """
             CREATE TABLE IF NOT EXISTS backtest_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 strategy_name TEXT NOT NULL,
                 sharpe_ratio REAL,
                 max_drawdown REAL,
@@ -926,6 +935,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS handoffs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 sender TEXT,
                 recipient TEXT,
                 contract_type TEXT,
@@ -938,6 +948,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS releases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 version TEXT NOT NULL,
                 tag TEXT,
                 notes TEXT,
@@ -950,6 +961,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS loop_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 stage TEXT,
                 target TEXT,
                 decision TEXT,
@@ -964,6 +976,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 name TEXT NOT NULL,
                 value REAL,
                 tags TEXT,
@@ -999,8 +1012,10 @@ class DatabaseClient:
                     cursor.execute(query)
                 self._ensure_issue_assignee_column(conn)
                 self._ensure_issue_milestone_id_is_text(conn)
+                self._ensure_issue_milestone_fk_dropped(conn)
                 self._ensure_column(conn, "sessions", "status", "TEXT")
                 self._ensure_column(conn, "handoffs", "summary", "TEXT")
+                self._ensure_record_id_columns(conn)
                 conn.commit()
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
@@ -1042,6 +1057,8 @@ class DatabaseClient:
             return
         assignee_column = ", assignee TEXT" if has_assignee else ""
         assignee_select = ", assignee" if has_assignee else ""
+        # The rebuilt table carries no FOREIGN KEY (ADR-0016; see
+        # _ensure_issue_milestone_fk_dropped for the rationale).
         conn.execute(
             "CREATE TABLE issues ("
             "github_id TEXT PRIMARY KEY, "
@@ -1049,8 +1066,7 @@ class DatabaseClient:
             "type_ TEXT, "
             "status TEXT, "
             "milestone_id TEXT" + assignee_column + ", "
-            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-            "FOREIGN KEY (milestone_id) REFERENCES milestones (id)"
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
             ")"
         )
         conn.execute(
@@ -1061,6 +1077,89 @@ class DatabaseClient:
             + ", created_at FROM issues_pre_text_milestone"
         )
         conn.execute("DROP TABLE issues_pre_text_milestone")
+
+    @staticmethod
+    def _ensure_issue_milestone_fk_dropped(conn: sqlite3.Connection) -> None:
+        """Rebuild a pre-ADR-0016 issues table to drop the milestone FOREIGN KEY.
+
+        The FK targeted ``milestones (id)``, the integer rowid, but with
+        backend-invariant record ids (F7) an issue's milestone_id carries the
+        minted milestone record id, which that FK rejects on every write. The
+        SurrealDB primary never enforced the constraint, so parity and the F7
+        contract both call for dropping it; the milestone linkage is soft by
+        design (the graph ``contains`` edge is the authoritative link).
+
+        SQLite cannot drop a constraint in place, so the migration rebuilds the
+        table exactly like :meth:`_ensure_issue_milestone_id_is_text`: rename
+        aside, recreate without the FK (preserving the current column set),
+        copy every row unchanged, drop the renamed original. A fresh store's
+        CREATE TABLE already omits the FK, so this is a no-op there.
+        Concurrency-safe via the same losing-RENAME guard.
+        """
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'issues'"
+        ).fetchone()
+        if row is None or "FOREIGN KEY" not in str(row["sql"]).upper():
+            return  # no table yet, or the FK is already gone
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(issues)")}
+        has_assignee = "assignee" in columns
+        try:
+            conn.execute("ALTER TABLE issues RENAME TO issues_pre_fk_drop")
+        except sqlite3.OperationalError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
+            return
+        assignee_column = ", assignee TEXT" if has_assignee else ""
+        assignee_select = ", assignee" if has_assignee else ""
+        conn.execute(
+            "CREATE TABLE issues ("
+            "github_id TEXT PRIMARY KEY, "
+            "title TEXT NOT NULL, "
+            "type_ TEXT, "
+            "status TEXT, "
+            "milestone_id TEXT" + assignee_column + ", "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO issues "
+            "(github_id, title, type_, status, milestone_id" + assignee_select + ", created_at) "
+            "SELECT github_id, title, type_, status, milestone_id"
+            + assignee_select
+            + ", created_at FROM issues_pre_fk_drop"
+        )
+        conn.execute("DROP TABLE issues_pre_fk_drop")
+
+    # The minted-id tables on the SQLite fallback: each stores the client-minted
+    # id in record_id, so an id means the same thing on both backends (F7).
+    # memory, issues, and sessions are natural-keyed and need no minted column.
+    _RECORD_ID_TABLES = (
+        "decisions",
+        "milestones",
+        "backtest_runs",
+        "handoffs",
+        "releases",
+        "loop_runs",
+        "metrics",
+        "transitions",
+    )
+
+    @classmethod
+    def _ensure_record_id_columns(cls, conn: sqlite3.Connection) -> None:
+        """Add record_id + its unique index to pre-migration tables (ADR-0016).
+
+        Expand/contract like :meth:`_ensure_issue_assignee_column`: legacy rows
+        keep a NULL record_id (the unique index tolerates NULLs), new writes
+        stamp the minted id. SQLite's ALTER cannot add a UNIQUE column, so the
+        column is plain and the uniqueness lives in a separate index. Table
+        names come from the class constant, never caller input.
+        """
+        for table in cls._RECORD_ID_TABLES:
+            cls._ensure_column(conn, table, "record_id", "TEXT")
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {table}_record_id "
+                f"ON {table} (record_id)"
+            )
 
     @staticmethod
     def _ensure_column(
@@ -1598,6 +1697,32 @@ class DatabaseClient:
         transport fault so :meth:`reconcile` can stop and leave the rest pending.
         """
         kind = meta["kind"]
+        if kind == "edge":
+            # An edge replays as an idempotent RELATE: the minted id is stamped
+            # on the edge as record_id, so the check-before-create can tell an
+            # already-replayed edge from a missing one (RELATE itself has no
+            # client-keyed UPSERT form) (ADR-0016, F5).
+            edge = self._safe_ident(payload["edge"], "edge name")
+            rid = payload.get("record_id") or meta["id"]
+            existing = self._run_surreal(
+                f"SELECT record_id FROM {edge} WHERE record_id = $record_id LIMIT 1;",
+                {"record_id": rid},
+            )
+            if self._extract_record(existing) is None:
+                query, params = self._relate_statement(payload, rid)
+                self._run_surreal(query, params)
+            return
+        if kind == "metric":
+            # A metric replays keyed by its minted id, carrying its ORIGINAL
+            # time coerced to a native datetime -- the metrics time field is
+            # what time::group buckets on, so it must never become a string.
+            content = dict(payload)
+            content["time"] = self._coerce_dt(payload.get("time") or meta.get("created_at"))
+            self._run_surreal(
+                "UPSERT $id CONTENT $content;",
+                {"id": self._rid("metrics", meta["id"]), "content": content},
+            )
+            return
         table = self._KIND_TABLE[kind]
         if payload.get("deleted"):
             # A deletion tombstone (a mutation like delete_memory that ran while
@@ -1733,15 +1858,16 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to log decision in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO decisions (title, rationale, outcome, author, branch, commit_sha)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO decisions
+                (record_id, title, rationale, outcome, author, branch, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["title"],
                             fields["rationale"],
                             fields["outcome"],
@@ -1751,7 +1877,8 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    # The minted id, never lastrowid: backend-invariant (F7).
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to log decision: {e}")
                 raise RuntimeError(f"Failed to log decision: {e}")
@@ -1998,15 +2125,15 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to create milestone in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO milestones (title, description, due_date, state)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO milestones (record_id, title, description, due_date, state)
+            VALUES (?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["title"],
                             fields["description"],
                             fields["due_date"],
@@ -2014,7 +2141,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
@@ -2107,15 +2234,15 @@ class DatabaseClient:
         else:
             query = """
             INSERT INTO releases
-                (version, tag, notes, issue_github_id, milestone_id, commit_sha)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (record_id, version, tag, notes, issue_github_id, milestone_id, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["version"],
                             fields["tag"],
                             fields["notes"],
@@ -2125,7 +2252,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to save release: {e}")
                 raise RuntimeError(f"Failed to save release: {e}")
@@ -2148,7 +2275,10 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT * FROM releases WHERE id = ?", (release_id,))
+                    cursor.execute(
+                        "SELECT * FROM releases WHERE id = ? OR record_id = ?",
+                        self._sqlite_id_lookup(release_id),
+                    )
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2343,15 +2473,17 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to save backtest run in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO backtest_runs (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO backtest_runs
+                (record_id, strategy_name, sharpe_ratio, max_drawdown,
+                 profit_factor, parameters, dataset, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["strategy_name"],
                             fields["sharpe_ratio"],
                             fields["max_drawdown"],
@@ -2362,7 +2494,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to save backtest run: {e}")
                 raise RuntimeError(f"Failed to save backtest run: {e}")
@@ -2557,15 +2689,16 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to log handoff in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO handoffs (sender, recipient, contract_type, contract_path, status, summary)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO handoffs
+                (record_id, sender, recipient, contract_type, contract_path, status, summary)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["sender"],
                             fields["recipient"],
                             fields["contract_type"],
@@ -2575,7 +2708,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to log handoff: {e}")
                 raise RuntimeError(f"Failed to log handoff: {e}")
@@ -2628,6 +2761,15 @@ class DatabaseClient:
             return key
         return s
 
+    def _sqlite_id_lookup(self, value: Any) -> tuple:
+        """The parameter pair for a ``WHERE id = ? OR record_id = ?`` lookup.
+
+        Accepts a legacy integer rowid, a minted record id, or the SurrealDB
+        ``table:key`` spelling (stripped via :meth:`_record_key`), so a caller
+        holding an id from either backend resolves the same row (F7).
+        """
+        return (value, self._record_key(value, value))
+
     @_resilient
     def _db_update_handoff(
         self, record_id: str, fields: Dict[str, Any]
@@ -2654,8 +2796,8 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     conn.execute(
-                        "UPDATE handoffs SET status = ? WHERE id = ?",
-                        (fields["status"], record_id),
+                        "UPDATE handoffs SET status = ? WHERE id = ? OR record_id = ?",
+                        (fields["status"], *self._sqlite_id_lookup(record_id)),
                     )
                     conn.commit()
                     return record_id
@@ -2826,11 +2968,11 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve handoff from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff from SurrealDB: {e}")
         else:
-            query = "SELECT * FROM handoffs WHERE id = ?"
+            query = "SELECT * FROM handoffs WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (handoff_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(handoff_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2860,11 +3002,11 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve decision from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve decision from SurrealDB: {e}")
         else:
-            query = "SELECT * FROM decisions WHERE id = ?"
+            query = "SELECT * FROM decisions WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (decision_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(decision_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2894,11 +3036,11 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve milestone from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone from SurrealDB: {e}")
         else:
-            query = "SELECT * FROM milestones WHERE id = ?"
+            query = "SELECT * FROM milestones WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (milestone_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(milestone_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2962,11 +3104,11 @@ class DatabaseClient:
                     f"Failed to retrieve backtest run from SurrealDB: {e}"
                 )
         else:
-            query = "SELECT * FROM backtest_runs WHERE id = ?"
+            query = "SELECT * FROM backtest_runs WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (backtest_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(backtest_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -3280,15 +3422,15 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to save loop run in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO loop_runs (stage, target, decision, status, session_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO loop_runs (record_id, stage, target, decision, status, session_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["stage"],
                             fields["target"],
                             fields["decision"],
@@ -3297,7 +3439,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to save loop run: {e}")
                 raise RuntimeError(f"Failed to save loop run: {e}")
@@ -3455,28 +3597,78 @@ class DatabaseClient:
 
     # --- Graph ---------------------------------------------------------------
 
-    @_resilient
+    # Parameter names the RELATE statement itself owns; an edge field with one
+    # of these names would silently overwrite the endpoint or identity binding.
+    _RESERVED_EDGE_PARAMS = frozenset({"rel_from", "rel_to", "record_id", "id"})
+
     def relate(self, edge: str, from_id: Any, to_id: Any, **fields: Any) -> Optional[str]:
         """Create a graph edge ``from_id -[edge]-> to_id`` and return its record id.
 
         ``from_id``/``to_id`` are RecordIDs or ``table:key`` strings (the typed
-        helpers below build them from natural keys). Extra keyword fields are stored
-        on the edge record. SurrealDB-only.
+        helpers below build them from natural keys). Extra keyword fields are
+        stored on the edge record.
+
+        Routed through the durability funnel (kind ``edge``, ADR-0016 F5): the
+        minted edge id is stamped on the edge as ``record_id``, and during an
+        outage of the configured primary the pending mirror carries the edge to
+        :meth:`reconcile`, which replays it as an idempotent RELATE
+        (check-before-create on that stamp). The graph model has no SQLite
+        representation, so with no SurrealDB primary configured at all this
+        still raises the graph guard -- there would be nothing to replay into.
         """
-        self._require_surreal("graph relations")
+        if self.backend != "surrealdb" and self._surreal_class is None:
+            self._require_surreal("graph relations")
         edge = self._safe_ident(edge, "edge name")
-        params: Dict[str, Any] = {"rel_from": self._parse_rid(from_id), "rel_to": self._parse_rid(to_id)}
-        if fields:
-            assignments = []
-            for key, val in fields.items():
-                self._safe_ident(key, "edge field")
-                assignments.append(f"{key} = ${key}")
-                params[key] = val
-            query = f"RELATE $rel_from->{edge}->$rel_to SET {', '.join(assignments)};"
-        else:
-            query = f"RELATE $rel_from->{edge}->$rel_to;"
-        res = self._run_surreal(query, params)
-        return self._extract_id(res)
+        for key in fields:
+            self._safe_ident(key, "edge field")
+            if key in self._RESERVED_EDGE_PARAMS:
+                raise ValueError(f"reserved edge field name: {key!r}")
+        record_id = self._mint_id("edge")
+        payload = {
+            "edge": edge,
+            "from_id": str(from_id),
+            "to_id": str(to_id),
+            "fields": dict(fields),
+            "record_id": record_id,
+        }
+        result = self._write_through("edge", record_id, payload, self._db_relate)
+        return result if result is not None else record_id
+
+    @_resilient
+    def _db_relate(self, record_id: str, payload: Dict[str, Any]) -> Optional[str]:
+        """Persist an edge: RELATE with the minted id stamped as record_id.
+
+        On the degraded fallback (the configured primary is down and the
+        resilient wrapper switched to SQLite) this is a no-op: the pending
+        mirror is the durable copy and reconcile replays it.
+        """
+        if self.backend != "surrealdb":
+            return None
+        query, params = self._relate_statement(payload, record_id)
+        try:
+            res = self._run_surreal(query, params)
+            return self._extract_id(res)
+        except _ConnectionLost:
+            raise
+        except Exception as e:
+            logging.error(f"Failed to relate in SurrealDB: {e}")
+            raise RuntimeError(f"Failed to relate in SurrealDB: {e}")
+
+    def _relate_statement(self, payload: Dict[str, Any], record_id: str) -> tuple:
+        """Build the RELATE query and params for a live write or a replay."""
+        edge = self._safe_ident(payload["edge"], "edge name")
+        params: Dict[str, Any] = {
+            "rel_from": self._parse_rid(payload["from_id"]),
+            "rel_to": self._parse_rid(payload["to_id"]),
+            "record_id": record_id,
+        }
+        assignments = ["record_id = $record_id"]
+        for key, val in (payload.get("fields") or {}).items():
+            self._safe_ident(key, "edge field")
+            assignments.append(f"{key} = ${key}")
+            params[key] = val
+        query = f"RELATE $rel_from->{edge}->$rel_to SET {', '.join(assignments)};"
+        return query, params
 
     def _traverse(self, rid: Any, path: str) -> List[Dict[str, Any]]:
         """Return the distinct target records of a one-hop traversal from ``rid``.
@@ -3555,43 +3747,72 @@ class DatabaseClient:
 
     # --- Timeseries ----------------------------------------------------------
 
-    @_resilient
     def record_metric(self, name: str, value: float, tags: Optional[Dict[str, Any]] = None, at: Any = None) -> Union[str, int, None]:
         """Append one timeseries metric point (name, value, tags, time).
 
-        Works on BOTH backends so statistics survive a SQLite fallback. ``at`` is an
-        optional datetime or ISO-8601 string; it defaults to the current time.
+        Works on BOTH backends so statistics survive a SQLite fallback, and is
+        routed through the durability funnel (kind ``metric``, ADR-0016 F5):
+        during an outage the point lands in the fallback metrics table AND a
+        pending mirror, which reconcile replays to the primary with its
+        ORIGINAL time. ``at`` is an optional datetime or ISO-8601 string; it
+        defaults to the write time, stamped client-side in UTC so the mirror,
+        the fallback row, and the replay all carry the same instant. Returns
+        the client-minted record id on both backends (F7).
         """
-        tags = tags or {}
+        fields = {
+            "name": name,
+            "value": float(value),
+            "tags": tags or {},
+            "time": self._coerce_dt_iso(at) or self._utc_iso(),
+        }
+        return self._write_through(
+            "metric", self._mint_id("metric"), fields, self._db_record_metric
+        )
+
+    @_resilient
+    def _db_record_metric(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a metric point: minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
-            if at is None:
-                query = "CREATE metrics CONTENT {name: $name, value: $value, tags: $tags, time: time::now()};"
-                params: Dict[str, Any] = {"name": name, "value": float(value), "tags": tags}
-            else:
-                query = "CREATE metrics CONTENT {name: $name, value: $value, tags: $tags, time: $time};"
-                params = {"name": name, "value": float(value), "tags": tags, "time": self._coerce_dt(at)}
+            query = (
+                "UPSERT $id CONTENT "
+                "{name: $name, value: $value, tags: $tags, time: $time};"
+            )
+            params = {
+                "id": self._rid("metrics", record_id),
+                "name": fields["name"],
+                "value": fields["value"],
+                "tags": fields["tags"],
+                "time": self._coerce_dt(fields["time"]),
+            }
             try:
                 res = self._run_surreal(query, params)
-                return self._extract_id(res)
+                return self._extract_id(res) or record_id
             except _ConnectionLost:
                 raise
             except Exception as e:
                 logging.error(f"Failed to record metric in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to record metric in SurrealDB: {e}")
         else:
-            ts = self._coerce_dt_iso(at)
-            if ts is None:
-                query = "INSERT INTO metrics (name, value, tags) VALUES (?, ?, ?)"
-                args: tuple = (name, float(value), json.dumps(tags))
-            else:
-                query = "INSERT INTO metrics (name, value, tags, time) VALUES (?, ?, ?, ?)"
-                args = (name, float(value), json.dumps(tags), ts)
+            query = (
+                "INSERT INTO metrics (record_id, name, value, tags, time) "
+                "VALUES (?, ?, ?, ?, ?)"
+            )
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(query, args)
+                    conn.execute(
+                        query,
+                        (
+                            record_id,
+                            fields["name"],
+                            fields["value"],
+                            json.dumps(fields["tags"]),
+                            fields["time"],
+                        ),
+                    )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to record metric: {e}")
                 raise RuntimeError(f"Failed to record metric: {e}")
