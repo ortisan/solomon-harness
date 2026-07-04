@@ -10,6 +10,7 @@ CLI:
     python -m solomon_harness.github ensure-board [--title T] [--owner O]
     python -m solomon_harness.github set-status --issue N --status "Code Review"
     python -m solomon_harness.github add-issue --issue N
+    python -m solomon_harness.github merge --pr M --issue N
 """
 
 import argparse
@@ -375,6 +376,41 @@ def set_issue_status(
     return {"ok": True, "issue": issue_number, "status": status}
 
 
+def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
+    """Squash-merge an approved PR, then complete the Done transition (#172, ADR-0020).
+
+    This is the single owning call for the merge-to-Done transition: on a
+    successful merge it moves the board card to Done and writes the terminal
+    status through to memory (the ADR-0006 write-through) in the same call, so
+    no separate ``reconcile`` is needed. On a failed merge (not mergeable,
+    conflicts) it leaves the board and memory untouched -- no partial state.
+    Callers are responsible for the human-approval gate (ADR-0020): this
+    function performs the merge unconditionally once called.
+
+    If the merge succeeds but the board move fails (``set_issue_status`` has
+    several independent failure modes: an unresolved board item, a missing
+    project id, a missing Status field or option), the PR is already merged
+    and GitHub has already closed the issue via its ``Closes #`` trailer, so
+    the memory write-through still fires -- only the board column needs a
+    retry. The result reports ``ok: False`` with ``merged: True`` so a caller
+    can tell that apart from nothing having happened at all.
+    """
+    res = _gh(["pr", "merge", str(pr_number), "--squash"])
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error", "gh pr merge failed.")}
+    status_res = set_issue_status(issue_number, "Done")
+    record_terminal_status(issue_number)
+    if not status_res.get("ok"):
+        return {
+            "ok": False,
+            "error": status_res.get("error", "board move to Done failed after a successful merge."),
+            "merged": True,
+            "pr": pr_number,
+            "issue": issue_number,
+        }
+    return {"ok": True, "pr": pr_number, "issue": issue_number}
+
+
 STANDARD_LABELS = [
     ("type:feature", "0E8A16", "A new capability or user story"),
     ("type:bug", "D73A4A", "A defect to fix"),
@@ -545,6 +581,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_add.add_argument("--issue", type=int, required=True)
     p_add.add_argument("--title", default=None)
 
+    p_merge = sub.add_parser(
+        "merge", help="Squash-merge an approved PR and complete the Done transition (#172)"
+    )
+    p_merge.add_argument("--pr", type=int, required=True)
+    p_merge.add_argument("--issue", type=int, required=True)
+
     args = parser.parse_args(argv)
 
     if args.command == "ensure-board":
@@ -579,6 +621,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 record_terminal_status(args.issue)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
+    elif args.command == "merge":
+        result = merge_pr_and_close(args.pr, args.issue)
     else:
         parser.print_help()
         return 1

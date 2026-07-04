@@ -143,3 +143,42 @@ def test_gemini_mirrors_carry_the_edge_wiring():
         body = _read(os.path.join(".gemini", "commands", f"solomon-{name}.toml"))
         assert "link_session_handoff" in body, name
         assert "issues=[" in body, name
+
+
+# --- Merge-to-Done transition owned by review, not release (#172, ADR-0020) --
+
+
+def test_review_command_owns_the_merge_on_approval():
+    body = _read(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "solomon_harness.github merge" in body
+    assert "ADR-0020" in body
+    # The old contradiction ("do not merge here") must be gone.
+    assert "do not push, merge" not in body.lower()
+    # AskUserQuestion must actually be callable for the interactive confirm step.
+    frontmatter = body.split("---")[1]
+    assert "AskUserQuestion" in frontmatter
+
+
+def test_release_command_never_merges_individual_prs():
+    body = _read(os.path.join(".claude", "commands", "solomon-release.md"))
+    assert "ADR-0020" in body
+    assert "never merges an individual pr" in body.lower()
+    # The old ambiguous claim must be gone.
+    assert "now happens in `/solomon-review` close-out, not here" not in body
+
+
+def test_gemini_mirrors_match_the_merge_ownership_decision():
+    review = _read(os.path.join(".gemini", "commands", "solomon-review.toml"))
+    assert "solomon_harness.github merge" in review
+    assert "ADR-0020" in review
+    assert "do not push, merge" not in review.lower()
+
+    release = _read(os.path.join(".gemini", "commands", "solomon-release.toml"))
+    assert "ADR-0020" in release
+    assert "never merges an individual pr" in release.lower()
+
+
+def test_workflow_doc_documents_the_merge_owner():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    assert "The merge-to-Done transition" in doc
+    assert "ADR-0020" in doc

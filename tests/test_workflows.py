@@ -121,6 +121,44 @@ class TestWorkflows(unittest.TestCase):
             "Bash(gh:*), mcp__solomon-memory__get_issue",
         )
 
+    def test_run_stage_strips_askuserquestion_from_headless_allowed_tools(self):
+        # #195: the headless engine has no TTY to answer AskUserQuestion, and
+        # this repo's own frontmatter serves both the interactive Claude Code
+        # command loader and this headless --allowed-tools passthrough. Forward
+        # every declared tool except the ones that require a live human, so a
+        # merge-style confirmation gate is unreachable headlessly by
+        # construction, not by unverified tool behavior.
+        root = _workspace_with_command(
+            "review",
+            "---\nallowed-tools: Bash(gh:*), AskUserQuestion, Task\n---\nReview $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "review", ["195"], engine="claude")
+        self.assertEqual(rc, 0)
+        args, _kwargs = mock_run.call_args
+        cmd = args[0]
+        self.assertIn("--allowed-tools", cmd)
+        forwarded = cmd[cmd.index("--allowed-tools") + 1]
+        self.assertNotIn("AskUserQuestion", forwarded)
+        self.assertEqual(forwarded, "Bash(gh:*), Task")
+
+    def test_run_stage_omits_allowed_tools_flag_when_only_interactive_only_tools_declared(self):
+        root = _workspace_with_command(
+            "review", "---\nallowed-tools: AskUserQuestion\n---\nReview $ARGUMENTS"
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "review", ["195"], engine="claude")
+        args, _kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["claude", "-p"])
+
     def test_run_stage_omits_allowed_tools_flag_when_frontmatter_declares_none(self):
         root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
 

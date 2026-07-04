@@ -6,7 +6,7 @@ allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Bash(scripts/wiki-sync.s
 
 Read `docs/solomon-workflow.md` first and follow the Deliver/release stage exactly. Drive this as the **sre** specialist; delegate the readiness gate and release mechanics to the `.claude/agents/sre` subagent via the Task tool, grounded in its `release_engineering_and_progressive_delivery` skill (the library readiness gate and the reversibility kernel). This is the `QA` → `Done` transition.
 
-This stage cuts a release for a **milestone**, never a single PR. A tag is cut when a GitHub milestone reaches 0 open issues with CI green on main; the routine per-PR squash-merge that closes each issue and burns down the milestone now happens in `/solomon-review` close-out, not here. The release object is the milestone: an **epic** milestone is titled with its SemVer minor (`v0.4.0`) and closing it cuts that MINOR; a **theme/hardening** milestone is titled by theme and closing it cuts a PATCH whose version is computed at cut time.
+This stage cuts a release for a **milestone**, never a single PR. A tag is cut when a GitHub milestone reaches 0 open issues with CI green on main; the routine per-PR squash-merge that closes each issue and burns down the milestone happens in `/solomon-review`'s own merge step (interactive-only, `uv run python -m solomon_harness.github merge`, ADR-0020) — this stage never merges an individual PR. The release object is the milestone: an **epic** milestone is titled with its SemVer minor (`v0.4.0`) and closing it cuts that MINOR; a **theme/hardening** milestone is titled by theme and closing it cuts a PATCH whose version is computed at cut time.
 
 Release target: **$ARGUMENTS** — a milestone title or number. Leave it empty to cut an on-demand PATCH for an accumulated batch (the escape valve) without waiting for a milestone to fully close. This is never a PR number.
 
@@ -42,7 +42,7 @@ Summarize the planned version, the rendered CHANGELOG section, and the readiness
 - The **human merges that prep PR** — that merge is the human release gate. Ask the user to merge it; do not merge it yourself. CI re-runs `release check` on the PR (Step 2 invariant) before it is mergeable.
 - On the merge to main, **CI is the single owner of tag and publish**: the resulting main push carries the `chore(release): vX.Y.Z` commit, and the release workflow creates and pushes the annotated tag `vX.Y.Z` (tags are not branch-protected; CI uses the default `GITHUB_TOKEN` with `contents:write`, no PAT, and never pushes a commit to protected main) and publishes the GitHub Release (`draft:false`) with the CHANGELOG section as the notes. Do **not** run `gh release create` by hand — a manual published release racing the auto-published one is exactly what this removes.
 
-This stage never squash-merges a feature branch and never commits on a `develop` branch (there is none — the repo is trunk-only). The routine per-PR squash-merge that closes each issue lives in `/solomon-review` close-out.
+This stage never squash-merges a feature branch and never commits on a `develop` branch (there is none — the repo is trunk-only). The routine per-PR squash-merge that closes each issue lives in `/solomon-review`'s own merge step (ADR-0020) — by the time a release runs, its milestone's issues are already merged and `Done`.
 
 ## 5. Close out
 After the prep PR is merged and CI has tagged and published:
