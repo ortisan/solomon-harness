@@ -1079,6 +1079,7 @@ class DatabaseClient:
         "backtest": "backtest_runs",
         "session": "sessions",
         "handoff": "handoffs",
+        "loop_run": "loop_runs",
     }
     _KIND_TIMEFIELD = {
         "decision": "created_at",
@@ -1089,6 +1090,7 @@ class DatabaseClient:
         "backtest": "created_at",
         "session": "timestamp",
         "handoff": "timestamp",
+        "loop_run": "created_at",
     }
 
     def _resolve_mirror_root(self, override: Optional[str]) -> str:
@@ -1275,8 +1277,10 @@ class DatabaseClient:
         return out
 
     def _replay(self, meta: Dict[str, Any], payload: Dict[str, Any]) -> None:
-        """Idempotently UPSERT a mirrored record into the SurrealDB primary.
+        """Idempotently replay a mirrored record into the SurrealDB primary.
 
+        A regular record is UPSERTed; a deletion tombstone (payload marked
+        ``deleted``) is replayed as a DELETE so a removed record never comes back.
         The UPSERT is keyed by the record's stored id, so replaying a record that
         is already present updates it in place rather than duplicating it. The
         original mirror ``created_at`` is preserved as the record's time field so a
@@ -1285,6 +1289,13 @@ class DatabaseClient:
         """
         kind = meta["kind"]
         table = self._KIND_TABLE[kind]
+        if payload.get("deleted"):
+            # A deletion tombstone (a mutation like delete_memory that ran while
+            # the primary was down) replays as a DELETE keyed by the stored id --
+            # never an UPSERT, which would resurrect the deleted record. Deleting
+            # an absent record is a no-op, so the replay stays idempotent.
+            self._run_surreal("DELETE $id;", {"id": self._rid(table, meta["id"])})
+            return
         content = dict(payload)
         content[self._KIND_TIMEFIELD.get(kind, "created_at")] = meta.get("created_at")
         self._run_surreal(
@@ -1499,9 +1510,23 @@ class DatabaseClient:
                 logging.error(f"Failed to save memory: {e}")
                 raise RuntimeError(f"Failed to save memory: {e}")
 
-    @_resilient
     def delete_memory(self, key: str) -> None:
-        """Deletes a memory entry by key (no-op if it does not exist)."""
+        """Deletes a memory entry by key (no-op if it does not exist).
+
+        The deletion goes through the same write-through funnel as every other
+        mutation: the key's mirror file is overwritten with a deletion tombstone
+        (same key-derived filename, so it replaces any pending save for the key)
+        before the DB delete runs. A reconcile after an outage therefore replays
+        the DELETE instead of resurrecting the row from a stale pending save.
+        """
+        self._write_through(
+            "memory", key, {"key": key, "deleted": True}, self._db_delete_memory
+        )
+
+    @_resilient
+    def _db_delete_memory(self, record_id: str, fields: Dict[str, Any]) -> None:
+        """Delete a memory entry; a connection loss falls back like every write."""
+        key = fields["key"]
         if self.backend == "surrealdb":
             try:
                 self._run_surreal("DELETE memory WHERE key = $key;", {"key": key})
@@ -2580,27 +2605,39 @@ class DatabaseClient:
         worktree gets a separate database and a cross-worktree count would be
         invisible.
         """
+        fields = {
+            "stage": stage,
+            "target": target,
+            "decision": decision,
+            "status": status,
+            "session_id": session_id,
+        }
+        return self._write_through(
+            "loop_run", self._mint_id("loop_run"), fields, self._db_save_loop_run
+        )
+
+    @_resilient
+    def _db_save_loop_run(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a loop-run entry: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO loop_runs {
+            UPSERT $id CONTENT {
                 stage: $stage,
                 target: $target,
                 decision: $decision,
                 status: $status,
                 session_id: $session_id,
                 created_at: time::now()
-            }
+            };
             """
-            params = {
-                "stage": stage,
-                "target": target,
-                "decision": decision,
-                "status": status,
-                "session_id": session_id,
-            }
+            params = {"id": self._rid("loop_runs", record_id), **fields}
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save loop run in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save loop run in SurrealDB: {e}")
@@ -2612,7 +2649,16 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (stage, target, decision, status, session_id))
+                    cursor.execute(
+                        query,
+                        (
+                            fields["stage"],
+                            fields["target"],
+                            fields["decision"],
+                            fields["status"],
+                            fields["session_id"],
+                        ),
+                    )
                     conn.commit()
                     return cursor.lastrowid
             except sqlite3.Error as e:
