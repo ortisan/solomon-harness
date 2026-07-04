@@ -10,6 +10,7 @@ These guard against regressions in the build pipeline and the memory/MCP layer:
 import hashlib
 import os
 import unittest
+from unittest.mock import patch
 
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -111,8 +112,15 @@ class TestSurrealIntegration(unittest.TestCase):
 
         from solomon_harness.tools.database_client import DatabaseClient
 
-        with tempfile.TemporaryDirectory() as tmp:
-            os.environ["SURREAL_URL"] = os.environ["SURREAL_TEST_URL"]
+        # Scoped via patch.dict so SURREAL_URL is restored to its prior value (or
+        # removed) on exit: an unconditional `os.environ[...] = ...` here leaked
+        # into every test collected after this one in the same pytest session
+        # (e.g. tests/test_memory.py's TestReadDbUrl), which only surfaced once
+        # CI started setting SURREAL_TEST_URL and this class stopped skipping.
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"SURREAL_URL": os.environ["SURREAL_TEST_URL"]}),
+        ):
             config_dir = os.path.join(tmp, ".agent")
             os.makedirs(config_dir)
             with open(os.path.join(config_dir, "config.json"), "w", encoding="utf-8") as f:
