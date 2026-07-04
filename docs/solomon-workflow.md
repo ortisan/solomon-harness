@@ -20,8 +20,8 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
 | Refine for readiness | `/solomon-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
 | Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `Code Review` |
-| Review | `/solomon-review` (auto-runs at the end of start) | software_architect (code), then qa, security, plus up to two diff-selected domain lenses | `Code Review` → `QA` (then approved) |
-| Deliver and release | `/solomon-release` | sre, software_engineer | `QA` → `Done` |
+| Review | `/solomon-review` (auto-runs at the end of start) | software_architect (code), then qa, security, plus up to two diff-selected domain lenses | `Code Review` → `QA`, then on approval and interactive confirmation, merges the PR and moves `QA` → `Done` (ADR-0020) |
+| Deliver and release | `/solomon-release` | sre, software_engineer | milestone-level: cuts the version tag once a milestone's issues are already `Done`; never merges an individual PR |
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
 with `ensure_project_board`; move cards with `set_issue_status`.
@@ -116,6 +116,23 @@ and persona content, and documenter for Markdown under `docs/` (recursively).
 ux_designer joins the ui rules once its agent definition lands. The cap keeps
 reviews bounded; the mapping lives in `solomon_harness/review_roster.py` with
 covering tests, so the selection is auditable and deterministic.
+
+## The merge-to-Done transition
+
+`/solomon-review` owns the merge (ADR-0020): on an approve verdict, in an
+**interactive** session, the reviewer is asked — via the enumerated-decision
+convention — whether to merge now. On yes, `uv run python -m
+solomon_harness.github merge --pr <n> --issue <issue>` squash-merges the PR
+and, in the same call, moves the board card to `Done` and writes the terminal
+status through to memory (the ADR-0006 write-through), so no separate
+`reconcile` is needed for the common case. A **headless** review run
+(`solomon-harness dev review`) never merges — there is no one to answer the
+confirmation, and the non-negotiable human-approval gate for merge holds by
+never reaching that code path, not by an autonomy-level check (`#183` is a
+separate, unresolved gap this does not depend on). `/solomon-release` never
+merges an individual PR; it remains purely milestone-gated, cutting a version
+tag once a milestone's issues are already `Done`, with a board-hygiene
+backstop for any card GitHub auto-closed outside the CLI `Done` path.
 
 ## Deliver and release
 

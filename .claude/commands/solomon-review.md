@@ -1,7 +1,7 @@
 ---
 description: Review a pull request through QA, security, and architecture gates, then approve or request changes
 argument-hint: [pr-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, AskUserQuestion, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
 ---
 
 You are running the Review stage of the solomon lifecycle for PR #$ARGUMENTS.
@@ -92,9 +92,35 @@ Each lens returns findings tagged blocker, major, or minor.
   the worked_on edge and resume is a graph query (ADR-0018).
 - `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` on approval, recording the produced edge.
 
-State explicitly whether an ADR was required and whether one exists. Do not push,
-merge, or change the board to `Done` here — Review moves the card `Code Review` →
-`QA` and ends in `QA`; release is a separate stage. Output direct, professional
+## 6. Merge (interactive only — #172, ADR-0020)
+Review owns the merge-to-`Done` transition; `/solomon-release` never merges an
+individual PR (it is milestone-gated and only cuts a version tag once a
+milestone's issues are already `Done` — see `docs/release-policy.md`).
+
+- On approval, in an interactive session: ask the human, via the enumerated
+  decision convention (never an open prose question), whether to merge now —
+  recommended option first, "Other" last. On yes, run
+  `uv run python -m solomon_harness.github merge --pr $ARGUMENTS --issue <issue>`.
+  This squash-merges the PR and, only on success, moves the board card to
+  `Done` and writes the terminal status through to memory in the same call
+  (the existing ADR-0006 write-through) — no separate `reconcile` step. On a
+  failed merge (not mergeable, conflicts), report the error; board and memory
+  are left unchanged.
+- In a headless run (`solomon-harness dev review`): never attempt to merge and
+  never ask — there is no one to answer. Report that the PR is approved and
+  ready, and that a human must complete the merge, either directly
+  (`gh pr merge` plus `uv run python -m solomon_harness.github merge --pr
+  <n> --issue <issue>` to converge the board/memory) or by re-running
+  `/solomon-review $ARGUMENTS` interactively. This mirrors the same
+  interactive/headless branching `/solomon-start` already uses for its own
+  confirmation points — merge is not gated by the autonomy level (#183 is a
+  separate, unresolved gap this decision does not depend on).
+- On a decline, or in a headless run: the card stays at `QA`, the PR stays
+  ready and unmerged — unchanged from before this decision.
+
+State explicitly whether an ADR was required and whether one exists. Never
+push to a protected branch directly, and never merge or release without the
+human confirmation this section describes. Output direct, professional
 English, no emojis.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
