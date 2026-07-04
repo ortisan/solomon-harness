@@ -236,6 +236,29 @@ class TestRunStageAutonomyPolicy(unittest.TestCase):
         self.assertAlmostEqual(loop_budget.daily_spend(root), 0.5)
 
 
+def _answering_ps_probes(engine_procs):
+    """side_effect for a subprocess.run mock: answer the loop-lock's
+    ``ps -o lstart=`` staleness probes with a fixed start time and hand the
+    queued fake procs to every other (engine) invocation."""
+    queue = list(engine_procs)
+
+    class _PsProc:
+        returncode = 0
+        stdout = "boot\n"
+
+    def run(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "ps":
+            return _PsProc()
+        return queue.pop(0)
+
+    return run
+
+
+def _engine_calls(mock_run):
+    """The subprocess.run calls that reached an engine, ignoring lock probes."""
+    return [c for c in mock_run.call_args_list if c.args[0][0] != "ps"]
+
+
 class TestLoopAutoStage(unittest.TestCase):
     """`loop-auto` drives N iterations of the existing `loop` stage logic — it
     must not build a new orchestration mechanism, just repeat what `loop` does
@@ -248,11 +271,12 @@ class TestLoopAutoStage(unittest.TestCase):
         class _Proc:
             returncode = 0
 
-        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run:
             rc = workflows.run_stage(root, "loop-auto", [], engine="claude")
         self.assertEqual(rc, 0)
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
+        calls = _engine_calls(mock_run)
+        self.assertEqual(len(calls), 1)
+        args, kwargs = calls[0]
         self.assertEqual(args[0], ["claude", "-p"])
         self.assertIn("Scan", kwargs["input"])
 
@@ -262,10 +286,12 @@ class TestLoopAutoStage(unittest.TestCase):
         class _Proc:
             returncode = 0
 
-        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+        with patch(
+            "subprocess.run", side_effect=_answering_ps_probes([_Proc(), _Proc(), _Proc()])
+        ) as mock_run:
             rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "3"], engine="claude")
         self.assertEqual(rc, 0)
-        self.assertEqual(mock_run.call_count, 3)
+        self.assertEqual(len(_engine_calls(mock_run)), 3)
 
     def test_loop_auto_strips_concurrency_before_building_the_prompt(self):
         root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
@@ -286,10 +312,12 @@ class TestLoopAutoStage(unittest.TestCase):
             def __init__(self, rc):
                 self.returncode = rc
 
-        with patch("subprocess.run", side_effect=[_Proc(1), _Proc(0), _Proc(0)]) as mock_run:
+        with patch(
+            "subprocess.run", side_effect=_answering_ps_probes([_Proc(1), _Proc(0), _Proc(0)])
+        ) as mock_run:
             rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "3"], engine="claude")
         self.assertEqual(rc, 1)
-        self.assertEqual(mock_run.call_count, 1)
+        self.assertEqual(len(_engine_calls(mock_run)), 1)
 
     def test_loop_auto_invalid_concurrency_errors_without_dispatch(self):
         root = _workspace_with_command("loop", "---\nx\n---\nScan $ARGUMENTS")
@@ -317,7 +345,9 @@ class TestLoopAutoStage(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             rc = workflows.run_stage(root, "loop-auto", ["--concurrency", "2"], engine="claude")
         self.assertEqual(rc, 1)
-        mock_run.assert_not_called()  # never reach the engine while another driver holds the lock
+        # Never reach the engine while another driver holds the lock; the
+        # mocked calls that do appear are the lock's own ps staleness probes.
+        self.assertEqual(_engine_calls(mock_run), [])
 
 
 if __name__ == "__main__":
