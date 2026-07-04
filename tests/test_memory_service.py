@@ -120,6 +120,29 @@ class TestMemoryService(unittest.TestCase):
         activity = self.svc.get_latest_activity()["activity"]
         self.assertIsNotNone(activity)
 
+    def test_handoff_lifecycle_summary_and_status_update(self):
+        handoff = self.svc.log_handoff(
+            "qa", "sre", "release", "/r.md", "ready", summary="suite green, ready to cut"
+        )
+        hid = handoff["handoff_id"]
+        self.assertIsNotNone(hid)
+
+        # The write seam normalized ready -> open (ADR-0016).
+        activity = self.svc.get_latest_activity()["activity"]
+        self.assertEqual(activity["status"], "open")
+        self.assertEqual(activity["summary"], "suite green, ready to cut")
+
+        updated = self.svc.update_handoff_status(hid, "accepted")
+        self.assertTrue(updated["ok"])
+        self.assertEqual(self.svc.get_latest_activity()["activity"]["status"], "accepted")
+
+    def test_update_handoff_status_missing_row_reports_not_ok(self):
+        self.assertFalse(self.svc.update_handoff_status(424242, "done")["ok"])
+
+    def test_save_session_persists_status(self):
+        self.svc.save_session("s9", "qa", "wrap up", [], status="done")
+        self.assertEqual(self.svc.get_session("s9")["session"]["status"], "done")
+
     def test_milestones_and_releases(self):
         mid = self.svc.create_milestone("M1", "goals", "2026-07-01", "active")["milestone_id"]
         self.assertEqual(len(self.svc.list_milestones()["milestones"]), 1)

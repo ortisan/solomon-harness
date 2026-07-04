@@ -15,7 +15,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from opentelemetry import trace
@@ -361,24 +361,54 @@ def _parse_board_history(raw: Optional[str]) -> List[Dict[str, Any]]:
     return history if isinstance(history, list) else []
 
 
+def _load_transition_histories(
+    client: Any, github_ids: Sequence[str]
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Read the first-class transitions rows, adapted to the history-entry shape.
+
+    Each transitions row becomes ``{column: to_status, entered_at}`` so every
+    downstream consumer (``_latest_done_entered_at``, ``_is_done``) works
+    unchanged on either source. Best-effort: a read failure degrades to an
+    empty dict so the caller falls back to the legacy board_history keys — the
+    cockpit renders a partial figure rather than failing the read (ADR-0002).
+    """
+    try:
+        grouped = client.get_status_transitions(github_ids)
+    except Exception:
+        return {}
+    return {
+        gid: [
+            {"column": row.get("to_status"), "entered_at": row.get("entered_at")}
+            for row in rows
+        ]
+        for gid, rows in grouped.items()
+        if rows
+    }
+
+
 def _load_board_histories(
     client: Any, github_ids: Iterable[Optional[str]]
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Bulk-read board_history for every id in ``github_ids`` in one round trip.
+    """Bulk-read each issue's board timeline in one round trip per source.
 
-    Batches every issue's ``board_history:<github_id>`` key into a single
-    ``get_memory_bulk`` call instead of one ``get_memory`` per issue, so a
-    tenant with N issues costs one history read, not N (no N+1). Returns a dict
-    keyed by github_id; an id with a missing, malformed, or non-list entry is
-    simply absent, so a caller's ``.get(id, [])`` degrades exactly like the
-    single-issue read used to.
+    Prefers the first-class transitions table (ADR-0016) per issue; only the
+    ids it does not cover are read from the legacy ``board_history:<github_id>``
+    keys through a single ``get_memory_bulk`` call (no N+1), so old cards keep
+    their history while new moves come from the indexed table. Returns a dict
+    keyed by github_id; an id with no timeline in either source is simply
+    absent, so a caller's ``.get(id, [])`` degrades exactly like before.
     """
     ids = sorted({gid for gid in github_ids if gid})
     if not ids:
         return {}
-    raw_by_key = client.get_memory_bulk([f"{BOARD_HISTORY_PREFIX}{gid}" for gid in ids])
-    histories: Dict[str, List[Dict[str, Any]]] = {}
-    for gid in ids:
+    histories: Dict[str, List[Dict[str, Any]]] = _load_transition_histories(client, ids)
+    legacy_ids = [gid for gid in ids if gid not in histories]
+    if not legacy_ids:
+        return histories
+    raw_by_key = client.get_memory_bulk(
+        [f"{BOARD_HISTORY_PREFIX}{gid}" for gid in legacy_ids]
+    )
+    for gid in legacy_ids:
         history = _parse_board_history(raw_by_key.get(f"{BOARD_HISTORY_PREFIX}{gid}"))
         if history:
             histories[gid] = history
@@ -817,7 +847,13 @@ def velocity_payload(
     fresh ``DatabaseClient`` for the harness directory.
     """
     factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
-    current = now if now is not None else datetime.now()
+    # Naive UTC, matching the UTC entered_at the transition writers stamp
+    # (ADR-0016): both sides of the window comparison share one clock basis.
+    # Entries written by the pre-UTC local-clock writer skew by at most the
+    # host offset at the window edge, decaying as that data ages out.
+    current = (
+        now if now is not None else datetime.now(timezone.utc).replace(tzinfo=None)
+    )
     with _tracer.start_as_current_span("cockpit.velocity") as span:
         available = _discover_with(factory)
         shown = list(available[:max_projects])

@@ -122,7 +122,7 @@ class TestMcpServerBuilds(unittest.TestCase):
         "log_issue", "get_open_issues", "get_issue", "create_milestone",
         "list_milestones", "save_release", "get_release", "list_releases",
         "save_backtest", "save_session", "get_session", "log_handoff",
-        "get_latest_activity",
+        "update_handoff_status", "get_latest_activity",
         # Graph (SurrealDB-only).
         "relate", "block_issue", "supersede_decision",
         "assign_issue_to_milestone", "link_session_handoff",

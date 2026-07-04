@@ -597,8 +597,17 @@ def _load_memory_context(
         )
 
     issues: List[dict] = []
-    milestone_id = milestone.get("id") if milestone else None
-    if milestone_id is not None:
+    # An issue's milestone_id may hold the milestone's integer rowid (legacy
+    # SQLite rows), its client-minted record id (F7, ADR-0016), or the
+    # SurrealDB ``table:key`` spelling, so the join matches against every
+    # spelling of this milestone's identity.
+    milestone_keys = set()
+    if milestone is not None:
+        for key in (milestone.get("id"), milestone.get("record_id")):
+            if key is not None:
+                milestone_keys.add(str(key))
+                milestone_keys.add(DatabaseClient._record_key(key, key))
+    if milestone_keys:
         try:
             # list_issues() returns every status, unlike get_open_issues() which
             # is scoped to non-terminal rows by design (ADR-0006). By release
@@ -608,7 +617,7 @@ def _load_memory_context(
             issues = [
                 i
                 for i in (db.list_issues() or [])
-                if str(i.get("milestone_id")) == str(milestone_id)
+                if str(i.get("milestone_id")) in milestone_keys
             ]
         except Exception:
             issues = []

@@ -401,6 +401,13 @@ def record_transition(issue_number, column) -> None:
 
     Builds a per-card timeline of when it entered each column, so the start and
     finish dates per stage (and cycle time) can be derived. Best-effort.
+
+    Writes BOTH representations (expand/contract, ADR-0016): the first-class
+    transitions row via ``record_status_transition`` (from_status chained from
+    the tail of the existing timeline) and the legacy ``board_history:*`` JSON
+    blob, kept for one release so downgraded readers keep working. Timestamps
+    are UTC; the previous naive local clock skewed the timeline with the host
+    timezone (finding F4).
     """
     try:
         import datetime
@@ -415,11 +422,22 @@ def record_transition(issue_number, column) -> None:
                     history = json.loads(raw)
                 except Exception:
                     history = []
+            previous = None
+            if history and isinstance(history[-1], dict):
+                previous = history[-1].get("column")
             history.append({
                 "column": column,
-                "entered_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                "entered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
             })
             db.save_memory(key=key, value=json.dumps(history), category="board_history")
+            db.record_status_transition(
+                issue_number,
+                previous,
+                column,
+                actor=os.environ.get("GITHUB_ACTOR") or os.environ.get("USER"),
+            )
     except Exception:
         pass
 
