@@ -33,6 +33,8 @@ import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+from solomon_harness.dates import today_iso
+
 # Bump levels, ordered so ``max`` selects the strongest signal in a commit window.
 _NONE, _PATCH, _MINOR, _MAJOR = 0, 1, 2, 3
 _LEVEL_NAME = {_PATCH: "patch", _MINOR: "minor", _MAJOR: "major"}
@@ -758,12 +760,6 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     return proc.returncode
 
 
-def _today() -> str:
-    return subprocess.run(
-        ["date", "+%Y-%m-%d"], text=True, capture_output=True, check=True
-    ).stdout.strip()
-
-
 def cmd_wiki_page(
     workspace_root: str,
     version: Optional[str] = None,
@@ -795,7 +791,7 @@ def cmd_wiki_page(
     ctx = _gather_release_context(workspace_root, clean)
     page = render_release_wiki_page(
         clean,
-        date=date or _today(),
+        date=date or today_iso(),
         commit_messages=ctx["commits"],
         milestone=ctx["milestone"],
         issues=ctx["issues"],
