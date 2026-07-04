@@ -368,6 +368,44 @@ def test_cmd_prep_rejects_a_malformed_explicit_version(repo, capsys):
     assert "not a SemVer" in capsys.readouterr().err
 
 
+def test_cmd_audit_trigger_success(repo, capsys):
+    from unittest.mock import patch, MagicMock
+    import subprocess
+    
+    # Create the curator directory and a dummy pyproject.toml
+    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+    
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+        
+        rc = release.cmd_audit_trigger(repo, version="1.0.0")
+        
+        assert rc == 0
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert "v1.0.0" in kwargs["input"]
+        assert kwargs["cwd"] == str(curator_dir)
+        assert "audit skipped" not in capsys.readouterr().out
+
+
+def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
+    from unittest.mock import patch
+    
+    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+    
+    with patch("subprocess.run", side_effect=Exception("Sourcing tool is down")):
+        rc = release.cmd_audit_trigger(repo, version="1.0.0")
+        
+        assert rc == 0
+        out_err = capsys.readouterr()
+        combined = out_err.out + out_err.err
+        assert "audit skipped: sourcing unavailable" in combined
+
+
 # --- Merge-time release-window recompute (catches a prep PR going stale) ----
 
 def _pyproject(repo):

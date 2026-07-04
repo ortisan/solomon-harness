@@ -167,10 +167,11 @@ tags; rollback as a revert PR that auto-ships the next patch; and
 backward-compatible expand/contract migrations for the SurrealDB / SQLite memory
 store.
 
-The CLI surface for this stage is `solomon-harness release plan | prep | check`:
-`plan` is read-only and headless-safe (the loop may *propose* a release with it);
-`prep` opens the prep PR and stops, never merging; `check` is the read-only
-fail-closed gate.
+The CLI surface for this stage is `solomon-harness release plan | prep | check | audit-trigger`:
+- `plan` — read-only and headless-safe (the loop may *propose* a release with it);
+- `prep` — opens the prep PR and stops, never merging;
+- `check` — the read-only fail-closed gate.
+- `audit-trigger` — autonomous audit trigger, read-only and degrade-safe. It runs `practice_curator`'s Slice 1 audit on the delivered release artifact to automate continuous benchmarking. Any failure exits 0 and logs "audit skipped: sourcing unavailable".
 
 ## GitHub conventions
 
