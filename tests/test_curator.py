@@ -389,6 +389,23 @@ class TestApplyProposal(unittest.TestCase):
         curator.apply_proposal(p, edit_callback, self.root, gh_runner=gh_runner)
         self.assertFalse(any("--reviewer" in a for a in captured))
 
+    def test_apply_proposal_raises_clear_error_when_gh_not_found(self):
+        # Bug: apply_proposal used to hardcode PATH to
+        # "/opt/homebrew/bin:/usr/bin:/bin" before invoking gh, which breaks on
+        # Intel Mac Homebrew (/usr/local/bin), most non-Debian Linux, and macOS
+        # GitHub Actions runners. gh must be resolved via shutil.which, and a
+        # missing gh must raise a clear, actionable error -- not a bare
+        # FileNotFoundError with no context.
+        def edit_callback(agent_dir):
+            skill_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skill_dir, exist_ok=True)
+            with open(os.path.join(skill_dir, "new_skill.md"), "w", encoding="utf-8") as f:
+                f.write("New skill content")
+
+        with mock.patch.object(curator.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "gh CLI"):
+                curator.apply_proposal(self.proposal, edit_callback, self.root)
+
 
 class TestPinnedClone(unittest.TestCase):
     def setUp(self):
@@ -835,6 +852,108 @@ class TestBrokerAcquisition(unittest.TestCase):
         self.assertEqual(proposal.kind, "adapt_skill")
         self.assertNotIn("baseline", proposal.sources)
         self.assertEqual(proposal.sources, (f"mock-source@{self.pin}",))
+
+
+class TestBrokerAgent(TestBrokerAcquisition):
+    def test_broker_agent_successful_scaffold_and_install(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/999\n"
+
+        def gh_runner(args):
+            return MockCompletedProcess()
+
+        # Create dummy AGENTS.md in self.root
+        agents_md_dir = os.path.join(self.root, "agents")
+        os.makedirs(agents_md_dir, exist_ok=True)
+        agents_md_path = os.path.join(agents_md_dir, "AGENTS.md")
+        with open(agents_md_path, "w", encoding="utf-8") as f:
+            f.write("# solomon-harness — Agent Rules\n\n## The specialist agents\n\n- `qa` — The QA Specialist.\n- `security` — The Security Specialist.\n- `software_engineer` — The Software Engineer.\n")
+
+        # Create a mock scripts directory and document-skills.py script
+        scripts_dir = os.path.join(self.root, "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+        with open(os.path.join(scripts_dir, "document-skills.py"), "w", encoding="utf-8") as f:
+            f.write("print('mock document-skills')\n")
+
+        pr_url = curator.broker_agent(
+            self.root,
+            "expert_coder",
+            "Expert Coder",
+            "Scaffolds code with ultimate precision.",
+            ["Scaffold complex architectures", "Review junior PRs"],
+            gh_runner=gh_runner
+        )
+
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/999")
+
+        # Verify directories and files are scaffolded
+        agent_dir = os.path.join(self.root, "agents", "expert_coder")
+        self.assertTrue(os.path.isdir(agent_dir))
+        self.assertTrue(os.path.isfile(os.path.join(agent_dir, "agents", "expert_coder.md")))
+        self.assertTrue(os.path.isfile(os.path.join(agent_dir, "persona.md")))
+        self.assertTrue(os.path.isfile(os.path.join(agent_dir, "skills", "scope_and_mandate.md")))
+
+        # Verify AGENTS.md registration
+        with open(agents_md_path, "r", encoding="utf-8") as f:
+            agents_md = f.read()
+        self.assertIn("- `expert_coder` — scaffolds code with ultimate precision.", agents_md)
+        # Check alphabetical order
+        expected_order = [
+            "expert_coder",
+            "qa",
+            "security",
+            "software_engineer"
+        ]
+        import re
+        found_order = re.findall(r"- `([^`]+)`", agents_md)
+        self.assertEqual(found_order, expected_order)
+
+    def test_broker_agent_idempotent_creation(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/999\n"
+
+        def gh_runner(args):
+            return MockCompletedProcess()
+
+        agents_md_dir = os.path.join(self.root, "agents")
+        os.makedirs(agents_md_dir, exist_ok=True)
+        agents_md_path = os.path.join(agents_md_dir, "AGENTS.md")
+        with open(agents_md_path, "w", encoding="utf-8") as f:
+            f.write("# solomon-harness — Agent Rules\n\n## The specialist agents\n\n- `qa` — The QA Specialist.\n")
+
+        # Create a mock scripts directory and document-skills.py script
+        scripts_dir = os.path.join(self.root, "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+        with open(os.path.join(scripts_dir, "document-skills.py"), "w", encoding="utf-8") as f:
+            f.write("print('mock document-skills')\n")
+
+        curator.broker_agent(
+            self.root,
+            "expert_coder",
+            "Expert Coder",
+            "Scaffolds code with ultimate precision.",
+            ["Scaffold complex architectures"],
+            gh_runner=gh_runner
+        )
+
+        url2 = curator.broker_agent(
+            self.root,
+            "expert_coder",
+            "Expert Coder",
+            "Scaffolds code with ultimate precision.",
+            ["Scaffold complex architectures"],
+            gh_runner=gh_runner
+        )
+        self.assertEqual(url2, "https://github.com/ortisan/solomon-harness/pull/999")
+
+        # Verify no duplication in AGENTS.md
+        with open(agents_md_path, "r", encoding="utf-8") as f:
+            agents_md = f.read()
+        import re
+        found_order = re.findall(r"- `([^`]+)`", agents_md)
+        self.assertEqual(found_order, ["expert_coder", "qa"])
 
 
 class TestPinnedManifestFitness(unittest.TestCase):

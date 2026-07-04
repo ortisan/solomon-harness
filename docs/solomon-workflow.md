@@ -69,8 +69,20 @@ which option, which target — present the choices as an enumerated list (1, 2, 
 with the final option always being "Other", where the user types a free-form answer.
 In Claude Code this is the AskUserQuestion tool; in the Gemini CLI, present a numbered
 list and invite a free-text reply. Lead with the recommended option first and keep the
-options mutually exclusive. Prefer this over an open prose question: discrete, numbered
-choices keep the user's context focused and prevent dispersion.
+options mutually exclusive. This is mandatory, not a preference (the non-negotiable
+Enumerable decisions rule in `agents/AGENTS.md`): never end a turn with an open prose
+question, and never hand the user a command to copy ("run `/solomon-start 55` when you
+want") in place of a clickable option — the closing "what next" block of every turn that
+offers a choice MUST be the enumerated menu. Discrete numbered choices keep the user's
+context focused and prevent dispersion.
+
+This applies to the **closing "next step" recommendation of every turn**, not only the
+big branching choices. Never end a report with prose the user must copy (for example
+"run `/solomon-start 5` or `/solomon-loop`"): present the candidate next actions as the
+enumerated menu itself — in Claude Code an AskUserQuestion the user clicks — so advancing
+the lifecycle costs one selection, not a copy-paste. The same holds for every small
+"proceed / retry / push-or-PR" confirmation. A turn that ends by offering what to do next
+without an enumerated, selectable menu is a defect.
 
 ## Implementation mode (automatic or manual)
 

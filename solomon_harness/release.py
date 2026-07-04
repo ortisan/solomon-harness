@@ -17,6 +17,11 @@ CLI surface (wired in ``cli.py``):
 - ``release prep``  open the ephemeral ``chore/release-vX.Y.Z`` PR with the bump
   and changelog written. Stops there; the human merges it (the release gate).
 - ``release check`` fail-closed gate: non-zero exit on any version drift.
+- ``release verify-window`` fail-closed gate run by CI's ``release`` job right
+  before tagging: recomputes the commit window from the last tag to the
+  just-pushed trunk HEAD and fails if it disagrees with what pyproject.toml /
+  CHANGELOG.md already declare (catches a commit that landed on main after the
+  prep PR opened but before it merged).
 """
 
 from __future__ import annotations
@@ -142,6 +147,30 @@ def read_changelog_top(path: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def read_changelog_section_lines(path: str, version: str) -> List[str]:
+    """Return the non-blank lines of the ``[version]`` CHANGELOG section body.
+
+    Used by :func:`verify_release_window` to compare what a release-prep PR
+    already wrote against a freshly rendered section for a recomputed commit
+    window. Blank lines are stripped so only the meaningful ``### Section`` /
+    ``- item`` content is compared.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    body: List[str] = []
+    capturing = False
+    for line in lines:
+        heading = _CHANGELOG_HEADING_RE.match(line.strip())
+        if heading:
+            if capturing:
+                break
+            capturing = heading.group("v") == version
+            continue
+        if capturing and line.strip():
+            body.append(line.strip())
+    return body
+
+
 # --- Fail-closed consistency gate -----------------------------------------
 
 def check_release_consistency(
@@ -172,6 +201,43 @@ def check_release_consistency(
         problems.append(f"CHANGELOG.md top entry {version!r} has no date")
     if tag in existing_tags:
         problems.append(f"tag {tag} already exists; published tags are immutable")
+    return problems
+
+
+def check_release_window(
+    *,
+    declared_version: str,
+    recomputed_version: Optional[str],
+    declared_body: List[str],
+    recomputed_body: List[str],
+) -> List[str]:
+    """Return drift problems between a declared release and a fresh recompute.
+
+    ``declared_version``/``declared_body`` are what a release-prep PR already
+    wrote to ``pyproject.toml``/``CHANGELOG.md``; ``recomputed_version``/
+    ``recomputed_body`` come from re-running the same commit-window
+    computation (:func:`commits_since` + :func:`compute_release`) against the
+    current trunk HEAD. A mismatch means a commit landed on main after the
+    prep PR was opened but before it merged, so the window the PR was built
+    from is stale -- even when the bump level (and so the version number)
+    happens not to change, e.g. a ``fix`` landing after a ``feat`` already
+    forced a minor bump. Better to abort the tag than publish it with a
+    silently stale CHANGELOG.
+    """
+    problems: List[str] = []
+    if recomputed_version != declared_version:
+        problems.append(
+            "recomputed release version from the current main history is "
+            f"{recomputed_version!r}, but pyproject.toml/CHANGELOG.md already "
+            f"declare {declared_version!r}. A commit likely landed on main "
+            "after `release prep` ran; re-run it and re-open the prep PR."
+        )
+    if recomputed_body != declared_body:
+        problems.append(
+            "CHANGELOG.md's release section no longer matches the commits "
+            "reachable from the current main history. A commit likely landed "
+            "on main after `release prep` ran; re-run it and re-open the prep PR."
+        )
     return problems
 
 
@@ -398,11 +464,22 @@ def trunk_ref(cwd: str) -> str:
 
 
 def plan(workspace_root: str) -> dict:
-    """Compute the next release from the commits on trunk since the last tag."""
+    """Compute the next release from the commits on trunk since the last tag.
+
+    Raises ``ValueError`` with a clean, explanatory message (never a bare regex
+    mismatch) when neither the last tag nor the current ``pyproject.toml``
+    version is a parseable SemVer string — e.g. a prerelease-style current
+    version (``0.1.0-rc.1``) before any tag exists. Callers that expose a
+    CLI surface (``cmd_plan``, ``cmd_prep``) catch this and follow the same
+    clean-stderr/return-1 pattern used elsewhere in this module.
+    """
     pyproject = os.path.join(workspace_root, "pyproject.toml")
     current_version = read_pyproject_version(pyproject)
     tag = last_version_tag(workspace_root)
-    base = SemVer.parse(tag) if tag else SemVer.parse(current_version)
+    try:
+        base = SemVer.parse(tag) if tag else SemVer.parse(current_version)
+    except ValueError as exc:
+        raise ValueError(f"cannot compute the release base version: {exc}") from exc
     ref = trunk_ref(workspace_root)
     commits = commits_since(tag, workspace_root, ref=ref)
     level, new_version = compute_release(base, commits)
@@ -415,6 +492,44 @@ def plan(workspace_root: str) -> dict:
         "commit_count": len(commits),
         "commits": commits,
     }
+
+
+def verify_release_window(workspace_root: str) -> List[str]:
+    """Recompute the release window against the current trunk HEAD.
+
+    Run by CI's ``release`` job right before tagging (never during ``prep``,
+    where the comparison would be trivially self-consistent): re-runs the same
+    commit-window computation ``plan()`` uses -- :func:`commits_since` from the
+    last tag, then :func:`compute_release` -- against whatever ``HEAD`` is
+    checked out to (the just-pushed main tip, after the prep PR's squash
+    merge) and compares it to what ``pyproject.toml``/``CHANGELOG.md`` already
+    declare. A commit that landed on main after the prep PR opened but before
+    it merged shows up here even when it does not change the bump level (a
+    ``fix`` arriving after a ``feat`` already forced a minor bump, say),
+    because the comparison also covers the rendered CHANGELOG body, not just
+    the version number.
+
+    Returns the list of drift problems; empty means the window is still
+    accurate. When there is no prior tag (the very first release ever), there
+    is no "since" boundary to recompute against, so this returns clean.
+    """
+    pyproject = os.path.join(workspace_root, "pyproject.toml")
+    changelog = os.path.join(workspace_root, "CHANGELOG.md")
+    declared_version = read_pyproject_version(pyproject)
+    prior_tag = last_version_tag(workspace_root)
+    if prior_tag is None:
+        return []
+    base = SemVer.parse(prior_tag)
+    commits = commits_since(prior_tag, workspace_root, ref="HEAD")
+    _, recomputed = compute_release(base, commits)
+    recomputed_body = [line for line in _bucket_lines(_change_buckets(commits)) if line.strip()]
+    declared_body = read_changelog_section_lines(changelog, declared_version)
+    return check_release_window(
+        declared_version=declared_version,
+        recomputed_version=str(recomputed) if recomputed else None,
+        declared_body=declared_body,
+        recomputed_body=recomputed_body,
+    )
 
 
 def set_pyproject_version(path: str, new_version: str) -> None:
@@ -451,9 +566,12 @@ def _load_memory_context(
     """Best-effort pull of the milestone and delivered issues from project memory.
 
     Returns ``(milestone, issues)``. The milestone is matched against the
-    release ``version`` by title/description when possible, otherwise the most
-    recent one is used; the issues are those attached to that milestone. Raises
-    on any backend failure so the caller can degrade to a placeholder page.
+    release ``version`` by title/description; the issues are those attached to
+    that milestone. When memory holds milestones but none references this
+    version, no milestone is guessed -- the caller renders the documented
+    placeholder instead of silently attributing an unrelated milestone's title
+    and description to this release. Raises on any backend failure so the
+    caller can degrade to a placeholder page.
     """
     from solomon_harness.tools.database_client import DatabaseClient
 
@@ -467,15 +585,29 @@ def _load_memory_context(
             milestone = ms
             break
     if milestone is None and milestones:
-        milestone = milestones[0]
+        # A milestone exists in memory but none references this release's
+        # version in its title or description. Picking the first one anyway
+        # (most recent, but otherwise arbitrary) previously produced a wiki
+        # page whose Business Problem section documented an unrelated
+        # milestone -- refuse that guess and flag it instead.
+        print(
+            f"release wiki-page: no milestone references version {needle!r}; "
+            "rendering the placeholder instead of guessing a milestone.",
+            file=sys.stderr,
+        )
 
     issues: List[dict] = []
     milestone_id = milestone.get("id") if milestone else None
     if milestone_id is not None:
         try:
+            # list_issues() returns every status, unlike get_open_issues() which
+            # is scoped to non-terminal rows by design (ADR-0006). By release
+            # time the delivered issues under a milestone are normally closed,
+            # so filtering the open-only set here would always render an empty
+            # "Delivered work" section.
             issues = [
                 i
-                for i in (db.get_open_issues() or [])
+                for i in (db.list_issues() or [])
                 if str(i.get("milestone_id")) == str(milestone_id)
             ]
         except Exception:
@@ -505,7 +637,11 @@ def _gather_release_context(workspace_root: str, version: str) -> dict:
 # --- CLI handlers ---------------------------------------------------------
 
 def cmd_plan(workspace_root: str) -> int:
-    info = plan(workspace_root)
+    try:
+        info = plan(workspace_root)
+    except ValueError as exc:
+        print(f"release plan: {exc}", file=sys.stderr)
+        return 1
     base = info["base"]
     tag = info["last_tag"] or "(no tag)"
     if not info["next"]:
@@ -541,9 +677,37 @@ def cmd_check(workspace_root: str) -> int:
     return 0
 
 
+def cmd_verify_window(workspace_root: str) -> int:
+    """Fail-closed gate for CI's ``release`` job: recompute the window pre-tag.
+
+    Distinct from ``cmd_check``, which only asserts internal agreement
+    (tag == pyproject.version == top CHANGELOG heading). This instead
+    recomputes the commit window from the last tag to the current ``HEAD``
+    and compares it to that declared version/changelog, so it catches a
+    commit that landed on main after the release-prep PR opened but before it
+    merged -- something an internal-agreement check cannot see.
+    """
+    try:
+        problems = verify_release_window(workspace_root)
+    except ValueError as exc:
+        print(f"release verify-window: {exc}", file=sys.stderr)
+        return 1
+    if problems:
+        print("release verify-window FAILED: the release window is stale.", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return 1
+    print("release verify-window OK: the release window still matches the current main history.")
+    return 0
+
+
 def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     """Open the ephemeral chore/release-vX.Y.Z prep PR. Never merges."""
-    info = plan(workspace_root)
+    try:
+        info = plan(workspace_root)
+    except ValueError as exc:
+        print(f"release prep: {exc}", file=sys.stderr)
+        return 1
     new_version = version or info["next"]
     if not new_version:
         print("Nothing to release: no releasable commits since the last tag.", file=sys.stderr)
@@ -637,10 +801,10 @@ def cmd_wiki_page(
 
 
 def run(workspace_root: str, args: List[str]) -> int:
-    """Dispatch ``release <plan|prep|check|wiki-page>``."""
+    """Dispatch ``release <plan|prep|check|verify-window|wiki-page>``."""
     if not args:
         print(
-            "Usage: solomon-harness release <plan|prep|check|wiki-page> [version]",
+            "Usage: solomon-harness release <plan|prep|check|verify-window|wiki-page> [version]",
             file=sys.stderr,
         )
         return 1
@@ -649,12 +813,14 @@ def run(workspace_root: str, args: List[str]) -> int:
         return cmd_plan(workspace_root)
     if sub == "check":
         return cmd_check(workspace_root)
+    if sub == "verify-window":
+        return cmd_verify_window(workspace_root)
     if sub == "prep":
         return cmd_prep(workspace_root, rest[0] if rest else None)
     if sub == "wiki-page":
         return cmd_wiki_page(workspace_root, rest[0] if rest else None)
     print(
-        f"Unknown release subcommand {sub!r}. Use plan, prep, check, or wiki-page.",
+        f"Unknown release subcommand {sub!r}. Use plan, prep, check, verify-window, or wiki-page.",
         file=sys.stderr,
     )
     return 1
@@ -704,6 +870,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _with_root(sub.add_parser("plan"))
     _with_root(sub.add_parser("check"))
+    _with_root(
+        sub.add_parser(
+            "verify-window",
+            help=(
+                "Recompute the release window against the current trunk HEAD and fail if it "
+                "drifted from pyproject.toml/CHANGELOG.md (run by CI right before tagging)"
+            ),
+        )
+    )
     prep = _with_root(sub.add_parser("prep"))
     prep.add_argument("version", nargs="?", default=None)
 
@@ -715,6 +890,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_plan(root)
     if args.command == "check":
         return cmd_check(root)
+    if args.command == "verify-window":
+        return cmd_verify_window(root)
     if args.command == "prep":
         return cmd_prep(root, args.version)
     return 1

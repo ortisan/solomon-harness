@@ -84,3 +84,5 @@ State explicitly whether an ADR was required and whether one exists. Do not push
 merge, or change the board to `Done` here — Review moves the card `Code Review` →
 `QA` and ends in `QA`; release is a separate stage. Output direct, professional
 English, no emojis.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.

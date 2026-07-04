@@ -10,6 +10,8 @@ import os
 import sys
 from typing import Dict, Optional, List, Tuple
 
+from solomon_harness.bootstrap import scaffold_new_agent
+
 
 def _subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
     """Look up a registered subcommand's parser by name, e.g. to print its help."""
@@ -329,11 +331,14 @@ def _fetch_gh_states(
     import json as _json
     import subprocess
 
+    from solomon_harness.subprocess_env import clean_git_env
+
     try:
         proc = subprocess.run(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
+            env=clean_git_env(),
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
@@ -683,12 +688,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     release_parser = subparsers.add_parser(
         "release",
-        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | wiki-page [version])",
+        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | verify-window | wiki-page [version])",
     )
     release_parser.add_argument(
         "release_args",
         nargs=argparse.REMAINDER,
-        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), wiki-page [version] (write the release wiki page)",
+        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), verify-window (recompute the release window against trunk HEAD pre-tag), wiki-page [version] (write the release wiki page)",
     )
 
     wt_parser = subparsers.add_parser(
@@ -709,6 +714,10 @@ def build_parser() -> argparse.ArgumentParser:
     agents_subparsers.add_parser("help", help="Display usage instructions")
     show_parser = agents_subparsers.add_parser("show", help="Show specific agent profile")
     show_parser.add_argument("agent_name", type=str, help="Agent name")
+    
+    scaffold_parser = agents_subparsers.add_parser("scaffold", help="Scaffold a new specialist agent")
+    scaffold_parser.add_argument("agent_name", type=str, help="Agent name")
+    scaffold_parser.add_argument("--description", type=str, required=True, help="Agent description")
 
     return parser
 
@@ -902,11 +911,21 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
             except Exception as e:
                 print(f"Error reading subagent: {e}", file=sys.stderr)
                 sys.exit(1)
+        elif args.agents_command == "scaffold":
+            if not args.agent_name:
+                print("Error: Subcommand 'scaffold' requires an agent name.", file=sys.stderr)
+                sys.exit(1)
+            try:
+                scaffold_new_agent(workspace_root, args.agent_name, args.description)
+                print(f"Agent '{args.agent_name}' scaffolded and registered successfully.")
+            except Exception as e:
+                print(f"Error scaffolding agent: {e}", file=sys.stderr)
+                sys.exit(1)
         elif args.agents_command == "help":
-            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            print("Usage: solomon-harness agents [list|show <agent_name>|scaffold <agent_name> --description <desc>]")
             sys.exit(0)
         else:
-            print("Usage: solomon-harness agents [list|show <agent_name>]")
+            print("Usage: solomon-harness agents [list|show <agent_name>|scaffold <agent_name> --description <desc>]")
             sys.exit(1)
     else:
         parser.print_help()

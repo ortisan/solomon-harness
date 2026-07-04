@@ -66,3 +66,5 @@ If `$ARGUMENTS` is empty, ask the user for the idea in one line and stop.
    Criteria, Definition of Ready, or Definition of Done yet, and only graduates to a
    Definition of Ready and a Definition of Done at refinement (`/solomon-refine`) once
    it is promoted to the backlog. Do not force a Definition of Ready onto a raw idea.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.

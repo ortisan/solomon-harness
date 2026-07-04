@@ -10,10 +10,12 @@ name: Release
 #     ruff are the separate ci.yml gate, not this job.
 #   - release: fires only when a prep PR has merged to main (its commit subject
 #     is exactly `chore(release): vX.Y.Z`; the repo squash-merges, so the squash
-#     subject is the prep PR title). It derives the version, verifies the pinned
-#     action SHAs resolve, tags it, and publishes the Release. There is no
-#     `gh release create` in the skill and no tag-push trigger, which removes the
-#     published-manual vs draft-auto race (issue #34).
+#     subject is the prep PR title). It derives the version, recomputes the
+#     release window against the just-pushed main HEAD (catching a commit that
+#     landed on main after the prep PR opened but before it merged), verifies
+#     the pinned action SHAs resolve, tags it, and publishes the Release. There
+#     is no `gh release create` in the skill and no tag-push trigger, which
+#     removes the published-manual vs draft-auto race (issue #34).
 
 on:
   push:
@@ -73,6 +75,23 @@ jobs:
             echo "Tag ${TAG} already exists on origin; refusing to re-tag." >&2
             exit 1
           fi
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Recompute the release window against the just-pushed main HEAD
+        # A feat/fix commit that landed on main after the prep PR opened but
+        # before it merged is otherwise silently dropped from the changelog
+        # and the release window: `release check` on the PR only proved the
+        # PR's own pyproject.toml/CHANGELOG.md/tag agreed with each other, not
+        # that they still match main's actual history at merge time. Abort the
+        # tag rather than publish one with a stale changelog.
+        run: uv run python -m solomon_harness.cli release verify-window
 
       - name: Extract changelog section for release notes
         id: notes

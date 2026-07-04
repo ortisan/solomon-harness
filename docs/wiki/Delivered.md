@@ -4,8 +4,8 @@ A running log of delivered issues, newest first. Versions are cut per release; s
 
 | Date | Issue | Title | Version | PR |
 | --- | --- | --- | --- | --- |
+| 2026-06-29 | [#127](https://github.com/ortisan/solomon-harness/issues/127) | chore(memory): mark synthetic RAID/follow-up rows terminal when their parent issue or PR resolves | v0.11.0 | [#134](https://github.com/ortisan/solomon-harness/pull/134) |
 | 2026-06-29 | [#55](https://github.com/ortisan/solomon-harness/issues/55) | feat(ui): cockpit per-user velocity — the throughput number (slice 3a) | v0.11.0 | [#140](https://github.com/ortisan/solomon-harness/pull/140) |
-| 2026-06-29 | [#116](https://github.com/ortisan/solomon-harness/issues/116) | feat(reconcile): close synthetic tracking rows when their parent issue or PR resolves | v0.11.0 | [#134](https://github.com/ortisan/solomon-harness/pull/134) |
 | 2026-06-29 | [#130](https://github.com/ortisan/solomon-harness/issues/130) | feat(workflow): check memory for pending tasks and output options card on session start | v0.10.0 | [#130](https://github.com/ortisan/solomon-harness/pull/130) |
 | 2026-06-29 | [#47](https://github.com/ortisan/solomon-harness/issues/47) | feat(agents): fetch and adapt an external skill with SHA pinning and security guards | v0.9.0 | [#99](https://github.com/ortisan/solomon-harness/pull/99) |
 | 2026-06-29 | [#119](https://github.com/ortisan/solomon-harness/issues/119) | feat(memory): multi-model SurrealDB and structural spec-audit fixes | v0.9.0 | [#119](https://github.com/ortisan/solomon-harness/pull/119) |

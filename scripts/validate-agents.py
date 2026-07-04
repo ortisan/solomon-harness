@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import glob
 import os
 import sys
 import unicodedata
@@ -76,6 +77,16 @@ REQUIRED_KEYWORDS = {
         "OpenTelemetry",
         "secure-by-default",
         "Test-Driven Development",
+    ],
+    "loop_engineer.md": [
+        "Loop Engineer",
+        "single-driver lock",
+        "autonomy ladder",
+        "guardrails",
+        "run-log",
+        "cost budget",
+        "context-reset discipline",
+        "human review gate",
     ],
     "ml_engineer.md": [
         "ML Engineer",
@@ -295,8 +306,25 @@ def validate_agent_file(filepath, required_keywords):
     return True
 
 
-def main():
-    agents_dir = "agents"
+def find_unregistered_profiles(agents_dir):
+    """Return the sorted list of agent profile paths that exist on disk under
+    ``agents_dir/*/agents/*.md`` but have no matching entry in
+    REQUIRED_KEYWORDS.
+
+    REQUIRED_KEYWORDS is maintained by hand, keyed by filename. Without this
+    check, a new or renamed agent profile that nobody registered there is
+    simply never iterated by ``main()`` and passes validation by omission.
+    """
+    pattern = os.path.join(agents_dir, "*", "agents", "*.md")
+    unregistered = []
+    for filepath in sorted(glob.glob(pattern)):
+        filename = os.path.basename(filepath)
+        if filename not in REQUIRED_KEYWORDS:
+            unregistered.append(filepath)
+    return unregistered
+
+
+def main(agents_dir="agents"):
     success = True
 
     print("Validating Agent Profile files...")
@@ -307,6 +335,14 @@ def main():
             print(f"  {filename} is valid.")
         else:
             success = False
+
+    for filepath in find_unregistered_profiles(agents_dir):
+        print(
+            f"Error: Agent profile '{filepath}' has no REQUIRED_KEYWORDS entry "
+            "in scripts/validate-agents.py. Register it explicitly with real "
+            "keywords instead of leaving it unchecked."
+        )
+        success = False
 
     if success:
         print("\nAll agent profile validation checks passed successfully.")

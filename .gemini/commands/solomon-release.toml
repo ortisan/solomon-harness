@@ -54,4 +54,6 @@ After the prep PR is merged and CI has tagged and published:
 - `save_session` to checkpoint the released milestone and the readiness baseline for the next release.
 
 Report the released version and tag, the prep-PR merge commit, the milestone closed, the board move, and any GO-WITH-CONDITIONS follow-ups. Output direct, professional English, no emojis.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
 '''
