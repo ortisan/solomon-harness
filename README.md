@@ -191,10 +191,11 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 
 ### Delivery workflows
 
-Ten `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
+Eleven `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
 guarded by `tests/test_readme_sync.py` — are authored once as Claude Code
 commands under `.claude/commands/` and mirrored to Gemini commands under
-`.gemini/commands/`. Eight drive the lifecycle table above; the other two,
+`.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop-auto`
+runs the autonomous parallel loop over Ready issues; and the remaining two,
 `/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
 scan the codebase for architectural drift and duplication (see
 `docs/solomon-workflow.md`). They orchestrate the specialist agents, the `gh` CLI, the
