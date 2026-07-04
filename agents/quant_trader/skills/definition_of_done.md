@@ -1,3 +1,17 @@
+# Quant Trader Definition of Done
+
+The evidence bar a strategy must clear before deployment. The pitfalls below are the shortcuts that fake each checklist item; the checklist itself follows.
+
+## Common pitfalls
+
+- A hypothesis card back-filled after the backtest with targets tuned to the observed result; the pre-registration is fiction and the strategy is unfalsifiable.
+- Thresholds "met" on gross numbers while the net run misses Sharpe `>= 1.5` OOS or profit factor `>= 1.3`; only net-of-cost results count.
+- Deflated Sharpe and PBO computed against a trial count far below the real search; undeclared reruns make the deflation meaningless.
+- Walk-forward claimed without purging and embargo, so the out-of-sample curve is quietly in-sample and the checklist item holds in name only.
+- The slippage stress skipped or run only at `1x`, letting a cost-fragile edge pass that dies at the first live fill.
+- Regime coverage marked done without a crisis period in the sample, so the all-weather claim rests on one benign regime.
+- A run called reproducible without pinned seeds, a data-snapshot hash, or a `save_backtest` record; a result that cannot be rerun cannot be audited.
+
 ## Definition of done
 
 

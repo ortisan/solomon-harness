@@ -1,3 +1,17 @@
+# Security Definition of Done
+
+The evidence gate for security work: what must be demonstrably true across STRIDE modeling, scanning, dependency pinning, secrets hygiene, and regression tests before a change merges. Every item is checked by artifact or tool output, never by assertion.
+
+## Common pitfalls
+
+- STRIDE applied to only part of the data flow diagram — a skipped data store or trust boundary means the six-category walk never completed, and the model gives false assurance.
+- A threat mitigated in the design but never recorded in PLAN.md or memory via `save_decision`, so the accepted risk has no owner or expiry when it resurfaces.
+- SAST declared clean because bandit passed while semgrep never ran, or a new HIGH finding suppressed without an inline justification.
+- `pip-audit` green taken as full dependency coverage without the second scanner (`trivy`/`grype`), leaving container and OS-layer CVEs unchecked.
+- SBOM generation skipped because "dependencies did not change" — the pinned-with-hashes claim then cannot be audited against what actually ships.
+- A vulnerability closed with the CVE noted but no CVSS vector and no regression test, so the severity SLA cannot be applied and the fix cannot be proven.
+- The secret scan run only against the diff, missing credentials already sitting in history that a full-history gitleaks pass would surface.
+
 ## Definition of done
 
 

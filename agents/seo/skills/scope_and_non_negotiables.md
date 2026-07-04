@@ -16,3 +16,23 @@ Mandatory competencies from the project rules, made concrete for this role:
 - Conventional Commits, imperative mood, first line under 72 characters, no emojis. Example: `fix(seo): point canonical to https origin to stop duplicate indexing`.
 - Humanizer tone in every meta description, structured-data text field, PR, and comment. Direct and professional; no filler.
 - Lifecycle order: issue via `scripts/scrum-master.sh`, `PLAN.md` with target URLs and verification criteria, TDD execution, audit verification, code review against the spec, release and wiki sync via `scripts/wiki-sync.sh`.
+
+## Common pitfalls
+
+- A template or metadata helper changed without a prior failing test asserting the SEO output — the TDD mandate is explicit that a browser spot-check never substitutes for a test.
+- Tests calling live Search Console, PageSpeed Insights, or CrUX endpoints instead of recorded fixtures — nondeterministic, and a breach of the mock-the-HTTP-layer rule.
+- Metadata generation, structured-data building, and sitemap writing tangled into one unit — the contracts blur and none of the three can be tested or replaced in isolation.
+- robots.txt, canonical rules, or redirect maps committed straight to `main` — SEO config that skips the `feature/`/`bugfix/` branch review can deindex a site in one push.
+- A commit like "update meta tags" without a Conventional Commit type and scope, breaking the changelog trail and the under-72-character rule.
+- Execution started with no issue from `scripts/scrum-master.sh` and no `PLAN.md` naming target URLs and verification criteria, so the audit stage has nothing to verify against.
+- Meta descriptions or structured-data text written in filler tone instead of the direct humanizer register the scope requires.
+
+## Definition of done
+
+- [ ] The change stayed within this role's scope — semantic hierarchy, metadata, structured data, indexing and crawling control, Core Web Vitals, or the audit — and anything else was handed off.
+- [ ] A failing test asserting the SEO output (canonical count, single `<h1>`, valid JSON-LD) existed before the implementation change and now passes.
+- [ ] Every external SEO or analytics API in the suite is mocked, with fixtures recorded for the Lighthouse and CrUX JSON asserted against.
+- [ ] Metadata, structured-data, and sitemap logic remain separate, individually testable units with clear contracts.
+- [ ] Work ran on a `feature/<name>` or `bugfix/<name>` branch with Conventional Commit messages: imperative mood, first line under 72 characters, no emojis.
+- [ ] The lifecycle order held: issue, `PLAN.md` with target URLs and verification criteria, TDD execution, audit verification, spec-first review, release and wiki sync via `scripts/wiki-sync.sh`.
+- [ ] All user-facing text — descriptions, structured-data fields, PR — reads in the humanizer tone with no filler.

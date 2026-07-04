@@ -1,3 +1,17 @@
+# Observability Definition of Done
+
+The acceptance gate for observability deliverables: every item below must hold before instrumentation, alerting, or dashboards ship. The pitfalls list the ways telemetry work gets falsely marked complete against this checklist.
+
+## Common pitfalls
+
+- Structured logging ticked while ERROR events are still sampled or PII survives in log bodies and span attributes — the item requires redaction and the ERROR sampling exemption, not just JSON formatting.
+- RED/USE coverage claimed from whatever auto-instrumentation happened to emit, with no cardinality budget written down — coverage without the budget math leaves the TSDB one label away from an outage.
+- Span coverage verified only on the happy path, with exceptions never passed to `record_exception` or given ERROR status — the failed requests are exactly the traces the checklist exists to keep.
+- Tail sampling marked done because a Collector policy exists, but never fed a sample payload in a test — an unvalidated config can silently drop the error traces it was meant to retain.
+- Burn-rate alerts shipped without severity, owner, or runbook — the multi-window rule fires correctly and still strands the responder, so the alerting item is not met.
+- Dashboards delivered as panels with no SLO state or error budget, so the golden signals cannot be read against a target.
+- The TDD item ticked with tests that assert only "no exception raised" instead of asserting the emitted spans and metric points against mocked backends — the telemetry contract itself goes unverified.
+
 ## Definition of done
 
 
