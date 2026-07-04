@@ -4,6 +4,8 @@ A running log of delivered issues, newest first. Versions are cut per release; s
 
 | Date | Issue | Title | Version | PR |
 | --- | --- | --- | --- | --- |
+| 2026-06-29 | [#127](https://github.com/ortisan/solomon-harness/issues/127) | chore(memory): mark synthetic RAID/follow-up rows terminal when their parent issue or PR resolves | v0.11.0 | [#134](https://github.com/ortisan/solomon-harness/pull/134) |
+| 2026-06-29 | [#55](https://github.com/ortisan/solomon-harness/issues/55) | feat(ui): cockpit per-user velocity — the throughput number (slice 3a) | v0.11.0 | [#140](https://github.com/ortisan/solomon-harness/pull/140) |
 | 2026-06-29 | [#130](https://github.com/ortisan/solomon-harness/issues/130) | feat(workflow): check memory for pending tasks and output options card on session start | v0.10.0 | [#130](https://github.com/ortisan/solomon-harness/pull/130) |
 | 2026-06-29 | [#53](https://github.com/ortisan/solomon-harness/issues/53) | feat(ui): cockpit foundation — SPA shell + read API + single-project board | v0.7.0 | [#77](https://github.com/ortisan/solomon-harness/pull/77) |
 | 2026-06-29 | [#19](https://github.com/ortisan/solomon-harness/issues/19) | feat(agents): practice_curator — fleet sweep emitting one bounded proposal per agent | v0.7.0 | [#95](https://github.com/ortisan/solomon-harness/pull/95) |

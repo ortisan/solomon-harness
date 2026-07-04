@@ -2,6 +2,12 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [0.11.0] - 2026-06-29
+
+### Added
+- cockpit per-user velocity — the throughput number (slice 3a) (#140)
+- close synthetic tracking rows when their parent issue or PR resolves (#134)
+
 ## [0.10.0] - 2026-06-29
 
 ### Added

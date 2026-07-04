@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Home from "./page";
@@ -413,5 +413,129 @@ describe("cockpit cross-user filter", () => {
     ).toBeInTheDocument();
     // No issue card renders anywhere under the empty filter.
     expect(screen.queryAllByTestId("issue-card")).toHaveLength(0);
+  });
+});
+
+interface VelocityRow {
+  personKey: string;
+  count: number;
+  perTenant: Record<string, number>;
+  excluded: number;
+  doneAt: string[];
+  partial: boolean;
+  partialTenants: string[];
+}
+
+function velocityRow(
+  personKey: string,
+  count: number,
+  overrides: Partial<VelocityRow> = {},
+): VelocityRow {
+  return {
+    personKey,
+    count,
+    perTenant: {},
+    excluded: 0,
+    doneAt: [],
+    partial: false,
+    partialTenants: [],
+    ...overrides,
+  };
+}
+
+function velocityPayload(rows: VelocityRow[], overrides: Record<string, unknown> = {}) {
+  const degraded = rows.some((row) => row.partial) ? ["gamma"] : [];
+  return {
+    rows,
+    aggregateStatus: degraded.length ? 207 : 200,
+    degraded,
+    window: 14,
+    ...overrides,
+  };
+}
+
+describe("cockpit velocity view", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function wireByView(portfolio: unknown, velocity: unknown) {
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () =>
+          String(url).includes("view=velocity") ? velocity : portfolio,
+      }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  it("renders one throughput row per subject with the excluded affordance, the partial badge, and an unassigned row", async () => {
+    const fetchMock = wireByView(
+      portfolioPayload([okSwimlane("alpha", { Backlog: [issue("a1")] })]),
+      velocityPayload([
+        velocityRow("alice@example.com", 7, {
+          perTenant: { alpha: 4, beta: 3 },
+          excluded: 2,
+          partial: true,
+          partialTenants: ["gamma"],
+        }),
+        velocityRow("gh:bob", 0, { partial: true, partialTenants: ["gamma"] }),
+        velocityRow("unassigned", 2, {
+          perTenant: { alpha: 2 },
+          partial: true,
+          partialTenants: ["gamma"],
+        }),
+      ]),
+    );
+
+    render(<Home />);
+
+    // Switch to the velocity view; the page re-fetches with ?view=velocity.
+    const viewSelect = (await screen.findByLabelText("View")) as HTMLSelectElement;
+    fireEvent.change(viewSelect, { target: { value: "velocity" } });
+
+    // One throughput row per subject, including the unassigned bucket.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("velocity-row")).toHaveLength(3),
+    );
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.some((url) => url.includes("view=velocity") && url.includes("window=14"))).toBe(true);
+    });
+
+    // Scope row lookups to the velocity panel; the unassigned subject also
+    // appears as a (here irrelevant) user-filter option outside it.
+    const panel = screen.getByTestId("velocity");
+
+    // alice's throughput number renders inside her row.
+    const aliceRow = within(panel)
+      .getByText("alice@example.com")
+      .closest("[data-testid='velocity-row']");
+    expect(aliceRow).not.toBeNull();
+    expect(within(aliceRow as HTMLElement).getByText("7")).toBeInTheDocument();
+
+    // The coverage gap is surfaced, never silent.
+    expect(
+      within(aliceRow as HTMLElement).getByText(/2 excluded \(no tracked history\)/i),
+    ).toBeInTheDocument();
+
+    // The reachable-subtotal figure is flagged partial, naming the degraded tenant.
+    expect(within(aliceRow as HTMLElement).getByText(/partial/i)).toBeInTheDocument();
+    expect(within(aliceRow as HTMLElement).getByText(/gamma/i)).toBeInTheDocument();
+
+    // The unassigned bucket is its own row reading 2, not merged into a person.
+    const unassignedRow = within(panel)
+      .getByText("unassigned")
+      .closest("[data-testid='velocity-row']");
+    expect(unassignedRow).not.toBeNull();
+    expect(within(unassignedRow as HTMLElement).getByText("2")).toBeInTheDocument();
+
+    // The velocity view is observe-only: every request is a GET.
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit | undefined;
+      expect((init?.method ?? "GET").toUpperCase()).toBe("GET");
+    }
   });
 });
