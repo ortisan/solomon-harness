@@ -430,7 +430,12 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("os.getcwd", return_value=tmp):
                 with DatabaseClient(harness_dir=tmp) as db:
-                    db.log_issue("77", "Deliver feature", "feature", "code_review", "mile-7")
+                    milestone_id = db.create_milestone(
+                        "M1", "goals", "2026-07-01", "active"
+                    )
+                    db.log_issue(
+                        "77", "Deliver feature", "feature", "code_review", milestone_id
+                    )
                 with patch(
                     "solomon_harness.github._gh",
                     return_value={"ok": True, "data": {"assignees": []}},
@@ -442,7 +447,7 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         self.assertEqual(row["status"], "closed")
         self.assertEqual(row["title"], "Deliver feature")
         self.assertEqual(row["type_"], "feature")
-        self.assertEqual(str(row["milestone_id"]), "mile-7")
+        self.assertEqual(str(row["milestone_id"]), str(milestone_id))
         self.assertIsNone(row["assignee"])
         self.assertNotIn("77", open_ids)
 

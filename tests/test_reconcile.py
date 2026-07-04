@@ -204,7 +204,10 @@ class TestReconcileTrackingRows(unittest.TestCase):
         proving the close only rewrites the status and never drops the milestone or
         owner of a resolved tracking item."""
         client = DatabaseClient(db_path=self.db_path)
-        client.log_issue("68-R-03", "RAID R-03 (#68)", "raid", "in_progress", 7, "marcelo")
+        milestone_id = client.create_milestone("M1", "goals", "2026-07-01", "active")
+        client.log_issue(
+            "68-R-03", "RAID R-03 (#68)", "raid", "in_progress", milestone_id, "marcelo"
+        )
 
         result = cli.reconcile_tracking_rows(client, {"68": True})
 
@@ -212,7 +215,7 @@ class TestReconcileTrackingRows(unittest.TestCase):
         closed_row = client.get_issue("68-R-03")
         self.assertTrue(is_terminal(closed_row["status"]))
         # The non-status fields survived the close unchanged.
-        self.assertEqual(closed_row["milestone_id"], 7)
+        self.assertEqual(closed_row["milestone_id"], str(milestone_id))
         self.assertEqual(closed_row["assignee"], "marcelo")
         # Read back through the open-issue view as well: the row is gone from it
         # (terminal), so the survival is confirmed via the direct get_issue read.

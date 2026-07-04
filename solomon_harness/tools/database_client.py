@@ -683,6 +683,11 @@ class DatabaseClient:
         # concurrently instead of failing with "database is locked".
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_seconds * 1000)}")
+        # SQLite does not enforce a declared FOREIGN KEY unless this pragma is set
+        # on the connection (it defaults OFF); without it, issues.milestone_id can
+        # carry a dangling reference to a milestone that never existed. Must be set
+        # before any transaction begins, so it runs here, before ``with conn:``.
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             with conn:
                 yield conn
@@ -728,7 +733,7 @@ class DatabaseClient:
                 title TEXT NOT NULL,
                 type_ TEXT,
                 status TEXT,
-                milestone_id INTEGER,
+                milestone_id TEXT,
                 assignee TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (milestone_id) REFERENCES milestones (id)
@@ -811,10 +816,67 @@ class DatabaseClient:
                 for query in queries:
                     cursor.execute(query)
                 self._ensure_issue_assignee_column(conn)
+                self._ensure_issue_milestone_id_is_text(conn)
                 conn.commit()
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
+
+    @staticmethod
+    def _ensure_issue_milestone_id_is_text(conn: sqlite3.Connection) -> None:
+        """Migrate a pre-migration issues.milestone_id from INTEGER to TEXT.
+
+        releases.milestone_id has always been TEXT (save_release str()-casts it),
+        while issues.milestone_id was declared INTEGER, forcing a string-cast at
+        every relational read that compares the two. A fresh store's CREATE TABLE
+        already declares TEXT, so this is a no-op there; a pre-migration store is
+        migrated in place.
+
+        SQLite has no ALTER COLUMN to change a declared type, so the migration
+        rebuilds the table: rename the old one aside, recreate ``issues`` with the
+        current column set (assignee only if the #118 migration already ran) and
+        milestone_id TEXT, copy every row across with milestone_id cast to TEXT
+        (a value is never otherwise changed), then drop the renamed original.
+
+        Concurrency-safe like :meth:`_ensure_issue_assignee_column`: two
+        simultaneous first-opens can both pass the PRAGMA guard before either
+        renames, so the losing RENAME raises ``OperationalError: table ... already
+        exists``, which means a concurrent open already started the same rebuild;
+        that is treated as already-migrated. Any other OperationalError is a real
+        failure and propagates.
+        """
+        columns = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(issues)")}
+        milestone_type = columns.get("milestone_id")
+        if milestone_type is None or milestone_type.upper() == "TEXT":
+            return  # already TEXT, or the table does not exist yet
+        has_assignee = "assignee" in columns
+        try:
+            conn.execute("ALTER TABLE issues RENAME TO issues_pre_text_milestone")
+        except sqlite3.OperationalError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
+            return
+        assignee_column = ", assignee TEXT" if has_assignee else ""
+        assignee_select = ", assignee" if has_assignee else ""
+        conn.execute(
+            "CREATE TABLE issues ("
+            "github_id TEXT PRIMARY KEY, "
+            "title TEXT NOT NULL, "
+            "type_ TEXT, "
+            "status TEXT, "
+            "milestone_id TEXT" + assignee_column + ", "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "FOREIGN KEY (milestone_id) REFERENCES milestones (id)"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO issues "
+            "(github_id, title, type_, status, milestone_id" + assignee_select + ", created_at) "
+            "SELECT github_id, title, type_, status, CAST(milestone_id AS TEXT)"
+            + assignee_select
+            + ", created_at FROM issues_pre_text_milestone"
+        )
+        conn.execute("DROP TABLE issues_pre_text_milestone")
 
     @staticmethod
     def _ensure_issue_assignee_column(conn: sqlite3.Connection) -> None:

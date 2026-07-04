@@ -125,7 +125,9 @@ class TestDatabaseClient(unittest.TestCase):
         issue = client.get_issue("gh-42")
         self.assertIsNotNone(issue)
         self.assertEqual(issue["title"], "Issue 42")
-        self.assertEqual(issue["milestone_id"], milestone_id)
+        # milestone_id is TEXT on both issues and releases (they share one type so
+        # neither side needs a string-cast to compare), so it reads back as a string.
+        self.assertEqual(issue["milestone_id"], str(milestone_id))
 
         # Test save_backtest and get_backtest
         backtest_id = client.save_backtest(
@@ -859,6 +861,78 @@ class TestDatabaseClient(unittest.TestCase):
         client.close()
         self.assertIsNone(issue["assignee"])
         self.assertEqual(person_key_or_unassigned(issue["assignee"]), "unassigned")
+
+    def test_sqlite_enforces_issue_milestone_foreign_key(self):
+        """A non-existent milestone_id raises IntegrityError on the SQLite backend.
+
+        The FOREIGN KEY declared on issues.milestone_id (referencing
+        milestones.id) has no teeth unless PRAGMA foreign_keys=ON is issued on
+        the connection; without it, SQLite silently accepts a dangling
+        reference. Exercised at the raw-connection level (the same connection
+        _db_log_issue uses) so the assertion is on the actual constraint, not
+        on log_issue's outer RuntimeError wrapping of every sqlite3.Error.
+        """
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        with self.assertRaises(sqlite3.IntegrityError):
+            with client._sqlite_conn() as conn:
+                conn.execute(
+                    "INSERT INTO issues (github_id, title, type_, status, milestone_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ("orphan", "Orphaned", "bug", "open", 99999),
+                )
+        client.close()
+
+        # The public log_issue API wraps the same constraint failure in the
+        # RuntimeError every other SQLite write failure is wrapped in.
+        with self.assertRaises(RuntimeError):
+            client.log_issue("orphan2", "Orphaned two", "bug", "open", 99999)
+
+    def test_issues_milestone_id_column_is_text_matching_releases(self):
+        """issues.milestone_id and releases.milestone_id share the same TEXT type,
+        so a caller never needs a string-cast to compare them across tables."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.log_issue("gh-text", "Item", "feature", "open", None)
+        with sqlite3.connect(self.sqlite_db_path) as conn:
+            columns = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(issues)")}
+        client.close()
+        self.assertEqual(columns["milestone_id"].upper(), "TEXT")
+
+    def test_milestone_id_text_migration_preserves_existing_rows(self):
+        """A pre-migration store with milestone_id INTEGER is migrated to TEXT in
+        place, additively (#118-style expand/contract): existing rows, including
+        their milestone_id value and any already-added assignee column, survive
+        unchanged, and the store never raises during the migration."""
+        db_path = os.path.join(self.temp_dir.name, "premigration_milestone.db")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE milestones (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "title TEXT NOT NULL, description TEXT, due_date TEXT, state TEXT, "
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO milestones (title, state) VALUES (?, ?)", ("M1", "active")
+            )
+            conn.execute(
+                "CREATE TABLE issues (github_id TEXT PRIMARY KEY, title TEXT NOT NULL, "
+                "type_ TEXT, status TEXT, milestone_id INTEGER, assignee TEXT, "
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO issues (github_id, title, type_, status, milestone_id, "
+                "assignee) VALUES (?, ?, ?, ?, ?, ?)",
+                ("old1", "Legacy issue", "bug", "open", 1, "alice@example.com"),
+            )
+            conn.commit()
+
+        client = DatabaseClient(db_path=db_path)
+        issue = client.get_issue("old1")
+        client.close()
+
+        self.assertEqual(issue["milestone_id"], "1")
+        self.assertEqual(issue["assignee"], "alice@example.com")
+        with sqlite3.connect(db_path) as conn:
+            columns = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(issues)")}
+        self.assertEqual(columns["milestone_id"].upper(), "TEXT")
 
     def test_surreal_upsert_includes_assignee_field(self):
         """On SurrealDB the issue UPSERT CONTENT carries the assignee as a bound
