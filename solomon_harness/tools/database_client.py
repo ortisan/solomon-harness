@@ -630,13 +630,30 @@ class DatabaseClient:
                 semantic search. Defaults to :class:`HashingEmbedder`, a dependency-free
                 lexical embedder; pass a model-backed embedder for true semantic search.
         """
+        self._init_embedder(embedder)
+        self._init_connection_state(db_path)
+        self._resolve_roots(harness_dir)
+
+        # Root for the write-through Markdown mirror (issue #35). Resolved once, up
+        # front, so every write funnels to the same gitignored local store.
+        self._mirror_root = self._resolve_mirror_root(mirror_root)
+
+        db_config = self._load_config()
+        self._init_backend(db_config)
+
+    def _init_embedder(self, embedder: Optional[Embedder]) -> None:
+        """Choose the embedder that vectorizes memory for the vector index."""
         # The embedder that vectorizes memory for the HNSW vector index. The default
         # is lexical (token overlap), swappable for a real semantic model.
         self._embedder: Embedder = embedder or HashingEmbedder()
 
+    def _init_connection_state(self, db_path: Optional[str]) -> None:
+        """Set the backend defaults and the rebuildable SurrealDB params."""
         self.backend = "sqlite"
         self.db = None
-        self.spectron = None
+        # Typed Any: assigned a Spectron or SpectronFallbackClient by
+        # _init_spectron when configured, else stays None.
+        self.spectron: Any = None
         self.db_path = db_path
         # The explicit db_path argument (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
@@ -659,6 +676,8 @@ class DatabaseClient:
         # the degradation honestly instead of looking like a clean SQLite setup.
         self._fallback_reason: Optional[str] = None
 
+    def _resolve_roots(self, harness_dir: Optional[str]) -> None:
+        """Resolve the owning harness directory and the repository root."""
         # The shared client no longer lives inside the agent directory, so the caller
         # passes the owning harness directory explicitly; fall back to this file's
         # package location for standalone or test use.
@@ -686,19 +705,18 @@ class DatabaseClient:
             project_root = harness_dir
 
         # Retained so the mid-session SQLite fallback can resolve the same store
-        # path the constructor would have used (issue #37).
+        # path the constructor would have used (issue #37), and for read-only
+        # tenant discovery (list_databases).
         self._project_root = project_root
 
-        # Root for the write-through Markdown mirror (issue #35). Resolved once, up
-        # front, so every write funnels to the same gitignored local store.
-        self._mirror_root = self._resolve_mirror_root(mirror_root)
-
+    def _load_config(self) -> Dict[str, Any]:
+        """Read .agent/config.json and capture the database block's fields."""
         # Load configuration. Prefer the harness-local .agent/config.json, which carries
         # the per-agent `database` block, and fall back to the project-root config.
         config: Dict[str, Any] = {}
         candidate_config_paths = [
-            os.path.join(harness_dir, ".agent", "config.json"),
-            os.path.join(project_root, ".agent", "config.json"),
+            os.path.join(self.harness_dir, ".agent", "config.json"),
+            os.path.join(self._project_root, ".agent", "config.json"),
         ]
         for candidate in candidate_config_paths:
             if os.path.isfile(candidate):
@@ -710,18 +728,20 @@ class DatabaseClient:
                     logging.error(f"Failed to read configuration at {candidate}: {exc}")
 
         db_config = config.get("database", {})
-        provider = db_config.get("provider")
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
         # Retained for read-only tenant discovery (list_databases). On the SQLite
         # fallback the resolvable tenant is derived from these, not from the store.
-        self._project_root = project_root
         self._configured_database = db_config.get("database")
         # The SurrealDB namespace that holds every tenant database. Stored so the
         # read-only use_tenant() accessor can rebind the connection scope to the
         # selected tenant with the same parameterized SDK bind the constructor uses.
         self._namespace = db_config.get("namespace", "solomon")
+        return db_config
 
+    def _init_backend(self, db_config: Dict[str, Any]) -> None:
+        """Bring up SurrealDB when configured and reachable, else SQLite."""
+        provider = db_config.get("provider")
         # An explicit db_path forces the SQLite backend (used for test isolation and
         # eval sandboxes), regardless of the configured provider.
         if provider == "surrealdb" and self.db_path is None:
@@ -751,7 +771,9 @@ class DatabaseClient:
 
             if has_surrealdb and Surreal is not None and creds_ok:
                 namespace = self._namespace
-                database = _resolve_database(db_config.get("database"), project_root)
+                database = _resolve_database(
+                    db_config.get("database"), self._project_root
+                )
 
                 # Capture the params so _connect_surreal can rebuild the handle
                 # after a mid-session drop, not only here at construction (#37).
@@ -776,37 +798,7 @@ class DatabaseClient:
                         # every statement has actually succeeded.
                         self._bootstrap_surreal_schema()
                         self.backend = "surrealdb"
-
-                        # Initialize Spectron if URL and API Key are configured
-                        spectron_url = os.environ.get(
-                            "SPECTRON_URL", db_config.get("spectron_url")
-                        )
-                        spectron_api_key = os.environ.get(
-                            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-                        )
-                        spectron_context = os.environ.get(
-                            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-                        )
-                        if spectron_url and spectron_api_key:
-                            try:
-                                try:
-                                    # Spectron ships only in newer surrealdb builds;
-                                    # the except below handles its absence at runtime.
-                                    from surrealdb import Spectron  # type: ignore[attr-defined]
-                                    self.spectron = Spectron(
-                                        context=spectron_context,
-                                        endpoint=spectron_url,
-                                        api_key=spectron_api_key
-                                    )
-                                except (ImportError, AttributeError):
-                                    self.spectron = SpectronFallbackClient(
-                                        context=spectron_context,
-                                        endpoint=spectron_url,
-                                        api_key=spectron_api_key
-                                    )
-                            except Exception as e:
-                                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                                self.spectron = None
+                        self._init_spectron(db_config)
                     except Exception as e:
                         sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
                         sys.stderr.write(
@@ -848,6 +840,39 @@ class DatabaseClient:
             if self.db_path is None:
                 self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
+
+    def _init_spectron(self, db_config: Dict[str, Any]) -> None:
+        """Connect the optional Spectron client when URL and API key are set."""
+        # Initialize Spectron if URL and API Key are configured
+        spectron_url = os.environ.get(
+            "SPECTRON_URL", db_config.get("spectron_url")
+        )
+        spectron_api_key = os.environ.get(
+            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
+        )
+        spectron_context = os.environ.get(
+            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
+        )
+        if spectron_url and spectron_api_key:
+            try:
+                try:
+                    # Spectron ships only in newer surrealdb builds;
+                    # the except below handles its absence at runtime.
+                    from surrealdb import Spectron  # type: ignore[attr-defined]
+                    self.spectron = Spectron(
+                        context=spectron_context,
+                        endpoint=spectron_url,
+                        api_key=spectron_api_key
+                    )
+                except (ImportError, AttributeError):
+                    self.spectron = SpectronFallbackClient(
+                        context=spectron_context,
+                        endpoint=spectron_url,
+                        api_key=spectron_api_key
+                    )
+            except Exception as e:
+                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
+                self.spectron = None
 
     def backend_status(self) -> Dict[str, Any]:
         """Report which backend serves this client, publicly (issue #163).

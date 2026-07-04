@@ -116,5 +116,28 @@ class TestBackendStatus(unittest.TestCase):
         self.assertIn("connection lost", status["fallback_reason"])
 
 
+class TestFocusedInit(unittest.TestCase):
+    """The 261-line constructor stays split into focused initializers."""
+
+    def test_constructor_delegates_to_focused_initializers(self):
+        for name in (
+            "_init_embedder",
+            "_init_connection_state",
+            "_resolve_roots",
+            "_load_config",
+            "_init_backend",
+        ):
+            self.assertTrue(
+                callable(getattr(DatabaseClient, name, None)),
+                f"missing focused initializer: {name}",
+            )
+
+    def test_constructor_stays_small(self):
+        lines = len(inspect.getsource(DatabaseClient.__init__).splitlines())
+        self.assertLess(
+            lines, 100, f"__init__ regrew to {lines} lines; keep it delegating"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
