@@ -143,7 +143,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-four role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-six role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed to the host tools as Claude Code
 subagents and Gemini commands. The count above is the number of `agents/*/agents/*.md`
@@ -167,6 +167,8 @@ from that directory listing.
 | `flutter` | Flutter/Dart, clean architecture, widget and integration tests |
 | `ml_engineer` | model training/validation, statistical modeling, leakage checks |
 | `quant_trader` | strategies, backtests, slippage/cost, Sharpe/drawdown risk |
+| `long_run_strategist` | long-horizon strategies: trend/momentum, factors, allocation, rebalancing |
+| `scalper` | intraday scalping: microstructure, order flow, execution, tick-data backtests |
 | `data_analyst` | SQL analytics, big data (Spark/ClickHouse), reporting |
 | `dba` | data modeling, performance tuning, migrations, replication |
 | `documenter` | technical and business docs, user guides, design docs |
@@ -229,7 +231,7 @@ to `docs/adr/NNNN-*.md` and persist it with `save_decision`.
 
 `solomon_harness/agent_selection.py` inspects the project's files and manifests and
 enables only the agents the stack needs (a core delivery/planning set plus platform
-and domain agents on detected signals), instead of all twenty-four.
+and domain agents on detected signals), instead of all twenty-six.
 
 ### GitHub project board
 

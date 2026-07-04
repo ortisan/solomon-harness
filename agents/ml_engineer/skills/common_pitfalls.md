@@ -1,5 +1,6 @@
-## Common pitfalls to reject in review
+## Common pitfalls
 
+Reject any of these in review:
 
 - Random K-fold on time-ordered data.
 - Scaler or encoder fit before the split.

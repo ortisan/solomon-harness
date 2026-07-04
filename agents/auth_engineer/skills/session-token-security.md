@@ -224,6 +224,23 @@ def valid_csrf(token: str, session_id: str, secret: bytes) -> bool:
 
 Pitfalls: comparing tokens with `==` (timing leak; use `compare_digest`); a global static CSRF token reused across users; protecting only the HTML form route but leaving a JSON twin unprotected; relying on `Referer` checks alone (often stripped); assuming `SameSite` is enough on its own.
 
+## Common pitfalls
+
+- Reading `alg` from the JWT header to pick the verifier. This is the algorithm-confusion attack: an RS256 public key gets treated as an HS256 secret and the attacker signs their own tokens. Pin `algorithms` server-side, always.
+- Accepting `alg: none` because the library default allows unverified decode, or calling `decode` where `verify` was meant. The token parses, claims load, and no signature was ever checked.
+- Skipping the `aud` check. A token minted for another service verifies fine cryptographically; audience confusion is a privilege-escalation path, not a formality.
+- Hours of `exp` leeway "for clock skew". Anything beyond 60 seconds is a replay window, not skew tolerance.
+- Fetching JWKS on every request (self-inflicted DoS on the issuer and your own latency) or never refreshing it (key rotation becomes an outage). Cache with a TTL, refetch on unknown `kid`.
+- Choosing JWT for first-party browser sessions and then discovering logout, password change, and admin kill cannot revoke anything until `exp`. Opaque server-side sessions are the default for a reason.
+- Rotating the access token but reusing the refresh token, which removes the theft tripwire; or revoking only the presented refresh token on reuse instead of the whole family, which leaves the attacker holding the next link in the chain.
+- Treating two near-simultaneous legitimate refreshes as theft with no grace window, logging users out at random under network retries.
+- Storing refresh tokens or session ids in plaintext, so a database dump is a credential dump. Store hashes; compare in constant time.
+- Access or refresh tokens in `localStorage`/`sessionStorage`. One XSS reads them all; there is no `HttpOnly` for web storage. Use the BFF pattern with an `HttpOnly` cookie.
+- A fat JWT pushed into a cookie past the 4096-byte limit: the browser silently drops it and users report unexplainable logout loops.
+- Session cookie without the `__Host-` prefix, so a compromised sibling subdomain can overwrite it (session fixation by cookie tossing).
+- Relying on `SameSite=Lax` as the only CSRF defense, or shipping the synchronizer token on the form route while the JSON twin endpoint stays unprotected.
+- Logging full bearer tokens in access logs or error traces. A token in a log is a live credential with your retention policy as its TTL.
+
 ## Definition of done
 
 - [ ] Token type chosen deliberately: opaque/stateful for first-party sessions, short-lived JWT only where stateless multi-verifier validation is needed; rationale recorded in memory or an ADR.

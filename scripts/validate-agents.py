@@ -238,6 +238,28 @@ REQUIRED_KEYWORDS = {
         "cognitive load",
         "evidence-based",
     ],
+    "long_run_strategist.md": [
+        "Long-Run Strategist",
+        "long-horizon",
+        "trend following",
+        "portfolio construction",
+        "rebalancing",
+        "position sizing",
+        "backtest",
+        "quant_trader",
+        "research_analyst",
+    ],
+    "scalper.md": [
+        "Scalper",
+        "market microstructure",
+        "order flow",
+        "spread capture",
+        "execution",
+        "latency",
+        "intraday risk",
+        "backtest",
+        "quant_trader",
+    ],
 }
 
 
