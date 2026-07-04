@@ -103,6 +103,6 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.
 - `mcp__solomon-memory__log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-$ARGUMENTS-start-to-review.md", status="ready")`; keep the returned handoff id.
-- `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Implement #$ARGUMENTS", messages=..., issues=[$ARGUMENTS])` to checkpoint; `issues` writes the worked_on edge so resume is a graph query, not a task-string parse (ADR-0017).
+- `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Implement #$ARGUMENTS", messages=..., issues=[$ARGUMENTS])` to checkpoint; `issues` writes the worked_on edge so resume is a graph query, not a task-string parse (ADR-0018).
 - `mcp__solomon-memory__link_session_handoff(session_id="start-$ARGUMENTS", handoff_id=<the returned handoff id>)` to record the produced edge.
 - Report the branch, PR URL, ADR decision, and that qa should run `/solomon-review`.

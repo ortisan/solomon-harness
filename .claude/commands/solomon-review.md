@@ -79,7 +79,7 @@ Each lens returns findings tagged blocker, major, or minor.
   so the Release stage can resume; keep the returned handoff id.
 - `mcp__solomon-memory__save_session` capturing what was reviewed, the verdict, and
   the linked decision and issue IDs; pass `issues=[<issue>]` so the session carries
-  the worked_on edge and resume is a graph query (ADR-0017).
+  the worked_on edge and resume is a graph query (ADR-0018).
 - `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` on approval, recording the produced edge.
 
 State explicitly whether an ADR was required and whether one exists. Do not push,

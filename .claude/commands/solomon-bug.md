@@ -62,7 +62,7 @@ Steps:
      issue and its repro/severity), so `/solomon-refine` reads it as its bounded input.
    - `log_handoff(sender="qa", recipient="software_engineer", contract_type="bug_report", contract_path=".solomon/handoffs/issue-<n>-bug-to-refine.md", status="open")` to hand the defect to implementation; keep the returned handoff id.
    - `save_session(...)` to checkpoint if triage required substantial subagent work;
-     pass `issues=[<n>]` (the worked_on edge, ADR-0017). When a session was saved,
+     pass `issues=[<n>]` (the worked_on edge, ADR-0018). When a session was saved,
      `link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` records the produced edge.
 8. Report back the issue URL, the assigned priority, and a one-line reminder that
    the regression test is the close gate.

@@ -145,7 +145,7 @@ class TestMemoryService(unittest.TestCase):
 
     def test_save_session_links_worked_on_issues(self):
         # The issues parameter reaches the client and produces worked_on links
-        # (ADR-0017); a missing issue row is created rather than dangled.
+        # (ADR-0018); a missing issue row is created rather than dangled.
         self.svc.save_session("s10", "qa", "review the fix", [], issues=[321])
         issue = self.svc.get_issue("321")["issue"]
         self.assertIsNotNone(issue)

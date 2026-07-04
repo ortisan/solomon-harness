@@ -73,7 +73,7 @@ def _target_issue_from_args(args: List[str]) -> Optional[int]:
     The loop stage's per-issue workers and the start/review/release stages
     receive a numeric target argument; anything else (flags, slugs, prose) is
     never parsed for digits -- the episodic link must be typed input, not a
-    guess (ADR-0017).
+    guess (ADR-0018).
     """
     for arg in args:
         if arg.isdigit() and arg.isascii():

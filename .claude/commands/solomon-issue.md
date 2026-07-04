@@ -67,7 +67,7 @@ Steps:
      agent_name="product_owner", task="Filed #<n>", messages=[], issues=[<n>]) to
      checkpoint with the worked_on edge, then
      `mcp__solomon-memory__link_session_handoff(session_id="issue-<n>", handoff_id=<the returned handoff id>)`
-     to record the produced edge (ADR-0017).
+     to record the produced edge (ADR-0018).
 
 8. Output the issue URL and a one-line summary (number, title, priority, area).
    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
