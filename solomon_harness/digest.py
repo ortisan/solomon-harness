@@ -81,6 +81,7 @@ def build_digest(
     last_loop_run: Optional[Dict[str, Any]],
     prs: Optional[List[Dict[str, Any]]],
     backend: str = "surrealdb",
+    per_issue: Optional[List[Dict[str, Any]]] = None,
 ) -> List[str]:
     """Render the digest lines from already-collected facts (pure).
 
@@ -89,6 +90,12 @@ def build_digest(
     stale or seeded local store is never silently presented as the canonical
     board — the failure mode that made a fixture row (``gh-1``) look like the
     real project state at session start.
+
+    ``per_issue`` is ``latest_activity_per_issue`` from memory (ADR-0017): the
+    most recent worked_on-linked activity per non-terminal issue, most recent
+    first. When rows exist, the resume target comes from this graph; the
+    free-text regex over the task string is only the fallback for legacy
+    sessions with no edges.
     """
     lines: List[str] = []
 
@@ -190,7 +197,32 @@ def build_digest(
         elif resume and resume.get("status") == "active":
             task_str = resume.get("task", "")
             cmd = "/solomon-workflow"
-            if "start" in str(task_str).lower():
+            # Graph-based resume (ADR-0017): the worked_on edges name the
+            # issue directly. Prefer the resume row's own linked issues, then
+            # the most recent per-issue activity row; the issue's status picks
+            # the stage command the same way the in-flight branch does.
+            status_by_id: Dict[str, str] = {}
+            for row in (per_issue or []):
+                row_id = _safe_id(row.get("github_id"))
+                if row_id:
+                    status_by_id.setdefault(row_id, str(row.get("issue_status") or ""))
+            linked = [
+                s for s in (_safe_id(n) for n in (resume.get("issues") or [])) if s
+            ]
+            if not linked:
+                linked = list(status_by_id.keys())[:1]
+            if linked:
+                issue_id = linked[0]
+                issue_status = status_by_id.get(issue_id, "").lower().replace(" ", "_")
+                if issue_status in ("code_review", "qa"):
+                    cmd = f"/solomon-review {issue_id}"
+                else:
+                    cmd = f"/solomon-start {issue_id}"
+            elif "start" in str(task_str).lower():
+                # DEPRECATED (ADR-0017): free-text fallback for legacy sessions
+                # written before the worked_on edge existed. Scheduled for
+                # deletion next release (expand/contract); every new session
+                # carries typed links instead.
                 m = re.search(r'#(\d+)', str(task_str))
                 if not m:
                     m = re.search(r'\b(?:issue|pr|task)\s*#?(\d+)', str(task_str), re.IGNORECASE)
@@ -321,9 +353,19 @@ def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> Li
     open_issues = _run_with_timeout(db.get_open_issues, timeout=0.5, default=[]) or []
     runs = _run_with_timeout(db.list_loop_runs, 1, timeout=0.5, default=[]) or []
     last_loop = runs[0] if runs else None
+    # The per-issue activity graph (ADR-0017). getattr-guarded so an older or
+    # fake client without the method degrades to the legacy resume path.
+    per_issue_fn = getattr(db, "latest_activity_per_issue", None)
+    per_issue = (
+        _run_with_timeout(per_issue_fn, timeout=0.5, default=[]) or []
+        if callable(per_issue_fn)
+        else []
+    )
     prs = _best_effort_prs(workspace_root) if fetch_github else None
     # Read the backend AFTER the queries: a mid-call ConnectionLost can flip the
     # client to the SQLite fallback, and the banner must reflect where the facts
     # above actually came from.
     backend = getattr(db, "backend", "surrealdb")
-    return build_digest(resume, open_issues, last_loop, prs, backend=backend)
+    return build_digest(
+        resume, open_issues, last_loop, prs, backend=backend, per_issue=per_issue
+    )

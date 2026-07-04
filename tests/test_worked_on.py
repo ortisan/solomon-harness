@@ -205,6 +205,142 @@ class TestWorkedOnRelateOnSurreal(unittest.TestCase):
             self.assertEqual(cur.fetchone()["n"], 0)
 
 
+class TestLatestActivityPerIssueSqlite(_SqliteBase):
+    def test_returns_the_most_recent_activity_per_issue(self):
+        with self._client() as db:
+            db.log_issue("1", "First", "feature", "in_progress", None)
+            db.log_issue("2", "Second", "bug", "qa", None)
+            db.save_session("s1", "qa", "old work", "[]", issues=[1])
+            db.save_session("s2", "software_engineer", "new work", "[]", issues=[1])
+            db.save_loop_run(
+                stage="review", target="2", decision="ran /solomon-review",
+                status="ok", session_id="x", target_issue=2,
+            )
+            rows = db.latest_activity_per_issue()
+        self.assertEqual([r["github_id"] for r in rows], ["2", "1"])
+        by_id = {r["github_id"]: r for r in rows}
+        self.assertEqual(by_id["1"]["type"], "session")
+        self.assertEqual(by_id["1"]["agent"], "software_engineer")
+        self.assertEqual(by_id["1"]["task"], "new work")
+        self.assertEqual(by_id["1"]["issue_status"], "in_progress")
+        self.assertEqual(by_id["1"]["title"], "First")
+        self.assertEqual(by_id["2"]["type"], "loop_run")
+        self.assertEqual(by_id["2"]["status"], "ok")
+        self.assertIn("timestamp", by_id["2"])
+
+    def test_terminal_issues_are_excluded(self):
+        with self._client() as db:
+            db.log_issue("5", "Shipped", "feature", "closed", None)
+            db.save_session("s1", "qa", "wrapped", "[]", issues=[5])
+            rows = db.latest_activity_per_issue()
+        self.assertEqual(rows, [])
+
+    def test_limit_caps_the_rows(self):
+        with self._client() as db:
+            for n in range(1, 5):
+                db.save_session(f"s{n}", "qa", f"work {n}", "[]", issues=[n])
+            rows = db.latest_activity_per_issue(limit=2)
+        self.assertEqual(len(rows), 2)
+
+    def test_no_edges_means_no_rows(self):
+        with self._client() as db:
+            db.log_issue("9", "Untouched", "feature", "Ready", None)
+            db.save_session("s1", "qa", "unlinked", "[]")
+            self.assertEqual(db.latest_activity_per_issue(), [])
+
+
+class TestGetLatestActivityIssuesKeySqlite(_SqliteBase):
+    def test_issues_key_lists_linked_numbers(self):
+        with self._client() as db:
+            db.save_session("s1", "qa", "work", "[]", issues=[42, 7])
+            activity = db.get_latest_activity()
+        self.assertEqual(activity["type"], "session")
+        self.assertEqual(activity["issues"], [7, 42])
+
+    def test_no_issues_key_without_edges(self):
+        # Consumers pin the exact resume shape; the key must not appear for
+        # legacy sessions with no worked_on edges.
+        with self._client() as db:
+            db.save_session("s1", "qa", "work on #42", "[]")
+            activity = db.get_latest_activity()
+        self.assertNotIn("issues", activity)
+
+
+class TestLatestActivityPerIssueSurrealUnit(unittest.TestCase):
+    """Graph-query construction and merge logic against a mocked backend."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        os.environ["HARNESS_MIRROR_ROOT"] = os.path.join(self.temp_dir.name, "mirror")
+
+    def tearDown(self):
+        os.environ.pop("HARNESS_MIRROR_ROOT", None)
+        self.temp_dir.cleanup()
+
+    def _surreal_mock_client(self, result=None):
+        client = DatabaseClient(db_path=os.path.join(self.temp_dir.name, "h.db"))
+        client.backend = "surrealdb"
+        client._run_surreal = MagicMock(return_value=result if result is not None else [])
+        return client
+
+    def test_one_graph_query_over_both_sources(self):
+        client = self._surreal_mock_client(result=[])
+        client.latest_activity_per_issue()
+        self.assertEqual(client._run_surreal.call_count, 1)
+        query = client._run_surreal.call_args[0][0]
+        self.assertIn("FROM issues", query)
+        self.assertIn("<-worked_on<-sessions", query)
+        self.assertIn("<-worked_on<-loop_runs", query)
+
+    def test_merges_sources_and_filters_terminal(self):
+        client = self._surreal_mock_client(
+            result=[
+                {
+                    "github_id": "42", "title": "Open one",
+                    "issue_status": "in_progress",
+                    "sessions": [{
+                        "session_id": "s1", "agent_name": "qa", "task": "t",
+                        "status": "active", "timestamp": "2026-07-04T10:00:00Z",
+                    }],
+                    "loop_runs": [{
+                        "stage": "start", "decision": "ran /solomon-start",
+                        "status": "ok", "created_at": "2026-07-04T11:00:00Z",
+                    }],
+                },
+                {
+                    "github_id": "7", "title": "Shipped one",
+                    "issue_status": "closed",
+                    "sessions": [{
+                        "session_id": "s2", "agent_name": "qa", "task": "t2",
+                        "status": "done", "timestamp": "2026-07-04T12:00:00Z",
+                    }],
+                    "loop_runs": [],
+                },
+            ]
+        )
+        rows = client.latest_activity_per_issue()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["github_id"], "42")
+        # The loop run is later than the session, so it wins the issue.
+        self.assertEqual(rows[0]["type"], "loop_run")
+        self.assertEqual(rows[0]["agent"], "start")
+        self.assertEqual(rows[0]["status"], "ok")
+
+    def test_get_latest_activity_issues_key_from_the_graph(self):
+        client = self._surreal_mock_client()
+        client._run_surreal = MagicMock(
+            side_effect=[
+                [{"session_id": "s1", "agent_name": "qa", "task": "t",
+                  "status": "active", "timestamp": "2026-07-04T10:00:00Z"}],
+                [],
+                [{"gids": ["42", "7"]}],
+            ]
+        )
+        activity = client.get_latest_activity()
+        self.assertEqual(activity["type"], "session")
+        self.assertEqual(activity["issues"], [7, 42])
+
+
 class TestRecordLoopRunTargetIssue(unittest.TestCase):
     """workflows._record_loop_run passes the first purely-numeric arg."""
 

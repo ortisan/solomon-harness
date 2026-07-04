@@ -3385,6 +3385,12 @@ class DatabaseClient:
             # "Handoff contracts") is never silently dropped by that ordering.
             if latest_handoff is not None:
                 result["contract_path"] = latest_handoff.get("contract_path")
+            # The linked issue numbers from the session's worked_on edges
+            # (ADR-0017), added only when edges exist so consumers pinned on
+            # the exact legacy shape are untouched by pre-edge rows.
+            linked = self._session_issue_numbers(latest_session.get("session_id"))
+            if linked:
+                result["issues"] = linked
             return result
         else:
             assert latest_handoff is not None
@@ -3400,6 +3406,180 @@ class DatabaseClient:
                 "summary": latest_handoff.get("summary"),
                 "timestamp": latest_handoff.get("timestamp"),
             }
+
+    def _session_issue_numbers(self, session_id: Any) -> List[int]:
+        """GitHub issue numbers linked from a session by worked_on edges.
+
+        Best-effort by design (ADR-0017): a graph read failure reports no
+        links, because the resume shape must never break when the graph is
+        unreachable -- the session row itself was already fetched.
+        """
+        if not session_id:
+            return []
+        try:
+            if self.backend == "surrealdb":
+                res = self._run_surreal(
+                    "SELECT array::distinct(->worked_on->issues.github_id) "
+                    "AS gids FROM $node;",
+                    {"node": self._rid("sessions", str(session_id))},
+                )
+                gids = self._extract_field(res, "gids") or []
+            else:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT DISTINCT github_id FROM worked_on "
+                        "WHERE source_table = 'sessions' AND source_id = ?",
+                        (str(session_id),),
+                    )
+                    gids = [row["github_id"] for row in cursor.fetchall()]
+            return sorted(
+                int(g) for g in gids if str(g).isdigit() and str(g).isascii()
+            )
+        except Exception:
+            return []
+
+    @staticmethod
+    def _activity_epoch(ts: Any) -> float:
+        """Best-effort epoch seconds for an activity timestamp (0.0 unknown).
+
+        Accepts the native datetime SurrealDB returns and the ISO/space-
+        separated strings SQLite stores, mirroring get_latest_activity's
+        tolerant parsing so the two orderings can never disagree.
+        """
+        if isinstance(ts, datetime.datetime):
+            return ts.timestamp()
+        if not ts:
+            return 0.0
+        clean = str(ts).replace(" ", "T").rstrip("Z")
+        if "+" in clean:
+            clean = clean.split("+")[0]
+        try:
+            return datetime.datetime.fromisoformat(clean).timestamp()
+        except ValueError:
+            return 0.0
+
+    @_resilient
+    def latest_activity_per_issue(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """The most recent linked activity per non-terminal issue (ADR-0017).
+
+        For each issue that has worked_on edges and is not terminal, returns
+        the most recent linked session or loop run. One graph query on
+        SurrealDB (issues projecting ``<-worked_on<-sessions`` and
+        ``<-worked_on<-loop_runs``); a join over the parity link table on the
+        SQLite fallback. The terminal filter runs in Python through the shared
+        :func:`is_terminal` predicate, so the status vocabulary lives in one
+        place.
+
+        Returns rows shaped ``{github_id, title, issue_status, type, agent,
+        task, status, timestamp}`` -- ``type`` is ``session`` or ``loop_run``;
+        for a loop run ``agent`` is the stage and ``task`` the decision text.
+        Most recent first, capped at ``limit``.
+        """
+        candidates: List[Dict[str, Any]] = []
+        order = 0
+        if self.backend == "surrealdb":
+            query = (
+                "SELECT github_id, title, status AS issue_status, "
+                "<-worked_on<-sessions.* AS sessions, "
+                "<-worked_on<-loop_runs.* AS loop_runs "
+                "FROM issues WHERE count(<-worked_on) > 0;"
+            )
+            try:
+                res = self._run_surreal(query)
+                issues = self._extract_list(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to query per-issue activity: {e}")
+                raise RuntimeError(f"Failed to query per-issue activity: {e}")
+            for issue in issues:
+                for s in issue.get("sessions") or []:
+                    order += 1
+                    candidates.append({
+                        "github_id": issue.get("github_id"),
+                        "title": issue.get("title"),
+                        "issue_status": issue.get("issue_status"),
+                        "type": "session",
+                        "agent": s.get("agent_name"),
+                        "task": s.get("task"),
+                        "status": s.get("status"),
+                        "timestamp": s.get("timestamp"),
+                        "_order": order,
+                    })
+                for r in issue.get("loop_runs") or []:
+                    order += 1
+                    candidates.append({
+                        "github_id": issue.get("github_id"),
+                        "title": issue.get("title"),
+                        "issue_status": issue.get("issue_status"),
+                        "type": "loop_run",
+                        "agent": r.get("stage"),
+                        "task": r.get("decision"),
+                        "status": r.get("status"),
+                        "timestamp": r.get("created_at"),
+                        "_order": order,
+                    })
+        else:
+            session_query = """
+            SELECT w.github_id AS github_id, i.title AS title,
+                   i.status AS issue_status, s.agent_name AS agent,
+                   s.task AS task, s.status AS status,
+                   s.timestamp AS timestamp, w.id AS link_order
+            FROM worked_on w
+            JOIN sessions s
+                ON w.source_table = 'sessions' AND w.source_id = s.session_id
+            LEFT JOIN issues i ON i.github_id = w.github_id
+            """
+            loop_query = """
+            SELECT w.github_id AS github_id, i.title AS title,
+                   i.status AS issue_status, r.stage AS agent,
+                   r.decision AS task, r.status AS status,
+                   r.created_at AS timestamp, w.id AS link_order
+            FROM worked_on w
+            JOIN loop_runs r
+                ON w.source_table = 'loop_runs' AND w.source_id = r.record_id
+            LEFT JOIN issues i ON i.github_id = w.github_id
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    for kind, query in (
+                        ("session", session_query),
+                        ("loop_run", loop_query),
+                    ):
+                        cursor.execute(query)
+                        for row in cursor.fetchall():
+                            entry = dict(row)
+                            entry["type"] = kind
+                            # The link-row id is a global insertion sequence:
+                            # it breaks CURRENT_TIMESTAMP's one-second ties
+                            # deterministically.
+                            entry["_order"] = entry.pop("link_order")
+                            candidates.append(entry)
+            except sqlite3.Error as e:
+                logging.error(f"Failed to query per-issue activity: {e}")
+                raise RuntimeError(f"Failed to query per-issue activity: {e}")
+
+        best: Dict[str, Dict[str, Any]] = {}
+        for entry in candidates:
+            if is_terminal(entry.get("issue_status")):
+                continue
+            gid = str(entry.get("github_id"))
+            key = (self._activity_epoch(entry.get("timestamp")), entry["_order"])
+            current = best.get(gid)
+            if current is None or key > (
+                self._activity_epoch(current.get("timestamp")), current["_order"]
+            ):
+                best[gid] = entry
+        rows = sorted(
+            best.values(),
+            key=lambda e: (self._activity_epoch(e.get("timestamp")), e["_order"]),
+            reverse=True,
+        )[: int(limit)]
+        for entry in rows:
+            entry.pop("_order", None)
+        return rows
 
     def save_loop_run(
         self,
