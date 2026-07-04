@@ -46,6 +46,37 @@ class TestWorkflows(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             workflows.build_prompt(root, "issue", [])
 
+    def test_build_prompt_omits_autonomous_directive_by_default(self):
+        # A standalone `workflow` invocation (not driven by `loop`) must keep
+        # presenting the interactive decision card unchanged (#194).
+        root = _workspace_with_command(
+            "workflow", "---\nx\n---\n## 3. Propose as an enumerated decision card, confirm, run"
+        )
+        prompt = workflows.build_prompt(root, "workflow", [])
+        self.assertNotIn("headless", prompt.lower())
+        self.assertNotIn(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE, prompt)
+
+    def test_build_prompt_injects_autonomous_directive_when_loop_driven(self):
+        # The `loop` stage dispatches the same `workflow` command file, but with
+        # `loop_driven=True` it must tell the model to skip the decision card and
+        # go straight into the Autonomous Mode branch (#194).
+        root = _workspace_with_command(
+            "workflow", "---\nx\n---\n## 3. Propose as an enumerated decision card, confirm, run"
+        )
+        prompt = workflows.build_prompt(root, "workflow", [], loop_driven=True)
+        self.assertIn(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE, prompt)
+        self.assertIn("no human is present", prompt.lower())
+        self.assertIn(
+            '"## 3. Propose as an enumerated decision card, confirm, run"', prompt
+        )
+        self.assertIn("AskUserQuestion", prompt)
+        self.assertIn("Autonomous Mode", prompt)
+        # The directive comes before the command file's own body.
+        self.assertLess(
+            prompt.index(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE),
+            prompt.index("## 3. Propose as an enumerated decision card, confirm, run"),
+        )
+
     def test_run_stage_rejects_unknown_stage(self):
         self.assertEqual(workflows.run_stage(".", "nonsense", []), 1)
 
@@ -468,6 +499,69 @@ class TestLoopStage(unittest.TestCase):
         # Never reach the engine while another driver holds the lock; the
         # mocked calls that do appear are the lock's own ps staleness probes.
         self.assertEqual(_engine_calls(mock_run), [])
+
+
+class TestLoopInjectsAutonomousModeDirective(unittest.TestCase):
+    """#194: a headless `loop`-driven iteration must skip the interactive
+    decision card and proceed straight into Autonomous Mode; a direct
+    `dev workflow` invocation must keep seeing the unmodified card."""
+
+    def test_loop_dispatches_the_directive_prefixed_prompt(self):
+        root = _workspace_with_command(
+            "workflow",
+            "---\nx\n---\n## 3. Propose as an enumerated decision card, confirm, run\nScan $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run:
+            rc = workflows.run_stage(root, "loop", [], engine="claude")
+        self.assertEqual(rc, 0)
+        calls = _engine_calls(mock_run)
+        self.assertEqual(len(calls), 1)
+        _, kwargs = calls[0]
+        self.assertIn(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE, kwargs["input"])
+        self.assertIn("AskUserQuestion", kwargs["input"])
+
+    def test_loop_injects_the_directive_on_every_iteration(self):
+        root = _workspace_with_command(
+            "workflow",
+            "---\nx\n---\n## 3. Propose as an enumerated decision card, confirm, run\nScan $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch(
+            "subprocess.run", side_effect=_answering_ps_probes([_Proc(), _Proc()])
+        ) as mock_run:
+            rc = workflows.run_stage(root, "loop", ["--concurrency", "2"], engine="claude")
+        self.assertEqual(rc, 0)
+        calls = _engine_calls(mock_run)
+        self.assertEqual(len(calls), 2)
+        for _, kwargs in calls:
+            self.assertIn(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE, kwargs["input"])
+
+    def test_direct_workflow_invocation_does_not_receive_the_directive(self):
+        # A direct `dev workflow` call (not driven by `loop`) must build the
+        # exact same prompt it built before this fix — the decision card stays.
+        root = _workspace_with_command(
+            "workflow",
+            "---\nx\n---\n## 3. Propose as an enumerated decision card, confirm, run\nScan $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run:
+            rc = workflows.run_stage(root, "workflow", ["7"], engine="claude")
+        self.assertEqual(rc, 0)
+        calls = _engine_calls(mock_run)
+        self.assertEqual(len(calls), 1)
+        _, kwargs = calls[0]
+        self.assertNotIn(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE, kwargs["input"])
+        self.assertNotIn("headless", kwargs["input"].lower())
 
 
 if __name__ == "__main__":

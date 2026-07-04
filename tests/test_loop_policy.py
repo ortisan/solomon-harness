@@ -51,6 +51,17 @@ class TestLadder(unittest.TestCase):
         self.assertFalse(_policy("L1").decide_stage("loop-auto").allowed)
         self.assertTrue(_policy("L3").requires_lock("loop-auto"))
 
+    def test_release_still_blocked_after_headless_loop_autonomy_fix(self):
+        # Regression guard for #194 / ADR-0021: making headless `loop`
+        # iterations actually execute autonomous work (an autonomous-mode
+        # directive injected into the dispatched prompt, see workflows.py's
+        # build_prompt/run_stage) must never widen this gate. Release stays
+        # permanently human-gated at every non-human level; only `human`
+        # (no `loop` block configured) is unrestricted.
+        for level in ("L1", "L2", "L3"):
+            self.assertFalse(_policy(level).decide_stage("release").allowed, level)
+        self.assertTrue(_policy("human").decide_stage("release").allowed)
+
     def test_scan_loops_are_l2_l3_automation(self):
         self.assertTrue(_policy("L2").decide_stage("scan-arch").allowed)
         self.assertTrue(_policy("L3").decide_stage("scan-dedup").allowed)

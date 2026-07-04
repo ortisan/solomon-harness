@@ -26,11 +26,34 @@ DEPRECATED_STAGE_ALIASES = {"loop-auto": "loop"}
 # the review gate, so honoring an advisory markdown "Step 0" was not enough.
 LOCKED_STAGES = {"workflow", "loop", "start", "review", "release", "scan-arch", "scan-dedup"}
 
-# `loop` is the headless cadence entrypoint: `dev loop --concurrency N` drives
-# N iterations of the `workflow` stage's own scan/propose/advance logic — the
-# same one confirmed step per `/solomon-workflow` invocation, repeated in a
-# bounded, auditable for-loop rather than a new self-scheduling mechanism.
+# `loop` is the headless cadence entrypoint: `dev loop --concurrency N` drives N
+# iterations of the `workflow` stage's own prompt, with LOOP_AUTONOMOUS_MODE_DIRECTIVE
+# prepended (see build_prompt) so each headless iteration skips the interactive
+# decision card and scans/decides/executes on its own via `dev <stage>`, instead of
+# stalling at a card nobody is present to answer (#194). Only this loop-driven
+# dispatch gets the directive; a direct `dev workflow` invocation is unaffected and
+# keeps presenting the enumerated decision card.
 DEFAULT_CONCURRENCY = 1
+
+# Injected only when `loop` is driving the `workflow` prompt headlessly (build_prompt's
+# `loop_driven=True`). It names the command file's own section headings rather than
+# re-describing the Autonomous Mode steps, so the harness stays prompt-driven: the
+# only source of truth for *what* Autonomous Mode does is solomon-workflow.md itself,
+# and if that file's step 3 is ever renumbered or reworded this reference breaks
+# visibly instead of silently drifting out of sync with it.
+LOOP_AUTONOMOUS_MODE_DIRECTIVE = (
+    "This is a headless, unattended /solomon-loop iteration: no human is present to "
+    "answer a question. Skip section \"## 3. Propose as an enumerated decision card, "
+    "confirm, run\" entirely — do not present or wait on the decision card in any "
+    "form (no AskUserQuestion call, no numbered list awaiting a reply). Proceed "
+    "directly to the Autonomous Mode instructions already described under that "
+    "section (Option 2): scan the current state, decide the next step via the same "
+    "rules, and — unless the next step is permanently human-gated (release/merge/"
+    "Done) or nothing more can be progressed — execute it headless via "
+    "`solomon-harness dev <stage> [args]`, save the decision, and continue until a "
+    "human-gated boundary is reached or no work remains, then report the final "
+    "status.\n\n"
+)
 
 
 def _parse_concurrency(args: List[str]) -> "tuple[int, List[str]]":
@@ -109,13 +132,24 @@ def _read_command_file(workspace_root: str, stage: str) -> str:
         return f.read()
 
 
-def build_prompt(workspace_root: str, stage: str, args: List[str]) -> str:
-    """Return the command body for a stage with $ARGUMENTS substituted."""
+def build_prompt(workspace_root: str, stage: str, args: List[str], *, loop_driven: bool = False) -> str:
+    """Return the command body for a stage with $ARGUMENTS substituted.
+
+    ``loop_driven`` is True only when the `loop` stage is dispatching the
+    `workflow` command file headlessly (see `run_stage`). In that case, and
+    only that case, LOOP_AUTONOMOUS_MODE_DIRECTIVE is prepended so the model
+    skips the interactive decision card and proceeds straight into Autonomous
+    Mode (#194). A direct invocation of any stage — including `workflow` on
+    its own — never sets this, so its prompt is unchanged.
+    """
     text = _read_command_file(workspace_root, stage)
     if text.startswith("---"):
         # Drop the YAML frontmatter, keep the prompt body.
         text = "---".join(text.split("---")[2:]).strip()
-    return text.replace("$ARGUMENTS", " ".join(args))
+    text = text.replace("$ARGUMENTS", " ".join(args))
+    if loop_driven:
+        text = LOOP_AUTONOMOUS_MODE_DIRECTIVE + text
+    return text
 
 
 def _allowed_tools(workspace_root: str, stage: str) -> Optional[str]:
@@ -173,6 +207,7 @@ def run_stage(
     prompt_stage = stage
     iterations = 1
     prompt_args = args
+    loop_driven = False
     if stage == "loop":
         try:
             iterations, prompt_args = _parse_concurrency(args)
@@ -180,9 +215,10 @@ def run_stage(
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         prompt_stage = "workflow"
+        loop_driven = True
 
     try:
-        prompt = build_prompt(workspace_root, prompt_stage, prompt_args)
+        prompt = build_prompt(workspace_root, prompt_stage, prompt_args, loop_driven=loop_driven)
     except FileNotFoundError as exc:
         print(f"Error: command file not found ({exc}). Run 'solomon-harness init' first.", file=sys.stderr)
         return 1
