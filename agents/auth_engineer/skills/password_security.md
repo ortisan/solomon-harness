@@ -210,7 +210,7 @@ def authenticate(username: str, password: str) -> bool:
 - Breach check: mock the HIBP HTTP call (never hit the network in tests); assert a known-pwned suffix is rejected, a clean one passes, and a simulated timeout fails open on signup.
 - Lockout: drive N failures and assert throttling, that an unknown user and a wrong password return the same message and comparable timing, and that a success resets the counter.
 
-## Common pitfalls to reject in review
+## Common pitfalls
 
 - Any fast or unsalted hash (MD5, SHA-1, SHA-256, SHA-512) used directly for passwords.
 - Trusting library defaults instead of setting Argon2 `m/t/p` to a calibrated, documented value.

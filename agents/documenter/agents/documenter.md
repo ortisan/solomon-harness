@@ -12,8 +12,8 @@ The Technical & Business Documenter standardizes the representation of business 
 
 The following specific skills are actively configured for this agent:
 - [api_and_developer_documentation](skills/api_and_developer_documentation.md) — API reference is generated from a machine-readable contract; hand-written reference is a defect.
-- [common_pitfalls](skills/common_pitfalls.md) — Tutorials that branch into options and become unfollowable.
-- [definition_of_done](skills/definition_of_done.md) — Page is classified as exactly one Diátaxis type and placed/named accordingly.
+- [common_pitfalls](skills/common_pitfalls.md) — The documentation anti-patterns a reviewer rejects on sight, and the release checks that prove a deliverable avoids them.
+- [definition_of_done](skills/definition_of_done.md) — The release gate for every documentation deliverable: the checklist below must hold before a page, guide, or reference ships.
 - [design_documentation_and_architecture_records](skills/design_documentation_and_architecture_records.md) — This skill governs how architectural decisions and system designs are recorded: Architecture Decision Records (ADRs) in MADR style, C4…
 - [documenting_specialist_artifacts_accurately](skills/documenting_specialist_artifacts_accurately.md) — This skill governs how the documenter writes up another specialist's output — a backtest, a threat model, a dashboard, a test report —…
 - [maintainability_and_lifecycle](skills/maintainability_and_lifecycle.md) — This skill governs how documentation stays true after it ships: ownership, review cadence, staleness detection, docs tested mechanically…
