@@ -267,7 +267,76 @@ function PortfolioView({ portfolio }: { portfolio: Portfolio }) {
   );
 }
 
-function VelocityRow({ row }: { row: VelocityRowData }) {
+interface DayBucket {
+  date: string;
+  count: number;
+}
+
+// Buckets `doneAt` (naive local ISO-8601 timestamps) into the last `window`
+// calendar days ending at `today`, zero-filled, oldest first. Day labels come
+// from `today`'s local getters (never `toISOString()`, which reinterprets in
+// UTC and can shift the calendar date depending on the browser's timezone);
+// `doneAt` entries are matched by their raw date-prefix string (never
+// `Date`-parsed), so there is no timezone re-coercion on either side.
+export function bucketDoneAt(
+  doneAt: string[],
+  window: number,
+  today: Date,
+): DayBucket[] {
+  const buckets: DayBucket[] = [];
+  for (let offset = window - 1; offset >= 0; offset--) {
+    const day = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - offset,
+    );
+    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    buckets.push({ date, count: 0 });
+  }
+  const indexByDate = new Map(buckets.map((bucket, i) => [bucket.date, i]));
+  const firstDate = buckets[0].date;
+  for (const timestamp of doneAt) {
+    const date = timestamp.slice(0, 10);
+    // The backend's window cutoff is time-of-day-precise
+    // (now - timedelta(days) <= entered <= now), while these are whole
+    // calendar-day buckets: a doneAt entry on that partial boundary day can
+    // fall one calendar day before our first bucket. compose_velocity has
+    // already filtered doneAt to the true window, so such an entry is
+    // never actually outside it — clamp it into the first (or, sharing the
+    // same reasoning, the last) bucket rather than silently dropping it, so
+    // the buckets always sum to doneAt.length.
+    const index = indexByDate.get(date) ?? (date < firstDate ? 0 : buckets.length - 1);
+    buckets[index].count += 1;
+  }
+  return buckets;
+}
+
+function VelocityChart({ buckets }: { buckets: DayBucket[] }) {
+  const max = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  return (
+    <div className="velocity-chart" data-testid="velocity-chart">
+      {buckets.map((bucket) => (
+        <span
+          key={bucket.date}
+          className="velocity-chart-bar"
+          data-testid="velocity-chart-bar"
+          title={`${bucket.date}: ${bucket.count}`}
+          style={{ height: `${(bucket.count / max) * 100}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VelocityRow({
+  row,
+  window,
+  today,
+}: {
+  row: VelocityRowData;
+  window: number;
+  today: Date;
+}) {
   return (
     <li className="velocity-row" data-testid="velocity-row">
       <span className="velocity-subject">{row.personKey}</span>
@@ -284,6 +353,17 @@ function VelocityRow({ row }: { row: VelocityRowData }) {
           partial ({row.partialTenants.join(", ")})
         </span>
       )}
+      {row.doneAt.length > 0 ? (
+        <VelocityChart buckets={bucketDoneAt(row.doneAt, window, today)} />
+      ) : (
+        <p
+          className="velocity-empty text-warning"
+          data-testid="velocity-empty"
+          role="status"
+        >
+          No activity in window
+        </p>
+      )}
     </li>
   );
 }
@@ -291,6 +371,7 @@ function VelocityRow({ row }: { row: VelocityRowData }) {
 function VelocityView({ velocity }: { velocity: Velocity }) {
   // Every figure is a reachable subtotal when a tenant is degraded; the per-row
   // partial badge names which, and this banner states the window-wide gap.
+  const today = new Date();
   return (
     <div className="velocity" data-testid="velocity">
       <div className="velocity-summary">
@@ -305,7 +386,12 @@ function VelocityView({ velocity }: { velocity: Velocity }) {
       </div>
       <ul className="velocity-rows">
         {velocity.rows.map((row) => (
-          <VelocityRow key={row.personKey} row={row} />
+          <VelocityRow
+            key={row.personKey}
+            row={row}
+            window={velocity.window}
+            today={today}
+          />
         ))}
       </ul>
     </div>
