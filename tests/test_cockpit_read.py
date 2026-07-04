@@ -790,6 +790,62 @@ class TestReadTenantSwimlane(unittest.TestCase):
         self.assertFalse(client.closed_during_read)
 
 
+class TestClassifyTenantReadCancellation(unittest.TestCase):
+    """_classify_tenant_read must not fire-and-forget an abandoned worker.
+
+    ``pool.shutdown(wait=False)`` alone does not stop a worker thread that is
+    still running past its reported timeout; it keeps running in the
+    background, which can pile up across tenants. A cancellation-aware worker
+    checks the ``threading.Event`` this function hands it and stops at its next
+    checkpoint instead.
+    """
+
+    def test_classify_tenant_read_cancels_an_abandoned_worker(self):
+        """On timeout, the cancel_event handed to the worker is set; a worker
+        with a checkpointed loop that honors it stops within one checkpoint
+        instead of running all the way to completion in the background after
+        UNREACHABLE has already been reported (the fire-and-forget regression)."""
+        progress = []
+
+        def worker(cancel_event):
+            for i in range(50):
+                if cancel_event.is_set():
+                    return "cancelled"
+                progress.append(i)
+                time.sleep(0.02)
+            return "completed"
+
+        status, value = cockpit_read._classify_tenant_read(worker, timeout=0.05)
+
+        self.assertEqual(status, cockpit_read.STATUS_UNREACHABLE)
+        self.assertIsNone(value)
+
+        # The worker genuinely started (proves this isn't a crash masquerading
+        # as a cancellation) before its SLA elapsed.
+        progress_at_timeout = len(progress)
+        self.assertGreater(progress_at_timeout, 0)
+
+        # A fire-and-forget executor would keep the worker running for the full
+        # ~1s (50 * 0.02s) regardless of the timeout already reported. Give the
+        # abandoned worker one extra checkpoint's worth of time to notice the
+        # cancellation and stop, then assert it actually did.
+        time.sleep(0.2)
+        self.assertLess(len(progress), 50)
+        self.assertLessEqual(len(progress), progress_at_timeout + 2)
+
+    def test_classify_tenant_read_still_returns_ok_on_a_clean_read(self):
+        """A worker that finishes inside the timeout still returns OK with its
+        value; the cancel_event plumbing does not disturb the happy path."""
+        def worker(cancel_event):
+            self.assertFalse(cancel_event.is_set())
+            return "done"
+
+        status, value = cockpit_read._classify_tenant_read(worker, timeout=1.0)
+
+        self.assertEqual(status, cockpit_read.STATUS_OK)
+        self.assertEqual(value, "done")
+
+
 class _ConcurrencyTracker:
     """Track the peak number of per-tenant reads running at the same time."""
 
@@ -1410,14 +1466,20 @@ def _done_history(entered_at):
 class _VelocityTenantClient:
     """A per-tenant read port that answers list_issues and board_history reads.
 
-    list_issues returns the fixed issue list; get_memory answers a
-    board_history:<github_id> key from the supplied history map (None when the
-    issue has no tracked history). Read-only: no write method exists.
+    list_issues returns the fixed issue list; get_memory_bulk answers every
+    requested board_history:<github_id> key from the supplied history map in
+    one call (a key with no tracked history is simply absent from the
+    result). Deliberately carries no per-key get_memory method, so a
+    regression to the N+1 read pattern (one get_memory call per issue) fails
+    loudly with an AttributeError rather than silently working. Records every
+    batch call so a test can assert the history read costs exactly one round
+    trip regardless of issue count. Read-only: no write method exists.
     """
 
     def __init__(self, issues, history_by_id=None):
         self._issues = issues
         self._history = dict(history_by_id or {})
+        self.bulk_calls = []
 
     def use_tenant(self, database):
         pass
@@ -1425,12 +1487,17 @@ class _VelocityTenantClient:
     def list_issues(self):
         return list(self._issues)
 
-    def get_memory(self, key):
+    def get_memory_bulk(self, keys):
+        self.bulk_calls.append(list(keys))
         prefix = "board_history:"
-        if not key.startswith(prefix):
-            return None
-        history = self._history.get(key[len(prefix):])
-        return json.dumps(history) if history is not None else None
+        result = {}
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            history = self._history.get(key[len(prefix):])
+            if history is not None:
+                result[key] = json.dumps(history)
+        return result
 
     def close(self):
         pass
@@ -1538,6 +1605,46 @@ class TestCountTenantVelocity(unittest.TestCase):
                     self._tenant(), "alpha", now=T_NOW, days=days
                 )
                 self.assertEqual(counts["alice@example.com"]["count"], expected)
+
+    def test_count_tenant_velocity_reads_board_history_in_one_batch_call(self):
+        """count_tenant_velocity reads every issue's board_history through a
+        single get_memory_bulk call, not one get_memory per issue (no N+1): a
+        tenant with many issues still costs exactly one history round trip,
+        carrying every issue's key."""
+        issues = [
+            {"github_id": f"m{i}", "status": "closed", "assignee": "alice@example.com"}
+            for i in range(50)
+        ]
+        history = {
+            f"m{i}": _done_history("2026-06-28T10:00:00") for i in range(50)
+        }
+        client = _VelocityTenantClient(issues, history)
+
+        counts = cockpit_read.count_tenant_velocity(
+            client, "alpha", now=T_NOW, days=14
+        )
+
+        self.assertEqual(len(client.bulk_calls), 1)
+        self.assertEqual(
+            set(client.bulk_calls[0]),
+            {f"board_history:m{i}" for i in range(50)},
+        )
+        self.assertEqual(counts["alice@example.com"]["count"], 50)
+
+    def test_count_tenant_velocity_stops_at_the_next_issue_when_cancelled(self):
+        """A cancel_event already set before the per-issue loop starts stops
+        count_tenant_velocity at the very first checkpoint: no issue is
+        counted, proving the loop actually observes cancellation rather than
+        running to completion regardless of it."""
+        client = self._tenant()
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        counts = cockpit_read.count_tenant_velocity(
+            client, "alpha", now=T_NOW, days=14, cancel_event=cancel_event
+        )
+
+        self.assertEqual(counts, {})
 
 
 def _ok_velocity(project, velocity):
@@ -1668,10 +1775,13 @@ class TestComposeVelocity(unittest.TestCase):
 class _VelocityFanoutClient:
     """A multi-tenant read port for the velocity fan-out.
 
-    list_issues and get_memory both answer for whichever tenant use_tenant last
-    bound, so a mis-bind (reading the wrong tenant's history) would surface as a
-    wrong attribution. Records the ordered call sequence so a test can assert the
-    bind happens before the read. Read-only: no write method exists.
+    list_issues and get_memory_bulk both answer for whichever tenant use_tenant
+    last bound, so a mis-bind (reading the wrong tenant's history) would surface
+    as a wrong attribution. Deliberately carries no per-key get_memory method,
+    so a regression to the N+1 read pattern fails loudly. Records the ordered
+    call sequence so a test can assert the bind happens before the read and
+    that the history read costs one batch call, not one per issue. Read-only:
+    no write method exists.
     """
 
     def __init__(self, by_tenant):
@@ -1691,15 +1801,18 @@ class _VelocityFanoutClient:
         self.calls.append("list_issues")
         return list(self._by_tenant.get(self._bound, {}).get("issues", []))
 
-    def get_memory(self, key):
-        self.calls.append(("get_memory", key))
+    def get_memory_bulk(self, keys):
+        self.calls.append(("get_memory_bulk", tuple(keys)))
         prefix = "board_history:"
-        if not key.startswith(prefix):
-            return None
-        history = self._by_tenant.get(self._bound, {}).get("history", {}).get(
-            key[len(prefix):]
-        )
-        return json.dumps(history) if history is not None else None
+        history_by_id = self._by_tenant.get(self._bound, {}).get("history", {})
+        result = {}
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            history = history_by_id.get(key[len(prefix):])
+            if history is not None:
+                result[key] = json.dumps(history)
+        return result
 
     def close(self):
         self.calls.append("close")

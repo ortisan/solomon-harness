@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Sequence,
     Union,
     runtime_checkable,
 )
@@ -1581,6 +1582,46 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to retrieve memory: {e}")
                 raise RuntimeError(f"Failed to retrieve memory: {e}")
+
+    @_resilient
+    def get_memory_bulk(self, keys: Sequence[str]) -> Dict[str, str]:
+        """Retrieves several memory values in one round trip, keyed by key.
+
+        Exists so a caller that needs N memory entries (e.g. one board_history
+        per issue) issues exactly one query instead of N (the N+1 pattern).
+        Returns a dict containing only the keys that resolved to a value; a key
+        with no stored entry is simply absent, the same "miss" a single
+        ``get_memory`` call reports as None. An empty ``keys`` sequence is a
+        no-op that skips the query entirely.
+        """
+        keys = list(keys)
+        if not keys:
+            return {}
+        if self.backend == "surrealdb":
+            query = "SELECT key, `value` FROM memory WHERE key IN $keys"
+            try:
+                res = self._run_surreal(query, {"keys": keys})
+                return {
+                    row["key"]: row["value"]
+                    for row in self._extract_list(res)
+                    if "key" in row
+                }
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to bulk retrieve memory from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to bulk retrieve memory from SurrealDB: {e}")
+        else:
+            placeholders = ",".join("?" for _ in keys)
+            query = f"SELECT key, value FROM memory WHERE key IN ({placeholders})"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, keys)
+                    return {row["key"]: row["value"] for row in cursor.fetchall()}
+            except sqlite3.Error as e:
+                logging.error(f"Failed to bulk retrieve memory: {e}")
+                raise RuntimeError(f"Failed to bulk retrieve memory: {e}")
 
     def create_milestone(
         self, title: str, description: str, due_date: str, state: str

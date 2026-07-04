@@ -1054,6 +1054,28 @@ class TestDatabaseClient(unittest.TestCase):
         client.delete_memory("never_existed")
         client.close()
 
+    def test_get_memory_bulk_sqlite(self):
+        """get_memory_bulk returns every stored key's value in one call, and a
+        key that was never saved is simply absent from the result (never a
+        raise, never a None placeholder)."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        client.save_memory("bh:1", "one", "board_history")
+        client.save_memory("bh:2", "two", "board_history")
+        client.save_memory("bh:3", "three", "board_history")
+
+        result = client.get_memory_bulk(["bh:1", "bh:2", "bh:missing"])
+
+        self.assertEqual(result, {"bh:1": "one", "bh:2": "two"})
+        self.assertNotIn("bh:missing", result)
+        client.close()
+
+    def test_get_memory_bulk_empty_keys_is_a_no_op(self):
+        """get_memory_bulk on an empty key list returns an empty dict without
+        issuing any query."""
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        self.assertEqual(client.get_memory_bulk([]), {})
+        client.close()
+
     def test_sqlite_uses_wal(self):
         """SQLite connections must run in WAL journal mode so the shared store is safe
         for concurrent agents."""
