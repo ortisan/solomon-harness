@@ -1,7 +1,7 @@
 ---
 description: Review a pull request through QA, security, and architecture gates, then approve or request changes
 argument-hint: [pr-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__get_latest_activity
 ---
 
 You are running the Review stage of the solomon lifecycle for PR #$ARGUMENTS.
@@ -76,9 +76,11 @@ Each lens returns findings tagged blocker, major, or minor.
   `mcp__solomon-memory__log_handoff(sender="qa", recipient="sre",
   contract_type="release-candidate",
   contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="approved")`
-  so the Release stage can resume.
+  so the Release stage can resume; keep the returned handoff id.
 - `mcp__solomon-memory__save_session` capturing what was reviewed, the verdict, and
-  the linked decision and issue IDs.
+  the linked decision and issue IDs; pass `issues=[<issue>]` so the session carries
+  the worked_on edge and resume is a graph query (ADR-0017).
+- `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` on approval, recording the produced edge.
 
 State explicitly whether an ADR was required and whether one exists. Do not push,
 merge, or change the board to `Done` here — Review moves the card `Code Review` →

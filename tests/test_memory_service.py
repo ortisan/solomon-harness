@@ -143,6 +143,18 @@ class TestMemoryService(unittest.TestCase):
         self.svc.save_session("s9", "qa", "wrap up", [], status="done")
         self.assertEqual(self.svc.get_session("s9")["session"]["status"], "done")
 
+    def test_save_session_links_worked_on_issues(self):
+        # The issues parameter reaches the client and produces worked_on links
+        # (ADR-0017); a missing issue row is created rather than dangled.
+        self.svc.save_session("s10", "qa", "review the fix", [], issues=[321])
+        issue = self.svc.get_issue("321")["issue"]
+        self.assertIsNotNone(issue)
+        with self.svc.client._sqlite_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT source_id, github_id FROM worked_on")
+            rows = [dict(r) for r in cur.fetchall()]
+        self.assertEqual(rows, [{"source_id": "s10", "github_id": "321"}])
+
     def test_milestones_and_releases(self):
         mid = self.svc.create_milestone("M1", "goals", "2026-07-01", "active")["milestone_id"]
         self.assertEqual(len(self.svc.list_milestones()["milestones"]), 1)

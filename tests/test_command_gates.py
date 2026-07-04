@@ -119,3 +119,27 @@ def test_docs_reframe_loop_as_host_orchestrated_human_gated():
         low = _read(rel).lower()
         assert "host-orchestrated" in low, rel
         assert "human-gated" in low, rel
+
+
+# --- Episodic work graph wired into the commands (ADR-0017) ------------------
+
+
+def test_commands_wire_worked_on_and_produced_edges():
+    """The stages that write sessions and handoffs must also write the graph:
+    issues=[...] on save_session (the worked_on edge) and
+    link_session_handoff (the produced edge), in both hosts' command files."""
+    for name in ("start", "review", "release", "bug", "issue"):
+        body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
+        assert "link_session_handoff" in body, name
+        assert "issues=[" in body, name
+        # The tool must be callable, not just mentioned: it is allowlisted.
+        frontmatter = body.split("---")[1]
+        assert "mcp__solomon-memory__link_session_handoff" in frontmatter, name
+        assert "mcp__solomon-memory__save_session" in frontmatter, name
+
+
+def test_gemini_mirrors_carry_the_edge_wiring():
+    for name in ("start", "review", "release", "bug", "issue"):
+        body = _read(os.path.join(".gemini", "commands", f"solomon-{name}.toml"))
+        assert "link_session_handoff" in body, name
+        assert "issues=[" in body, name

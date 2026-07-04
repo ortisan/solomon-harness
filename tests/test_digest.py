@@ -284,6 +284,98 @@ class TestBuildDigest(unittest.TestCase):
     def test_sanitize_title_none(self):
         self.assertEqual(digest._sanitize_title(None), "")
 
+    def test_resume_uses_graph_linked_issue_over_task_text(self):
+        # ADR-0017: the worked_on edges name the issue; no number in the task
+        # text is needed (the legacy regex would have found nothing here).
+        resume = {
+            "type": "session", "agent": "software_engineer",
+            "task": "implement the widget", "status": "active", "issues": [42],
+        }
+        per_issue = [
+            {"github_id": "42", "title": "The widget", "issue_status": "in_progress"}
+        ]
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=per_issue,
+            )
+        )
+        self.assertIn("/solomon-start 42", text)
+        self.assertIn(
+            "Resume last activity: software_engineer is working on 'implement the widget'",
+            text,
+        )
+
+    def test_resume_graph_maps_review_status_to_review(self):
+        resume = {
+            "type": "session", "agent": "qa",
+            "task": "verify the fix", "status": "active", "issues": [77],
+        }
+        per_issue = [
+            {"github_id": "77", "title": "The fix", "issue_status": "code_review"}
+        ]
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=per_issue,
+            )
+        )
+        self.assertIn("/solomon-review 77", text)
+
+    def test_resume_graph_rows_win_even_without_resume_issues_key(self):
+        # A legacy resume row with no edges of its own still gets a typed
+        # target when the per-issue graph has rows.
+        resume = {
+            "type": "session", "agent": "qa",
+            "task": "start something", "status": "active",
+        }
+        per_issue = [
+            {"github_id": "9", "title": "Recent", "issue_status": "in_progress"}
+        ]
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=per_issue,
+            )
+        )
+        self.assertIn("/solomon-start 9", text)
+
+    def test_resume_without_graph_rows_falls_back_to_the_regex(self):
+        # The deprecated free-text branch (ADR-0017) still resolves legacy
+        # sessions with no worked_on edges.
+        resume = {"type": "session", "agent": "qa", "task": "start #55", "status": "active"}
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=[],
+            )
+        )
+        self.assertIn("/solomon-start 55", text)
+
+    def test_gather_digest_feeds_per_issue_rows(self):
+        class GraphDB:
+            backend = "surrealdb"
+
+            def get_latest_activity(self):
+                return {
+                    "type": "session", "agent": "qa",
+                    "task": "no number here", "status": "active",
+                }
+
+            def get_open_issues(self):
+                return []
+
+            def list_loop_runs(self, limit):
+                return []
+
+            def latest_activity_per_issue(self, limit=10):
+                return [
+                    {"github_id": "31", "title": "Linked", "issue_status": "in_progress"}
+                ]
+
+        lines = digest.gather_digest(".", GraphDB(), fetch_github=False)
+        self.assertIn("/solomon-start 31", "\n".join(lines))
+
     def test_digest_shows_resume_start_active_with_hash(self):
         resume = {"type": "session", "agent": "qa", "task": "start #123", "status": "active"}
         text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))

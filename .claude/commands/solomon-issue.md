@@ -1,7 +1,7 @@
 ---
 description: Create a feature/story issue (INVEST + Given/When/Then) and place it on the board Backlog
 argument-hint: <short feature description, or a path/link to context>
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff
 ---
 
 Read `docs/solomon-workflow.md` and follow it exactly: this is the "Create a
@@ -61,7 +61,13 @@ Steps:
      using the contract template in the conventions doc (`.solomon/` is gitignored
      local state).
    - `mcp__solomon-memory__log_handoff` — product_owner → scrum_master, contract
-     "feature-story", contract_path = that handoff file, status="ready_for_refinement".
+     "feature-story", contract_path = that handoff file, status="ready_for_refinement";
+     keep the returned handoff id.
+   - `mcp__solomon-memory__save_session` (session_id="issue-<n>",
+     agent_name="product_owner", task="Filed #<n>", messages=[], issues=[<n>]) to
+     checkpoint with the worked_on edge, then
+     `mcp__solomon-memory__link_session_handoff(session_id="issue-<n>", handoff_id=<the returned handoff id>)`
+     to record the produced edge (ADR-0017).
 
 8. Output the issue URL and a one-line summary (number, title, priority, area).
    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.

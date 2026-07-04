@@ -1,7 +1,7 @@
 ---
 description: File a structured bug report, label and prioritize it, place it on the board Backlog, and record it in memory.
 argument-hint: <bug description, with repro steps / env / severity if known>
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, mcp__solomon-memory__log_issue, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff
 ---
 
 You are running the `/solomon-bug` stage. Read
@@ -60,8 +60,10 @@ Steps:
    - Write the compact handoff contract to `.solomon/handoffs/issue-<n>-bug-to-refine.md`
      using the template in `docs/solomon-workflow.md` (a summary plus pointers to the
      issue and its repro/severity), so `/solomon-refine` reads it as its bounded input.
-   - `log_handoff(sender="qa", recipient="software_engineer", contract_type="bug_report", contract_path=".solomon/handoffs/issue-<n>-bug-to-refine.md", status="open")` to hand the defect to implementation.
-   - `save_session(...)` to checkpoint if triage required substantial subagent work.
+   - `log_handoff(sender="qa", recipient="software_engineer", contract_type="bug_report", contract_path=".solomon/handoffs/issue-<n>-bug-to-refine.md", status="open")` to hand the defect to implementation; keep the returned handoff id.
+   - `save_session(...)` to checkpoint if triage required substantial subagent work;
+     pass `issues=[<n>]` (the worked_on edge, ADR-0017). When a session was saved,
+     `link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` records the produced edge.
 8. Report back the issue URL, the assigned priority, and a one-line reminder that
    the regression test is the close gate.
 

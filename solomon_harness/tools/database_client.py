@@ -563,6 +563,9 @@ class DatabaseClient:
         "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION;",
         "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION;",
         "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION;",
+        # Episodic work graph (ADR-0017): sessions and loop_runs link to the
+        # issues they advance, so resume is a graph query, not a prose regex.
+        "DEFINE TABLE IF NOT EXISTS worked_on TYPE RELATION;",
         # Relational: indexes for the hot lookups. github_id is the record
         # key, so it is unique by construction.
         "DEFINE INDEX IF NOT EXISTS issues_github_id "
@@ -967,6 +970,7 @@ class DatabaseClient:
                 decision TEXT,
                 status TEXT,
                 session_id TEXT,
+                target_issue INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
@@ -1003,6 +1007,26 @@ class DatabaseClient:
             "ON transitions (record_id);",
             "CREATE INDEX IF NOT EXISTS transitions_issue_entered "
             "ON transitions (github_id, entered_at);",
+            # worked_on parity link table (ADR-0017). On SurrealDB the edge is
+            # a RELATE through the mirrored funnel; whenever a link write does
+            # not land on the primary (pure-SQLite or degraded fallback) this
+            # table keeps graph-based resume working. ``source_table`` is
+            # 'sessions' or 'loop_runs'; ``source_id`` the session_id or the
+            # minted loop_run record id. The unique index makes a re-save of
+            # the same session idempotent (INSERT OR IGNORE).
+            """
+            CREATE TABLE IF NOT EXISTS worked_on (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
+                source_table TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                github_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS worked_on_link "
+            "ON worked_on (source_table, source_id, github_id);",
+            "CREATE INDEX IF NOT EXISTS worked_on_issue ON worked_on (github_id);",
         ]
 
         try:
@@ -1015,6 +1039,7 @@ class DatabaseClient:
                 self._ensure_issue_milestone_fk_dropped(conn)
                 self._ensure_column(conn, "sessions", "status", "TEXT")
                 self._ensure_column(conn, "handoffs", "summary", "TEXT")
+                self._ensure_column(conn, "loop_runs", "target_issue", "INTEGER")
                 self._ensure_record_id_columns(conn)
                 conn.commit()
         except sqlite3.Error as e:
@@ -2506,6 +2531,7 @@ class DatabaseClient:
         task: str,
         messages: Union[List[Dict[str, Any]], str],
         status: str = "active",
+        issues: Optional[Sequence[Union[int, str]]] = None,
     ) -> None:
         """Upserts a short-term session state.
 
@@ -2519,7 +2545,16 @@ class DatabaseClient:
                 parameter defaulting to active, so every existing caller is
                 unchanged and get_latest_activity reads the stored value
                 instead of hardcoding it.
+            issues: Optional GitHub issue numbers this session worked on. Each
+                becomes a ``worked_on`` edge (session -> issue, ADR-0017) after
+                the session row lands, so resume is a graph query instead of a
+                regex over the free-text task string. Validated numeric before
+                any write; a missing issue row is created minimally via the
+                log_issue path so an edge never dangles.
         """
+        # Validate before the session write so a bad number fails the whole
+        # call fast instead of leaving a session row with half its links.
+        issue_numbers = [self._canonical_issue_number(n) for n in (issues or [])]
         fields = {
             "session_id": session_id,
             "agent_name": agent_name,
@@ -2529,6 +2564,8 @@ class DatabaseClient:
         }
         # session_id is already a stable id, reused for the RecordID and filename.
         self._write_through("session", session_id, fields, self._db_save_session)
+        for gid in issue_numbers:
+            self._record_worked_on("sessions", session_id, gid)
 
     @_resilient
     def _db_save_session(self, record_id: str, fields: Dict[str, Any]) -> None:
@@ -3348,6 +3385,12 @@ class DatabaseClient:
             # "Handoff contracts") is never silently dropped by that ordering.
             if latest_handoff is not None:
                 result["contract_path"] = latest_handoff.get("contract_path")
+            # The linked issue numbers from the session's worked_on edges
+            # (ADR-0017), added only when edges exist so consumers pinned on
+            # the exact legacy shape are untouched by pre-edge rows.
+            linked = self._session_issue_numbers(latest_session.get("session_id"))
+            if linked:
+                result["issues"] = linked
             return result
         else:
             assert latest_handoff is not None
@@ -3364,6 +3407,180 @@ class DatabaseClient:
                 "timestamp": latest_handoff.get("timestamp"),
             }
 
+    def _session_issue_numbers(self, session_id: Any) -> List[int]:
+        """GitHub issue numbers linked from a session by worked_on edges.
+
+        Best-effort by design (ADR-0017): a graph read failure reports no
+        links, because the resume shape must never break when the graph is
+        unreachable -- the session row itself was already fetched.
+        """
+        if not session_id:
+            return []
+        try:
+            if self.backend == "surrealdb":
+                res = self._run_surreal(
+                    "SELECT array::distinct(->worked_on->issues.github_id) "
+                    "AS gids FROM $node;",
+                    {"node": self._rid("sessions", str(session_id))},
+                )
+                gids = self._extract_field(res, "gids") or []
+            else:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT DISTINCT github_id FROM worked_on "
+                        "WHERE source_table = 'sessions' AND source_id = ?",
+                        (str(session_id),),
+                    )
+                    gids = [row["github_id"] for row in cursor.fetchall()]
+            return sorted(
+                int(g) for g in gids if str(g).isdigit() and str(g).isascii()
+            )
+        except Exception:
+            return []
+
+    @staticmethod
+    def _activity_epoch(ts: Any) -> float:
+        """Best-effort epoch seconds for an activity timestamp (0.0 unknown).
+
+        Accepts the native datetime SurrealDB returns and the ISO/space-
+        separated strings SQLite stores, mirroring get_latest_activity's
+        tolerant parsing so the two orderings can never disagree.
+        """
+        if isinstance(ts, datetime.datetime):
+            return ts.timestamp()
+        if not ts:
+            return 0.0
+        clean = str(ts).replace(" ", "T").rstrip("Z")
+        if "+" in clean:
+            clean = clean.split("+")[0]
+        try:
+            return datetime.datetime.fromisoformat(clean).timestamp()
+        except ValueError:
+            return 0.0
+
+    @_resilient
+    def latest_activity_per_issue(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """The most recent linked activity per non-terminal issue (ADR-0017).
+
+        For each issue that has worked_on edges and is not terminal, returns
+        the most recent linked session or loop run. One graph query on
+        SurrealDB (issues projecting ``<-worked_on<-sessions`` and
+        ``<-worked_on<-loop_runs``); a join over the parity link table on the
+        SQLite fallback. The terminal filter runs in Python through the shared
+        :func:`is_terminal` predicate, so the status vocabulary lives in one
+        place.
+
+        Returns rows shaped ``{github_id, title, issue_status, type, agent,
+        task, status, timestamp}`` -- ``type`` is ``session`` or ``loop_run``;
+        for a loop run ``agent`` is the stage and ``task`` the decision text.
+        Most recent first, capped at ``limit``.
+        """
+        candidates: List[Dict[str, Any]] = []
+        order = 0
+        if self.backend == "surrealdb":
+            query = (
+                "SELECT github_id, title, status AS issue_status, "
+                "<-worked_on<-sessions.* AS sessions, "
+                "<-worked_on<-loop_runs.* AS loop_runs "
+                "FROM issues WHERE count(<-worked_on) > 0;"
+            )
+            try:
+                res = self._run_surreal(query)
+                issues = self._extract_list(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to query per-issue activity: {e}")
+                raise RuntimeError(f"Failed to query per-issue activity: {e}")
+            for issue in issues:
+                for s in issue.get("sessions") or []:
+                    order += 1
+                    candidates.append({
+                        "github_id": issue.get("github_id"),
+                        "title": issue.get("title"),
+                        "issue_status": issue.get("issue_status"),
+                        "type": "session",
+                        "agent": s.get("agent_name"),
+                        "task": s.get("task"),
+                        "status": s.get("status"),
+                        "timestamp": s.get("timestamp"),
+                        "_order": order,
+                    })
+                for r in issue.get("loop_runs") or []:
+                    order += 1
+                    candidates.append({
+                        "github_id": issue.get("github_id"),
+                        "title": issue.get("title"),
+                        "issue_status": issue.get("issue_status"),
+                        "type": "loop_run",
+                        "agent": r.get("stage"),
+                        "task": r.get("decision"),
+                        "status": r.get("status"),
+                        "timestamp": r.get("created_at"),
+                        "_order": order,
+                    })
+        else:
+            session_query = """
+            SELECT w.github_id AS github_id, i.title AS title,
+                   i.status AS issue_status, s.agent_name AS agent,
+                   s.task AS task, s.status AS status,
+                   s.timestamp AS timestamp, w.id AS link_order
+            FROM worked_on w
+            JOIN sessions s
+                ON w.source_table = 'sessions' AND w.source_id = s.session_id
+            LEFT JOIN issues i ON i.github_id = w.github_id
+            """
+            loop_query = """
+            SELECT w.github_id AS github_id, i.title AS title,
+                   i.status AS issue_status, r.stage AS agent,
+                   r.decision AS task, r.status AS status,
+                   r.created_at AS timestamp, w.id AS link_order
+            FROM worked_on w
+            JOIN loop_runs r
+                ON w.source_table = 'loop_runs' AND w.source_id = r.record_id
+            LEFT JOIN issues i ON i.github_id = w.github_id
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    for kind, query in (
+                        ("session", session_query),
+                        ("loop_run", loop_query),
+                    ):
+                        cursor.execute(query)
+                        for row in cursor.fetchall():
+                            entry = dict(row)
+                            entry["type"] = kind
+                            # The link-row id is a global insertion sequence:
+                            # it breaks CURRENT_TIMESTAMP's one-second ties
+                            # deterministically.
+                            entry["_order"] = entry.pop("link_order")
+                            candidates.append(entry)
+            except sqlite3.Error as e:
+                logging.error(f"Failed to query per-issue activity: {e}")
+                raise RuntimeError(f"Failed to query per-issue activity: {e}")
+
+        best: Dict[str, Dict[str, Any]] = {}
+        for entry in candidates:
+            if is_terminal(entry.get("issue_status")):
+                continue
+            gid = str(entry.get("github_id"))
+            key = (self._activity_epoch(entry.get("timestamp")), entry["_order"])
+            current = best.get(gid)
+            if current is None or key > (
+                self._activity_epoch(current.get("timestamp")), current["_order"]
+            ):
+                best[gid] = entry
+        rows = sorted(
+            best.values(),
+            key=lambda e: (self._activity_epoch(e.get("timestamp")), e["_order"]),
+            reverse=True,
+        )[: int(limit)]
+        for entry in rows:
+            entry.pop("_order", None)
+        return rows
+
     def save_loop_run(
         self,
         stage: str,
@@ -3371,6 +3588,7 @@ class DatabaseClient:
         decision: str,
         status: str,
         session_id: str,
+        target_issue: Optional[int] = None,
     ) -> Union[str, int, None]:
         """Append one loop-run entry to the auditable ledger.
 
@@ -3383,17 +3601,32 @@ class DatabaseClient:
         ``status`` is normalized to the canonical loop-run vocabulary (ok or
         failed) at this write seam, so the aggregators can count one token
         (#165, ADR-0016).
+
+        ``target_issue`` is the GitHub issue number this run advanced, when the
+        stage carries one. It is stored on the row and also written as a
+        ``worked_on`` edge (loop_run -> issue, ADR-0017), the same edge table
+        sessions use, so per-issue resume sees loop runs too.
         """
+        gid = (
+            self._canonical_issue_number(target_issue)
+            if target_issue is not None
+            else None
+        )
         fields = {
             "stage": stage,
             "target": target,
             "decision": decision,
             "status": normalize_loop_run_status(status),
             "session_id": session_id,
+            "target_issue": int(gid) if gid is not None else None,
         }
-        return self._write_through(
-            "loop_run", self._mint_id("loop_run"), fields, self._db_save_loop_run
+        record_id = self._mint_id("loop_run")
+        result = self._write_through(
+            "loop_run", record_id, fields, self._db_save_loop_run
         )
+        if gid is not None:
+            self._record_worked_on("loop_runs", record_id, gid)
+        return result
 
     @_resilient
     def _db_save_loop_run(
@@ -3408,10 +3641,12 @@ class DatabaseClient:
                 decision: $decision,
                 status: $status,
                 session_id: $session_id,
+                target_issue: $target_issue,
                 created_at: time::now()
             };
             """
             params = {"id": self._rid("loop_runs", record_id), **fields}
+            params.setdefault("target_issue", None)
             try:
                 res = self._run_surreal(query, params)
                 return self._extract_id(res)
@@ -3422,8 +3657,9 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to save loop run in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO loop_runs (record_id, stage, target, decision, status, session_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO loop_runs
+                (record_id, stage, target, decision, status, session_id, target_issue)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
@@ -3436,6 +3672,7 @@ class DatabaseClient:
                             fields["decision"],
                             fields["status"],
                             fields["session_id"],
+                            fields.get("target_issue"),
                         ),
                     )
                     conn.commit()
@@ -3527,7 +3764,9 @@ class DatabaseClient:
 
     # The graph RELATION edge tables DEFINEd in the init block. The generic
     # ``relate`` accepts any safe identifier, but only these are pre-defined.
-    _RELATION_EDGES = ("blocks", "supersedes", "contains", "produced", "addresses")
+    _RELATION_EDGES = (
+        "blocks", "supersedes", "contains", "produced", "addresses", "worked_on",
+    )
     _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
     # Time buckets accepted by SurrealDB's ``time::group`` that floor cleanly.
     # ``week`` is excluded: it returns a null bucket on v3.x.
@@ -3703,6 +3942,81 @@ class DatabaseClient:
     def link_session_handoff(self, session_id: Any, handoff_id: Any) -> Optional[str]:
         """Record that a session produced a handoff (session -[produced]-> handoff)."""
         return self.relate("produced", self._as_rid("sessions", session_id), self._as_rid("handoffs", handoff_id))
+
+    @staticmethod
+    def _canonical_issue_number(value: Any) -> str:
+        """Validate and canonicalize a GitHub issue number to its digit string.
+
+        Same digits-only, ASCII-only rule as :func:`is_github_issue`; leading
+        zeros are dropped. Raises ``ValueError`` on anything else, so a bad
+        number can never reach a query or the graph.
+        """
+        s = str(value)
+        if not (s.isdigit() and s.isascii()):
+            raise ValueError(f"invalid GitHub issue number: {value!r}")
+        return str(int(s))
+
+    def _record_worked_on(self, source_table: str, source_key: str, gid: str) -> None:
+        """Link one episodic row (session or loop run) to the issue it advanced.
+
+        The worked_on edge (ADR-0017): ``<source_table>:<source_key> ->
+        worked_on -> issues:<gid>``. A missing issue row is first created
+        minimally through the log_issue path so the edge never dangles. On
+        SurrealDB the edge rides the wave-1 mirrored relate funnel (ADR-0016
+        F5), with a check-before-relate so re-saving a session does not
+        duplicate the edge. Whenever the write cannot land on the primary
+        (pure-SQLite, or the degraded fallback -- where relate still mirrors
+        the edge as pending for replay) a parity row in the SQLite worked_on
+        link table keeps graph-based resume working.
+        """
+        if self.get_issue(gid) is None:
+            self.log_issue(gid, f"GitHub issue #{gid}", "issue", "open", None)
+        if self.backend == "surrealdb" or self._surreal_class is not None:
+            if not (
+                self.backend == "surrealdb"
+                and gid in self._worked_on_targets(source_table, source_key)
+            ):
+                self.relate(
+                    "worked_on",
+                    self._rid(source_table, source_key),
+                    self._rid("issues", gid),
+                )
+        if self.backend != "surrealdb":
+            self._sqlite_link_worked_on(source_table, source_key, gid)
+
+    def _worked_on_targets(self, source_table: str, source_key: str) -> List[str]:
+        """github_ids already linked from a source row (live-SurrealDB only).
+
+        Best-effort: any read failure reports no targets, so the caller
+        proceeds to relate (the resilient write path handles the fault).
+        """
+        try:
+            res = self._run_surreal(
+                "SELECT array::distinct(->worked_on->issues.github_id) AS gids "
+                "FROM $node;",
+                {"node": self._rid(source_table, source_key)},
+            )
+            return [str(g) for g in (self._extract_field(res, "gids") or [])]
+        except Exception:
+            return []
+
+    def _sqlite_link_worked_on(
+        self, source_table: str, source_id: str, github_id: str
+    ) -> None:
+        """Write one worked_on parity row; idempotent via the unique link index."""
+        query = (
+            "INSERT OR IGNORE INTO worked_on "
+            "(record_id, source_table, source_id, github_id) VALUES (?, ?, ?, ?)"
+        )
+        try:
+            with self._sqlite_conn() as conn:
+                conn.execute(
+                    query, (self._mint_id("edge"), source_table, source_id, github_id)
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            logging.error(f"Failed to link worked_on: {e}")
+            raise RuntimeError(f"Failed to link worked_on: {e}")
 
     def decision_addresses_issue(self, decision_id: Any, github_id: Any) -> Optional[str]:
         """Record that a decision addresses an issue (decision -[addresses]-> issue)."""
