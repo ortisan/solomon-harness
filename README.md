@@ -97,7 +97,7 @@ In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
 /solomon-issue     add rate limiting to the public API
 /solomon-refine    42
 /solomon-start     42
-/solomon-review    17
+/solomon-review    17   # optional: review auto-runs at the end of start; invoke directly only for an existing PR
 /solomon-release   17
 ```
 
@@ -130,7 +130,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 | `/solomon-bug` | create a bug | qa, software_engineer |
 | `/solomon-refine` | ready an issue | product_owner, scrum_master |
 | `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
-| `/solomon-review` | review gates | qa, security, software_architect |
+| `/solomon-review` | review gates (auto-runs at the end of start) | qa, security, software_architect, plus up to two diff-selected domain lenses |
 | `/solomon-release` | deliver and release | sre, software_engineer |
 
 The conventions every workflow follows (board columns, Git Flow branches, labels,
