@@ -575,6 +575,16 @@ class DatabaseClient:
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(LOOP_RUN_STATUSES)};",
         "DEFINE FIELD IF NOT EXISTS state ON milestones "
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(MILESTONE_STATES)};",
+        # First-class issue status transitions (ADR-0016, F4): one row per board
+        # move, typed where it matters (the issue link and the timestamp) while
+        # the table stays SCHEMALESS elsewhere. The composite index makes the
+        # per-issue timeline (and cycle time) one indexed query instead of a
+        # JSON parse per issue.
+        "DEFINE TABLE IF NOT EXISTS transitions SCHEMALESS;",
+        "DEFINE FIELD IF NOT EXISTS issue ON transitions TYPE record<issues>;",
+        "DEFINE FIELD IF NOT EXISTS entered_at ON transitions TYPE datetime;",
+        "DEFINE INDEX IF NOT EXISTS transitions_issue_entered "
+        "ON transitions FIELDS issue, entered_at;",
     ]
 
     def __init__(
@@ -942,6 +952,25 @@ class DatabaseClient:
             );
             """,
             "CREATE INDEX IF NOT EXISTS metrics_name_time ON metrics (name, time);",
+            # Issue status transitions, mirrored on the SQLite fallback so board
+            # moves are recorded even degraded (ADR-0016). ``github_id`` stands in
+            # for the SurrealDB record link; ``entered_at`` is a UTC ISO string;
+            # ``record_id`` is the client-minted id (backend-invariant, F7).
+            """
+            CREATE TABLE IF NOT EXISTS transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
+                github_id TEXT NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                entered_at TIMESTAMP,
+                actor TEXT
+            );
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS transitions_record_id "
+            "ON transitions (record_id);",
+            "CREATE INDEX IF NOT EXISTS transitions_issue_entered "
+            "ON transitions (github_id, entered_at);",
         ]
 
         try:
@@ -2608,6 +2637,146 @@ class DatabaseClient:
             except sqlite3.Error as e:
                 logging.error(f"Failed to update handoff: {e}")
                 raise RuntimeError(f"Failed to update handoff: {e}")
+
+    def record_status_transition(
+        self,
+        github_id: Union[str, int],
+        from_status: Optional[str],
+        to_status: Optional[str],
+        actor: Optional[str] = None,
+    ) -> Union[str, int, None]:
+        """Append one issue status transition to the first-class timeline.
+
+        The row is ``{issue, github_id, from_status, to_status, entered_at,
+        actor}`` (ADR-0016, F4): ``issue`` links the issues record on SurrealDB
+        and ``entered_at`` is stamped server-side with ``time::now()``; on the
+        SQLite fallback ``github_id`` stands in for the link and the stamp is
+        UTC. Statuses are normalized through the canonical vocabulary
+        (ADR-0006) at this write seam. Returns the client-minted record id on
+        both backends. Not mirrored: durability is covered by the parallel
+        legacy board_history write for this release (see the ADR).
+        """
+        fields = {
+            "github_id": str(github_id),
+            "from_status": normalize_status(from_status),
+            "to_status": normalize_status(to_status),
+            "actor": actor,
+        }
+        # Minted here, outside the resilient retry, so a reconnect/fallback
+        # re-run never re-mints the id.
+        return self._db_record_status_transition(self._mint_id("transition"), fields)
+
+    @_resilient
+    def _db_record_status_transition(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a transition: minted id, idempotent UPSERT on SurrealDB."""
+        if self.backend == "surrealdb":
+            query = """
+            UPSERT $id CONTENT {
+                issue: $issue,
+                github_id: $github_id,
+                from_status: $from_status,
+                to_status: $to_status,
+                actor: $actor,
+                entered_at: time::now()
+            };
+            """
+            params = {
+                "id": self._rid("transitions", record_id),
+                "issue": self._rid("issues", fields["github_id"]),
+                **fields,
+            }
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_id(res) or record_id
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to record transition in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to record transition in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO transitions
+                (record_id, github_id, from_status, to_status, entered_at, actor)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    conn.execute(
+                        query,
+                        (
+                            record_id,
+                            fields["github_id"],
+                            fields["from_status"],
+                            fields["to_status"],
+                            self._utc_iso(),
+                            fields["actor"],
+                        ),
+                    )
+                    conn.commit()
+                    return record_id
+            except sqlite3.Error as e:
+                logging.error(f"Failed to record transition: {e}")
+                raise RuntimeError(f"Failed to record transition: {e}")
+
+    @_resilient
+    def get_status_transitions(
+        self, github_ids: Sequence[Union[str, int]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Bulk-read the recorded transitions for the given issues, one round trip.
+
+        Returns a dict keyed by github_id; each value is the issue's transitions
+        ascending by ``entered_at`` as ``{from_status, to_status, entered_at,
+        actor}`` with ``entered_at`` coerced to an ISO-8601 string on both
+        backends. An issue with no rows is absent, so a caller's ``.get(id, [])``
+        degrades cleanly (the cockpit falls back to the legacy board_history).
+        """
+        ids = sorted({str(gid) for gid in github_ids if gid})
+        if not ids:
+            return {}
+        if self.backend == "surrealdb":
+            query = (
+                "SELECT github_id, from_status, to_status, entered_at, actor "
+                "FROM transitions WHERE github_id IN $ids ORDER BY entered_at;"
+            )
+            try:
+                res = self._run_surreal(query, {"ids": ids})
+                rows = self._extract_list(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to read transitions from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to read transitions from SurrealDB: {e}")
+        else:
+            placeholders = ", ".join("?" for _ in ids)
+            query = (
+                "SELECT github_id, from_status, to_status, entered_at, actor "
+                f"FROM transitions WHERE github_id IN ({placeholders}) "
+                "ORDER BY entered_at, id"
+            )
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, ids)
+                    rows = [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to read transitions: {e}")
+                raise RuntimeError(f"Failed to read transitions: {e}")
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            entered_at = row.get("entered_at")
+            if isinstance(entered_at, datetime.datetime):
+                entered_at = entered_at.isoformat()
+            grouped.setdefault(str(row.get("github_id")), []).append(
+                {
+                    "from_status": row.get("from_status"),
+                    "to_status": row.get("to_status"),
+                    "entered_at": entered_at,
+                    "actor": row.get("actor"),
+                }
+            )
+        return grouped
 
     @_resilient
     def get_handoff(self, handoff_id: Union[str, int]) -> Optional[Dict[str, Any]]:
