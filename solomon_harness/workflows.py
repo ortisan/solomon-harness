@@ -311,6 +311,17 @@ def run_stage(
 
             from solomon_harness.subprocess_env import clean_git_env
 
+            child_env = clean_git_env()
+            if lock is not None:
+                # Propagate this driver's own identity into the engine child so
+                # that a nested `solomon-harness dev <stage>` it shells out to
+                # (the loop's Autonomous Mode branch acting on its own scan,
+                # #197) resolves the SAME session_id via LoopLock's own env
+                # lookup and reenters this still-held lock, instead of falling
+                # back to a new `host:pid` identity and being refused as a
+                # foreign competing driver.
+                child_env["SOLOMON_SESSION_ID"] = lock.session_id
+
             rc = 0
             for i in range(iterations):
                 if iterations > 1:
@@ -320,7 +331,7 @@ def run_stage(
                     proc = subprocess.run(
                         cmd,
                         input=prompt, text=True, capture_output=True, check=False,
-                        env=clean_git_env(),
+                        env=child_env,
                     )
                     out = getattr(proc, "stdout", None)
                     if out:
@@ -331,7 +342,7 @@ def run_stage(
                     if cost is not None:
                         loop_budget.record(workspace_root, cost, stage=stage)
                 else:
-                    proc = subprocess.run(cmd, input=prompt, text=True, check=False, env=clean_git_env())
+                    proc = subprocess.run(cmd, input=prompt, text=True, check=False, env=child_env)
                 rc = proc.returncode
                 if rc != 0:
                     # A failed iteration stops the run rather than plowing ahead —

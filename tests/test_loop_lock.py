@@ -155,6 +155,27 @@ class TestLoopLock(unittest.TestCase):
             self.assertEqual(self._lock("z").read()["session_id"], "a")
         self.assertFalse(os.path.exists(self.path))
 
+    def test_reentrant_acquire_does_not_release_the_outer_holders_lock(self):
+        # #197: a nested `dev <stage>` call resolves the SAME session_id
+        # as its still-running parent (propagated via SOLOMON_SESSION_ID) and
+        # lands on the reentrant branch above -- but it must not tear down the
+        # lock on its own way out. Only the call that ORIGINALLY created (or
+        # reclaimed) the lockfile owns its lifecycle; a reentrant holder
+        # releasing it would free the lock while the outer driver is still
+        # mid-run, reopening the exact concurrent-driver race the lock exists
+        # to close.
+        outer = self._lock("a")
+        outer.acquire()
+        inner = self._lock("a")  # separate instance, same session_id: nested call
+        inner.acquire()
+        inner.release()
+        held = outer.read()
+        self.assertIsNotNone(held, "the outer holder's lock must survive a nested release")
+        self.assertEqual(held["session_id"], "a")
+        # The true owner can still release it when it actually finishes.
+        outer.release()
+        self.assertIsNone(outer.read())
+
     def test_reclaim_cas_loser_backs_off(self):
         # Two drivers race to reclaim the same dead lock. After our atomic write,
         # the confirmation re-read sees a live foreign winner, so we must back off

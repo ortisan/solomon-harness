@@ -277,6 +277,118 @@ class TestRunStageDriverLock(unittest.TestCase):
         mock_run.assert_called_once()  # idea creates no branch/merge, so it is not gated
 
 
+class TestRunStageSessionIdPropagation(unittest.TestCase):
+    """#197: the loop-driven `claude -p` child must inherit the driver's own
+    session_id, so a nested `solomon-harness dev <stage>` it shells out to
+    (the Autonomous Mode branch acting on its own scan) resolves the SAME
+    session_id and reenters the still-held parent lock instead of being
+    refused as a foreign competing driver."""
+
+    def test_engine_subprocess_env_carries_the_drivers_session_id(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch.dict(os.environ, {"SOLOMON_SESSION_ID": "driver-42"}):
+            with patch("subprocess.run", return_value=_Proc()) as mock_run:
+                rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env)
+        self.assertEqual(env.get("SOLOMON_SESSION_ID"), "driver-42")
+
+    def test_default_session_id_fallback_still_propagates_to_the_child(self):
+        # The actual gap in #197: SOLOMON_SESSION_ID is usually never set
+        # upstream at all, so the acquired lock's session_id falls back to
+        # f"{host}:{pid}" -- a value that only ever lived on the LoopLock
+        # instance, never as an exported env var. clean_git_env() alone can
+        # only pass through a var that already exists in os.environ, so this
+        # computed fallback identity must be explicitly injected into the
+        # child's env for a nested call to ever resolve the same one.
+        import socket
+
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+        expected = f"{socket.gethostname()}:{os.getpid()}"
+        stripped = {
+            k: v for k, v in os.environ.items()
+            if k not in ("SOLOMON_SESSION_ID", "CLAUDE_SESSION_ID")
+        }
+
+        class _Proc:
+            returncode = 0
+
+        with patch.dict(os.environ, stripped, clear=True):
+            with patch("subprocess.run", return_value=_Proc()) as mock_run:
+                rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env)
+        self.assertEqual(env.get("SOLOMON_SESSION_ID"), expected)
+
+    def test_cost_capture_path_also_carries_the_drivers_session_id(self):
+        # L2: the cost-capturing subprocess.run call is a second, separate call
+        # site -- confirm the same propagation happens there too.
+        root = _workspace_with_loop("start", "---\nx\n---\nGo $ARGUMENTS", {"autonomy": "L2"})
+
+        class _Proc:
+            returncode = 0
+            stdout = '{"total_cost_usd": 0.5}'
+
+        with patch.dict(os.environ, {"SOLOMON_SESSION_ID": "driver-42"}):
+            with patch("subprocess.run", return_value=_Proc()) as mock_run:
+                rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+        self.assertEqual(rc, 0)
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env)
+        self.assertEqual(env.get("SOLOMON_SESSION_ID"), "driver-42")
+
+    def test_nested_dev_stage_reenters_the_still_held_parent_lock(self):
+        # Reproduces the exact reported scenario: the parent `dev loop` process
+        # holds the lock (session "outer-driver") and is synchronously blocked
+        # on its `claude -p` child. From inside that child, the model shells
+        # out to `solomon-harness dev review 195`; that nested process resolves
+        # its LoopLock's session_id from the propagated SOLOMON_SESSION_ID env
+        # var, so it must reenter rather than be refused.
+        root = _workspace_with_command("review", "---\nx\n---\nReview $ARGUMENTS")
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="outer-driver", pid=os.getpid()).acquire()
+
+        class _Proc:
+            returncode = 0
+
+        with patch.dict(os.environ, {"SOLOMON_SESSION_ID": "outer-driver"}):
+            with patch("subprocess.run", return_value=_Proc()) as mock_run:
+                rc = workflows.run_stage(root, "review", ["195"], engine="claude")
+        self.assertEqual(rc, 0)
+        self.assertTrue(
+            [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        )
+        # The outer holder's lock must survive: a reentrant nested call must
+        # not release the lock out from under its still-running parent.
+        held = LoopLock(lock_path=path, session_id="outer-driver").read()
+        self.assertIsNotNone(held, "the nested reentrant call must not release the parent's lock")
+        self.assertEqual(held["session_id"], "outer-driver")
+
+    def test_a_genuinely_different_session_is_still_refused(self):
+        # Regression guard: propagating SOLOMON_SESSION_ID must not become a
+        # blanket bypass -- a DIFFERENT session_id is still a foreign driver.
+        root = _workspace_with_command("review", "---\nx\n---\nReview $ARGUMENTS")
+        path = loop_lock.resolve_lock_path(root)
+        LoopLock(lock_path=path, session_id="outer-driver", pid=os.getpid()).acquire()
+
+        with patch.dict(os.environ, {"SOLOMON_SESSION_ID": "some-other-driver"}):
+            with patch("subprocess.run") as mock_run:
+                rc = workflows.run_stage(root, "review", ["195"], engine="claude")
+        self.assertEqual(rc, 1)
+        self.assertFalse(
+            [c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["claude", "-p"]]
+        )
+
+
 class TestRunStageAutonomyPolicy(unittest.TestCase):
     """The portable governed-autonomy gate, enforced in run_stage on both hosts."""
 
