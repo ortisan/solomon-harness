@@ -451,9 +451,12 @@ def _load_memory_context(
     """Best-effort pull of the milestone and delivered issues from project memory.
 
     Returns ``(milestone, issues)``. The milestone is matched against the
-    release ``version`` by title/description when possible, otherwise the most
-    recent one is used; the issues are those attached to that milestone. Raises
-    on any backend failure so the caller can degrade to a placeholder page.
+    release ``version`` by title/description; the issues are those attached to
+    that milestone. When memory holds milestones but none references this
+    version, no milestone is guessed -- the caller renders the documented
+    placeholder instead of silently attributing an unrelated milestone's title
+    and description to this release. Raises on any backend failure so the
+    caller can degrade to a placeholder page.
     """
     from solomon_harness.tools.database_client import DatabaseClient
 
@@ -467,15 +470,29 @@ def _load_memory_context(
             milestone = ms
             break
     if milestone is None and milestones:
-        milestone = milestones[0]
+        # A milestone exists in memory but none references this release's
+        # version in its title or description. Picking the first one anyway
+        # (most recent, but otherwise arbitrary) previously produced a wiki
+        # page whose Business Problem section documented an unrelated
+        # milestone -- refuse that guess and flag it instead.
+        print(
+            f"release wiki-page: no milestone references version {needle!r}; "
+            "rendering the placeholder instead of guessing a milestone.",
+            file=sys.stderr,
+        )
 
     issues: List[dict] = []
     milestone_id = milestone.get("id") if milestone else None
     if milestone_id is not None:
         try:
+            # list_issues() returns every status, unlike get_open_issues() which
+            # is scoped to non-terminal rows by design (ADR-0006). By release
+            # time the delivered issues under a milestone are normally closed,
+            # so filtering the open-only set here would always render an empty
+            # "Delivered work" section.
             issues = [
                 i
-                for i in (db.get_open_issues() or [])
+                for i in (db.list_issues() or [])
                 if str(i.get("milestone_id")) == str(milestone_id)
             ]
         except Exception:

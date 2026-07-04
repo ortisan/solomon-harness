@@ -187,3 +187,108 @@ def test_module_is_runnable_as_main(tmp_path, monkeypatch):
     # `python -m solomon_harness.release wiki-page --release <version>`.
     assert callable(release.main)
     assert os.path.basename(release.__file__) == "release.py"
+
+
+# --- _load_memory_context against a real DatabaseClient ---------------------
+#
+# By release time the delivered issues under a milestone are normally closed,
+# not open. get_open_issues() only returns non-terminal rows by design, so
+# filtering it by milestone_id silently drops every closed issue and the
+# rendered "Delivered work" section comes out empty. These tests exercise a
+# real (SQLite-fallback) DatabaseClient instead of a mock, so the regression
+# cannot hide behind a monkeypatched context.
+
+def test_load_memory_context_includes_closed_issues_under_milestone(tmp_path):
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    workspace_root = str(tmp_path)
+    db = DatabaseClient(harness_dir=workspace_root)
+    try:
+        milestone_id = db.create_milestone(
+            "Release v0.7.0 readiness",
+            "Ship the delivery pipeline.",
+            "2026-07-01",
+            "active",
+        )
+        db.log_issue("201", "reconcile issue status", "bug", "closed", milestone_id)
+        db.log_issue("202", "cockpit foundation", "feature", "Done", milestone_id)
+    finally:
+        db.close()
+
+    milestone, issues = release._load_memory_context(workspace_root, "0.7.0")
+
+    assert milestone is not None
+    assert milestone.get("title") == "Release v0.7.0 readiness"
+    numbers = {str(i.get("github_id")) for i in issues}
+    assert numbers == {"201", "202"}
+
+
+def test_wiki_page_renders_closed_delivered_issues_from_real_db(tmp_path):
+    """End-to-end: closed issues under the matching milestone must appear in
+    the rendered Business Problem section, not just in the raw context."""
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    workspace_root = str(tmp_path)
+    db = DatabaseClient(harness_dir=workspace_root)
+    try:
+        milestone_id = db.create_milestone(
+            "Release v0.7.0 readiness",
+            "Ship the delivery pipeline.",
+            "2026-07-01",
+            "active",
+        )
+        db.log_issue("201", "reconcile issue status", "bug", "closed", milestone_id)
+        db.log_issue("202", "cockpit foundation", "feature", "Done", milestone_id)
+    finally:
+        db.close()
+
+    ctx = release._gather_release_context(workspace_root, "0.7.0")
+    page = release.render_release_wiki_page(
+        "0.7.0", milestone=ctx["milestone"], issues=ctx["issues"]
+    )
+    business = page.split("## Technical", 1)[0]
+    assert "#201" in business and "reconcile issue status" in business
+    assert "#202" in business and "cockpit foundation" in business
+
+
+# --- milestone selection refuses an unrelated fallback -----------------------
+
+def test_load_memory_context_refuses_unrelated_milestone_fallback(tmp_path, capsys):
+    """When no milestone's title/description references the release version,
+    the generator must not silently pick whichever milestone happens to be
+    first -- it must leave the milestone unset and flag the mismatch."""
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    workspace_root = str(tmp_path)
+    db = DatabaseClient(harness_dir=workspace_root)
+    try:
+        db.create_milestone("Sprint 1", "goals", "2026-01-01", "closed")
+    finally:
+        db.close()
+
+    milestone, issues = release._load_memory_context(workspace_root, "0.11.0")
+
+    assert milestone is None
+    assert issues == []
+    assert "0.11.0" in capsys.readouterr().err
+
+
+def test_wiki_page_placeholder_when_no_milestone_matches_version(tmp_path):
+    """The rendered page must not attribute an unrelated milestone's title and
+    description to the release being documented."""
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    workspace_root = str(tmp_path)
+    db = DatabaseClient(harness_dir=workspace_root)
+    try:
+        db.create_milestone("Sprint 1", "goals", "2026-01-01", "closed")
+    finally:
+        db.close()
+
+    ctx = release._gather_release_context(workspace_root, "0.11.0")
+    page = release.render_release_wiki_page(
+        "0.11.0", milestone=ctx["milestone"], issues=ctx["issues"]
+    )
+    business = page.split("## Technical", 1)[0]
+    assert "Sprint 1" not in business
+    assert "No business context" in business
