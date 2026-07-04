@@ -280,6 +280,25 @@ def normalize_milestone_state(state: Optional[str]) -> Optional[str]:
     return _normalize_token(state, _MILESTONE_ALIASES)
 
 
+# The memory categories that are operational blobs, not semantic notes: the
+# code index (bootstrap writes categories codebase_index and index) and the
+# per-card board history. Embedding them pollutes the HNSW vector index, so
+# semantic_search returns file contents instead of meaning (ADR-0016, F6).
+# A DENYLIST, deliberately: an unknown category keeps its embedding and stays
+# searchable without a code change, whereas an allowlist would silently drop
+# new categories from the index -- the failure mode being fixed, inverted.
+NON_SEMANTIC_MEMORY_CATEGORIES = ("codebase_index", "index", "board_history")
+
+
+def is_semantic_category(category: Optional[str]) -> bool:
+    """Whether a memory category belongs in the semantic vector index.
+
+    Total: None or empty (no category) counts as semantic, preserving the
+    pre-gate behavior for every category not on the denylist.
+    """
+    return str(category or "").strip().lower() not in NON_SEMANTIC_MEMORY_CATEGORIES
+
+
 # The status literals a harness write can legitimately store on an issue row:
 # the canonical display/board tokens (ADR-0006) plus the legacy literals that
 # replays and reads stay tolerant of. This is the SurrealDB ASSERT set for
@@ -1768,23 +1787,29 @@ class DatabaseClient:
             # here (not stored in the durability mirror) so the vector index stays
             # additive: existing get_memory reads and the mirror format are
             # unchanged, and a record without an embedding is simply not indexed.
-            embedding = self._embedder.embed(f"{key} {value}")
-            query = """
-            UPSERT $id CONTENT {
-                key: $key,
-                value: $value,
-                category: $category,
-                embedding: $embedding,
-                updated_at: time::now()
-            };
-            """
+            # Non-semantic categories (the code index, the board history) skip
+            # the embedding entirely -- the field is omitted, so the HNSW index
+            # never sees the row (ADR-0016, F6). A re-save that changes category
+            # replaces the whole CONTENT, so a stale embedding falls out then.
             params = {
                 "id": self._rid("memory", record_id),
                 "key": key,
                 "value": value,
                 "category": category,
-                "embedding": embedding,
             }
+            if is_semantic_category(category):
+                embedding_field = "embedding: $embedding,\n                "
+                params["embedding"] = self._embedder.embed(f"{key} {value}")
+            else:
+                embedding_field = ""
+            query = f"""
+            UPSERT $id CONTENT {{
+                key: $key,
+                value: $value,
+                category: $category,
+                {embedding_field}updated_at: time::now()
+            }};
+            """
             try:
                 self._run_surreal(query, params)
             except _ConnectionLost:
@@ -3710,15 +3735,21 @@ class DatabaseClient:
         and SurrealDB's ``<|k, EF|>`` KNN operator (``ef`` is the search breadth).
         With the default :class:`HashingEmbedder` this is LEXICAL nearness (shared
         tokens), not semantic; swap in a model-backed embedder for true meaning.
-        Results are ``[{"key", "value", "category", "distance"}, ...]`` nearest first.
+        By default the non-semantic categories (the code index, the board
+        history) are excluded so results carry meaning, not file blobs; an
+        explicit ``category`` argument is honored verbatim, including one of the
+        excluded categories (ADR-0016, F6). Results are
+        ``[{"key", "value", "category", "distance"}, ...]`` nearest first.
         """
         self._require_surreal("semantic search")
         q_vec = self._embedder.embed(query)
         params: Dict[str, Any] = {"q": q_vec}
-        cat_clause = ""
         if category is not None:
             cat_clause = "category = $category AND "
             params["category"] = category
+        else:
+            cat_clause = "category NOT IN $excluded AND "
+            params["excluded"] = list(NON_SEMANTIC_MEMORY_CATEGORIES)
         knn = f"<|{int(k)},{int(ef)}|>"
         sql = (
             f"SELECT key, value, category, vector::distance::knn() AS distance "
