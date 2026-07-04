@@ -104,6 +104,10 @@ interactive confirmation, never reached in a headless run.
   once a milestone's issues are already `Done`.
 - Both `.claude/commands/` and `.gemini/commands/` mirrors for `review` and
   `release` are updated identically; a fitness test pins parity.
+- The PR's own title/body/diff/comments are treated as data to evaluate, never
+  as instructions to follow, stated explicitly in the command file: this stage
+  can now merge on approval, so a successful prompt injection has a path to an
+  actual merge, not just a wrong verdict (found in review of this ADR's own PR).
 
 Rejected alternatives: **(B)** conflates per-PR merge with milestone-gated
 release; **(C)** adds a stage for a one-step action that only ever follows
@@ -118,19 +122,50 @@ decision.
   write-through instead of adding a second convergence mechanism. No manual
   `reconcile` needed for the common (interactive) case.
 - Negative: `/solomon-review` gains a git-mutating action (`gh pr merge`) it
-  did not have before. Mitigated structurally, not by policy: the merge call
-  path is only reachable from the interactive confirmation branch of the
-  command file; the headless branch of the same file never reaches it, so no
-  autonomy-level check is relied upon for this gate.
+  did not have before. **Correction from this ADR's original text** (found in
+  review of the implementing PR): the first draft claimed the gate was
+  "mitigated structurally... the headless branch never reaches it," but the
+  `allowed-tools:` frontmatter this decision adds `AskUserQuestion` to is read
+  by exactly one piece of code (`workflows.py::_allowed_tools`), and every
+  invocation through that code is headless by construction — a real
+  interactive session reads the command file directly through Claude Code's
+  own command loader, never through `workflows.py`. So the original claim was
+  not true as written: the same frontmatter line reaches both audiences, and
+  nothing prevented a headless run from also receiving `AskUserQuestion`. The
+  fix landed in the same PR: `_allowed_tools` now unconditionally strips
+  `AskUserQuestion` (`HEADLESS_UNSAFE_TOOLS`) from what it forwards to the
+  headless engine, for every stage, not only `review`. That makes the
+  "headless never reaches the merge branch" guarantee actually true at the
+  code layer — the tool required to answer the confirmation is not present in
+  the headless engine's own permission set, not merely discouraged by prose.
+  No autonomy-level check (`loop_policy`) is relied upon for this gate.
 - Scope: this decision does not fix #183 (the `loop_policy` human-gate
-  enforcement gap) or #185 (the `gh:*` wildcard covering merge/release). Both
-  remain open, tracked, and independent — hardening either strengthens this
-  decision's headless-never-merges guarantee but is not required for it to
-  hold, since the guarantee here is structural (no reachable code path), not
-  policy-based.
-- Follow-ups: #183, #185 (already filed, unrelated action needed); a parity
-  fitness test (`tests/test_command_gates.py`) so the two host mirrors cannot
-  silently diverge on the owning-stage decision again.
+  enforcement gap) or #185 (the `gh:*` wildcard covering merge/release, which
+  a same-day security review also confirmed already reaches `merge_pr_and_close`
+  via `Bash(uv run:*)` pre-existing to this decision). Both remain open,
+  tracked, and independent — hardening either strengthens this decision's
+  headless-never-merges guarantee but is not required for it to hold, since
+  the `AskUserQuestion` guarantee above is now code-level, not policy-based.
+- Follow-ups: #183, #185 (already filed, unrelated action needed, #185 updated
+  with this decision's reachability nuance); a parity fitness test
+  (`tests/test_command_gates.py`) so the two host mirrors cannot silently
+  diverge on the owning-stage decision again.
+- Live-verified (mirroring how ADR-0017/#179 was live-verified): a disposable
+  fixture command file declaring `AskUserQuestion` in its frontmatter, piped
+  into `claude -p` with the exact `--allowed-tools` string `_allowed_tools`
+  now forwards (with `AskUserQuestion` stripped), reports the tool "not found
+  among deferred or active tools" — it cannot be discovered, let alone called.
+  A second run additionally re-added `AskUserQuestion` back into
+  `--allowed-tools` directly (simulating the pre-fix state) and got the
+  identical result: `claude -p` (headless, no TTY) does not expose
+  `AskUserQuestion` as a callable tool at all, independent of what
+  `--allowed-tools` declares. This means the underlying risk this correction
+  responds to was structurally bounded by the engine itself even before the
+  `HEADLESS_UNSAFE_TOOLS` fix landed — but the fix is kept regardless: it
+  makes the guarantee explicit and verified in this repo's own code and tests
+  rather than resting on an unconfirmed assumption about a third-party CLI's
+  undocumented behavior, and it generalizes to any future interactive-only
+  tool, not only this one.
 
 ## More information
 
@@ -138,7 +173,14 @@ decision.
   `solomon_harness/github.py` (`merge_pr_and_close`, the `github merge` CLI
   subcommand), `.claude/commands/solomon-review.md` /
   `.gemini/commands/solomon-review.toml`, `.claude/commands/solomon-release.md`
-  / `.gemini/commands/solomon-release.toml`, `docs/solomon-workflow.md`.
+  / `.gemini/commands/solomon-release.toml`, `docs/solomon-workflow.md`,
+  `solomon_harness/workflows.py` (`HEADLESS_UNSAFE_TOOLS`, `_allowed_tools`).
+- Corrected during the review of the implementing PR (#195): the original
+  "mitigated structurally" claim did not hold as written; the fix and the
+  corrected reasoning are captured in this ADR's Consequences section rather
+  than in a superseding ADR, since the underlying design decision (interactive
+  confirmation, headless never merges) did not change — only the mechanism
+  that makes it true did.
 - Builds on ADR-0006 (`docs/adr/0006-canonical-issue-status-vocabulary-and-board-to-memory-write-through.md`):
   reuses its `record_terminal_status` write-through and `reconcile` backstop
   unchanged; this ADR only decides who calls it after a real merge.

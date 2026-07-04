@@ -711,12 +711,16 @@ class TestMergePrAndClose(unittest.TestCase):
     """#172: the owning stage for the merge-to-Done transition. On a successful
     merge it must complete the Done transition in the same call (board move +
     the ADR-0006 write-through), with no separate reconcile step. On a failed
-    merge it must leave board/memory untouched -- no partial state."""
+    merge it must leave board/memory untouched -- no partial state. On a merge
+    that succeeds but whose board move fails, it must report the accurate
+    partial state (merged, but not fully converged) rather than a blanket ok."""
 
     def test_successful_merge_completes_the_done_transition(self):
         with (
             patch("solomon_harness.github._gh", return_value={"ok": True}) as gh,
-            patch("solomon_harness.github.set_issue_status") as set_status,
+            patch(
+                "solomon_harness.github.set_issue_status", return_value={"ok": True}
+            ) as set_status,
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
         ):
             res = github.merge_pr_and_close(42, 172)
@@ -726,6 +730,27 @@ class TestMergePrAndClose(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["pr"], 42)
         self.assertEqual(res["issue"], 172)
+
+    def test_merge_succeeds_but_board_move_fails_reports_partial_state(self):
+        """#195 architecture-review finding: a merge that succeeds but whose
+        board move fails must not be reported as ok -- the caller needs to
+        know the board still needs a retry, distinct from nothing happening."""
+        with (
+            patch("solomon_harness.github._gh", return_value={"ok": True}),
+            patch(
+                "solomon_harness.github.set_issue_status",
+                return_value={"ok": False, "error": "no Status field"},
+            ),
+            patch("solomon_harness.github.record_terminal_status") as record_terminal,
+        ):
+            res = github.merge_pr_and_close(42, 172)
+        self.assertFalse(res["ok"])
+        self.assertTrue(res["merged"])
+        self.assertEqual(res["error"], "no Status field")
+        # The PR is genuinely merged (GitHub already closed the issue via the
+        # Closes trailer), so memory still converges to that true state even
+        # though the board column lags -- only the board needs a retry.
+        record_terminal.assert_called_once_with(172)
 
     def test_failed_merge_does_not_touch_board_or_memory(self):
         with (

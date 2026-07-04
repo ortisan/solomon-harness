@@ -41,7 +41,7 @@ stage is what the work is doing — so this table reconciles them:
 | `In Progress` | Implementation and Tests (the TDD Red/Green/Refactor loop writes the covering tests here) |
 | `Code Review` | Review (the software_architect code-review gate) |
 | `QA` | Tests and Review verification (the qa and security gates; acceptance criteria and the Definition of Done are checked) |
-| `Done` | Release and Milestone (the tag is cut when the milestone closes with 0 open issues and CI green) |
+| `Done` | Entered via Review's own merge (ADR-0020); Release and Milestone is what happens once enough `Done` cards close a milestone (the tag is cut when the milestone reaches 0 open issues with CI green) |
 
 ## The loop and session resumption
 
@@ -136,9 +136,12 @@ backstop for any card GitHub auto-closed outside the CLI `Done` path.
 
 ## Deliver and release
 
-`/solomon-release` (sre, software_engineer) takes an approved, merged change from
-`QA` to `Done` and, when a release is due, drives the tag through CI. The full,
-canonical standard is `docs/release-policy.md` (decision recorded in
+`/solomon-release` (sre, software_engineer) does not move an individual card to
+`Done` — that already happened when `/solomon-review` merged the PR (ADR-0020).
+Its own role is milestone-level: once a milestone's issues are already `Done`,
+it drives the version tag through CI, plus a board-hygiene backstop for any
+card GitHub auto-closed outside the CLI `Done` path. The full, canonical
+standard is `docs/release-policy.md` (decision recorded in
 `docs/adr/0004-milestone-gated-releases.md`); this section is the operational
 summary the workflow follows.
 

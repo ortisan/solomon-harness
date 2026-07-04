@@ -152,8 +152,20 @@ def build_prompt(workspace_root: str, stage: str, args: List[str], *, loop_drive
     return text
 
 
+# Tools that only return a usable result when a live human answers them. The
+# `allowed-tools:` frontmatter serves both an interactive Claude Code session
+# (which reads the command file directly) and this headless --allowed-tools
+# passthrough (which never has a TTY) — the same declaration cannot safely
+# grant both audiences the same tools. Stripped unconditionally for every
+# stage, so a confirmation gate (e.g. the merge step in #172/#195) is
+# unreachable headlessly by construction, not by prose plus unverified
+# non-interactive tool behavior.
+HEADLESS_UNSAFE_TOOLS = {"AskUserQuestion"}
+
+
 def _allowed_tools(workspace_root: str, stage: str) -> Optional[str]:
-    """Return the command file's declared ``allowed-tools:`` frontmatter value.
+    """Return the command file's declared ``allowed-tools:``, minus any tool
+    that requires a live human to answer (see ``HEADLESS_UNSAFE_TOOLS``).
 
     The headless engine has no TTY, so any tool call outside the ambient
     project settings.json allowlist blocks with no one to approve it (#179).
@@ -174,7 +186,11 @@ def _allowed_tools(workspace_root: str, stage: str) -> Optional[str]:
         line = line.strip()
         if line.lower().startswith("allowed-tools:"):
             value = line.split(":", 1)[1].strip()
-            return value or None
+            if not value:
+                return None
+            tools = [t.strip() for t in value.split(",")]
+            kept = [t for t in tools if t not in HEADLESS_UNSAFE_TOOLS]
+            return ", ".join(kept) if kept else None
     return None
 
 

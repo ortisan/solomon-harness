@@ -386,12 +386,28 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     conflicts) it leaves the board and memory untouched -- no partial state.
     Callers are responsible for the human-approval gate (ADR-0020): this
     function performs the merge unconditionally once called.
+
+    If the merge succeeds but the board move fails (``set_issue_status`` has
+    several independent failure modes: an unresolved board item, a missing
+    project id, a missing Status field or option), the PR is already merged
+    and GitHub has already closed the issue via its ``Closes #`` trailer, so
+    the memory write-through still fires -- only the board column needs a
+    retry. The result reports ``ok: False`` with ``merged: True`` so a caller
+    can tell that apart from nothing having happened at all.
     """
     res = _gh(["pr", "merge", str(pr_number), "--squash"])
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error", "gh pr merge failed.")}
-    set_issue_status(issue_number, "Done")
+    status_res = set_issue_status(issue_number, "Done")
     record_terminal_status(issue_number)
+    if not status_res.get("ok"):
+        return {
+            "ok": False,
+            "error": status_res.get("error", "board move to Done failed after a successful merge."),
+            "merged": True,
+            "pr": pr_number,
+            "issue": issue_number,
+        }
     return {"ok": True, "pr": pr_number, "issue": issue_number}
 
 
