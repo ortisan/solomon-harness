@@ -652,6 +652,13 @@ class DatabaseClient:
         self._surreal_database: Optional[str] = None
         self._connect_deadline: float = 5.0
 
+        # Why the client is on SQLite although a SurrealDB primary was intended.
+        # None while SurrealDB serves, and None when SQLite is a deliberate
+        # choice (explicit db_path, or no surrealdb provider configured). Every
+        # fallback path records its reason here so backend_status() can report
+        # the degradation honestly instead of looking like a clean SQLite setup.
+        self._fallback_reason: Optional[str] = None
+
         # The shared client no longer lives inside the agent directory, so the caller
         # passes the owning harness directory explicitly; fall back to this file's
         # package location for standalone or test use.
@@ -812,22 +819,28 @@ class DatabaseClient:
                                 pass
                             self.db = None
                         self.backend = "sqlite"
+                        self._fallback_reason = f"SurrealDB initialization failed: {e}"
                 else:
                     sys.stderr.write("Warning: Connection to SurrealDB failed.\n")
                     sys.stderr.write(
                         "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
                     )
                     self.backend = "sqlite"
+                    self._fallback_reason = "connection to SurrealDB failed"
             else:
                 if not creds_ok:
                     sys.stderr.write(
                         "SurrealDB credentials are not set for a non-local URL; set "
                         "SURREAL_USER/SURREAL_PASS. Falling back to SQLite backend.\n"
                     )
+                    self._fallback_reason = (
+                        "SurrealDB credentials are not set for a non-local URL"
+                    )
                 else:
                     sys.stderr.write(
                         "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
                     )
+                    self._fallback_reason = "surrealdb library unavailable"
                 self.backend = "sqlite"
 
         # Initialize SQLite if backend is sqlite
@@ -835,6 +848,24 @@ class DatabaseClient:
             if self.db_path is None:
                 self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
+
+    def backend_status(self) -> Dict[str, Any]:
+        """Report which backend serves this client, publicly (issue #163).
+
+        Returns ``{"backend", "degraded", "fallback_reason"}``. ``degraded`` is
+        True only when a SurrealDB primary was intended but the SQLite fallback
+        is serving; a deliberate SQLite client (explicit ``db_path``, or no
+        surrealdb provider configured) is not degraded and carries no reason.
+        The session-start digest already renders this state; this accessor
+        gives sessions and workflows the same answer without reaching into
+        private attributes.
+        """
+        degraded = self.backend != "surrealdb" and self._fallback_reason is not None
+        return {
+            "backend": self.backend,
+            "degraded": degraded,
+            "fallback_reason": self._fallback_reason if degraded else None,
+        }
 
     @contextmanager
     def _sqlite_conn(self) -> Generator[sqlite3.Connection, None, None]:
@@ -1390,6 +1421,9 @@ class DatabaseClient:
                 pass
             self.db = None
         self.backend = "sqlite"
+        self._fallback_reason = (
+            "SurrealDB connection lost mid-session; reconnect failed"
+        )
         if self.db_path is None:
             self.db_path = self._resolve_sqlite_path()
         self._init_sqlite_db()
@@ -1794,6 +1828,7 @@ class DatabaseClient:
         if self.backend != "surrealdb" or self.db is None:
             if self._connect_surreal():
                 self.backend = "surrealdb"
+                self._fallback_reason = None
             else:
                 return {"synced": 0, "remaining": len(pending)}
 

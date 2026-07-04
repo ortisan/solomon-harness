@@ -101,6 +101,14 @@ class TestMemoryService(unittest.TestCase):
         self.svc.save_memory("k", "v", "cat")
         self.assertEqual(self.svc.get_memory("k")["value"], "v")
 
+    def test_get_backend_status_reports_sqlite(self):
+        # An explicit db_path is a deliberate SQLite choice, so the service
+        # reports the backend without flagging degradation (issue #163).
+        self.assertEqual(
+            self.svc.get_backend_status(),
+            {"backend": "sqlite", "degraded": False, "fallback_reason": None},
+        )
+
     def test_open_issues(self):
         self.svc.log_issue("gh-1", "Open one", "feature", "open")
         self.svc.log_issue("gh-2", "Closed one", "bug", "closed")
