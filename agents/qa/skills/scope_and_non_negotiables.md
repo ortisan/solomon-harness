@@ -2,7 +2,7 @@
 
 Purpose: a concrete, enforceable standard for designing, automating, and reporting tests so every change reaching production is verified, isolated, deterministic, and traceable.
 
-## Mandatory competencies (non-negotiable)
+## Scope and non-negotiables
 
 
 - Write unit and integration tests for all new code or any logical change. No PR is verifiable without them.

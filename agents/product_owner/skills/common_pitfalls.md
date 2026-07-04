@@ -1,4 +1,4 @@
-## Common pitfalls to avoid
+## Common pitfalls
 
 
 - Solutioning in the problem statement. Describe the pain; let engineering and architecture choose the how.

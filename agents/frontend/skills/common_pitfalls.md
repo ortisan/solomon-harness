@@ -1,4 +1,4 @@
-## Common pitfalls to avoid
+# Common pitfalls
 
 
 - `useEffect` used to sync derived state, causing extra renders and stale values. Compute in render instead.

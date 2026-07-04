@@ -1,41 +1,67 @@
 # Wiki Design and Presentation Standards
 
-Establishes structural patterns and visual formatting rules for business-facing landing pages, technical summaries, and release logs.
+This skill establishes the structural patterns, naming conventions, and visual formatting rules for the project wiki: the sync model that makes `docs/wiki/` the source of truth, page naming and navigation, the standard page set, release-notes conventions, and the layout rules that keep pages credible and scannable.
 
-## Wiki Architecture and Page Patterns
+## Sync model: the repo is the source of truth
 
-All repository wikis must follow a unified page pattern that balances high-level business goals with detailed technical implementation:
+The wiki is authored in `docs/wiki/*.md` inside the repository and published by `scripts/wiki-sync.sh`, which clones `<repo>.wiki.git`, copies the Markdown files in flat, commits, and pushes. Consequences that shape how you work:
 
-- **Home Page (Business-First):** Must describe the project's vision, core objectives, and business value proposition first. Never start with codebase details or complex dependency logs. Use high-level flowcharts to present the value stream.
-- **Developer-First Navigation Index:** On the `Home.md` page, the index directory MUST place the **Quick Start Guide** and **Features/Technical Overview** at the very top of the list. Developer onboarding and capability summaries are high-priority pages that developers need immediately, whereas business constraints and deep technical references belong further down.
-- **Features Page (Condensed Capabilities):** Avoid pulverized list-of-features sections. Group technical capabilities into cohesive, user-facing feature sets (powers) that solve specific user problems.
-- **Quick Start Page (Onboarding):** Present a sequential setup guide covering prerequisites, environment setup, database configuration, and running the first cycle.
-- **Release History Page (Changelog):** Maintain a chronological history of major and minor versions linking to a detailed delivered-issues log.
+- Never edit pages in the GitHub wiki UI; the next sync overwrites them. All wiki changes are pull requests against `docs/wiki/`, reviewed like any docs change.
+- The sync is flat: subdirectories under `docs/wiki/` are not copied. Every page is a top-level `.md` file.
+- GitHub only creates the wiki content repository after the first page is saved through the web UI. The script detects an uninitialized wiki via `solomon_harness.wiki_bootstrap detect` and exits with code 4 and an actionable message instead of a raw git error; with no git remote configured it degrades to mock mode and copies the files to `tmp/wiki-mock-verification` for inspection.
+- Sync runs in the Release and Documentation stage; a release is not done until the wiki reflects it.
 
-## Visual Design and Layout
+## Page naming and navigation
 
-To convey credibility and professional authority, documentation must employ clean layouts and structured visual elements:
+- Page files use Title-Case-With-Hyphens (`Quick-Start.md`, `Release-Notes.md`, `Release-0.11.0.md`); the filename becomes the wiki page URL and title.
+- Internal links use the page name without the `.md` extension — `[Features](Features)` — which is how the GitHub wiki resolves links; extension-suffixed links render in repo browsing but break as wiki navigation.
+- `_Sidebar.md` is the navigation rail: a single list with Home first, then the developer-first pages (Quick Start, Commands Reference, Features), business and deep technical references after, and Release History and the Design System last. Every page in `docs/wiki/` appears in the sidebar or is reachable from Home; a page reachable from nowhere is dead weight.
 
-- **Mermaid Flowcharts:** Use Mermaid flow diagrams to visualize workflows, data flows, and state machines. Ensure node labels are clear and quoted if they contain special characters.
-- **Structured Data Tables:** Use Markdown tables to compare features, backend behaviors, or user roles.
-- **GitHub Alert Callouts:** Utilize Markdown callouts (e.g., `> [!NOTE]`, `> [!IMPORTANT]`, `> [!TIP]`) to draw attention to critical requirements, optimization tips, or safety notices.
-- **Clickable Issue and PR Links:** Any issue number (e.g., `[#53](https://github.com/<owner>/<repo>/issues/53)`) and PR number (e.g., `[#77](https://github.com/<owner>/<repo>/pull/77)`) referenced in documentation indexes, release notes, or delivered logs must be formatted as clickable markdown links to their respective GitHub URLs.
-- **No Comma-Separated Lists:** Never list entities (such as technologies or agents) as comma-separated lists. Always present them as ordered or unordered markdown lists.
-- **Markdown Table Separator:** When creating or modifying tables, always ensure a valid separator row (e.g., `| --- | --- |`) is present immediately below the column headers to prevent layout failures.
-- **No Emojis or Icons:** Keep all documentation completely free of emojis, visual ornaments, or informal icons, maintaining a direct, senior-engineer style.
+## Standard page set and page patterns
+
+Every repository wiki carries a consistent set, each with a defined job:
+
+- **`Home.md` (business-first):** the project's vision, core objectives, and business value proposition first — never codebase details or dependency logs. Use a high-level Mermaid flowchart to present the value stream, then a documentation index that places the Quick Start Guide and the Features/Technical Overview at the top: developers need onboarding and capability summaries immediately, while business constraints and deep references belong further down.
+- **`Quick-Start.md` (onboarding):** a sequential setup guide covering prerequisites, environment setup, database configuration, and running the first cycle.
+- **`Features.md` (condensed capabilities):** group technical capabilities into cohesive, user-facing feature sets that solve specific problems; never a pulverized list of individual functions or files.
+- **`Release-Notes.md` and `Delivered.md`:** the release history, per the conventions below.
+- **`Design-System.md`:** the wiki's own presentation standards, so contributors keep pages consistent.
+
+## Release notes conventions
+
+Three artifacts share the release story, newest first in all of them:
+
+- **`Release-Notes.md`** is the consolidated history: one `### vX.Y.Z (date)` section per release with one to three bolded capability bullets written for users, followed by the standing release-policy section. It links to the Delivered log for the full detail.
+- **`Delivered.md`** is the per-issue log: a single table with columns Date, Issue, Title, Version, and PR, where every issue and PR number is a clickable GitHub link.
+- **`Release-<version>.md`** pages carry the business problem (milestone and goals) and the technical changes for one version, linked from `Release-Notes.md`.
+
+Versions follow the milestone-gated SemVer policy (`docs/release-policy.md`, ADR-0004): the wiki records what shipped and never announces a tag before the release PR merges.
+
+## Visual design and layout
+
+- **Mermaid flowcharts** visualize workflows, data flows, and state machines; quote node labels containing special characters. Prefer a diagram to a wall of prose for any multi-step process.
+- **Markdown tables** compare features, backend behaviors, or roles, and always carry a valid separator row (`| --- | --- |`) immediately below the header, or GitHub breaks the layout.
+- **GitHub alert callouts** (`> [!NOTE]`, `> [!IMPORTANT]`, `> [!TIP]`) flag critical requirements, optimization notes, and safety warnings; use them sparingly so they retain force.
+- **Clickable issue and PR links:** every referenced issue (`[#53](https://github.com/<owner>/<repo>/issues/53)`) and PR (`[#77](https://github.com/<owner>/<repo>/pull/77)`) is a Markdown link, never raw `#53` text.
+- **No comma-separated entity lists:** technologies, agents, and similar enumerations are ordered or unordered Markdown lists, never inline comma strings.
+- **No emojis or icons** anywhere; the tone is direct, senior-engineer prose per the workspace humanizer rules.
 
 ## Common pitfalls
 
-- **Pulverized Feature Lists:** Creating disjointed lists of individual functions or files without grouping them into functional, user-facing capabilities.
-- **Business/Tech Bleed:** Explaining deep code mechanics (e.g. database schema details) directly on the landing page, diluting the business value proposition.
-- **Broken Navigation Links:** Using hardcoded URLs or broken links between wiki pages instead of relative links (e.g., `[Features](Features.md)`).
-- **Unlinked Issues/PRs:** Writing raw `#53` or `#77` text without wrapping them in clickable GitHub links in delivered logs or release pages.
-- **Missing Table Separators:** Leaving out the divider row, which breaks table layout on GitHub.
+- Editing the wiki through the GitHub UI, silently reverted by the next `wiki-sync.sh` run.
+- Placing pages in subdirectories of `docs/wiki/`, which the flat sync never publishes.
+- Internal links with the `.md` extension, which look fine in the repo and break in the wiki.
+- Adding a page without a `_Sidebar.md` entry or a Home index link, leaving it unreachable.
+- Business/tech bleed: schema details and dependency mechanics on the landing page, diluting the value proposition.
+- Pulverized feature lists — disjointed functions instead of grouped, user-facing capabilities.
+- Raw `#53` issue text, missing table separator rows, or comma-separated entity strings.
+- Documenting a version in the wiki before the release PR merges, so the wiki claims a tag that does not exist.
 
 ## Definition of done
 
-- [ ] Every wiki contains a business-focused `Home.md`, a technical `Features.md`, a step-by-step `Quick-Start.md`, a `Release-Notes.md`, and a `Design-System.md`.
-- [ ] No emojis, icons, or flowery AI cliches appear on any documentation page.
-- [ ] Complex processes are visualized using Mermaid diagrams rather than large walls of prose.
-- [ ] All issue and PR references are formatted as clickable GitHub Markdown links.
-- [ ] Tables are formatted with a correct divider row, and no comma-separated inline strings are used for lists.
+- [ ] All changes were made in `docs/wiki/` (flat, Title-Case-With-Hyphens filenames) and published via `scripts/wiki-sync.sh`; no direct wiki-UI edits.
+- [ ] The wiki contains the standard set: business-first `Home.md`, `Quick-Start.md`, `Features.md`, `Release-Notes.md`, `Delivered.md`, and `Design-System.md`.
+- [ ] Internal links are extension-free page-name links, and every page is reachable from `_Sidebar.md` or Home.
+- [ ] A release adds its `Release-Notes.md` section, its `Delivered.md` rows, and a linked `Release-<version>.md` page, all with clickable issue and PR links, only after the release merges.
+- [ ] Complex processes are Mermaid diagrams, tables carry separator rows, and no comma-separated entity lists remain.
+- [ ] No emojis, icons, or banned filler terms appear on any page.

@@ -1,4 +1,4 @@
-## Common pitfalls to reject in review
+## Common pitfalls
 
 
 - Averaging latency or alerting on the mean instead of percentiles.

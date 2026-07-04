@@ -8,6 +8,6 @@
 - [ ] Deflated Sharpe and PBO reported and acceptable; multiple-testing accounted for.
 - [ ] Per-regime metrics reported, including at least one crisis period; parameter stability checked.
 - [ ] Slippage stress at `2x` and `3x` does not erase the edge; cost share of gross PnL within budget.
-- [ ] Risk controls in place: vol targeting or capped fractional Kelly, exposure/leverage caps, drawdown governor.
+- [ ] Risk controls in place: vol targeting or capped fractional Kelly, exposure/gearing caps, drawdown governor.
 - [ ] Tests written first; external services mocked; accounting, costs, leakage guards, and numerical edge cases all covered and green.
 - [ ] Run is reproducible (pinned seeds, data snapshot, code hash) and persisted to memory via `save_backtest`.

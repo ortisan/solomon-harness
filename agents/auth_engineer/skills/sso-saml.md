@@ -239,6 +239,23 @@ Tools: SAML Raider (Burp extension) and python3-saml/ruby-saml's own test fixtur
 - Metadata: consume signed IdP metadata, honor `validUntil`, and alert before IdP cert expiry. Automate SP metadata publication so EntityID, ACS URL, and certs stay consistent.
 - Logging: log every assertion/token rejection with the reason and a correlation ID, but never log raw assertions, tokens, or private keys. Alert on spikes in signature-validation failures — that is an attack signature.
 
+## Common pitfalls
+
+- Verifying the signature, then re-selecting "the assertion" from the document by tag name or XPath. That gap between the validated node and the node you read is XML Signature Wrapping — the exact bug behind CVE-2024-45409 (ruby-saml) and CVE-2025-47949 (samlify). Read identity only from the DOM node the signature covered.
+- Accepting "response signed, assertion unsigned" while reading identity from the assertion. Signature confusion; set `wantAssertionsSigned` and do not weaken it to response-or-assertion.
+- Treating a missing signature as a pass. Signature exclusion attacks work because the code path for "no signature present" forgets to fail.
+- Taking the verification key from the message's `KeyInfo` instead of pinned metadata. The attacker controls `KeyInfo`; they will happily sign with their own key.
+- Pinning a SHA-1 certificate fingerprint instead of the full cert. Fingerprint collisions have bypassed validation, and a fingerprint says nothing about the rest of the certificate.
+- Not rejecting documents with duplicate element IDs, which is the cheap check that kills most wrapping variants before signature logic even runs.
+- Leaving `allow_unsolicited` (pysaml2) or unsolicited-response acceptance (python3-saml) on by default. IdP-initiated flow has no `InResponseTo` binding and is login-CSRF by design; it must be per-tenant, default off.
+- Running python3-saml with `strict: false` or ruby-saml with `soft = true` in production. Both silently skip or swallow the validations this whole skill is about.
+- Assuming the library keeps a replay cache. pysaml2 does not persist consumed assertion IDs across processes; without your own store, every assertion is replayable until `NotOnOrAfter`.
+- Accepting SHA-1 signatures or multi-hour assertion lifetimes, or stretching clock-skew tolerance past 180 seconds to paper over an unsynced server clock.
+- Parsing SAML XML with DTDs or external entities enabled — an XXE reading your filesystem is a strange price for single sign-on.
+- Provisioning SCIM users with an `externalId`/`userName` that does not equal the SAML `NameID`/OIDC subject seen at login. Every mismatch is a duplicate account or an orphaned session, and it is the top integration defect.
+- Treating SCIM deprovisioning (`active: false` or DELETE) as "block the next login" while existing sessions and tokens keep working. Disable must kill live sessions immediately.
+- OIDC-side: choosing HS256 with the client secret when you expect asymmetric keys (alg confusion), skipping `nonce`, or wildcarding `redirect_uri` matching.
+
 ## Definition of done
 
 - [ ] SP-initiated is the default; IdP-initiated is per-tenant, default off, with `InResponseTo` absent enforced and `@ID`/`SessionIndex` replay caching.
