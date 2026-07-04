@@ -66,6 +66,55 @@ class TestWorkflows(unittest.TestCase):
         self.assertEqual(args[0], ["claude", "-p"])
         self.assertIn("Do work on 42", kwargs["input"])
 
+    def test_run_stage_passes_allowed_tools_frontmatter_to_claude_engine(self):
+        # #179: the headless engine has no TTY, so any tool outside the ambient
+        # settings.json allowlist silently blocks. Each command file already
+        # declares the exact tools it needs via `allowed-tools:`; run_stage must
+        # forward that declaration to the claude engine instead of discarding it.
+        root = _workspace_with_command(
+            "refine",
+            "---\nallowed-tools: Bash(gh:*), mcp__solomon-memory__get_issue\n---\nRefine $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "refine", ["172"], engine="claude")
+        self.assertEqual(rc, 0)
+        args, _kwargs = mock_run.call_args
+        cmd = args[0]
+        self.assertIn("--allowed-tools", cmd)
+        self.assertEqual(
+            cmd[cmd.index("--allowed-tools") + 1],
+            "Bash(gh:*), mcp__solomon-memory__get_issue",
+        )
+
+    def test_run_stage_omits_allowed_tools_flag_when_frontmatter_declares_none(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "start", ["42"], engine="claude")
+        args, _kwargs = mock_run.call_args
+        self.assertEqual(args[0], ["claude", "-p"])
+
+    def test_run_stage_does_not_pass_allowed_tools_to_non_claude_engine(self):
+        root = _workspace_with_command(
+            "refine",
+            "---\nallowed-tools: Bash(gh:*)\n---\nRefine $ARGUMENTS",
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "refine", ["172"], engine="gemini")
+        args, _kwargs = mock_run.call_args
+        self.assertNotIn("--allowed-tools", args[0])
+
 
 class TestRunStageGitEnvHygiene(unittest.TestCase):
     """run_stage's two engine launches must not leak inherited GIT_* vars into

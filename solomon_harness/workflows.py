@@ -86,17 +86,47 @@ def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, 
         pass
 
 
-def build_prompt(workspace_root: str, stage: str, args: List[str]) -> str:
-    """Return the command body for a stage with $ARGUMENTS substituted."""
+def _read_command_file(workspace_root: str, stage: str) -> str:
     cmd_file = os.path.join(workspace_root, ".claude", "commands", f"solomon-{stage}.md")
     if not os.path.isfile(cmd_file):
         raise FileNotFoundError(cmd_file)
     with open(cmd_file, "r", encoding="utf-8") as f:
-        text = f.read()
+        return f.read()
+
+
+def build_prompt(workspace_root: str, stage: str, args: List[str]) -> str:
+    """Return the command body for a stage with $ARGUMENTS substituted."""
+    text = _read_command_file(workspace_root, stage)
     if text.startswith("---"):
         # Drop the YAML frontmatter, keep the prompt body.
         text = "---".join(text.split("---")[2:]).strip()
     return text.replace("$ARGUMENTS", " ".join(args))
+
+
+def _allowed_tools(workspace_root: str, stage: str) -> Optional[str]:
+    """Return the command file's declared ``allowed-tools:`` frontmatter value.
+
+    The headless engine has no TTY, so any tool call outside the ambient
+    project settings.json allowlist blocks with no one to approve it (#179).
+    Each `.claude/commands/solomon-<stage>.md` already declares, and has
+    already been reviewed for, the exact tools that stage needs — this makes
+    that existing declaration effective instead of silently discarding it.
+    """
+    try:
+        text = _read_command_file(workspace_root, stage)
+    except FileNotFoundError:
+        return None
+    if not text.startswith("---"):
+        return None
+    parts = text.split("---")
+    if len(parts) < 3:
+        return None
+    for line in parts[1].splitlines():
+        line = line.strip()
+        if line.lower().startswith("allowed-tools:"):
+            value = line.split(":", 1)[1].strip()
+            return value or None
+    return None
 
 
 def run_stage(
@@ -207,6 +237,10 @@ def run_stage(
                 cmd = [engine, "-p"]
                 if capture_cost:
                     cmd.extend(["--output-format", "json"])
+                if engine == "claude":
+                    allowed_tools = _allowed_tools(workspace_root, prompt_stage)
+                    if allowed_tools:
+                        cmd.extend(["--allowed-tools", allowed_tools])
 
             from solomon_harness.subprocess_env import clean_git_env
 
