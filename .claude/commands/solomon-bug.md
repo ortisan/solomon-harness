@@ -66,3 +66,5 @@ Steps:
    the regression test is the close gate.
 
 Do not branch, fix, or open a PR here — that begins at `/solomon-start`.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
