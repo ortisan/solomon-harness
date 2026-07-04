@@ -16,8 +16,9 @@ def _policy(level, root=None, **kw):
 class TestLadder(unittest.TestCase):
     def test_human_allows_everything(self):
         p = _policy("human")
-        for stage in ("loop", "start", "review", "release", "idea"):
+        for stage in ("loop", "start", "review", "idea"):
             self.assertTrue(p.decide_stage(stage).allowed, stage)
+        self.assertFalse(p.decide_stage("release").allowed)
 
     def test_release_is_permanently_human_gated(self):
         for level in ("L1", "L2", "L3"):
@@ -160,7 +161,7 @@ class TestFromConfig(unittest.TestCase):
         root = tempfile.mkdtemp()
         p = LoopPolicy.from_config(root, env={})
         self.assertEqual(p.level, "human")
-        self.assertTrue(p.decide_stage("release").allowed)
+        self.assertFalse(p.decide_stage("release").allowed)
 
 
 if __name__ == "__main__":
