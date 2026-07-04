@@ -19,10 +19,10 @@ def _make_source(root):
         with open(os.path.join(root, ".claude", "agents", n), "w") as f:
             f.write(f"# {n}")
     os.makedirs(os.path.join(root, ".claude", "commands"))
-    with open(os.path.join(root, ".claude", "commands", "solomon-loop.md"), "w") as f:
-        f.write("# loop")
+    with open(os.path.join(root, ".claude", "commands", "solomon-workflow.md"), "w") as f:
+        f.write("# workflow")
     os.makedirs(os.path.join(root, ".gemini", "commands"))
-    with open(os.path.join(root, ".gemini", "commands", "solomon-loop.toml"), "w") as f:
+    with open(os.path.join(root, ".gemini", "commands", "solomon-workflow.toml"), "w") as f:
         f.write("prompt = 'x'")
 
 
@@ -54,10 +54,10 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(self.home, "agents", "qa")))
         self.assertTrue(os.path.isfile(os.path.join(self.home, "docker-compose.yml")))
         self.assertEqual(sorted(res["claude_agents"]), ["qa.md", "sre.md"])
-        self.assertIn("solomon-loop.md", res["claude_commands"])
-        self.assertIn("solomon-loop.toml", res["gemini_commands"])
+        self.assertIn("solomon-workflow.md", res["claude_commands"])
+        self.assertIn("solomon-workflow.toml", res["gemini_commands"])
         self.assertTrue(os.path.isfile(os.path.join(self.claude, "agents", "sre.md")))
-        self.assertTrue(os.path.isfile(os.path.join(self.gemini, "commands", "solomon-loop.toml")))
+        self.assertTrue(os.path.isfile(os.path.join(self.gemini, "commands", "solomon-workflow.toml")))
 
     def test_home_compose_templates_assigned_port(self):
         # The bundled compose has the default 8000 mapping; the install must
@@ -138,7 +138,7 @@ class TestInstallGlobal(unittest.TestCase):
             
         ext_dir = os.path.join(self.gemini, "extensions", "solomon")
         self.assertTrue(os.path.isdir(os.path.join(ext_dir, "commands")))
-        self.assertTrue(os.path.isfile(os.path.join(ext_dir, "commands", "solomon-loop.toml")))
+        self.assertTrue(os.path.isfile(os.path.join(ext_dir, "commands", "solomon-workflow.toml")))
         
         manifest_path = os.path.join(ext_dir, "gemini-extension.json")
         self.assertTrue(os.path.isfile(manifest_path))

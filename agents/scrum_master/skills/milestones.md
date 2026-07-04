@@ -31,7 +31,7 @@ Record the same milestone in the project memory through the `solomon-memory` MCP
 - `create_milestone(title, description, due_date, state)` — `state` is the lifecycle marker, one of `active`, `pending`, or `complete`. A milestone in flight is `active`; one queued behind the current one is `pending`; a closed one is `complete`.
 - `list_milestones()` — returns milestones most recent first, for resuming where planning stopped.
 
-Keep the two in step: when you open the GitHub milestone, write the memory record with `state="active"`; when you close it on GitHub, update the memory state to `complete` so `/solomon-loop` reads an accurate picture on the next session.
+Keep the two in step: when you open the GitHub milestone, write the memory record with `state="active"`; when you close it on GitHub, update the memory state to `complete` so `/solomon-workflow` reads an accurate picture on the next session.
 
 ## Mapping issues to a milestone
 
@@ -74,7 +74,7 @@ create_milestone(
 - An open-ended milestone with no due date: it cannot be late, so it gives no schedule signal and never forces a scope decision. Always set a hard date.
 - Moving the due date to absorb new scope: it converts the milestone from a commitment into a moving target and destroys the velocity data the next plan depends on. Push new work to the next milestone instead.
 - Sizing to optimism rather than measured velocity: the milestone overruns predictably, and a chronically missed date trains the team to ignore the date entirely.
-- The GitHub milestone and the memory record drifting out of state: `/solomon-loop` reads memory to resume, so a milestone marked `active` in memory but closed on GitHub makes the loop propose dead work.
+- The GitHub milestone and the memory record drifting out of state: `/solomon-workflow` reads memory to resume, so a milestone marked `active` in memory but closed on GitHub makes the loop propose dead work.
 - Assigning vague, unestimated issues to an active milestone: they cannot be planned and silently inflate the scope; only Ready issues belong in an active milestone.
 - Closing a milestone with issues still open and no deferral note: the history loses why the scope was cut, and the dropped work vanishes instead of returning to the backlog.
 - Tracking milestone progress in prose instead of issue states: the burndown becomes opinion; let the closed/open count be the truth.

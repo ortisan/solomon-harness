@@ -93,12 +93,12 @@ at `http://localhost:3000`.
 In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
 
 ```text
-/solomon-loop    (orchestrate/scan)
-/solomon-issue   add rate limiting to the public API
-/solomon-refine  42
-/solomon-start    42
-/solomon-review   17
-/solomon-release  17
+/solomon-workflow  (orchestrate/scan)
+/solomon-issue     add rate limiting to the public API
+/solomon-refine    42
+/solomon-start     42
+/solomon-review    17
+/solomon-release   17
 ```
 
 Or headlessly, for CI and automation:
@@ -124,7 +124,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 
 | Workflow | Stage | Driving agents |
 | --- | --- | --- |
-| `/solomon-loop` | orchestrate/scan | loop_engineer |
+| `/solomon-workflow` | orchestrate/scan | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
 | `/solomon-issue` | create a feature/story | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |
@@ -194,7 +194,7 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 Eleven `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
 guarded by `tests/test_readme_sync.py` — are authored once as Claude Code
 commands under `.claude/commands/` and mirrored to Gemini commands under
-`.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop-auto`
+`.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop`
 runs the autonomous parallel loop over Ready issues; and the remaining two,
 `/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
 scan the codebase for architectural drift and duplication (see

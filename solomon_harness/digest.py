@@ -4,7 +4,7 @@ Folded into ``solomon-harness run`` (the SessionStart hook), so every session
 opens with the whole board in one place instead of stitching memory rows by hand.
 It renders only what the harness already owns — the resume point, open issues,
 the last loop run, and PRs awaiting review — and ends by pointing at
-``/solomon-loop``. The next step is decided there, by the canonical prose ladder,
+``/solomon-workflow``. The next step is decided there, by the canonical prose ladder,
 never computed in Python (which would fork the ladder and drift).
 """
 
@@ -189,7 +189,7 @@ def build_digest(
                 }
         elif resume and resume.get("status") == "active":
             task_str = resume.get("task", "")
-            cmd = "/solomon-loop"
+            cmd = "/solomon-workflow"
             if "start" in str(task_str).lower():
                 m = re.search(r'#(\d+)', str(task_str))
                 if not m:

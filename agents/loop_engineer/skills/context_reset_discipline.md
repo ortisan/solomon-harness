@@ -4,7 +4,7 @@ Treat every loop tick as disposable: start from the handoff contract and the run
 
 ## The tick contract
 
-- **Fresh context every tick.** Each `/solomon-loop` invocation starts clean and reads its bounded input from disk: the latest handoff contract (`get_latest_activity` -> `contract_path`) and the tail of the run-log (`solomon-harness log`). It never relies on conversation history carried across ticks.
+- **Fresh context every tick.** Each `/solomon-workflow` invocation starts clean and reads its bounded input from disk: the latest handoff contract (`get_latest_activity` -> `contract_path`) and the tail of the run-log (`solomon-harness log`). It never relies on conversation history carried across ticks.
 - **One bounded task, then commit.** A tick advances exactly one stage and produces an independently reviewable unit. A tick that tries to do two things is wrong; bound the blast radius.
 - **A checkable exit condition.** Each stage's success is objectively checkable (tests named, board column reached, PR state). For a merge or release tick the exit condition is literally "human approved" — self-gating may never substitute for `/solomon-review`.
 - **Externalize before ending.** Before the tick ends, write the handoff contract, the `loop_runs` entry, and the git commit, so the next clean-context tick resumes from state, not memory.

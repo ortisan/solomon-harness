@@ -19,7 +19,7 @@ machinery that makes a cadence safe.
 | State / memory | Strong | SurrealDB + SQLite, handoff contracts |
 | Connectors (MCP) | Partial | `solomon-memory` MCP + `gh`; no notification egress |
 | Worktrees | Partial / fragile | `core.bare` flip, orphan accumulation |
-| Automations / scheduling | Absent | `/solomon-loop` is manual, one confirmed step per run |
+| Automations / scheduling | Absent | `/solomon-workflow` is manual, one confirmed step per run |
 
 ## Hard constraints
 
@@ -66,7 +66,7 @@ auditable record are guaranteed.
   `run_stage`, PreToolUse `loop-guard`, the `loop_runs` run-log, and the
   `solomon-harness log` feed. See below.
 - **Phase 1 — Day-to-day UX.** Board digest folded into `cli run`; a one-keystroke
-  resume decision card (enumerated options) in `/solomon-loop`.
+  resume decision card (enumerated options) in `/solomon-workflow`.
 - **Phase 2 — Governed autonomy (shipped).** An L1/L2/L3 maturity policy
   (`solomon_harness/loop_policy.py`) enforced portably in `run_stage`; merge,
   release and board-Done permanently human-gated; an unknown level fails closed; a

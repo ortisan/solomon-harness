@@ -104,7 +104,7 @@ class TestGlobalInstall(unittest.TestCase):
             os.makedirs(os.path.join(d, "commands"))
             with open(os.path.join(d, "agents", "qa.md"), "w") as f:
                 f.write("x")
-            with open(os.path.join(d, "commands", "solomon-loop.md"), "w") as f:
+            with open(os.path.join(d, "commands", "solomon-workflow.md"), "w") as f:
                 f.write("x")
             c = hc.check_global_install(claude_dir=d)
         self.assertEqual(c["status"], hc.OK)
