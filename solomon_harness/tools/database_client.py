@@ -184,6 +184,49 @@ def recover_parent(github_id: Optional[str], title: Optional[str]) -> Optional[s
 
 
 # ---------------------------------------------------------------------------
+# Canonical status vocabularies for the other stateful kinds (ADR-0016).
+#
+# The same normalize-on-write rule ADR-0006 established for issues, applied to
+# loop runs (and, with ADR-0016, to handoffs, sessions and milestones): one
+# canonical token per logical state, normalized here below every consumer, so
+# a writer and an aggregator can never drift apart on spelling again (#165:
+# the writer stored "failed" while the failure rate counted "failure", so
+# every failed run was invisible). Reads stay tolerant of legacy tokens;
+# unknown tokens pass through lowercased so normalization never invents a
+# state -- the store-side ASSERT is what rejects genuine garbage.
+# ---------------------------------------------------------------------------
+
+# The canonical loop-run outcomes. workflows.py writes exactly these.
+LOOP_RUN_STATUSES = ("ok", "failed")
+
+# Lowercased legacy/alias token -> canonical loop-run token.
+_LOOP_RUN_ALIASES = {
+    "success": "ok",
+    "passed": "ok",
+    "failure": "failed",
+    "error": "failed",
+}
+
+
+def _normalize_token(value: Optional[str], aliases: Dict[str, str]) -> Optional[str]:
+    """Trim, lowercase, and alias-map one status token; None passes through."""
+    if value is None:
+        return None
+    token = str(value).strip().lower()
+    return aliases.get(token, token)
+
+
+def normalize_loop_run_status(status: Optional[str]) -> Optional[str]:
+    """Map a loop-run status to its canonical token (ok or failed).
+
+    Legacy spellings collapse (success/passed -> ok, failure/error -> failed);
+    an unknown token passes through lowercased; None passes through so an
+    unset status is never invented.
+    """
+    return _normalize_token(status, _LOOP_RUN_ALIASES)
+
+
+# ---------------------------------------------------------------------------
 # Canonical person key (ADR-0012).
 #
 # The cross-tenant subject of an issue. Like normalize_status, it is normalized
@@ -2752,12 +2795,16 @@ class DatabaseClient:
         the lockfile, not this ledger, because under the SQLite fallback each
         worktree gets a separate database and a cross-worktree count would be
         invisible.
+
+        ``status`` is normalized to the canonical loop-run vocabulary (ok or
+        failed) at this write seam, so the aggregators can count one token
+        (#165, ADR-0016).
         """
         fields = {
             "stage": stage,
             "target": target,
             "decision": decision,
-            "status": status,
+            "status": normalize_loop_run_status(status),
             "session_id": session_id,
         }
         return self._write_through(
@@ -3215,7 +3262,9 @@ class DatabaseClient:
 
         Returns ``{"total", "failures", "failure_rate"}`` where ``failure_rate`` is
         ``failures / total`` (0.0 when there are no runs). A run counts as a failure
-        when its ``status`` is ``failure``.
+        when its ``status`` is the canonical ``failed`` OR the legacy ``failure``
+        token: rows recorded before the vocabulary fix must not vanish from the
+        metric (#165, ADR-0016).
         """
         self._require_surreal("loop-run aggregation")
         params: Dict[str, Any] = {}
@@ -3224,7 +3273,7 @@ class DatabaseClient:
             where = "WHERE created_at >= $since "
             params["since"] = self._coerce_dt(since)
         query = (
-            f"SELECT count() AS total, count(status = 'failure') AS failures "
+            f"SELECT count() AS total, count(status IN ['failed', 'failure']) AS failures "
             f"FROM loop_runs {where}GROUP ALL;"
         )
         res = self._run_surreal(query, params)
