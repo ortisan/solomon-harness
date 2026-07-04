@@ -16,7 +16,7 @@ def _policy(level, root=None, **kw):
 class TestLadder(unittest.TestCase):
     def test_human_allows_everything(self):
         p = _policy("human")
-        for stage in ("loop", "start", "review", "release", "idea"):
+        for stage in ("workflow", "loop", "start", "review", "release", "idea"):
             self.assertTrue(p.decide_stage(stage).allowed, stage)
 
     def test_release_is_permanently_human_gated(self):
@@ -25,9 +25,11 @@ class TestLadder(unittest.TestCase):
 
     def test_l1_is_report_only(self):
         p = _policy("L1")
-        self.assertTrue(p.decide_stage("loop").allowed)
+        self.assertTrue(p.decide_stage("workflow").allowed)
         self.assertFalse(p.decide_stage("start").allowed)
         self.assertFalse(p.decide_stage("idea").allowed)
+        # The autonomous parallel loop (formerly loop-auto) mutates state.
+        self.assertFalse(p.decide_stage("loop").allowed)
 
     def test_l2_l3_allow_up_to_review(self):
         for level in ("L2", "L3"):
@@ -39,8 +41,15 @@ class TestLadder(unittest.TestCase):
     def test_l3_requires_lock_for_mutating_stages(self):
         p = _policy("L3")
         self.assertTrue(p.requires_lock("start"))
-        self.assertFalse(p.requires_lock("loop"))
+        self.assertTrue(p.requires_lock("loop"))
+        self.assertFalse(p.requires_lock("workflow"))
         self.assertFalse(_policy("L2").requires_lock("start"))
+
+    def test_loop_auto_is_a_deprecated_alias_for_loop(self):
+        # Callers still passing the pre-rename stage name get the same verdicts.
+        self.assertTrue(_policy("L2").decide_stage("loop-auto").allowed)
+        self.assertFalse(_policy("L1").decide_stage("loop-auto").allowed)
+        self.assertTrue(_policy("L3").requires_lock("loop-auto"))
 
     def test_scan_loops_are_l2_l3_automation(self):
         self.assertTrue(_policy("L2").decide_stage("scan-arch").allowed)
@@ -51,7 +60,7 @@ class TestLadder(unittest.TestCase):
     def test_invalid_level_fails_closed(self):
         # A typo must never silently become unrestricted.
         p = _policy("l2")
-        self.assertFalse(p.decide_stage("loop").allowed)
+        self.assertFalse(p.decide_stage("workflow").allowed)
         self.assertFalse(p.decide_stage("start").allowed)
 
 
@@ -63,7 +72,7 @@ class TestKillSwitch(unittest.TestCase):
         loop_policy.write_stop(root)
         self.assertTrue(p.is_halted())
         self.assertFalse(p.decide_stage("start").allowed)
-        self.assertFalse(p.decide_stage("loop").allowed)  # halt blocks even L1-allowed
+        self.assertFalse(p.decide_stage("workflow").allowed)  # halt blocks even L1-allowed
         self.assertTrue(loop_policy.clear_stop(root))
         self.assertFalse(p.is_halted())
         self.assertTrue(p.decide_stage("start").allowed)

@@ -104,8 +104,8 @@ def test_workflow_doc_maps_board_columns_to_lifecycle_stages():
 # --- Honest framing: host-orchestrated, human-gated -------------------------
 
 
-def test_loop_command_is_host_orchestrated_human_gated():
-    body = _read(os.path.join(".claude", "commands", "solomon-loop.md")).lower()
+def test_workflow_command_is_host_orchestrated_human_gated():
+    body = _read(os.path.join(".claude", "commands", "solomon-workflow.md")).lower()
     assert "host-orchestrated" in body
     assert "human-gated" in body
 

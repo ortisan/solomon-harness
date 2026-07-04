@@ -117,7 +117,7 @@ def handle_run(harness_dir: str, task=None) -> None:
 
         # One-screen board digest: resume point, open work, the last loop run,
         # and PRs awaiting review. Facts only; the next step is decided by
-        # /solomon-loop, never computed here.
+        # /solomon-workflow, never computed here.
         from solomon_harness.digest import gather_digest
 
         print()
@@ -145,7 +145,8 @@ def handle_run(harness_dir: str, task=None) -> None:
 
         print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
         workflows = [
-            ("/solomon-loop", "scan where work stopped and propose the next step"),
+            ("/solomon-workflow", "scan where work stopped and propose the next step"),
+            ("/solomon-loop", "autonomous parallel loop over Ready issues"),
             ("/solomon-idea", "capture a product idea"),
             ("/solomon-issue", "create a feature or story issue"),
             ("/solomon-bug", "create a bug report"),
@@ -222,7 +223,7 @@ def handle_loop_policy(workspace_root: str) -> None:
     print(f"Checker split:  {'ok' if p.checker_split_ok() else 'not configured (set maker_model/checker_model)'}")
     print(f"Denylist ({len(p.denylist)}): {', '.join(p.denylist)}")
     print("Stage gates:")
-    for stage in ["loop", "idea", "issue", "bug", "refine", "start", "review", "release"]:
+    for stage in ["workflow", "loop", "idea", "issue", "bug", "refine", "start", "review", "release"]:
         d = p.decide_stage(stage)
         verdict = "allow" if d.allowed else "DENY "
         print(f"  {stage:<8} {verdict} {d.reason}")
@@ -682,11 +683,11 @@ def build_parser() -> argparse.ArgumentParser:
         "loop-budget", help="Show today's autonomous-loop cost spend versus the ceiling"
     )
 
-    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (loop, loop-auto, idea, issue, bug, refine, start, review, release)")
+    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (workflow, loop, idea, issue, bug, refine, start, review, release)")
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument(
         "dev_args", nargs=argparse.REMAINDER,
-        help="Arguments passed to the workflow (loop-auto accepts --concurrency N to run N loop iterations)",
+        help="Arguments passed to the workflow (loop accepts --concurrency N to run N iterations)",
     )
 
     release_parser = subparsers.add_parser(

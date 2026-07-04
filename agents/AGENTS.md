@@ -136,7 +136,7 @@ These are the project defaults; deviating from one requires an ADR.
    `scripts/wiki-sync.sh`.
 
 This lifecycle is driven by the `/solomon-*` workflows, orchestrated by
-`/solomon-loop`: it scans the project memory and the GitHub board for where work
+`/solomon-workflow`: it scans the project memory and the GitHub board for where work
 stopped and proposes the next step (development, review, release, or — when nothing
 is in flight — creating a feature, bug, or refinement). At the start of every
 Claude Code or Gemini CLI session, a SessionStart hook runs `solomon-harness run`

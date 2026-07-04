@@ -35,7 +35,7 @@ This will run a diagnostic check, link the GitHub Project board, scaffold requir
 
 Drive development using the `/solomon-*` commands in your host agent (Claude Code or Gemini CLI):
 
-* Run **`/solomon-loop`** to scan project memory and automatically run the next logical step.
+* Run **`/solomon-workflow`** to scan project memory and automatically run the next logical step.
 * Run **`/solomon-issue <summary>`** to create a new ticket in the Backlog.
 * Run **`/solomon-start <issue_id>`** to begin implementing an issue using TDD.
 * Run **`/solomon-release <issue_id>`** to merge and release.
