@@ -1,3 +1,17 @@
+# Software Architect Definition of Done
+
+The exit checklist for software-architect deliverables: C4 diagrams, ADRs, design contracts, NFR scenarios, and boundary reviews. Architecture work counts as done only when every item below holds; the pitfalls list the usual ways the checklist gets ticked without the substance behind it.
+
+## Common pitfalls
+
+- An ADR checked off without a Status, a Date, or two genuinely considered options — a single-option record is a rationalization of a choice already made, so the "two options considered" item is unmet.
+- A Consequences section listing only benefits — the real cost was never found, which fails the "including the cost" clause and hides the trade-off from the next maintainer.
+- Context or Container diagrams committed as binary exports or without a last-updated date — they cannot be diffed in the PR and are presumed stale, failing the "version-controlled text, dated" item.
+- Code structure changed without the Container view updated in the same PR — the diagram now describes a system that no longer exists, so every item ticked against it is fiction.
+- A boundary contract missing its closed error set, idempotency statement, or QoS terms — callers cannot enumerate failures or retry safely, so the failure-mode half of the contract item is absent.
+- A prose-only contract with no OpenAPI/Protobuf/AsyncAPI schema and no consumer-driven contract test — producer and consumer drift silently between releases, leaving the "checkable schema" item unenforced.
+- An NFR recorded as an adjective ("fast", "scalable") instead of a six-part scenario with a number — it maps to no SLI, test, or dashboard, so the measurable-scenario item cannot be verified.
+
 ## Definition of done
 
 

@@ -70,4 +70,6 @@ Steps:
 Report the refined issue link, any sub-issues created, the estimate, the RAID
 summary, and the new board status. Do not run outward-facing `gh` writes or push
 without the user's go-ahead; never touch a protected branch.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
 '''

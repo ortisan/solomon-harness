@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-06-28
+- Amended: 2026-06-29 — v1 velocity metric source (see Amendment below)
 - Deciders: software_architect with dba; ratified by the maintainer
 - Issue: #44 (gates #54, #55, #56, #57; #53 is decoupled)
 
@@ -77,7 +78,9 @@ Coupled sub-decisions (ratified with this ADR):
 - **Metric source for v1:** compute velocity and open/close-rate from `created_at`
   plus current status (cheap, approximate, available now) rather than adding event
   capture immediately. Revisit minimal event capture before burndown (#57) if the
-  approximation proves too lossy.
+  approximation proves too lossy. (Amended 2026-06-29: v1 velocity now reads
+  `board_history` instead of `created_at`; see the Amendment section below. The
+  `created_at` approximation still stands for open/close-rate (#56).)
 
 **Evolution trigger to (c):** adopt the projection when any holds — sustained
 portfolios beyond the 25-project / 500-issue envelope, p95 < 2s starts failing under
@@ -95,6 +98,49 @@ portfolios beyond the 25-project / 500-issue envelope, p95 < 2s starts failing u
 - Follow-ups: define the canonical person key (owner: dba with software_architect);
   decide event-capture vs approximation before slice 5; revisit (c) at the named
   trigger. Tracked in memory as the person-key/history follow-up.
+
+## Amendment 2026-06-29: velocity metric source
+
+- Issue: #55 (slice 3a, per-user velocity)
+- Amends: the "Metric source for v1" sub-decision above, for velocity only.
+
+This amendment refines which source v1 velocity reads. It does not reverse the
+accepted decision: the cockpit still reads on demand through the same per-tenant
+read port (option (a)), isolation still holds by construction (R-01), and no new
+event-capture mechanism is added.
+
+**Decision.** v1 per-user velocity — and the per-user activity series (#133) — is
+computed from `board_history`, the real board transitions already captured by
+`github.record_transition`, not from the `created_at` approximation the original
+sub-decision named. The history is a per-card timeline stored under the memory key
+`board_history:<issue_number>` as a JSON list of `{column, entered_at}` entries; the
+`entered_at` of the entry whose `column` is the Done column is the delivery
+timestamp a velocity count keys on. Counts are attributed to a person through the
+canonical assignee person key (ADR-0012 / #118), then summed per person across
+tenants by composition — read each tenant's history independently and add, never
+join two stores (compose-never-join, R-01). This supersedes the `created_at`
+approximation for the velocity metric only.
+
+This is a same-source refinement, not new event capture: `record_transition` already
+writes `board_history` on every harness `set-status`, so v1 reads an existing series
+rather than adding one. Only what the read port reads from changes; the cockpit code
+and the isolation principle do not.
+
+**Named consequence — coverage limitation (must be surfaced, never silent).**
+`board_history` exists only for issues whose transitions passed through the harness
+`set-status` path. An issue dragged to Done directly on the GitHub board, or closed
+before `record_transition` existed, has no tracked history and therefore no derivable
+delivery timestamp. Such issues are EXCLUDED from the velocity count, and the
+exclusion is reported per user as "N excluded (no tracked history)", so thin or
+missing history degrades to a stated, auditable gap rather than a silently-wrong
+number. `entered_at` is a naive local-time ISO string (no timezone offset; see
+`record_transition`), so every window comparison must normalize both sides to one
+clock basis before bucketing by period.
+
+**Revisit trigger (unchanged).** Minimal event capture remains deferred to before
+burndown (#57): if `board_history` coverage proves too lossy in practice, add the
+minimal capture then. Open/close-rate (#56) is not bound by this amendment — at its
+own refinement it may keep the `created_at` approximation or move to `board_history`.
 
 ## More information
 

@@ -62,14 +62,16 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
 
     # Git Remote
     try:
+        from solomon_harness.subprocess_env import clean_git_env
+
         git_remote = subprocess.check_output(
             ["git", "remote", "get-url", "origin"],
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
             text=True,
             # Strip GIT_* so a worktree/hook context does not redirect this to the
-            # enclosing repo (see solomon_harness.home._clean_git_env / issue #24).
-            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            # enclosing repo (see solomon_harness.subprocess_env.clean_git_env / issue #24).
+            env=clean_git_env(),
         ).strip()
     except Exception:
         git_remote = "none"
@@ -175,24 +177,51 @@ def interpolate_and_write(template_path: str, dest_path: str, replacements: Dict
 
 
 def has_github_project_and_wiki(workspace_root: str, git_remote: str) -> bool:
-    """Checks if the target repository has active project boards and wiki on GitHub."""
+    """Checks if the target repository has an active GitHub Projects board.
+
+    Wiki is only required alongside the project board for public repos; a
+    private repo may not be able to enable a wiki at all, so it does not
+    factor into whether the local Kanban fallback is needed.
+    """
     if git_remote == "none" or "github.com" not in git_remote:
         return False
     try:
         out = subprocess.check_output(
-            ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled"],
+            ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled,isPrivate"],
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=2.0
         )
         data = json.loads(out)
-        return data.get("hasWikiEnabled", False) and data.get("hasProjectsEnabled", False)
+        if not data.get("hasProjectsEnabled", False):
+            return False
+        if data.get("isPrivate", False):
+            return True
+        return data.get("hasWikiEnabled", False)
     except Exception:
         wiki_dir = os.path.join(workspace_root, "docs", "wiki")
         if os.path.isdir(wiki_dir) and os.listdir(wiki_dir):
             return True
         return False
+
+
+def github_prereq_status(
+    wiki_enabled: bool, wiki_initialized: bool, projects_ok: bool, is_public: bool
+) -> tuple[bool, bool, bool]:
+    """Decide whether `init` should block on the GitHub Wiki/Projects check.
+
+    Wiki is only a hard requirement for public repos: a private repo may not
+    be able to enable it at all (org policy, plan restrictions), so it is
+    reported but never blocks init on its own. GitHub Projects always blocks,
+    since the delivery board depends on it.
+
+    Returns (wiki_ok, wiki_blocking, blocked).
+    """
+    wiki_ok = wiki_enabled and wiki_initialized
+    wiki_blocking = not wiki_ok and is_public
+    blocked = wiki_blocking or not projects_ok
+    return wiki_ok, wiki_blocking, blocked
 
 
 def github_wiki_enabled(workspace_root: str) -> bool | None:
@@ -272,7 +301,7 @@ def _install_harness_files(workspace_root: str) -> None:
     # instance in ~/.solomon-harness (see solomon_harness/memory.py).
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "GEMINI.md", "CLAUDE.md", "README.md", "skill-sources.json",
+        "AGENTS.md", "AGY.md", "CLAUDE.md", "README.md", "skill-sources.json",
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -319,6 +348,159 @@ def scaffold_agents(workspace_root: str) -> None:
                 f.write(content)
 
 
+def scaffold_new_agent(
+    workspace_root: str,
+    name: str,
+    description: str,
+    title: Optional[str] = None,
+    duties: Optional[List[str]] = None,
+) -> None:
+    """Scaffold a new agent directory from templates (create-only)."""
+    import re
+    if not re.match(r"^[a-z0-9_]+$", name):
+        raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    agents_dir = os.path.join(workspace_root, "agents")
+    agent_dir = os.path.join(agents_dir, name)
+    real_agents_dir = os.path.realpath(agents_dir)
+    real_agent_dir = os.path.realpath(agent_dir)
+
+    # Confinement check
+    if not real_agent_dir.startswith(real_agents_dir + os.sep) and real_agent_dir != real_agents_dir:
+        raise ValueError("Path confinement violation: agent folder must be inside agents/")
+
+    if os.path.exists(real_agent_dir):
+        print(f"Agent '{name}' already exists. Skipping scaffolding.")
+        return
+
+    # Create directories
+    os.makedirs(os.path.join(real_agent_dir, "agents"), exist_ok=True)
+    os.makedirs(os.path.join(real_agent_dir, "skills"), exist_ok=True)
+
+    # Write persona.md
+    if title is None:
+        title = name.replace("_", " ").title()
+    persona_content = f"""# {title} Persona
+
+{description}
+
+This agent is the {name} brain for solomon-harness. It reasons within the shared rules in agents/AGENTS.md and its contract in agents/{name}/agents/{name}.md, applies the skills in agents/{name}/skills/, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
+"""
+    with open(os.path.join(real_agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+        f.write(persona_content)
+
+    # Write role file
+    if duties is None:
+        duties = [
+            "Adhere strictly to the Git Flow branching guidelines, utilizing feature/* or bugfix/* branches.",
+            "Commit all code and documentation changes using Conventional Commits rules."
+        ]
+    duties_str = "\n".join(f"- {d}" for d in duties)
+    role_content = f"""# {title} Profile
+
+{description}
+
+## Core Duties
+{duties_str}
+
+## Active Skills
+
+No local skills configured.
+
+## External Skills
+
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+```bash
+solomon-harness skills add <source> <skill> --agent {name}
+```
+"""
+    with open(os.path.join(real_agent_dir, "agents", f"{name}.md"), "w", encoding="utf-8") as f:
+        f.write(role_content)
+
+    # Write scope_and_mandate.md skill
+    skill_content = f"""# {title} Best Practices
+
+Reference standard for the {name} specialist.
+
+## Scope and mandate
+
+This skill covers the {name} role's duties.
+"""
+    with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
+        f.write(skill_content)
+
+    # Copy main.py and config.json via scaffold_agents
+    scaffold_agents(workspace_root)
+
+    # Register in agents/AGENTS.md
+    agents_md_path = os.path.join(agents_dir, "AGENTS.md")
+    if os.path.isfile(agents_md_path):
+        with open(agents_md_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        pattern = r"(## The specialist agents\n+)([\s\S]*)"
+        match = re.search(pattern, content)
+        if match:
+            list_content = match.group(2)
+
+            lines = list_content.splitlines()
+            agent_lines = []
+            other_lines = []
+            in_list = True
+            for line in lines:
+                if in_list and (line.strip().startswith("- `") or not line.strip()):
+                    if line.strip():
+                        agent_lines.append(line.strip())
+                else:
+                    in_list = False
+                    other_lines.append(line)
+
+            formatted_desc = description
+            if formatted_desc:
+                formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
+
+            new_line = f"- `{name}` — {formatted_desc}"
+            agent_lines.append(new_line)
+
+            def extract_name(entry):
+                m = re.search(r"- `([^`]+)`", entry)
+                return m.group(1) if m else entry
+
+            seen = set()
+            unique_agent_lines = []
+            for line in sorted(agent_lines, key=extract_name):
+                n_ = extract_name(line)
+                if n_ not in seen:
+                    seen.add(n_)
+                    unique_agent_lines.append(line)
+
+            new_list_content = "\n".join(unique_agent_lines)
+            if other_lines:
+                while other_lines and not other_lines[0].strip():
+                    other_lines.pop(0)
+                new_list_content += "\n\n" + "\n".join(other_lines)
+            else:
+                new_list_content += "\n"
+
+            new_content = content[:match.start()] + "## The specialist agents\n\n" + new_list_content
+            with open(agents_md_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+
+    # Run document-skills script to compile the new agent's skills
+    doc_skills_script = os.path.join(workspace_root, "scripts", "document-skills.py")
+    if os.path.isfile(doc_skills_script):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, doc_skills_script], cwd=workspace_root, check=True)
+
+    # Run generate-integrations script to compile Claude agents and Gemini commands
+    gen_integrations_script = os.path.join(workspace_root, "scripts", "generate-integrations.py")
+    if os.path.isfile(gen_integrations_script):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, gen_integrations_script], cwd=workspace_root, check=True)
+
+
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:
     """Initializes the agent harness workspace in workspace_root.
 
@@ -337,11 +519,16 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     except Exception as exc:
         print(f"  Warning: prerequisite check failed: {exc}")
 
+    # Read the target project's own identity before the harness plants its
+    # files: _install_harness_files copies this repo's own pyproject.toml into
+    # any workspace that doesn't have one yet, so detecting metadata afterward
+    # would read the harness's identity ("solomon-harness") instead of the
+    # host project's.
+    project_name, git_remote, technologies = get_project_metadata(workspace_root)
+
     # When run in a fresh project (no agents/ yet), install the harness files from
     # this package's repository into the workspace before configuring it.
     _install_harness_files(workspace_root)
-
-    project_name, git_remote, technologies = get_project_metadata(workspace_root)
     print(f"  - Project Name: {project_name}")
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
@@ -352,7 +539,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # prompts for nothing, and never creates the first page.
     hint_uninitialized_wiki(workspace_root, git_remote)
 
-    # Enforce GitHub prerequisites if the project is hosted on GitHub
+    # Enforce GitHub prerequisites if the project is hosted on GitHub. Wiki is
+    # only required for public repos; private repos may not be able to enable
+    # it (org policy, plan restrictions), so it is reported but not enforced.
+    # GitHub Projects is always required, since the delivery board depends on it.
     if "github.com" in git_remote and not os.environ.get("SOLOMON_SKIP_GH_CHECK"):
         print("Checking GitHub prerequisites (Wiki and Project)...")
         import sys
@@ -384,17 +574,18 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             
         try:
             out = subprocess.check_output(
-                ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled"],
+                ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled,isPrivate"],
                 cwd=workspace_root,
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=5.0
             )
             data = json.loads(out)
-            
+
             wiki_enabled = data.get("hasWikiEnabled", False)
             projects_ok = data.get("hasProjectsEnabled", False)
-            
+            is_public = not data.get("isPrivate", False)
+
             # Check if the Wiki repository is initialized (first page created)
             wiki_initialized = False
             if wiki_enabled:
@@ -407,25 +598,30 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                     wiki_initialized = True
                 except Exception:
                     pass
-            
-            wiki_ok = wiki_enabled and wiki_initialized
-            
+
+            wiki_ok, wiki_blocking, blocked = github_prereq_status(
+                wiki_enabled, wiki_initialized, projects_ok, is_public
+            )
+
             wiki_icon = "\033[32m✓\033[0m" if wiki_ok else "\033[31m✗\033[0m"
             projects_icon = "\033[32m✓\033[0m" if projects_ok else "\033[31m✗\033[0m"
-            
+
             print(f"  {wiki_icon}  GitHub Wiki")
             print(f"  {projects_icon}  GitHub Projects")
-            
-            if not wiki_ok or not projects_ok:
+
+            if blocked:
                 print("\nError: Prerequisite checks failed. Please enable the missing features in your GitHub repository settings.")
-                if not wiki_enabled:
-                    print("  - Enable Wikis: Settings -> General -> Features -> Wikis")
-                elif not wiki_initialized:
-                    print(f"  - Initialize Wiki: Visit {web_wiki_url} and click 'Create the first page' or 'Save page'.")
+                if wiki_blocking:
+                    if not wiki_enabled:
+                        print("  - Enable Wikis: Settings -> General -> Features -> Wikis")
+                    elif not wiki_initialized:
+                        print(f"  - Initialize Wiki: Visit {web_wiki_url} and click 'Create the first page' or 'Save page'.")
                 if not projects_ok:
                     print("  - Enable Projects: Settings -> General -> Features -> Projects")
                 sys.exit(1)
-                
+            elif not wiki_ok:
+                print("  Note: wiki is not required for a private repository; skipping wiki-dependent docs publishing until it is available.")
+
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr.strip() if e.stderr else str(e)
             print(f"Error: Failed to verify GitHub repository settings via gh CLI: {error_msg}")

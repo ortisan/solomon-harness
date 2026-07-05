@@ -6,8 +6,8 @@ This document provides a detailed reference of all custom slash commands (`/solo
 
 ## 1. Lifecycle Commands
 
-### `/solomon-loop` (Master Orchestrator)
-The core engine command. It scans the repository's current state, checked-out branch, open issues, and board status to determine where development stopped, then proposes or automatically runs the next logical step.
+### `/solomon-workflow` (End-to-End Orchestrator)
+Runs a task end-to-end, or continues from a previous execution. It scans the repository's current state, checked-out branch, open issues, and board status to determine where development stopped, then proposes or automatically runs the next logical step.
 * **Arguments:** Optional focus (e.g., issue or PR number).
 * **Primary Agent:** Orchestrator (hierarchical coordinator).
 * **Workflows:**
@@ -16,6 +16,16 @@ The core engine command. It scans the repository's current state, checked-out br
   3. Checks for in-progress branches to resume coding.
   4. Checks for ready issues to start implementation.
   5. Provides a choice between a **Single Step** execution or **Autonomous Mode** (looping through tasks until blocked by human gates).
+
+### `/solomon-loop` (Autonomous Parallel Loop)
+Runs the fully autonomous parallel loop: it spawns multiple worker agents that start, develop, test, review, and open draft PRs for Ready issues concurrently.
+* **Arguments:** Optional `--issues 42,43` to restrict the run to specific issues.
+* **Primary Agent:** Orchestrator (delegates to `software_engineer`, `qa`, `software_architect` workers).
+* **Workflows:**
+  1. Asks for the concurrency limit (default: 3).
+  2. Runs `solomon-harness dev loop --concurrency <limit>` under the single-driver lock.
+  3. Each worker claims one Ready issue, implements it with TDD in an isolated worktree, and opens a draft PR.
+  4. Human review remains the merge gate; the loop never merges its own PRs.
 
 ### `/solomon-start` (Developer Center)
 Begins implementation on a `Ready` issue.

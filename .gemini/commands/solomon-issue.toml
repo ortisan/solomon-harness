@@ -58,8 +58,16 @@ Steps:
      using the contract template in the conventions doc (`.solomon/` is gitignored
      local state).
    - `log_handoff` — product_owner → scrum_master, contract
-     "feature-story", contract_path = that handoff file, status="ready_for_refinement".
+     "feature-story", contract_path = that handoff file, status="open";
+     keep the returned handoff id.
+   - `save_session` (session_id="issue-<n>",
+     agent_name="product_owner", task="Filed #<n>", messages=[], issues=[<n>]) to
+     checkpoint with the worked_on edge, then
+     `link_session_handoff(session_id="issue-<n>", handoff_id=<the returned handoff id>)`
+     to record the produced edge (ADR-0018).
 
 8. Output the issue URL and a one-line summary (number, title, priority, area).
    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
 '''

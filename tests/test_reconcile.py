@@ -22,7 +22,11 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from solomon_harness import cli  # noqa: E402
-from solomon_harness.tools.database_client import DatabaseClient  # noqa: E402
+from solomon_harness.tools.database_client import (  # noqa: E402
+    DatabaseClient,
+    is_terminal,
+    recover_parent,
+)
 
 
 class _Proc:
@@ -30,6 +34,28 @@ class _Proc:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+class TestRecoverParent(unittest.TestCase):
+    """recover_parent maps a tracking row's id/title to its parent GitHub number.
+
+    id-first (the slug's leading int before the first hyphen), else the first
+    ``#<digits>`` in the title (which subsumes the ``PR #45`` form), else None.
+    Pure and total: it never raises and never guesses a number that is not there.
+    """
+
+    def test_recover_parent_truth_table(self):
+        cases = [
+            (("68-R-01", "RAID R-01 (#68)"), "68"),   # id wins
+            (("45-M2", "loop review minor"), "45"),    # id wins, no title ref
+            (("R-01", "RAID R-01 (#68)"), "68"),       # id has no leading int -> title
+            (("follow-up", "loop (review minor, PR #45)"), "45"),  # PR # form via #(\d+)
+            (("R-07", "no number here"), None),        # nothing recoverable
+            ((None, None), None),                       # total over None inputs
+        ]
+        for (github_id, title), expected in cases:
+            with self.subTest(github_id=github_id, title=title):
+                self.assertEqual(recover_parent(github_id, title), expected)
 
 
 class TestReconcileMemory(unittest.TestCase):
@@ -95,6 +121,108 @@ class TestReconcileMemory(unittest.TestCase):
         client.close()
 
 
+class TestReconcileTrackingRows(unittest.TestCase):
+    """The tracking-row close pass: a slug row whose parent number is RESOLVED
+    becomes terminal; every other row (open parent, absent parent, numeric) is
+    spared. Never deletes a row; never touches a numeric (real GitHub) row."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _seed(self):
+        client = DatabaseClient(db_path=self.db_path)
+        # Parent #68 is resolved -> this row must close.
+        client.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
+        # Parent #100 is present but unresolved (open) -> untouched.
+        client.log_issue("100-R-02", "RAID for open issue (#100)", "raid", "in_progress", None)
+        # Parent #45 is absent from the map entirely -> untouched (safe default).
+        client.log_issue("45-M2", "loop review minor", "followup", "in_progress", None)
+        # A real numeric GitHub row -> never a candidate.
+        client.log_issue("100", "Still open numeric", "feature", "in_progress", None)
+        return client
+
+    def test_closes_resolved_parent_and_spares_the_rest(self):
+        client = self._seed()
+        resolved_map = {"68": True, "100": False}
+
+        result = cli.reconcile_tracking_rows(client, resolved_map)
+
+        self.assertEqual(result["closed"], 1)
+        self.assertEqual(result["skipped_no_parent"], 0)
+        self.assertEqual(result["scanned_tracking"], 3)
+
+        # The resolved-parent row is now terminal, with its other fields preserved.
+        closed_row = client.get_issue("68-R-01")
+        self.assertTrue(is_terminal(closed_row["status"]))
+        self.assertEqual(closed_row["title"], "RAID R-01 (#68)")
+        self.assertEqual(closed_row["type_"], "raid")
+
+        open_ids = {i["github_id"] for i in client.get_open_issues()}
+        # The closed row dropped out; the open-parent, absent-parent and numeric
+        # rows are all still open.
+        self.assertNotIn("68-R-01", open_ids)
+        self.assertEqual(open_ids, {"100-R-02", "45-M2", "100"})
+        self.assertEqual(client.get_issue("100-R-02")["status"], "in_progress")
+        self.assertEqual(client.get_issue("45-M2")["status"], "in_progress")
+        self.assertEqual(client.get_issue("100")["status"], "in_progress")
+        client.close()
+
+    def test_skips_and_logs_row_with_no_parent(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("R-07", "RAID with no number", "raid", "in_progress", None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = cli.reconcile_tracking_rows(client, {})
+        self.assertEqual(result["skipped_no_parent"], 1)
+        self.assertEqual(result["closed"], 0)
+        # Left open, never guessed; the unparseable slug is named on stderr.
+        self.assertEqual(client.get_issue("R-07")["status"], "in_progress")
+        self.assertIn("R-07", err.getvalue())
+        client.close()
+
+    def test_dry_run_collects_slugs_without_writing(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
+
+        result = cli.reconcile_tracking_rows(client, {"68": True}, dry_run=True)
+
+        self.assertEqual(result["would_close"], ["68-R-01"])
+        self.assertEqual(result["closed"], 0)
+        # Nothing written on a dry run: the row is still non-terminal and open.
+        self.assertEqual(client.get_issue("68-R-01")["status"], "in_progress")
+        self.assertIn("68-R-01", {i["github_id"] for i in client.get_open_issues()})
+        client.close()
+
+    def test_close_preserves_non_null_milestone_and_assignee(self):
+        """The close pass read-modify-writes the row through the 6-arg log_issue,
+        carrying every non-status field forward. A row seeded with a NON-NULL
+        milestone_id and assignee must come back terminal with both fields intact,
+        proving the close only rewrites the status and never drops the milestone or
+        owner of a resolved tracking item."""
+        client = DatabaseClient(db_path=self.db_path)
+        milestone_id = client.create_milestone("M1", "goals", "2026-07-01", "active")
+        client.log_issue(
+            "68-R-03", "RAID R-03 (#68)", "raid", "in_progress", milestone_id, "marcelo"
+        )
+
+        result = cli.reconcile_tracking_rows(client, {"68": True})
+
+        self.assertEqual(result["closed"], 1)
+        closed_row = client.get_issue("68-R-03")
+        self.assertTrue(is_terminal(closed_row["status"]))
+        # The non-status fields survived the close unchanged.
+        self.assertEqual(closed_row["milestone_id"], str(milestone_id))
+        self.assertEqual(closed_row["assignee"], "marcelo")
+        # Read back through the open-issue view as well: the row is gone from it
+        # (terminal), so the survival is confirmed via the direct get_issue read.
+        self.assertNotIn("68-R-03", {i["github_id"] for i in client.get_open_issues()})
+        client.close()
+
+
 class TestFetchGhIssueStates(unittest.TestCase):
     def test_validates_number_and_state_as_data(self):
         payload = json.dumps(
@@ -142,6 +270,19 @@ class TestFetchGhIssueStates(unittest.TestCase):
             states = cli._fetch_gh_issue_states(".")
         self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
 
+    def test_strips_inherited_git_env_before_shelling_out(self):
+        # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
+        # worktree) must not be forwarded to the gh subprocess.
+        payload = json.dumps([{"number": 6, "state": "CLOSED"}])
+        leaked = {"GIT_DIR": "/tmp/leaked/.git", "GIT_WORK_TREE": "/tmp/leaked"}
+        with patch.dict(os.environ, leaked):
+            with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
+                cli._fetch_gh_issue_states(".")
+        _, kwargs = run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
+        self.assertFalse(any(k.startswith("GIT_") for k in env))
+
     def test_warns_when_gh_returns_the_issue_cap(self):
         """When gh returns exactly the --limit cap, reconcile may miss closed issues
         beyond it, so the truncation is surfaced on stderr instead of hidden."""
@@ -155,6 +296,88 @@ class TestFetchGhIssueStates(unittest.TestCase):
             states = cli._fetch_gh_issue_states(".")
         self.assertIn("cap", err.getvalue())
         self.assertEqual(len(states), 2)
+
+
+class TestFetchGhPrStates(unittest.TestCase):
+    """The PR-state fetch mirrors the issue fetch but accepts the extra MERGED
+    literal: a parent PR counts as resolved when MERGED or CLOSED (#127)."""
+
+    def test_fetches_pr_list_and_validates_states_as_data(self):
+        payload = json.dumps(
+            [
+                {"number": 45, "state": "MERGED"},
+                {"number": 50, "state": "CLOSED"},
+                {"number": 60, "state": "OPEN"},
+                {"number": "nope", "state": "MERGED"},  # bad number -> skipped
+                {"number": 7, "state": "DRAFT"},        # not a state literal -> skipped
+                {"state": "MERGED"},                     # missing number -> skipped
+            ]
+        )
+        with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
+            states = cli._fetch_gh_pr_states(".")
+        # The bulk PR listing is fetched with `gh pr list`, not a per-row call.
+        self.assertEqual(run.call_args.args[0][:3], ["gh", "pr", "list"])
+        self.assertEqual(
+            states,
+            [
+                {"number": "45", "state": "MERGED"},
+                {"number": "50", "state": "CLOSED"},
+                {"number": "60", "state": "OPEN"},
+            ],
+        )
+
+    def test_gh_failure_raises(self):
+        with patch("subprocess.run", return_value=_Proc(1, "", "boom")):
+            with self.assertRaises(RuntimeError):
+                cli._fetch_gh_pr_states(".")
+
+
+class TestBuildResolvedMap(unittest.TestCase):
+    """A number is RESOLVED when its issue is CLOSED or its PR is MERGED/CLOSED;
+    an OPEN issue or OPEN PR records the number as not-yet-resolved (#127)."""
+
+    def test_merges_issue_closed_or_pr_merged_or_closed(self):
+        issue_states = [
+            {"number": "68", "state": "CLOSED"},  # resolved via closed issue
+            {"number": "100", "state": "OPEN"},   # open issue -> not resolved
+        ]
+        pr_states = [
+            {"number": "45", "state": "MERGED"},  # resolved via merged PR
+            {"number": "50", "state": "CLOSED"},  # resolved via closed PR
+            {"number": "60", "state": "OPEN"},    # open PR -> not resolved
+        ]
+        resolved = cli._build_resolved_map(issue_states, pr_states)
+        self.assertTrue(resolved["68"])
+        self.assertTrue(resolved["45"])
+        self.assertTrue(resolved["50"])
+        self.assertFalse(resolved["100"])
+        self.assertFalse(resolved["60"])
+        # A number absent from both lists is not a key (treated as unresolved).
+        self.assertNotIn("999", resolved)
+
+    def test_pr_resolution_does_not_get_overridden_by_an_open_signal(self):
+        # Order-independent OR: a resolved PR signal wins even if an OPEN signal
+        # for the same number is seen first.
+        resolved = cli._build_resolved_map(
+            [{"number": "45", "state": "OPEN"}],
+            [{"number": "45", "state": "MERGED"}],
+        )
+        self.assertTrue(resolved["45"])
+
+    def test_a_none_number_record_is_skipped_in_both_lists(self):
+        """The defensive ``number is None`` guards (one per loop) drop a record
+        with no number before it can key the map, so None is never a key, while a
+        valid record sitting alongside it in the same list resolves normally."""
+        resolved = cli._build_resolved_map(
+            [{"number": None, "state": "CLOSED"}, {"number": "68", "state": "CLOSED"}],
+            [{"number": None, "state": "MERGED"}, {"number": "45", "state": "MERGED"}],
+        )
+        # The None-number records were skipped: None is absent from the map.
+        self.assertNotIn(None, resolved)
+        # The valid records sharing each list still resolved correctly.
+        self.assertTrue(resolved["68"])
+        self.assertTrue(resolved["45"])
+        self.assertEqual(set(resolved), {"68", "45"})
 
 
 class _FakeSqliteClient:
@@ -319,6 +542,73 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 cli.handle_reconcile(self.temp_dir.name, dry_run=False)
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("reconcile failed", err.getvalue())
+
+
+class TestHandleReconcileTracking(unittest.TestCase):
+    """The reconcile command's tracking-row pass, wired end to end against a real
+    store with a mocked gh. The parent is a MERGED PR, so the expanded PR path is
+    exercised through the real fetch + merge + close pipeline."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+        self.inner = DatabaseClient(db_path=self.db_path)
+        self.inner.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
+        self.proxy = _ShareStoreProxy(self.inner)
+
+    def tearDown(self):
+        self.inner.close()
+        self.temp_dir.cleanup()
+
+    def _gh_payload(self):
+        # Parent #68 is a MERGED PR: rejected by the issue fetch (OPEN/CLOSED only),
+        # accepted by the PR fetch, so the row resolves only through the PR map.
+        return json.dumps([{"number": 68, "state": "MERGED"}])
+
+    def test_real_run_closes_then_idempotent(self):
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("1 tracking row(s) set to done", out.getvalue())
+        # The row dropped out of the open set (became terminal).
+        self.assertNotIn(
+            "68-R-01", {i["github_id"] for i in self.inner.get_open_issues()}
+        )
+
+        out2 = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out2),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("0 tracking row(s) set to done", out2.getvalue())
+
+    def test_main_dry_run_reports_rows_it_would_close(self):
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.main(harness_dir=self.temp_dir.name, argv=["reconcile", "--dry-run"])
+        self.assertIn("would be set to done", out.getvalue())
+        self.assertIn("68-R-01", out.getvalue())
+        # Nothing written on a dry run.
+        self.assertEqual(self.inner.get_issue("68-R-01")["status"], "in_progress")
 
 
 if __name__ == "__main__":

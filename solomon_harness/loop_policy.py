@@ -27,12 +27,17 @@ LEVELS = ("human", "L1", "L2", "L3")
 # Permanently human-gated stages — never autonomous, at any level.
 HUMAN_GATED_STAGES = {"release"}
 # L1 is report-only: it may scan and propose, never mutate.
-L1_ALLOWED_STAGES = {"loop"}
+L1_ALLOWED_STAGES = {"workflow"}
 # L2/L3 may create work and draft PRs, but never the human-gated stages above.
 # The scan loops are generative maintenance: they draft PRs, so they belong here.
 AUTOMATION_ALLOWED_STAGES = {
-    "loop", "idea", "issue", "bug", "refine", "start", "review", "scan-arch", "scan-dedup",
+    "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review",
+    "scan-arch", "scan-dedup",
 }
+
+# Renamed stages, normalized on read so pre-rename callers and recorded state
+# keep the same verdicts (`loop-auto` became `loop`).
+LEGACY_STAGE_ALIASES = {"loop-auto": "loop"}
 
 DEFAULT_DENYLIST = [
     ".git/*",
@@ -100,6 +105,7 @@ class LoopPolicy:
     # -- decisions ----------------------------------------------------------
     def decide_stage(self, stage: str) -> Decision:
         """Decide whether the automation path may run ``stage`` now."""
+        stage = LEGACY_STAGE_ALIASES.get(stage, stage)
         if self.is_halted():
             return Decision(False, "loop halted by kill-switch; clear with 'solomon-harness loop-stop --clear'")
         if stage in HUMAN_GATED_STAGES:
@@ -118,7 +124,8 @@ class LoopPolicy:
 
     def requires_lock(self, stage: str) -> bool:
         """L3 may only act while the single-driver lock is held."""
-        return self.level == "L3" and stage not in ("loop",)
+        stage = LEGACY_STAGE_ALIASES.get(stage, stage)
+        return self.level == "L3" and stage not in ("workflow",)
 
     # -- denylist -----------------------------------------------------------
     def is_denied_path(self, path: str) -> bool:

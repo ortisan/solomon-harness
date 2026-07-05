@@ -2,7 +2,7 @@
 
 Shared conventions for the `/solomon-*` workflows. Every workflow command
 reads this file and follows it so the lifecycle is consistent, auditable, and
-backed by the project memory. The host tool (Claude Code or Gemini CLI) provides
+backed by the project memory. The host tool (Claude Code or Antigravity CLI) provides
 the model; these workflows orchestrate the specialist agents, the GitHub project,
 and the memory layer.
 
@@ -14,14 +14,14 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 
 | Stage | Workflow | Driving agents | Board move |
 | --- | --- | --- | --- |
-| Orchestrate (scan + next) | `/solomon-loop` | scrum_master | proposes the next step |
+| Orchestrate (scan + next) | `/solomon-workflow` | scrum_master | runs a task end-to-end or continues |
 | Capture an idea | `/solomon-idea` | product_owner | → `Ideas` |
 | Create a feature/story | `/solomon-issue` | product_owner | → `Backlog` |
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
 | Refine for readiness | `/solomon-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
 | Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `Code Review` |
-| Review | `/solomon-review` | software_architect (code), then qa, security | `Code Review` → `QA` (then approved) |
-| Deliver and release | `/solomon-release` | sre, software_engineer | `QA` → `Done` |
+| Review | `/solomon-review` (auto-runs at the end of start) | software_architect (code), then qa, security, plus up to two diff-selected domain lenses | `Code Review` → `QA`, then on approval and interactive confirmation, merges the PR and moves `QA` → `Done` (ADR-0020) |
+| Deliver and release | `/solomon-release` | sre, software_engineer | milestone-level: cuts the version tag once a milestone's issues are already `Done`; never merges an individual PR |
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
 with `ensure_project_board`; move cards with `set_issue_status`.
@@ -41,22 +41,22 @@ stage is what the work is doing — so this table reconciles them:
 | `In Progress` | Implementation and Tests (the TDD Red/Green/Refactor loop writes the covering tests here) |
 | `Code Review` | Review (the software_architect code-review gate) |
 | `QA` | Tests and Review verification (the qa and security gates; acceptance criteria and the Definition of Done are checked) |
-| `Done` | Release and Milestone (the tag is cut when the milestone closes with 0 open issues and CI green) |
+| `Done` | Entered via Review's own merge (ADR-0020); Release and Milestone is what happens once enough `Done` cards close a milestone (the tag is cut when the milestone reaches 0 open issues with CI green) |
 
 ## The loop and session resumption
 
-`/solomon-loop` is the orchestrator. It scans the project memory and the board to
+`/solomon-workflow` is the orchestrator. It scans the project memory and the board to
 find where work stopped, then proposes the single best next step — one of the
 workflows above — and runs it on confirmation. It advances one stage per
 invocation: when work is in flight it proposes development, review, or release;
 when nothing is in progress it proposes creating a feature, bug, or refinement.
 
 The loop is host-orchestrated and human-gated, not fully autonomous: no code
-decides the next stage — the host tool (Claude Code or the Gemini CLI) runs these
+decides the next stage — the host tool (Claude Code or the Antigravity CLI) runs these
 markdown prompts — and the merge, release, and move-to-Done gates always require a
 human.
 
-At the start of every Claude Code or Gemini CLI session, the harness surfaces the
+At the start of every Claude Code or Antigravity CLI session, the harness surfaces the
 project status (latest activity and open issues) through a SessionStart hook that
 runs `solomon-harness run`. This hook automatically checks memory for pending tasks
 (or prints open issues if none) and outputs the options card. The agent reads this
@@ -67,10 +67,22 @@ on start and immediately prompts the user with the enumerated choices.
 When a workflow needs a decision or confirmation from the user — which next step,
 which option, which target — present the choices as an enumerated list (1, 2, 3, …),
 with the final option always being "Other", where the user types a free-form answer.
-In Claude Code this is the AskUserQuestion tool; in the Gemini CLI, present a numbered
+In Claude Code this is the AskUserQuestion tool; in the Antigravity CLI, present a numbered
 list and invite a free-text reply. Lead with the recommended option first and keep the
-options mutually exclusive. Prefer this over an open prose question: discrete, numbered
-choices keep the user's context focused and prevent dispersion.
+options mutually exclusive. This is mandatory, not a preference (the non-negotiable
+Enumerable decisions rule in `agents/AGENTS.md`): never end a turn with an open prose
+question, and never hand the user a command to copy ("run `/solomon-start 55` when you
+want") in place of a clickable option — the closing "what next" block of every turn that
+offers a choice MUST be the enumerated menu. Discrete numbered choices keep the user's
+context focused and prevent dispersion.
+
+This applies to the **closing "next step" recommendation of every turn**, not only the
+big branching choices. Never end a report with prose the user must copy (for example
+"run `/solomon-start 5` or `/solomon-workflow`"): present the candidate next actions as the
+enumerated menu itself — in Claude Code an AskUserQuestion the user clicks — so advancing
+the lifecycle costs one selection, not a copy-paste. The same holds for every small
+"proceed / retry / push-or-PR" confirmation. A turn that ends by offering what to do next
+without an enumerated, selectable menu is a defect.
 
 ## Implementation mode (automatic or manual)
 
@@ -80,7 +92,9 @@ hands-on developers who want to write the code themselves. The choice uses the
 enumerated-options style above (Automatic, recommended and first; Manual; Other).
 
 - Automatic: the agent runs the TDD loop (Red/Green/Refactor) per PLAN.md, then opens the
-  draft PR and moves the card to Code Review — the existing behavior.
+  draft PR and moves the card to Code Review, then continues directly into
+  `/solomon-review` for the new PR — the review runs automatically as part of the
+  workflow; only the merge stays a human gate.
 - Manual: the agent writes no production or test code and opens no PR. It hands back the
   prepared worktree, branch, PLAN.md, and the ADR decision, and leaves the card in
   `In Progress`. The developer implements by hand, then re-runs `/solomon-start` to open the
@@ -89,11 +103,45 @@ enumerated-options style above (Automatic, recommended and first; Manual; Other)
   the prompt — it defaults to Automatic and prints
   `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
 
+## Review staffing
+
+The Review stage always runs three mandatory gates — qa, security, and
+software_architect. In addition, `python -m solomon_harness.review_roster`
+selects up to two domain lenses deterministically from the PR's changed paths
+(`gh pr diff <n> --name-only` piped in): auth_engineer for credential-named
+files, dba for `database_client`/`.surql`/migrations, sre for CI workflows and
+deploy files, loop_engineer for `loop_*` files and `solomon_harness/workflows.py`, frontend
+for `ui/`, observability for instrumentation, practice_curator for agent skill
+and persona content, and documenter for Markdown under `docs/` (recursively).
+ux_designer joins the ui rules once its agent definition lands. The cap keeps
+reviews bounded; the mapping lives in `solomon_harness/review_roster.py` with
+covering tests, so the selection is auditable and deterministic.
+
+## The merge-to-Done transition
+
+`/solomon-review` owns the merge (ADR-0020): on an approve verdict, in an
+**interactive** session, the reviewer is asked — via the enumerated-decision
+convention — whether to merge now. On yes, `uv run python -m
+solomon_harness.github merge --pr <n> --issue <issue>` squash-merges the PR
+and, in the same call, moves the board card to `Done` and writes the terminal
+status through to memory (the ADR-0006 write-through), so no separate
+`reconcile` is needed for the common case. A **headless** review run
+(`solomon-harness dev review`) never merges — there is no one to answer the
+confirmation, and the non-negotiable human-approval gate for merge holds by
+never reaching that code path, not by an autonomy-level check (`#183` is a
+separate, unresolved gap this does not depend on). `/solomon-release` never
+merges an individual PR; it remains purely milestone-gated, cutting a version
+tag once a milestone's issues are already `Done`, with a board-hygiene
+backstop for any card GitHub auto-closed outside the CLI `Done` path.
+
 ## Deliver and release
 
-`/solomon-release` (sre, software_engineer) takes an approved, merged change from
-`QA` to `Done` and, when a release is due, drives the tag through CI. The full,
-canonical standard is `docs/release-policy.md` (decision recorded in
+`/solomon-release` (sre, software_engineer) does not move an individual card to
+`Done` — that already happened when `/solomon-review` merged the PR (ADR-0020).
+Its own role is milestone-level: once a milestone's issues are already `Done`,
+it drives the version tag through CI, plus a board-hygiene backstop for any
+card GitHub auto-closed outside the CLI `Done` path. The full, canonical
+standard is `docs/release-policy.md` (decision recorded in
 `docs/adr/0004-milestone-gated-releases.md`); this section is the operational
 summary the workflow follows.
 
@@ -155,10 +203,11 @@ tags; rollback as a revert PR that auto-ships the next patch; and
 backward-compatible expand/contract migrations for the SurrealDB / SQLite memory
 store.
 
-The CLI surface for this stage is `solomon-harness release plan | prep | check`:
-`plan` is read-only and headless-safe (the loop may *propose* a release with it);
-`prep` opens the prep PR and stops, never merging; `check` is the read-only
-fail-closed gate.
+The CLI surface for this stage is `solomon-harness release plan | prep | check | audit-trigger`:
+- `plan` — read-only and headless-safe (the loop may *propose* a release with it);
+- `prep` — opens the prep PR and stops, never merging;
+- `check` — the read-only fail-closed gate.
+- `audit-trigger` — autonomous audit trigger, read-only and degrade-safe. It runs `practice_curator`'s Slice 1 audit on the delivered release artifact to automate continuous benchmarking. Any failure exits 0 and logs "audit skipped: sourcing unavailable".
 
 ## GitHub conventions
 
@@ -252,14 +301,14 @@ Each stage also persists the lifecycle facts to the project memory:
 
 Loop engineering turns the harness into a system that can advance work on a
 cadence, so two drivers must never act on one repository at once. A documented
-incident — two concurrent `/solomon-loop` drivers — produced premature merges
+incident — two concurrent `/solomon-workflow` drivers — produced premature merges
 that bypassed the review gate and flipped `core.bare=true` on a worktree. The
 safety floor prevents that by construction:
 
 - **Single-driver lock.** Before a stage that touches git/board state runs
-  (`loop`, `start`, `review`, `release`, and the `scan-arch` / `scan-dedup`
-  maintenance loops — and, at L3, every stage the policy's `requires_lock`
-  names), the headless runner acquires one advisory lock anchored at the git
+  (`workflow`, `loop`, `start`, `review`, `release`, and the `scan-arch` /
+  `scan-dedup` maintenance loops — and, at L3, every stage the policy's
+  `requires_lock` names), the headless runner acquires one advisory lock anchored at the git
   *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of
   the repository contends on the same file. A second driver is refused. The lock
   is a plain JSON file (the holder is auditable). Staleness favors safety: a
@@ -268,7 +317,7 @@ safety floor prevents that by construction:
   pid, or a cross-host lock past the TTL (`DEFAULT_TTL_SECONDS = 1800`, since a
   remote pid cannot be probed), is reclaimed. Implementation:
   `solomon_harness/loop_lock.py`; the portable gate lives in `run_stage` so it
-  enforces on both Claude Code and the Gemini CLI. (`workflows.LOCKED_STAGES` is
+  enforces on both Claude Code and the Antigravity CLI. (`workflows.LOCKED_STAGES` is
   the source of truth for the static set.)
 - **PreToolUse guard (Claude Code only).** A `loop-guard` hook in
   `.claude/settings.json` blocks `git push` / `gh pr merge` while another live
@@ -294,7 +343,7 @@ How far the automation path (`solomon-harness dev <stage>` and any host-schedule
 cadence) may act is one dial, set in the project's `.agent/config.json` `loop`
 block (overridable with `SOLOMON_LOOP_AUTONOMY`) and enforced in portable Python
 inside `run_stage` (`solomon_harness/loop_policy.py`), so it holds on both Claude
-Code and the Gemini CLI — not only in a Claude-only hook.
+Code and the Antigravity CLI — not only in a Claude-only hook.
 
 ```json
 "loop": { "autonomy": "L2", "maker_model": "...", "checker_model": "...",

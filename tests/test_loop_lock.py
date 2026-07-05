@@ -110,6 +110,40 @@ class TestLoopLock(unittest.TestCase):
         with self.assertRaises(LoopLockHeld):
             self._lock("new", pid=os.getpid(), pid_alive=lambda pid: True).acquire()
 
+    def test_pid_reuse_is_detected_as_stale(self):
+        # Regression: the original holder (pid 424242) crashed and the OS
+        # recycled its pid for an unrelated process. A bare os.kill(pid, 0)
+        # liveness check alone cannot tell the two apart -- it reports the pid
+        # as alive forever. The recorded process-start-time must disambiguate:
+        # same pid, but a different start time than what was recorded at
+        # acquire time means the live process is NOT the original holder.
+        self._lock(
+            "holder", pid=424242,
+            pid_start_time=lambda pid: "Mon Jan  1 00:00:00 2026",
+        ).acquire()
+        new = self._lock(
+            "new", pid=os.getpid(),
+            pid_alive=lambda pid: True,  # the recycled pid looks alive
+            pid_start_time=lambda pid: "Tue Jan  2 00:00:00 2026",  # different process
+        )
+        new.acquire()
+        self.assertEqual(new.read()["session_id"], "new")
+
+    def test_pid_not_reused_with_same_start_time_stays_live(self):
+        # Same pid, same recorded start time: the original holder is still
+        # running, so the lock must stay held and refuse the second driver.
+        self._lock(
+            "holder", pid=424242,
+            pid_start_time=lambda pid: "Mon Jan  1 00:00:00 2026",
+        ).acquire()
+        new = self._lock(
+            "new", pid=os.getpid(),
+            pid_alive=lambda pid: True,
+            pid_start_time=lambda pid: "Mon Jan  1 00:00:00 2026",
+        )
+        with self.assertRaises(LoopLockHeld):
+            new.acquire()
+
     def test_held_by_other(self):
         self.assertIsNone(self._lock("a").held_by_other())
         self._lock("a", pid=os.getpid()).acquire()
@@ -120,6 +154,27 @@ class TestLoopLock(unittest.TestCase):
         with self._lock("a"):
             self.assertEqual(self._lock("z").read()["session_id"], "a")
         self.assertFalse(os.path.exists(self.path))
+
+    def test_reentrant_acquire_does_not_release_the_outer_holders_lock(self):
+        # #197: a nested `dev <stage>` call resolves the SAME session_id
+        # as its still-running parent (propagated via SOLOMON_SESSION_ID) and
+        # lands on the reentrant branch above -- but it must not tear down the
+        # lock on its own way out. Only the call that ORIGINALLY created (or
+        # reclaimed) the lockfile owns its lifecycle; a reentrant holder
+        # releasing it would free the lock while the outer driver is still
+        # mid-run, reopening the exact concurrent-driver race the lock exists
+        # to close.
+        outer = self._lock("a")
+        outer.acquire()
+        inner = self._lock("a")  # separate instance, same session_id: nested call
+        inner.acquire()
+        inner.release()
+        held = outer.read()
+        self.assertIsNotNone(held, "the outer holder's lock must survive a nested release")
+        self.assertEqual(held["session_id"], "a")
+        # The true owner can still release it when it actually finishes.
+        outer.release()
+        self.assertIsNone(outer.read())
 
     def test_reclaim_cas_loser_backs_off(self):
         # Two drivers race to reclaim the same dead lock. After our atomic write,

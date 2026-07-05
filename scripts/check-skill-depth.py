@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Mechanical depth gate for delivery-spine agent skills (#6).
+"""Mechanical depth and format gate for agent skills (#6, #160).
 
 The canonical depth bar from issue #6: every role-core skill file must be at least
 600 words and close with `## Common pitfalls` and `## Definition of done`. Shared
-checklist files are exempt because they are intentionally short and identical
-across agents.
+checklist files are exempt from the word count because they are intentionally
+short.
+
+The format gate from issue #160: every agents/*/skills/*.md, with no exemptions,
+must contain both mandated sections and use a snake_case filename
+(agents/AGENTS.md, "Skill file format"). This scan always runs over the whole
+repository, regardless of which agents are named for the depth scan.
 
 Usage:
   python scripts/check-skill-depth.py                 # default agents
@@ -29,6 +34,8 @@ DEFAULT_AGENTS = ("software_architect", "sre")
 # An agent name maps to a directory under agents/; constrain it so a stray `..`
 # or absolute-path argument cannot redirect the scan outside the repo.
 VALID_AGENT = re.compile(r"^[a-z0-9_]+$")
+# The mandated filename shape for a skill file (agents/AGENTS.md).
+SNAKE_CASE = re.compile(r"^[a-z0-9_]+\.md$")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,6 +55,32 @@ def check_skill(path: Path) -> list[str]:
         if section not in text:
             gaps.append(f"missing '{section}'")
     return gaps
+
+
+def check_format(path: Path) -> list[str]:
+    """Return the format gaps for one skill file (empty == passes).
+
+    The mandated shape, with no exemptions: a snake_case filename and both
+    `## Common pitfalls` and `## Definition of done` sections.
+    """
+    gaps: list[str] = []
+    if not SNAKE_CASE.match(path.name):
+        gaps.append("filename not snake_case")
+    text = path.read_text(encoding="utf-8")
+    for section in REQUIRED_SECTIONS:
+        if section not in text:
+            gaps.append(f"missing '{section}'")
+    return gaps
+
+
+def scan_format(root: Path) -> list[str]:
+    """Check every agents/*/skills/*.md under root against the format gate."""
+    failures: list[str] = []
+    for path in sorted(root.glob("agents/*/skills/*.md")):
+        gaps = check_format(path)
+        if gaps:
+            failures.append(f"{path.relative_to(root)}: {'; '.join(gaps)}")
+    return failures
 
 
 def main(argv: list[str]) -> int:
@@ -73,10 +106,16 @@ def main(argv: list[str]) -> int:
                 failures += 1
                 rel = path.relative_to(REPO_ROOT)
                 print(f"FAIL  {rel}: {'; '.join(gaps)}")
+    format_failures = scan_format(REPO_ROOT)
+    for line in format_failures:
+        print(f"FAIL  {line}")
+    failures += len(format_failures)
     if failures:
-        print(f"\n{failures} skill(s) below the canonical depth bar ({checked} checked).")
+        print(f"\n{failures} skill(s) below the canonical depth or format bar ({checked} checked).")
         return 1
-    print(f"OK  all {checked} role-core skills meet the canonical depth bar.")
+    print(
+        f"OK  {checked} role-core skills meet the depth bar; all skill files meet the format gate."
+    )
     return 0
 
 

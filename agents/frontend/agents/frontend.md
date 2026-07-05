@@ -14,16 +14,16 @@ The Frontend React & Angular Specialist designs, implements, and optimizes web i
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [accessibility_target_wcag_22_aa](skills/accessibility_target_wcag_22_aa.md) — Semantic HTML first.
-- [angular_standards](skills/angular_standards.md) — Standalone components by default (the default since Angular 19; do not add `standalone: true`, and avoid NgModules for new features).
-- [common_pitfalls_to_avoid](skills/common_pitfalls_to_avoid.md) — `useEffect` used to sync derived state, causing extra renders and stale values.
-- [definition_of_done](skills/definition_of_done.md) — Tests written first and passing; meaningful coverage of states, interactions, and accessibility; all external services mocked.
-- [design_tokens_and_styling](skills/design_tokens_and_styling.md) — Single source of truth for design decisions.
-- [performance_target_core_web_vitals_good](skills/performance_target_core_web_vitals_good.md) — Field targets at the 75th percentile: LCP under 2.5s, INP under 200ms (INP replaced FID as the responsiveness metric), CLS under 0.1.
-- [react_standards](skills/react_standards.md) — Function components and hooks only.
+- [accessibility_target_wcag_22_aa](skills/accessibility_target_wcag_22_aa.md) — This skill sets WCAG 2.2 AA as the conformance floor for every interface shipped here, with the SPA-specific obligations spelled out:…
+- [angular_standards](skills/angular_standards.md) — This skill governs every Angular component, service, and template shipped in this workspace.
+- [common_pitfalls](skills/common_pitfalls.md) — The React and Angular defects that recur in review, from index keys and stale closures to leaked subscriptions and unsanitized HTML.
+- [definition_of_done](skills/definition_of_done.md) — The completion gate for every React and Angular change: what must hold before UI work is called done.
+- [design_tokens_and_styling](skills/design_tokens_and_styling.md) — This skill governs how visual decisions are encoded and consumed: tokens are the single source of truth, components never touch raw…
+- [performance_target_core_web_vitals_good](skills/performance_target_core_web_vitals_good.md) — This skill sets the performance budgets and the discipline for meeting them: every user-facing page holds Core Web Vitals "good" at the…
+- [react_standards](skills/react_standards.md) — This skill governs every React component, hook, and server/client boundary shipped in this workspace.
 - [scope_and_non_negotiables](skills/scope_and_non_negotiables.md) — Build accessible, fast, well-tested React and Angular interfaces with a disciplined approach to components, hooks, state, and design tokens.
-- [state_management](skills/state_management.md) — Decision order, smallest scope first:
-- [testing_approach](skills/testing_approach.md) — Test behavior, not implementation.
+- [state_management](skills/state_management.md) — This skill governs where state lives in React and Angular applications.
+- [testing_approach](skills/testing_approach.md) — This skill governs how frontend code is tested: Vitest plus Testing Library for components, Playwright for end-to-end journeys, and MSW at…
 
 ## External Skills
 

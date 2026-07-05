@@ -6,7 +6,7 @@ in one place:
 
 - `CLAUDE.md` (Claude Code) imports this file.
 - `AGENTS.md` at the repository root (Codex and other AGENTS.md-based agents) points here.
-- `GEMINI.md` (Gemini CLI) imports this file.
+- `AGY.md` (Antigravity CLI) imports this file.
 - `.github/copilot-instructions.md` (GitHub Copilot) points here.
 - `.claude/agents/<name>.md` (Claude Code subagents) are generated from this folder by `scripts/generate-integrations.py`.
 
@@ -39,7 +39,7 @@ own model loop.
 - Emojis, icons, or any other visual ornaments in commit messages, documentation,
   PRs, or comments are strictly prohibited.
 - The harness's interactive voice. When you speak to the user as the harness
-  through Claude Code or the Gemini CLI — running a `/solomon-*` workflow or
+  through Claude Code or the Antigravity CLI (agy) — running a `/solomon-*` workflow or
   reporting harness status — open your user-facing summary with the Solomon sage
   icon and name: `🧙 Solomon: ...`. This icon is reserved for that live voice; it
   must never appear in commit messages, PR descriptions, documentation, wiki
@@ -47,6 +47,34 @@ own model loop.
 - Avoid typical AI cliches such as "delve", "leverage", "testament to", "feel free
   to", "dive into", "in summary", or other redundant and flowery terms. Get
   straight to the point professionally.
+- Decisions and next steps are enumerated, never prose to copy. Whenever you offer the
+  user a choice — which option, which target, or the closing "what next" at the end of a
+  turn — present it as a numbered, selectable menu (in Claude Code, the AskUserQuestion
+  tool with an automatic "Other" escape hatch; in the Antigravity CLI, a numbered list inviting
+  a free-text reply), recommended option first and mutually exclusive. Never end a turn
+  with a next step the user must copy and paste (for example "run `/solomon-start 5`");
+  make the candidate actions clickable. Canonical detail in `docs/solomon-workflow.md`
+  ("Interaction style").
+
+### Enumerable decisions (non-negotiable)
+
+Every decision or confirmation an agent puts to the user MUST be presented as an
+enumerated set of discrete options, never as an open prose question. In Claude Code
+this is the `AskUserQuestion` tool; in the Antigravity CLI it is a numbered list (1, 2, 3,
+…). The rules:
+
+- Lead with the recommended option first, keep the options mutually exclusive, and let
+  the final option always be "Other" (free text). `AskUserQuestion` supplies "Other"
+  automatically.
+- This covers the small confirmations too — proceed / next-step / retry / push-or-PR /
+  which-target — not only the big branching choices.
+- The closing "what next" block of EVERY turn that offers the user a choice MUST be an
+  enumerated menu. Never end a turn with an open prose question (for example "Want me to
+  proceed, or look at X?"), and never hand the user a command to copy ("run
+  `/solomon-start 55` when you want") in place of a clickable option — that is slow and
+  disperses focus. Present the candidate next actions as the enumerated options.
+- When there is genuinely no choice to offer (a pure status report, or work fully
+  complete with nothing to decide), say so plainly instead of inventing a question.
 
 ## Specialist competencies
 
@@ -108,10 +136,10 @@ These are the project defaults; deviating from one requires an ADR.
    `scripts/wiki-sync.sh`.
 
 This lifecycle is driven by the `/solomon-*` workflows, orchestrated by
-`/solomon-loop`: it scans the project memory and the GitHub board for where work
+`/solomon-workflow`: it scans the project memory and the GitHub board for where work
 stopped and proposes the next step (development, review, release, or — when nothing
 is in flight — creating a feature, bug, or refinement). At the start of every
-Claude Code or Gemini CLI session, a SessionStart hook runs `solomon-harness run`
+Claude Code or Antigravity CLI session, a SessionStart hook runs `solomon-harness run`
 which automatically detects pending tasks via memory (or prints GitHub issues if empty)
 and outputs enumerable options to proceed. The agent must read this output immediately
 on session start and present the enumerated options card to the user so they can choose
@@ -143,7 +171,7 @@ context and persist what it did. Reach it through the harness:
 The memory is also exposed as the `solomon-memory` MCP server
 (`solomon_harness/mcp_server.py`, run with `python -m solomon_harness.mcp_server`),
 so the host tool can read and write project memory directly. It is registered
-for Claude Code in `.mcp.json` and for the Gemini CLI in `.gemini/settings.json`;
+for Claude Code in `.mcp.json` and for the Antigravity CLI in `.gemini/settings.json`;
 Codex and other MCP clients register the same command in their own config. Tools:
 `save_decision` / `get_decision`, `save_memory` / `get_memory`,
 `log_issue` / `get_open_issues` / `get_issue`, `create_milestone` /
@@ -218,6 +246,7 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `frontend` — React and Angular interfaces, components, state management, design tokens.
 - `legacy_modernizer` — plans and sequences the safe modernization of a legacy codebase to the house standards (hexagonal, OpenTelemetry, secure-by-default, TDD), one bounded step per run ordered dependency- and risk-first, delegating each step to its owner; delegation only, human-gated.
 - `loop_engineer` — autonomous-loop mechanics: the single-driver lock, the autonomy ladder and guardrails, the run-log, the cost budget, and the context-reset discipline, so loops run unattended without bypassing the human review gate.
+- `long_run_strategist` — long-horizon (weeks to years) systematic strategy design: trend following and momentum, factor models, portfolio construction and allocation, position sizing and risk budgeting, rebalancing and turnover control, long-horizon backtest hygiene, costs/taxes/capacity; hands backtest validation to quant_trader and fundamental views to research_analyst.
 - `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, and didactic reporting (absorbs data science).
 - `observability` — logging, metrics, tracing, monitoring dashboards, OpenTelemetry.
 - `practice_curator` — benchmarks delivered work and the agents' own guidance against the state of the art (software, architecture, ML/DRL, trading) and proposes reviewed updates; cited sources, one target agent per change.
@@ -225,6 +254,7 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `qa` — unit, integration and E2E tests, mocking external services, UAT, QA reports.
 - `quant_trader` — quantitative strategies, backtests, slippage and transaction costs, Sharpe/drawdown/profit-factor risk.
 - `research_analyst` — fundamental and qualitative investment research: valuation (DCF, multiples, sum-of-the-parts), qualitative asset selection, and the sources playbook (how to proceed and where to look); sources and timestamps every claim, and hands quantitative validation to quant_trader and statistical-model work to ml_engineer. The fundamental counterpart to quant_trader.
+- `scalper` — intraday scalping strategy design (seconds-to-minutes holds): market microstructure, order-flow signals, spread capture, execution and order types, latency budgets, tick-data backtesting, strict intraday risk controls; validation via quant_trader's backtest standards.
 - `scrum_master` — milestones, backlog, sprints, Git Flow, conventional commits.
 - `security` — threat modeling (STRIDE), SAST, dependency and vulnerability checks.
 - `seo` — semantic structure, metadata, indexing and crawling, page speed, audits.

@@ -3,7 +3,7 @@
 A multi-agent harness for controlling, planning, and delivering software. It
 defines a team of specialist agents, a project memory, and an end-to-end,
 GitHub-integrated delivery workflow that runs inside the host tool you already
-use — Claude Code or the Gemini CLI. The harness supplies the agents and the
+use — Claude Code or the Antigravity CLI (agy). The harness supplies the agents and the
 memory; the host tool supplies the model loop. The delivery loop is
 host-orchestrated and human-gated, not fully autonomous: the host tool runs the
 workflow prompts and a human approves every merge and release.
@@ -23,7 +23,7 @@ prerequisites and installs the ones that are safe to install (uv) without sudo.
 ### Prerequisites
 
 - **Python 3.10+** and [uv](https://github.com/astral-sh/uv) (`solomon-harness doctor` installs uv if missing).
-- A **host tool** to run the workflows: [Claude Code](https://claude.com/claude-code) or the **Gemini CLI**.
+- A **host tool** to run the workflows: [Claude Code](https://claude.com/claude-code) or the **Antigravity CLI (agy)**.
 - **GitHub CLI** (`gh`), authenticated, for the issue/PR/board steps (`gh auth login`; the board needs the `project` scope).
 - **Docker** (optional) to run SurrealDB locally; without it the harness falls back to SQLite.
 
@@ -56,7 +56,7 @@ solomon-harness install-global
 ```
 
 This installs the agents and `/solomon-*` commands into the user-global
-`~/.claude` (and Gemini commands into `~/.gemini`), registers the `solomon-memory`
+`~/.claude` (and Antigravity plugins/commands into `~/.gemini`), registers the `solomon-memory`
 MCP server, and sets up the shared memory home in `~/.solomon-harness`. After
 this, every project on the machine uses the same agents with no per-project
 copies; a project carries only its `.agent/config.json` (its tenant).
@@ -90,21 +90,21 @@ Provide credentials via the `SURREAL_USER` / `SURREAL_PASS` environment variable
 (none are committed); locally they default to `root`/`root`. The Surrealist IDE is
 at `http://localhost:3000`.
 
-In Claude Code or the Gemini CLI, drive the lifecycle with slash commands:
+In Claude Code or the Antigravity CLI (agy), drive the lifecycle with slash commands:
 
 ```text
-/solomon-loop    (orchestrate/scan)
-/solomon-issue   add rate limiting to the public API
-/solomon-refine  42
-/solomon-start    42
-/solomon-review   17
-/solomon-release  17
+/solomon-workflow  (end-to-end / continue)
+/solomon-issue     add rate limiting to the public API
+/solomon-refine    42
+/solomon-start     42
+/solomon-review    17   # optional: review auto-runs at the end of start; invoke directly only for an existing PR
+/solomon-release   17
 ```
 
 Or headlessly, for CI and automation:
 
 ```bash
-SOLOMON_ENGINE=claude solomon-harness dev start 42     # or SOLOMON_ENGINE=gemini
+SOLOMON_ENGINE=claude solomon-harness dev start 42     # or SOLOMON_ENGINE=agy
 ```
 
 Each command shapes the work with the right specialist agents, creates and moves
@@ -124,13 +124,13 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 
 | Workflow | Stage | Driving agents |
 | --- | --- | --- |
-| `/solomon-loop` | orchestrate/scan | loop_engineer |
+| `/solomon-workflow` | run a task end-to-end or continue | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
 | `/solomon-issue` | create a feature/story | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |
 | `/solomon-refine` | ready an issue | product_owner, scrum_master |
 | `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
-| `/solomon-review` | review gates | qa, security, software_architect |
+| `/solomon-review` | review gates (auto-runs at the end of start) | qa, security, software_architect, plus up to two diff-selected domain lenses |
 | `/solomon-release` | deliver and release | sre, software_engineer |
 
 The conventions every workflow follows (board columns, Git Flow branches, labels,
@@ -143,10 +143,12 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Nineteen role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-six role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed to the host tools as Claude Code
-subagents and Gemini commands.
+subagents and Antigravity commands. The count above is the number of `agents/*/agents/*.md`
+role profiles; `tests/test_readme_sync.py` fails if this table (or the count) drifts
+from that directory listing.
 
 | Agent | Focus |
 | --- | --- |
@@ -165,13 +167,20 @@ subagents and Gemini commands.
 | `flutter` | Flutter/Dart, clean architecture, widget and integration tests |
 | `ml_engineer` | model training/validation, statistical modeling, leakage checks |
 | `quant_trader` | strategies, backtests, slippage/cost, Sharpe/drawdown risk |
+| `long_run_strategist` | long-horizon strategies: trend/momentum, factors, allocation, rebalancing |
+| `scalper` | intraday scalping: microstructure, order flow, execution, tick-data backtests |
 | `data_analyst` | SQL analytics, big data (Spark/ClickHouse), reporting |
 | `dba` | data modeling, performance tuning, migrations, replication |
 | `documenter` | technical and business docs, user guides, design docs |
 | `seo` | semantic structure, metadata, indexing, page speed, audits |
+| `educational_psychologist` | Cognitive Load Theory, retrieval practice, spaced repetition, dual coding |
+| `legacy_modernizer` | dependency/risk-ordered legacy modernization planning, human-gated delegation |
+| `loop_engineer` | autonomous-loop mechanics: single-driver lock, autonomy ladder, run-log, cost budget |
+| `practice_curator` | benchmarks delivered work and agent guidance against the state of the art |
+| `research_analyst` | fundamental/qualitative research: DCF, multiples, sum-of-the-parts, sources playbook |
 
 The shared rules, the memory guide, and the agent index are the single source of
-truth in [`agents/AGENTS.md`](agents/AGENTS.md); `CLAUDE.md`, `GEMINI.md`, the root
+truth in [`agents/AGENTS.md`](agents/AGENTS.md); `CLAUDE.md`, `AGY.md`, the root
 `AGENTS.md`, and the Copilot instructions all point there.
 
 ### Skills
@@ -184,9 +193,14 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 
 ### Delivery workflows
 
-The seven `/solomon-*` commands above are authored once as Claude Code
-commands under `.claude/commands/` and mirrored to Gemini commands under
-`.gemini/commands/`. They orchestrate the specialist agents, the `gh` CLI, the
+Eleven `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
+guarded by `tests/test_readme_sync.py` — are authored once as Claude Code
+commands under `.claude/commands/` and mirrored to Antigravity commands under
+`.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop`
+runs the autonomous parallel loop over Ready issues; and the remaining two,
+`/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
+scan the codebase for architectural drift and duplication (see
+`docs/solomon-workflow.md`). They orchestrate the specialist agents, the `gh` CLI, the
 GitHub board, and the project memory, and confirm before any outward-facing action
 (creating issues/PRs, merging, releasing).
 
@@ -195,7 +209,7 @@ GitHub board, and the project memory, and confirm before any outward-facing acti
 A SurrealDB-primary, SQLite-fallback store (`solomon_harness/tools/database_client.py`)
 records decisions, sessions, handoffs, issues, milestones, and backtests. It is
 exposed as the `solomon-memory` MCP server (`solomon_harness/mcp_server.py`),
-registered for Claude Code (`.mcp.json`) and the Gemini CLI (`.gemini/settings.json`),
+registered for Claude Code (`.mcp.json`) and the Antigravity CLI (`.gemini/settings.json`),
 with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
 `log_issue`/`get_open_issues`/`get_issue`, `create_milestone`/`list_milestones`,
 `save_release`/`get_release`/`list_releases`, `save_backtest`,
@@ -217,7 +231,7 @@ to `docs/adr/NNNN-*.md` and persist it with `save_decision`.
 
 `solomon_harness/agent_selection.py` inspects the project's files and manifests and
 enables only the agents the stack needs (a core delivery/planning set plus platform
-and domain agents on detected signals), instead of all nineteen.
+and domain agents on detected signals), instead of all twenty-six.
 
 ### GitHub project board
 
@@ -237,7 +251,7 @@ large files) and stores each file in the memory so agents can query the codebase
 ### Host-tool integrations
 
 `scripts/generate-integrations.py` regenerates the Claude Code subagents
-(`.claude/agents/`) from `agents/` and the Gemini commands (`.gemini/commands/`)
+(`.claude/agents/`) from `agents/` and the Antigravity commands (`.gemini/commands/`)
 from `.claude/commands/`. `solomon-harness compile` runs it automatically so the
 integrations never drift from their sources.
 
@@ -259,7 +273,7 @@ deviating from one requires an ADR.
 
 Strict TDD is the standard; the suite (run with the command below) covers the
 scaffolder, memory client, MCP server, agent selection, the board helpers, the
-host integrations, the Gemini mirror, and the prerequisite/workflow CLI, plus
+host integrations, the Antigravity mirror, and the prerequisite/workflow CLI, plus
 invariant guards (scaffolding is non-destructive, the MCP server builds, the
 SurrealDB path works against a live server). The humanizer rules forbid emojis and
 AI cliches in all generated output.
@@ -270,27 +284,44 @@ AI cliches in all generated output.
 
 ### `solomon-harness`
 
+The table below lists every subcommand `solomon_harness/cli.py` registers on
+`build_parser()`, in the order they are defined there — it is meant to be
+regenerated from that function rather than hand-counted; `tests/test_readme_sync.py`
+fails CI if a subcommand is added, removed, or renamed here without updating this
+table.
+
 | Command | Description |
 | --- | --- |
+| `db-init` | Initialize the long-term database client and tables |
+| `eval` | Run the agent evaluations test suite |
+| `run [task]` | Show the resume point (latest activity, open issues) and list the workflows |
 | `init [--non-interactive]` | Install into / bootstrap a project: prerequisites, files, config, tenant, board, index |
-| `install-global [--no-mcp]` | Install agents + `/solomon-*` commands into `~/.claude`/`~/.gemini`, the MCP server, and the shared memory home |
-| `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
-| `memory-down` | Stop the shared memory backend |
-| `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
-| `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release) |
 | `compile` | Compile agent harnesses and regenerate host-tool integrations |
 | `index` | Index the project codebase into the memory |
 | `wiki` | Refresh the living code-overview wiki page from the index |
-| `run` | Show the resume point (latest activity, open issues) and list the workflows |
-| `log [--last N]` | Show the read-only loop activity feed (loop runs, decisions, handoffs) |
+| `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
+| `memory-down` | Stop the shared memory backend |
+| `memory sync` | Replay pending mirror records to SurrealDB and report the counts |
+| `reconcile [--dry-run]` | Repair memory issue rows from GitHub state (set GitHub-closed issues to closed in memory) |
+| `install-global [--no-mcp]` | Install agents + `/solomon-*` commands into `~/.claude`/`~/.gemini`, the MCP server, and the shared memory home |
+| `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
+| `healthcheck` | Report runtime readiness and pending init items (Docker, memory, board, global install) |
+| `git-repair` | Repair local git config by unsetting stray `core.worktree` and setting `core.bare` to false |
 | `loop-lock [status\|release]` | Inspect or clear the single-driver loop lock (crash recovery) |
-| `db-init` | Initialize the memory store |
-| `eval` | Run the agent evaluation suite |
+| `log [--last N]` | Show the read-only loop activity feed (loop runs, decisions, handoffs) |
+| `loop-guard` | PreToolUse hook: block push/merge while another driver holds the loop lock |
+| `loop-stop [--clear]` | Kill-switch: halt all autonomous loop stages immediately (or clear it) |
+| `loop-policy` | Show the autonomy level, kill-switch state, denylist, and per-stage gates |
+| `notify <message> [--event EVENT]` | Send an outbound status notification (console or webhook) |
+| `loop-budget` | Show today's autonomous-loop cost spend versus the ceiling |
+| `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release) |
+| `release plan\|prep [version]\|check\|wiki-page [version]` | Plan, prepare, check, or document a milestone-gated release |
+| `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
-| `agents list \| show <name>` | List or show the generated subagents |
+| `agents list \| help \| show <name>` | List or show the generated subagents |
 
-For `dev`, set `SOLOMON_ENGINE=claude` (default) or `gemini` to choose the engine.
-`python -m solomon_harness.github ensure-board \| set-status --issue N --status "<col>" \| add-issue --issue N`
+For `dev`, set `SOLOMON_ENGINE=claude` (default) or `agy` to choose the engine.
+`python -m solomon_harness.github ensure-board | set-status --issue N --status "<col>" | add-issue --issue N`
 manages the board directly.
 
 ---
@@ -302,7 +333,7 @@ solomon-harness/
 ├── agents/                  # Source-of-truth specialist agents + AGENTS.md (the rules)
 │   └── <name>/              #   persona.md, agents/<name>.md, skills/, .agent/config.json
 ├── .claude/                 # Claude Code: agents/ (subagents) and commands/ (/solomon-*)
-├── .gemini/                 # Gemini CLI: commands/ (generated) and settings.json (MCP)
+├── .gemini/                 # Antigravity CLI plugin: commands/ (generated) and settings.json (MCP)
 ├── docs/                    # adr/ (ADRs) and solomon-workflow.md (conventions)
 ├── solomon_harness/         # Core package
 │   ├── bootstrap.py         #   init / install / scaffold / codebase indexing

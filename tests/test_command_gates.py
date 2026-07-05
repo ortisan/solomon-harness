@@ -104,8 +104,8 @@ def test_workflow_doc_maps_board_columns_to_lifecycle_stages():
 # --- Honest framing: host-orchestrated, human-gated -------------------------
 
 
-def test_loop_command_is_host_orchestrated_human_gated():
-    body = _read(os.path.join(".claude", "commands", "solomon-loop.md")).lower()
+def test_workflow_command_is_host_orchestrated_human_gated():
+    body = _read(os.path.join(".claude", "commands", "solomon-workflow.md")).lower()
     assert "host-orchestrated" in body
     assert "human-gated" in body
 
@@ -119,3 +119,66 @@ def test_docs_reframe_loop_as_host_orchestrated_human_gated():
         low = _read(rel).lower()
         assert "host-orchestrated" in low, rel
         assert "human-gated" in low, rel
+
+
+# --- Episodic work graph wired into the commands (ADR-0018) ------------------
+
+
+def test_commands_wire_worked_on_and_produced_edges():
+    """The stages that write sessions and handoffs must also write the graph:
+    issues=[...] on save_session (the worked_on edge) and
+    link_session_handoff (the produced edge), in both hosts' command files."""
+    for name in ("start", "review", "release", "bug", "issue"):
+        body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
+        assert "link_session_handoff" in body, name
+        assert "issues=[" in body, name
+        # The tool must be callable, not just mentioned: it is allowlisted.
+        frontmatter = body.split("---")[1]
+        assert "mcp__solomon-memory__link_session_handoff" in frontmatter, name
+        assert "mcp__solomon-memory__save_session" in frontmatter, name
+
+
+def test_gemini_mirrors_carry_the_edge_wiring():
+    for name in ("start", "review", "release", "bug", "issue"):
+        body = _read(os.path.join(".gemini", "commands", f"solomon-{name}.toml"))
+        assert "link_session_handoff" in body, name
+        assert "issues=[" in body, name
+
+
+# --- Merge-to-Done transition owned by review, not release (#172, ADR-0020) --
+
+
+def test_review_command_owns_the_merge_on_approval():
+    body = _read(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "solomon_harness.github merge" in body
+    assert "ADR-0020" in body
+    # The old contradiction ("do not merge here") must be gone.
+    assert "do not push, merge" not in body.lower()
+    # AskUserQuestion must actually be callable for the interactive confirm step.
+    frontmatter = body.split("---")[1]
+    assert "AskUserQuestion" in frontmatter
+
+
+def test_release_command_never_merges_individual_prs():
+    body = _read(os.path.join(".claude", "commands", "solomon-release.md"))
+    assert "ADR-0020" in body
+    assert "never merges an individual pr" in body.lower()
+    # The old ambiguous claim must be gone.
+    assert "now happens in `/solomon-review` close-out, not here" not in body
+
+
+def test_gemini_mirrors_match_the_merge_ownership_decision():
+    review = _read(os.path.join(".gemini", "commands", "solomon-review.toml"))
+    assert "solomon_harness.github merge" in review
+    assert "ADR-0020" in review
+    assert "do not push, merge" not in review.lower()
+
+    release = _read(os.path.join(".gemini", "commands", "solomon-release.toml"))
+    assert "ADR-0020" in release
+    assert "never merges an individual pr" in release.lower()
+
+
+def test_workflow_doc_documents_the_merge_owner():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    assert "The merge-to-Done transition" in doc
+    assert "ADR-0020" in doc

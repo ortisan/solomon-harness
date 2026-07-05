@@ -1,7 +1,7 @@
 ---
 description: Start development on a Ready issue: branch, PLAN.md, TDD loop, ADR check, draft PR.
 argument-hint: [issue-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues
 ---
 
 Begin implementation of issue **#$ARGUMENTS**. First read `docs/solomon-workflow.md`
@@ -91,7 +91,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   `In Progress` (do not advance it to Code Review). Tell the developer: implement by hand using
   PLAN.md, then re-run `/solomon-start $ARGUMENTS` to open the draft PR and move to Code Review,
   or open the PR yourself and run `/solomon-review`. Checkpoint the choice with
-  `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Manual implementation chosen for #$ARGUMENTS", messages=...)` and stop here. Skip step 6.
+  `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Manual implementation chosen for #$ARGUMENTS", messages=..., issues=[$ARGUMENTS])` and stop here. Skip step 6.
 
 ## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
@@ -102,6 +102,13 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.
-- `mcp__solomon-memory__log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-$ARGUMENTS-start-to-review.md", status="ready")`.
-- `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Implement #$ARGUMENTS", messages=...)` to checkpoint.
-- Report the branch, PR URL, ADR decision, and that qa should run `/solomon-review`.
+- `mcp__solomon-memory__log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-$ARGUMENTS-start-to-review.md", status="open")`; keep the returned handoff id.
+- `mcp__solomon-memory__save_session(session_id="start-$ARGUMENTS", agent_name="software_engineer", task="Implement #$ARGUMENTS", messages=..., issues=[$ARGUMENTS])` to checkpoint; `issues` writes the worked_on edge so resume is a graph query, not a task-string parse (ADR-0018).
+- `mcp__solomon-memory__link_session_handoff(session_id="start-$ARGUMENTS", handoff_id=<the returned handoff id>)` to record the produced edge.
+- Report the branch, PR URL, and ADR decision. Then continue directly into the Review
+  stage for the PR you just opened — run the `/solomon-review` flow for it now, in this
+  same run, without waiting for a new command. The review is part of the workflow, not a
+  separate manual step; only the merge remains a human gate. A blocker verdict halts the
+  chain and returns to the human — never fix and re-review inside the same run (ADR-0019).
+  (Headless `dev start` chains identically: it builds its prompt from the same
+  `.claude/commands/solomon-start.md`.)

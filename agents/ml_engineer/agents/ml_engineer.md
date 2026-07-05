@@ -13,19 +13,19 @@ The ML Engineer designs, trains, validates, and deploys machine learning and sta
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [common_pitfalls_to_reject_in_review](skills/common_pitfalls_to_reject_in_review.md) — Random K-fold on time-ordered data.
-- [data_driven_reporting](skills/data_driven_reporting.md) — Design analytical reports that combine quantitative evidence with structural readability.
-- [data_leakage_prevention](skills/data_leakage_prevention.md) — Audit every feature against this list.
-- [data_splitting_and_cross_validation](skills/data_splitting_and_cross_validation.md) — Split before you do anything else: fit scalers, encoders, imputers, and feature selection on the training fold only, then apply to…
-- [definition_of_done](skills/definition_of_done.md) — Model Hypothesis committed with target Sharpe, drawdown limit, profit factor, latency/slippage, dataset/features, and architecture (or the…
-- [didactic_explanations](skills/didactic_explanations.md) — Translate complex statistical models and data trends into clear, simple, and intuitive concepts for business decision-makers.
-- [hyperparameters_and_tuning](skills/hyperparameters_and_tuning.md) — Search with a tracked, reproducible method: Optuna or `RandomizedSearchCV` over a defined space; log every trial.
-- [model_hypothesis_state_before_training](skills/model_hypothesis_state_before_training.md) — Write this down first.
-- [reproducibility](skills/reproducibility.md) — Seed everything: Python `random`, `numpy`, framework RNG (`torch.manual_seed`, `cuda` seeds), and set `PYTHONHASHSEED`.
+- [common_pitfalls](skills/common_pitfalls.md) — The review reject list for ML and DRL deliverables: the validation, leakage, numerical, and reporting defects that invalidate a result.
+- [data_driven_reporting](skills/data_driven_reporting.md) — This skill governs the structure and honesty of analytical and model-evaluation reports.
+- [data_leakage_prevention](skills/data_leakage_prevention.md) — This skill governs how features, preprocessing, and splits are audited so no information unavailable at prediction time reaches the model.
+- [data_splitting_and_cross_validation](skills/data_splitting_and_cross_validation.md) — This skill governs how datasets are partitioned for training, model selection, and final evaluation.
+- [definition_of_done](skills/definition_of_done.md) — The acceptance gate for an ML or DRL deliverable: every item below must hold before a model is called done.
+- [didactic_explanations](skills/didactic_explanations.md) — This skill governs how models, metrics, and findings are explained to non-specialist decision-makers.
+- [hyperparameters_and_tuning](skills/hyperparameters_and_tuning.md) — This skill governs how hyperparameter search is designed, budgeted, executed, and reported.
+- [model_hypothesis_state_before_training](skills/model_hypothesis_state_before_training.md) — This skill governs the written hypothesis that must be committed before any training run starts.
+- [reproducibility](skills/reproducibility.md) — This skill governs seeds, environment pinning, data versioning, experiment tracking, and run manifests, so that any reported number can be…
 - [scope_and_non_negotiables](skills/scope_and_non_negotiables.md) — a concrete standard for training, validating, and shipping ML and DRL models in this project without overfitting, data leakage, or…
-- [statistical_modeling](skills/statistical_modeling.md) — Verify statistical hypotheses and calculate confidence intervals.
-- [tensor_shape_and_numerical_safety_checks](skills/tensor_shape_and_numerical_safety_checks.md) — Before any matmul, reshape, broadcast, loss, or reward computation:
-- [testing_qa_discipline_applies_here](skills/testing_qa_discipline_applies_here.md) — Unit-test feature transforms, the split logic (assert no index overlap between train and test), and metric functions against known inputs.
+- [statistical_modeling](skills/statistical_modeling.md) — This skill governs hypothesis testing, effect estimation, and the choice between classical statistics and machine learning.
+- [tensor_shape_and_numerical_safety_checks](skills/tensor_shape_and_numerical_safety_checks.md) — This skill governs shape assertions, dtype discipline, and numerical guards around every matmul, reshape, broadcast, loss, and reward…
+- [testing_qa_discipline_applies_here](skills/testing_qa_discipline_applies_here.md) — This skill governs how ML code is tested.
 
 ## External Skills
 

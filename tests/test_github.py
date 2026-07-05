@@ -58,6 +58,104 @@ class TestGhWrapper(unittest.TestCase):
         self.assertIn("error", res)
 
 
+class TestGhRetry(unittest.TestCase):
+    """_gh retries once on a transient failure (a non-zero exit or a timeout) and
+    heals a credential blip on the retry by injecting a freshly resolved token. A
+    deterministic failure (gh missing, or a JSON parse error after a success) is
+    never retried."""
+
+    def test_transient_nonzero_then_success_retries_and_succeeds(self):
+        """A first call that exits non-zero is retried once; a succeeding retry makes
+        _gh return ok. With a token already in the env the heal injection is skipped,
+        so exactly two subprocess.run calls occur (no `gh auth token`)."""
+        results = [_Proc(1, "", "Bad credentials"), _Proc(0, "ok")]
+
+        def fake_run(cmd, **kwargs):
+            return results.pop(0)
+
+        with patch.dict("os.environ", {"GH_TOKEN": "preset"}, clear=False):
+            with patch("subprocess.run", side_effect=fake_run) as run:
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["stdout"], "ok")
+        self.assertEqual(run.call_count, 2)
+
+    def test_retry_injects_freshly_resolved_token_when_env_has_none(self):
+        """On the heal retry, with neither GITHUB_TOKEN nor GH_TOKEN in the env, _gh
+        resolves a fresh token via `gh auth token` and passes it as GH_TOKEN in the
+        env= of the retried gh call, healing a credential blip."""
+        gh_args_envs = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "auth", "token"]:
+                return _Proc(0, "healed-token-42")
+            gh_args_envs.append(kwargs.get("env"))
+            first_attempt = len(gh_args_envs) == 1
+            return _Proc(1, "", "Bad credentials") if first_attempt else _Proc(0, "done")
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("subprocess.run", side_effect=fake_run):
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        # The first attempt inherits the env; the retry carries the healed token.
+        self.assertIsNone(gh_args_envs[0])
+        self.assertIsNotNone(gh_args_envs[1])
+        self.assertEqual(gh_args_envs[1].get("GH_TOKEN"), "healed-token-42")
+
+    def test_retry_does_not_resolve_or_override_a_preset_token(self):
+        """When GITHUB_TOKEN is already set, the heal retry neither calls
+        `gh auth token` nor overrides the token: the retried call runs with the
+        inherited env (env=None)."""
+        seen = []
+        results = [_Proc(1, "", "Bad credentials"), _Proc(0, "ok")]
+
+        def fake_run(cmd, **kwargs):
+            seen.append((cmd, kwargs.get("env")))
+            return results.pop(0)
+
+        with patch.dict("os.environ", {"GITHUB_TOKEN": "preset"}, clear=False):
+            with patch("subprocess.run", side_effect=fake_run):
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        self.assertFalse(any(cmd[:3] == ["gh", "auth", "token"] for cmd, _env in seen))
+        self.assertEqual(len(seen), 2)
+        self.assertIsNone(seen[1][1])  # the retry inherits the env, no injection
+
+    def test_retry_runs_without_injection_when_token_resolution_is_empty(self):
+        """If `gh auth token` resolves nothing (empty output), the retry still runs as
+        a plain network retry with no env override; a succeeding retry returns ok."""
+        gh_args_envs = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "auth", "token"]:
+                return _Proc(0, "")  # nothing resolved -> no injection
+            gh_args_envs.append(kwargs.get("env"))
+            first_attempt = len(gh_args_envs) == 1
+            return _Proc(1, "", "Bad credentials") if first_attempt else _Proc(0, "done")
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("subprocess.run", side_effect=fake_run):
+                res = github._gh(["project", "item-edit"])
+        self.assertTrue(res["ok"])
+        self.assertIsNone(gh_args_envs[1])  # plain retry, no env override
+
+    def test_successful_first_call_does_not_retry(self):
+        """A first call that exits zero is not retried: exactly one subprocess.run."""
+        with patch("subprocess.run", return_value=_Proc(0, "ok")) as run:
+            res = github._gh(["repo", "view"])
+        self.assertTrue(res["ok"])
+        self.assertEqual(run.call_count, 1)
+
+    def test_gh_missing_is_not_retried(self):
+        """A missing gh (FileNotFoundError) is deterministic: it is not retried and
+        returns the gh-not-found error after a single attempt."""
+        with patch("subprocess.run", side_effect=FileNotFoundError()) as run:
+            res = github._gh(["repo", "view"])
+        self.assertFalse(res["ok"])
+        self.assertIn("gh CLI not found", res["error"])
+        self.assertEqual(run.call_count, 1)
+
+
 class TestEnsureBoard(unittest.TestCase):
     def test_returns_existing_without_creating(self):
         calls = []
@@ -104,6 +202,87 @@ class TestEnsureBoard(unittest.TestCase):
         mutation = self._graphql_calls[0][-1]
         for col in github.BOARD_COLUMNS:
             self.assertIn(f'name: "{col}"', mutation)
+
+
+class TestEnsureBoardGuards(unittest.TestCase):
+    """A failed or ambiguous project lookup must never mint a new board (bug #76).
+
+    The duplicate 'solomon-harness' board was created when a transient gh failure
+    made the lookup return empty and the find-or-create path treated 'could not
+    list' as 'absent'. Once a duplicate exists, first-match resolution silently
+    routes every transition to the newest board.
+    """
+
+    def test_listing_failure_refuses_to_create(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "auth", "token"]:
+                return _Proc(0, "")
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                return _Proc(1, "", "HTTP 401: Bad credentials")
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_project_board()
+        self.assertFalse(res["ok"])
+        self.assertIn("refusing to create", res["error"])
+        self.assertFalse(any(c[:3] == ["gh", "project", "create"] for c in calls))
+
+    def test_duplicate_titles_resolve_to_the_lowest_number(self):
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                # gh lists newest first; a stray duplicate must not shadow the
+                # canonical (oldest) board.
+                return _Proc(0, json.dumps({"projects": [
+                    {"title": "solomon", "number": 16},
+                    {"title": "solomon", "number": 5},
+                ]}))
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_project_board()
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["created"])
+        self.assertEqual(res["project"]["number"], 5)
+
+    def test_absent_board_without_create_does_not_create(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                return _Proc(0, json.dumps({"projects": []}))
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.ensure_project_board(create=False)
+        self.assertFalse(res["ok"])
+        self.assertIn("ensure-board", res["error"])
+        self.assertFalse(any(c[:3] == ["gh", "project", "create"] for c in calls))
+
+    def test_add_issue_never_creates_a_board(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return _Proc(0, json.dumps({"owner": {"login": "acme"}}))
+            if cmd[:3] == ["gh", "project", "list"]:
+                return _Proc(0, json.dumps({"projects": []}))
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            res = github.add_issue_to_board(7)
+        self.assertFalse(res["ok"])
+        self.assertFalse(any(c[:3] == ["gh", "project", "create"] for c in calls))
 
 
 class TestConfigureBoardColumns(unittest.TestCase):
@@ -430,7 +609,12 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("os.getcwd", return_value=tmp):
                 with DatabaseClient(harness_dir=tmp) as db:
-                    db.log_issue("77", "Deliver feature", "feature", "code_review", "mile-7")
+                    milestone_id = db.create_milestone(
+                        "M1", "goals", "2026-07-01", "active"
+                    )
+                    db.log_issue(
+                        "77", "Deliver feature", "feature", "code_review", milestone_id
+                    )
                 with patch(
                     "solomon_harness.github._gh",
                     return_value={"ok": True, "data": {"assignees": []}},
@@ -442,7 +626,7 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
         self.assertEqual(row["status"], "closed")
         self.assertEqual(row["title"], "Deliver feature")
         self.assertEqual(row["type_"], "feature")
-        self.assertEqual(str(row["milestone_id"]), "mile-7")
+        self.assertEqual(str(row["milestone_id"]), str(milestone_id))
         self.assertIsNone(row["assignee"])
         self.assertNotIn("77", open_ids)
 
@@ -521,6 +705,86 @@ class TestBoardTitleAndLink(unittest.TestCase):
         self.assertEqual(res["project"]["title"], "widget")
         self.assertEqual(len(links), 1)
         self.assertIn("acme/widget", links[0])
+
+
+class TestMergePrAndClose(unittest.TestCase):
+    """#172: the owning stage for the merge-to-Done transition. On a successful
+    merge it must complete the Done transition in the same call (board move +
+    the ADR-0006 write-through), with no separate reconcile step. On a failed
+    merge it must leave board/memory untouched -- no partial state. On a merge
+    that succeeds but whose board move fails, it must report the accurate
+    partial state (merged, but not fully converged) rather than a blanket ok."""
+
+    def test_successful_merge_completes_the_done_transition(self):
+        with (
+            patch("solomon_harness.github._gh", return_value={"ok": True}) as gh,
+            patch(
+                "solomon_harness.github.set_issue_status", return_value={"ok": True}
+            ) as set_status,
+            patch("solomon_harness.github.record_terminal_status") as record_terminal,
+        ):
+            res = github.merge_pr_and_close(42, 172)
+        gh.assert_called_once_with(["pr", "merge", "42", "--squash"])
+        set_status.assert_called_once_with(172, "Done")
+        record_terminal.assert_called_once_with(172)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["pr"], 42)
+        self.assertEqual(res["issue"], 172)
+
+    def test_merge_succeeds_but_board_move_fails_reports_partial_state(self):
+        """#195 architecture-review finding: a merge that succeeds but whose
+        board move fails must not be reported as ok -- the caller needs to
+        know the board still needs a retry, distinct from nothing happening."""
+        with (
+            patch("solomon_harness.github._gh", return_value={"ok": True}),
+            patch(
+                "solomon_harness.github.set_issue_status",
+                return_value={"ok": False, "error": "no Status field"},
+            ),
+            patch("solomon_harness.github.record_terminal_status") as record_terminal,
+        ):
+            res = github.merge_pr_and_close(42, 172)
+        self.assertFalse(res["ok"])
+        self.assertTrue(res["merged"])
+        self.assertEqual(res["error"], "no Status field")
+        # The PR is genuinely merged (GitHub already closed the issue via the
+        # Closes trailer), so memory still converges to that true state even
+        # though the board column lags -- only the board needs a retry.
+        record_terminal.assert_called_once_with(172)
+
+    def test_failed_merge_does_not_touch_board_or_memory(self):
+        with (
+            patch(
+                "solomon_harness.github._gh",
+                return_value={"ok": False, "error": "not mergeable"},
+            ),
+            patch("solomon_harness.github.set_issue_status") as set_status,
+            patch("solomon_harness.github.record_terminal_status") as record_terminal,
+        ):
+            res = github.merge_pr_and_close(42, 172)
+        set_status.assert_not_called()
+        record_terminal.assert_not_called()
+        self.assertFalse(res["ok"])
+        self.assertIn("error", res)
+
+
+class TestGithubCliMerge(unittest.TestCase):
+    def test_merge_subcommand_parses_and_dispatches(self):
+        with patch(
+            "solomon_harness.github.merge_pr_and_close",
+            return_value={"ok": True, "pr": 42, "issue": 172},
+        ) as merge:
+            rc = github.main(["merge", "--pr", "42", "--issue", "172"])
+        merge.assert_called_once_with(42, 172)
+        self.assertEqual(rc, 0)
+
+    def test_merge_subcommand_returns_nonzero_on_failure(self):
+        with patch(
+            "solomon_harness.github.merge_pr_and_close",
+            return_value={"ok": False, "error": "not mergeable"},
+        ):
+            rc = github.main(["merge", "--pr", "42", "--issue", "172"])
+        self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":

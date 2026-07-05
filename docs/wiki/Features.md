@@ -12,7 +12,7 @@ This feature group automates the implementation cycle, ensuring that code is wri
 * **Structured Planning (`PLAN.md`):** Before writing code, the harness requires a detailed plan specifying affected files, edge cases, and verification criteria. This aligns intent and prevents regression.
 * **TDD Implementation Loop (Red-Green-Refactor):** In automatic mode, the agent writes failing tests (Red), implements the minimal fix (Green), and cleans the implementation (Refactor).
 * **Automated QA & Isolation:** Isolates tests by automatically mocking third-party integrations and external services.
-* **Unified Command Loop (`/solomon-loop`):** Scans the repository's board and memory to prompt and execute the next logical step, reducing command coordination.
+* **Unified Command Loop (`/solomon-workflow`):** Scans the repository's board and memory to prompt and execute the next logical step, reducing command coordination.
 
 ```mermaid
 graph TD

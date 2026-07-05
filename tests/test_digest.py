@@ -2,7 +2,7 @@
 
 The digest is facts-only: it renders what the harness already knows (resume
 point, open work, the last loop run, PRs awaiting review) and points at
-/solomon-loop to decide the next step. It never computes the next step itself —
+/solomon-workflow to decide the next step. It never computes the next step itself —
 that stays the canonical prose ladder in the loop command.
 """
 
@@ -114,7 +114,7 @@ class TestBuildDigest(unittest.TestCase):
                 return [{"github_id": "x", "title": "T"}]
 
             def list_loop_runs(self, n):
-                return [{"stage": "loop", "target": "", "status": "ok", "created_at": "2026-06-28T10:00:00"}]
+                return [{"stage": "workflow", "target": "", "status": "ok", "created_at": "2026-06-28T10:00:00"}]
 
         text = "\n".join(digest.gather_digest(".", FakeDB(), fetch_github=False))
         self.assertIn("Resume:", text)
@@ -218,6 +218,11 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("Resume last activity: qa is working on 'start 42'", text)
         self.assertIn("/solomon-start 42", text)
 
+    def test_digest_resume_without_issue_hint_points_at_the_orchestrator(self):
+        resume = {"type": "session", "agent": "qa", "task": "triaging things", "status": "active"}
+        text = "\n".join(digest.build_digest(resume=resume, open_issues=[], last_loop_run=None, prs=[]))
+        self.assertIn("/solomon-workflow", text)
+
     def test_digest_shows_ready_issues(self):
         issues = [
             {"github_id": "200", "title": "ready to work", "status": "ready"}
@@ -253,6 +258,24 @@ class TestBuildDigest(unittest.TestCase):
             res = digest._best_effort_prs(".")
             self.assertIsNone(res)
 
+    def test_best_effort_prs_strips_inherited_git_env(self):
+        # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
+        # worktree) must not be forwarded to the gh subprocess.
+        import os
+        from unittest.mock import patch, MagicMock
+        leaked = {"GIT_DIR": "/tmp/leaked/.git", "GIT_WORK_TREE": "/tmp/leaked"}
+        with patch.dict(os.environ, leaked):
+            with patch("subprocess.run") as mock_run:
+                mock_proc = MagicMock()
+                mock_proc.returncode = 0
+                mock_proc.stdout = "[]"
+                mock_run.return_value = mock_proc
+                digest._best_effort_prs(".")
+        _, kwargs = mock_run.call_args
+        env = kwargs.get("env")
+        self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
+        self.assertFalse(any(k.startswith("GIT_") for k in env))
+
     def test_safe_id_edge_cases(self):
         self.assertIsNone(digest._safe_id(None))
         self.assertIsNone(digest._safe_id("invalid; rm -rf /"))
@@ -260,6 +283,98 @@ class TestBuildDigest(unittest.TestCase):
 
     def test_sanitize_title_none(self):
         self.assertEqual(digest._sanitize_title(None), "")
+
+    def test_resume_uses_graph_linked_issue_over_task_text(self):
+        # ADR-0018: the worked_on edges name the issue; no number in the task
+        # text is needed (the legacy regex would have found nothing here).
+        resume = {
+            "type": "session", "agent": "software_engineer",
+            "task": "implement the widget", "status": "active", "issues": [42],
+        }
+        per_issue = [
+            {"github_id": "42", "title": "The widget", "issue_status": "in_progress"}
+        ]
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=per_issue,
+            )
+        )
+        self.assertIn("/solomon-start 42", text)
+        self.assertIn(
+            "Resume last activity: software_engineer is working on 'implement the widget'",
+            text,
+        )
+
+    def test_resume_graph_maps_review_status_to_review(self):
+        resume = {
+            "type": "session", "agent": "qa",
+            "task": "verify the fix", "status": "active", "issues": [77],
+        }
+        per_issue = [
+            {"github_id": "77", "title": "The fix", "issue_status": "code_review"}
+        ]
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=per_issue,
+            )
+        )
+        self.assertIn("/solomon-review 77", text)
+
+    def test_resume_graph_rows_win_even_without_resume_issues_key(self):
+        # A legacy resume row with no edges of its own still gets a typed
+        # target when the per-issue graph has rows.
+        resume = {
+            "type": "session", "agent": "qa",
+            "task": "start something", "status": "active",
+        }
+        per_issue = [
+            {"github_id": "9", "title": "Recent", "issue_status": "in_progress"}
+        ]
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=per_issue,
+            )
+        )
+        self.assertIn("/solomon-start 9", text)
+
+    def test_resume_without_graph_rows_falls_back_to_the_regex(self):
+        # The deprecated free-text branch (ADR-0018) still resolves legacy
+        # sessions with no worked_on edges.
+        resume = {"type": "session", "agent": "qa", "task": "start #55", "status": "active"}
+        text = "\n".join(
+            digest.build_digest(
+                resume=resume, open_issues=[], last_loop_run=None, prs=[],
+                per_issue=[],
+            )
+        )
+        self.assertIn("/solomon-start 55", text)
+
+    def test_gather_digest_feeds_per_issue_rows(self):
+        class GraphDB:
+            backend = "surrealdb"
+
+            def get_latest_activity(self):
+                return {
+                    "type": "session", "agent": "qa",
+                    "task": "no number here", "status": "active",
+                }
+
+            def get_open_issues(self):
+                return []
+
+            def list_loop_runs(self, limit):
+                return []
+
+            def latest_activity_per_issue(self, limit=10):
+                return [
+                    {"github_id": "31", "title": "Linked", "issue_status": "in_progress"}
+                ]
+
+        lines = digest.gather_digest(".", GraphDB(), fetch_github=False)
+        self.assertIn("/solomon-start 31", "\n".join(lines))
 
     def test_digest_shows_resume_start_active_with_hash(self):
         resume = {"type": "session", "agent": "qa", "task": "start #123", "status": "active"}

@@ -10,6 +10,7 @@ CLI:
     python -m solomon_harness.github ensure-board [--title T] [--owner O]
     python -m solomon_harness.github set-status --issue N --status "Code Review"
     python -m solomon_harness.github add-issue --issue N
+    python -m solomon_harness.github merge --pr M --issue N
 """
 
 import argparse
@@ -39,30 +40,94 @@ GH_TIMEOUT_SECONDS = 15
 
 
 def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
-    """Run a gh command and return {'ok', 'data'|'stdout', 'error'}."""
+    """Run a gh command and return {'ok', 'data'|'stdout', 'error'}.
+
+    Retries once on a transient failure (a non-zero exit or a timeout): a momentary
+    keyring race with a concurrent driver, or a network blip, can fail one call
+    while the very next one succeeds (bug #138). The retry, and only the retry,
+    heals a credential blip by injecting a freshly resolved token (see
+    :func:`_heal_token_env`). A missing gh (FileNotFoundError) is deterministic and
+    is not retried; a JSON parse error only follows a successful call and is
+    likewise not retried. The retry at most doubles a single call's worst-case time.
+    """
+    cmd = ["gh", *args]
+    # Reached only if both attempts fail transiently; each failing attempt overwrites
+    # it with the specific error, so the generic default is a defensive fallback.
+    transient_error: Dict[str, Any] = {"ok": False, "error": "gh command failed."}
+    for attempt in range(2):
+        env = _heal_token_env() if attempt == 1 else None
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=GH_TIMEOUT_SECONDS,
+                env=env,
+            )
+        except FileNotFoundError:
+            return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
+        except subprocess.TimeoutExpired:
+            # A fixed message, never str(exc): treat a hung gh as a transient failed
+            # call so the caller degrades gracefully instead of blocking or raising.
+            transient_error = {"ok": False, "error": f"gh command timed out after {GH_TIMEOUT_SECONDS}s."}
+            continue
+        if proc.returncode != 0:
+            transient_error = {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
+            continue
+        return _parse_gh_stdout(proc.stdout, parse_json)
+    return transient_error
+
+
+def _parse_gh_stdout(stdout: str, parse_json: bool) -> Dict[str, Any]:
+    """Shape a successful gh stdout into the public _gh result dict."""
+    out = stdout.strip()
+    if not parse_json:
+        return {"ok": True, "stdout": out}
+    try:
+        return {"ok": True, "data": json.loads(out) if out else None}
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "error": f"could not parse gh JSON output: {exc}"}
+
+
+def _resolve_gh_token() -> Optional[str]:
+    """Best-effort resolve a token via ``gh auth token`` for the heal retry.
+
+    Returns the token, or None when gh cannot resolve one (the retry then runs
+    without injection, still a useful network retry). Bounded by the same timeout
+    and tolerant of any failure: resolving a token must never break the retry.
+    """
     try:
         proc = subprocess.run(
-            ["gh", *args],
+            ["gh", "auth", "token"],
             capture_output=True,
             text=True,
             check=False,
             timeout=GH_TIMEOUT_SECONDS,
         )
-    except FileNotFoundError:
-        return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
-    except subprocess.TimeoutExpired:
-        # A fixed message, never str(exc): treat a hung gh as a failed call so the
-        # caller degrades gracefully instead of blocking or raising.
-        return {"ok": False, "error": f"gh command timed out after {GH_TIMEOUT_SECONDS}s."}
+    except Exception:  # noqa: BLE001 - best-effort heal; any failure falls back to a plain retry
+        return None
     if proc.returncode != 0:
-        return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
-    out = proc.stdout.strip()
-    if parse_json:
-        try:
-            return {"ok": True, "data": json.loads(out) if out else None}
-        except json.JSONDecodeError as exc:
-            return {"ok": False, "error": f"could not parse gh JSON output: {exc}"}
-    return {"ok": True, "stdout": out}
+        return None
+    return proc.stdout.strip() or None
+
+
+def _heal_token_env() -> Optional[Dict[str, str]]:
+    """The environment for the heal retry, or None to inherit the parent's.
+
+    Only when the env carries neither GITHUB_TOKEN nor GH_TOKEN does it resolve a
+    fresh token and return a copy of ``os.environ`` with GH_TOKEN set, healing a
+    credential blip. When a token is already present, or none can be resolved, it
+    returns None so the retry inherits the existing environment unchanged.
+    """
+    if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
+        return None
+    token = _resolve_gh_token()
+    if not token:
+        return None
+    env = os.environ.copy()
+    env["GH_TOKEN"] = token
+    return env
 
 
 def repo_owner() -> Optional[str]:
@@ -106,21 +171,56 @@ def _link_project_to_repo(owner: str, number, repo_with_owner: Optional[str]) ->
     return _gh(["project", "link", str(number), "--owner", owner, "--repo", repo_with_owner])
 
 
+def _list_title_matches(owner: str, title: str) -> Optional[List[Dict[str, Any]]]:
+    """Return the owner's projects whose title matches, or None when the listing
+    call itself failed.
+
+    The None/empty distinction is load-bearing: a transient gh failure must read
+    as "could not look", not "board absent", or a find-or-create caller mints a
+    duplicate board on every blip (bug #76).
+    """
+    res = _gh(
+        ["project", "list", "--owner", owner, "--limit", "100", "--format", "json"],
+        parse_json=True,
+    )
+    if not res["ok"]:
+        return None
+    projects = (res.get("data") or {}).get("projects", [])
+    return [p for p in projects if p.get("title") == title]
+
+
+def _oldest(matches: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The lowest-numbered (oldest) project: gh lists newest first, so first-match
+    would route every transition to a stray duplicate instead of the canonical board."""
+    if len(matches) > 1:
+        oldest = min(matches, key=lambda p: p.get("number") or 0)
+        logging.warning(
+            "found %d projects sharing one title; using the oldest (#%s). "
+            "Delete the duplicates so card moves cannot land on the wrong board.",
+            len(matches),
+            oldest.get("number"),
+        )
+        return oldest
+    return matches[0]
+
+
 def find_project(owner: str, title: str) -> Optional[Dict[str, Any]]:
     """Return the project dict whose title matches, or None."""
-    res = _gh(["project", "list", "--owner", owner, "--format", "json"], parse_json=True)
-    if not res["ok"] or not res.get("data"):
+    matches = _list_title_matches(owner, title)
+    if not matches:
         return None
-    for project in res["data"].get("projects", []):
-        if project.get("title") == title:
-            return project
-    return None
+    return _oldest(matches)
 
 
 def ensure_project_board(
-    title: Optional[str] = None, owner: Optional[str] = None
+    title: Optional[str] = None, owner: Optional[str] = None, create: bool = True
 ) -> Dict[str, Any]:
-    """Find or create the per-repository delivery board, linked to the repo."""
+    """Find the per-repository delivery board, creating it only when asked.
+
+    Only the explicit ``ensure-board`` command keeps ``create=True``; the
+    per-issue paths (add-issue, set-status) pass ``create=False`` so a routine
+    card move can never mint a board (bug #76).
+    """
     owner = owner or repo_owner()
     if not owner:
         return {"ok": False, "error": "could not resolve the repository owner via gh."}
@@ -128,9 +228,22 @@ def ensure_project_board(
     title = title or board_title()
     repo_with_owner = repo_name_with_owner()
 
-    existing = find_project(owner, title)
-    if existing:
-        return {"ok": True, "created": False, "owner": owner, "project": existing}
+    matches = _list_title_matches(owner, title)
+    if matches is None:
+        return {
+            "ok": False,
+            "error": "could not list the owner's projects; refusing to create a board on a failed lookup.",
+        }
+    if matches:
+        return {"ok": True, "created": False, "owner": owner, "project": _oldest(matches)}
+    if not create:
+        return {
+            "ok": False,
+            "error": (
+                f"board '{title}' not found; run `python -m solomon_harness.github "
+                "ensure-board` to create it."
+            ),
+        }
 
     res = _gh(
         ["project", "create", "--owner", owner, "--title", title, "--format", "json"],
@@ -179,8 +292,12 @@ def _configure_board_columns(owner: str, project_number) -> Dict[str, Any]:
 def add_issue_to_board(
     issue_number: int, title: Optional[str] = None, owner: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Add an issue to the board, returning the created item."""
-    board = ensure_project_board(title=title, owner=owner)
+    """Add an issue to the board, returning the created item.
+
+    Never creates the board: a per-issue operation against a missing board is a
+    setup error to surface, not a reason to mint a project (bug #76).
+    """
+    board = ensure_project_board(title=title, owner=owner, create=False)
     if not board["ok"]:
         return board
     owner = board["owner"]
@@ -259,6 +376,41 @@ def set_issue_status(
     return {"ok": True, "issue": issue_number, "status": status}
 
 
+def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
+    """Squash-merge an approved PR, then complete the Done transition (#172, ADR-0020).
+
+    This is the single owning call for the merge-to-Done transition: on a
+    successful merge it moves the board card to Done and writes the terminal
+    status through to memory (the ADR-0006 write-through) in the same call, so
+    no separate ``reconcile`` is needed. On a failed merge (not mergeable,
+    conflicts) it leaves the board and memory untouched -- no partial state.
+    Callers are responsible for the human-approval gate (ADR-0020): this
+    function performs the merge unconditionally once called.
+
+    If the merge succeeds but the board move fails (``set_issue_status`` has
+    several independent failure modes: an unresolved board item, a missing
+    project id, a missing Status field or option), the PR is already merged
+    and GitHub has already closed the issue via its ``Closes #`` trailer, so
+    the memory write-through still fires -- only the board column needs a
+    retry. The result reports ``ok: False`` with ``merged: True`` so a caller
+    can tell that apart from nothing having happened at all.
+    """
+    res = _gh(["pr", "merge", str(pr_number), "--squash"])
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error", "gh pr merge failed.")}
+    status_res = set_issue_status(issue_number, "Done")
+    record_terminal_status(issue_number)
+    if not status_res.get("ok"):
+        return {
+            "ok": False,
+            "error": status_res.get("error", "board move to Done failed after a successful merge."),
+            "merged": True,
+            "pr": pr_number,
+            "issue": issue_number,
+        }
+    return {"ok": True, "pr": pr_number, "issue": issue_number}
+
+
 STANDARD_LABELS = [
     ("type:feature", "0E8A16", "A new capability or user story"),
     ("type:bug", "D73A4A", "A defect to fix"),
@@ -285,6 +437,13 @@ def record_transition(issue_number, column) -> None:
 
     Builds a per-card timeline of when it entered each column, so the start and
     finish dates per stage (and cycle time) can be derived. Best-effort.
+
+    Writes BOTH representations (expand/contract, ADR-0016): the first-class
+    transitions row via ``record_status_transition`` (from_status chained from
+    the tail of the existing timeline) and the legacy ``board_history:*`` JSON
+    blob, kept for one release so downgraded readers keep working. Timestamps
+    are UTC; the previous naive local clock skewed the timeline with the host
+    timezone (finding F4).
     """
     try:
         import datetime
@@ -299,11 +458,22 @@ def record_transition(issue_number, column) -> None:
                     history = json.loads(raw)
                 except Exception:
                     history = []
+            previous = None
+            if history and isinstance(history[-1], dict):
+                previous = history[-1].get("column")
             history.append({
                 "column": column,
-                "entered_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                "entered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
             })
             db.save_memory(key=key, value=json.dumps(history), category="board_history")
+            db.record_status_transition(
+                issue_number,
+                previous,
+                column,
+                actor=os.environ.get("GITHUB_ACTOR") or os.environ.get("USER"),
+            )
     except Exception:
         pass
 
@@ -411,6 +581,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_add.add_argument("--issue", type=int, required=True)
     p_add.add_argument("--title", default=None)
 
+    p_merge = sub.add_parser(
+        "merge", help="Squash-merge an approved PR and complete the Done transition (#172)"
+    )
+    p_merge.add_argument("--pr", type=int, required=True)
+    p_merge.add_argument("--issue", type=int, required=True)
+
     args = parser.parse_args(argv)
 
     if args.command == "ensure-board":
@@ -445,6 +621,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 record_terminal_status(args.issue)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
+    elif args.command == "merge":
+        result = merge_pr_and_close(args.pr, args.issue)
     else:
         parser.print_help()
         return 1

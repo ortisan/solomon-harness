@@ -54,7 +54,7 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
      `.solomon/handoffs/issue-<n>-idea-to-refine.md` using the template in
      `docs/solomon-workflow.md`, then call `log_handoff(sender="product_owner",
      recipient="refine", contract_type="idea",
-     contract_path=".solomon/handoffs/issue-<n>-idea-to-refine.md", status="ready")`.
+     contract_path=".solomon/handoffs/issue-<n>-idea-to-refine.md", status="open")`.
 
 6. **Output the issue URL** and a one-line recap (JTBD + riskiest assumption).
    State explicitly that no implementation was planned and that promotion to the
@@ -63,4 +63,6 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
    Criteria, Definition of Ready, or Definition of Done yet, and only graduates to a
    Definition of Ready and a Definition of Done at refinement (`/solomon-refine`) once
    it is promoted to the backlog. Do not force a Definition of Ready onto a raw idea.
+
+Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
 '''

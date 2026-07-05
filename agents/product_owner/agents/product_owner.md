@@ -15,8 +15,8 @@ The Product Owner translates user requirements into structured technical specifi
 
 The following specific skills are actively configured for this agent:
 - [acceptance_criteria_given_when_then](skills/acceptance_criteria_given_when_then.md) — Write acceptance criteria in Gherkin (Given-When-Then) with exact values so QA can turn each scenario into a test without guessing intent.
-- [common_pitfalls_to_avoid](skills/common_pitfalls_to_avoid.md) — Solutioning in the problem statement.
-- [definition_of_done](skills/definition_of_done.md) — A PRD and its stories are done when:
+- [common_pitfalls](skills/common_pitfalls.md) — The recurring product-definition failures a reviewer must reject before a PRD or its stories leave the product_owner.
+- [definition_of_done](skills/definition_of_done.md) — The exit gate for product work: what must hold before a PRD and its stories are handed to engineering.
 - [delivery_forecasting_and_flow_metrics](skills/delivery_forecasting_and_flow_metrics.md) — Forecast delivery from how work actually flows instead of from a wished-for single date: measure cycle time, throughput, and…
 - [encoding_other_specialists_requirements_into_acceptance_criteria](skills/encoding_other_specialists_requirements_into_acceptance_criteria.md) — This skill governs how the product_owner carries another specialist's non-functional requirement into a PRD as a measurable, pass-or-fail…
 - [prioritization](skills/prioritization.md) — Prioritize with a named, repeatable method and show the numbers, never by opinion volume or the loudest stakeholder.

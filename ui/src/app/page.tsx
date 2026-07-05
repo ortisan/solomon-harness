@@ -22,6 +22,13 @@ const ALL_USERS = "";
 // The reserved subject for issues with no assignee, mirrored from the composer.
 const UNASSIGNED_USER = "unassigned";
 
+// The board (current snapshot) and velocity (per-user throughput) views.
+const BOARD_VIEW = "board";
+const VELOCITY_VIEW = "velocity";
+// The selectable velocity windows in days, mirrored from the route's allowed set.
+const VELOCITY_WINDOWS = [7, 14, 30];
+const DEFAULT_WINDOW = 14;
+
 interface Issue {
   github_id: string;
   title: string;
@@ -70,10 +77,31 @@ interface Portfolio {
   filteredUser?: string;
 }
 
-type DashboardData = Dashboard | Portfolio;
+interface VelocityRowData {
+  personKey: string;
+  count: number;
+  perTenant: Record<string, number>;
+  excluded: number;
+  doneAt: string[];
+  partial: boolean;
+  partialTenants: string[];
+}
+
+interface Velocity {
+  rows: VelocityRowData[];
+  aggregateStatus: number;
+  degraded: string[];
+  window: number;
+}
+
+type DashboardData = Dashboard | Portfolio | Velocity;
 
 function isPortfolio(data: DashboardData): data is Portfolio {
   return "swimlanes" in data;
+}
+
+function isVelocity(data: DashboardData): data is Velocity {
+  return "rows" in data;
 }
 
 function fallbackColumns(): BoardColumn[] {
@@ -239,6 +267,137 @@ function PortfolioView({ portfolio }: { portfolio: Portfolio }) {
   );
 }
 
+interface DayBucket {
+  date: string;
+  count: number;
+}
+
+// Buckets `doneAt` (naive local ISO-8601 timestamps) into the last `window`
+// calendar days ending at `today`, zero-filled, oldest first. Day labels come
+// from `today`'s local getters (never `toISOString()`, which reinterprets in
+// UTC and can shift the calendar date depending on the browser's timezone);
+// `doneAt` entries are matched by their raw date-prefix string (never
+// `Date`-parsed), so there is no timezone re-coercion on either side.
+export function bucketDoneAt(
+  doneAt: string[],
+  window: number,
+  today: Date,
+): DayBucket[] {
+  const buckets: DayBucket[] = [];
+  for (let offset = window - 1; offset >= 0; offset--) {
+    const day = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - offset,
+    );
+    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    buckets.push({ date, count: 0 });
+  }
+  const indexByDate = new Map(buckets.map((bucket, i) => [bucket.date, i]));
+  const firstDate = buckets[0].date;
+  for (const timestamp of doneAt) {
+    const date = timestamp.slice(0, 10);
+    // The backend's window cutoff is time-of-day-precise
+    // (now - timedelta(days) <= entered <= now), while these are whole
+    // calendar-day buckets: a doneAt entry on that partial boundary day can
+    // fall one calendar day before our first bucket. compose_velocity has
+    // already filtered doneAt to the true window, so such an entry is
+    // never actually outside it — clamp it into the first (or, sharing the
+    // same reasoning, the last) bucket rather than silently dropping it, so
+    // the buckets always sum to doneAt.length.
+    const index = indexByDate.get(date) ?? (date < firstDate ? 0 : buckets.length - 1);
+    buckets[index].count += 1;
+  }
+  return buckets;
+}
+
+function VelocityChart({ buckets }: { buckets: DayBucket[] }) {
+  const max = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  return (
+    <div className="velocity-chart" data-testid="velocity-chart">
+      {buckets.map((bucket) => (
+        <span
+          key={bucket.date}
+          className="velocity-chart-bar"
+          data-testid="velocity-chart-bar"
+          title={`${bucket.date}: ${bucket.count}`}
+          style={{ height: `${(bucket.count / max) * 100}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VelocityRow({
+  row,
+  window,
+  today,
+}: {
+  row: VelocityRowData;
+  window: number;
+  today: Date;
+}) {
+  return (
+    <li className="velocity-row" data-testid="velocity-row">
+      <span className="velocity-subject">{row.personKey}</span>
+      <span className="velocity-count" data-testid="velocity-count">
+        {row.count}
+      </span>
+      {row.excluded > 0 && (
+        <span className="velocity-excluded text-warning">
+          {row.excluded} excluded (no tracked history)
+        </span>
+      )}
+      {row.partial && (
+        <span className="velocity-partial-badge" role="status">
+          partial ({row.partialTenants.join(", ")})
+        </span>
+      )}
+      {row.doneAt.length > 0 ? (
+        <VelocityChart buckets={bucketDoneAt(row.doneAt, window, today)} />
+      ) : (
+        <p
+          className="velocity-empty text-warning"
+          data-testid="velocity-empty"
+          role="status"
+        >
+          No activity in window
+        </p>
+      )}
+    </li>
+  );
+}
+
+function VelocityView({ velocity }: { velocity: Velocity }) {
+  // Every figure is a reachable subtotal when a tenant is degraded; the per-row
+  // partial badge names which, and this banner states the window-wide gap.
+  const today = new Date();
+  return (
+    <div className="velocity" data-testid="velocity">
+      <div className="velocity-summary">
+        <span data-testid="velocity-window">
+          Throughput over {velocity.window} days
+        </span>
+        {velocity.degraded.length > 0 && (
+          <p className="text-warning" role="status">
+            Partial: {velocity.degraded.join(", ")} unreachable
+          </p>
+        )}
+      </div>
+      <ul className="velocity-rows">
+        {velocity.rows.map((row) => (
+          <VelocityRow
+            key={row.personKey}
+            row={row}
+            window={velocity.window}
+            today={today}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function SingleBoardView({ board }: { board?: Board }) {
   if (board?.found === false) {
     // A not-found project gets an explicit notice, never a silent all-zero
@@ -255,26 +414,19 @@ function SingleBoardView({ board }: { board?: Board }) {
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [allUsers, setAllUsers] = useState<string[]>([]);
+  const [view, setView] = useState<string>(BOARD_VIEW);
+  const [windowDays, setWindowDays] = useState<number>(DEFAULT_WINDOW);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void load();
-    // Load once on mount; the selector triggers subsequent loads.
+    // Load once on mount; the selectors trigger subsequent loads.
   }, []);
 
-  async function load(project?: string, user?: string) {
+  async function fetchInto(url: string) {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (project) {
-        params.set("project", project);
-      }
-      if (user) {
-        params.set("user", user);
-      }
-      const query = params.toString();
-      const url = query ? `/api/dashboard?${query}` : "/api/dashboard";
       const res = await fetch(url);
       const json = await res.json();
       if (json?.error) {
@@ -294,8 +446,41 @@ export default function Home() {
     }
   }
 
+  async function load(project?: string, user?: string) {
+    const params = new URLSearchParams();
+    if (project) {
+      params.set("project", project);
+    }
+    if (user) {
+      params.set("user", user);
+    }
+    const query = params.toString();
+    await fetchInto(query ? `/api/dashboard?${query}` : "/api/dashboard");
+  }
+
+  async function loadVelocity(days: number) {
+    await fetchInto(`/api/dashboard?view=${VELOCITY_VIEW}&window=${days}`);
+  }
+
+  function changeView(next: string) {
+    const nextView = next === VELOCITY_VIEW ? VELOCITY_VIEW : BOARD_VIEW;
+    setView(nextView);
+    if (nextView === VELOCITY_VIEW) {
+      void loadVelocity(windowDays);
+    } else {
+      void load();
+    }
+  }
+
+  function changeWindow(days: number) {
+    setWindowDays(days);
+    void loadVelocity(days);
+  }
+
   const portfolio = data && isPortfolio(data) ? data : null;
-  const dashboard = data && !isPortfolio(data) ? data : null;
+  const velocity = data && isVelocity(data) ? data : null;
+  const dashboard =
+    data && !isPortfolio(data) && !isVelocity(data) ? data : null;
   const projects =
     dashboard?.projects ?? portfolio?.swimlanes.map((s) => s.project) ?? [];
   const selectedProject = dashboard?.selectedProject ?? ALL_PROJECTS;
@@ -345,6 +530,35 @@ export default function Home() {
               ))}
             </select>
           </div>
+          <div className="repo-title">
+            <span>View:</span>
+            <select
+              aria-label="View"
+              className="select-input"
+              value={view}
+              onChange={(event) => changeView(event.target.value)}
+            >
+              <option value={BOARD_VIEW}>Board</option>
+              <option value={VELOCITY_VIEW}>Velocity</option>
+            </select>
+          </div>
+          {view === VELOCITY_VIEW && (
+            <div className="repo-title">
+              <span>Window:</span>
+              <select
+                aria-label="Window"
+                className="select-input"
+                value={windowDays}
+                onChange={(event) => changeWindow(Number(event.target.value))}
+              >
+                {VELOCITY_WINDOWS.map((days) => (
+                  <option key={days} value={days}>
+                    {days} days
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       </section>
 
@@ -356,7 +570,9 @@ export default function Home() {
         )}
         {loading && !data && <p>Loading board...</p>}
 
-        {portfolio ? (
+        {velocity ? (
+          <VelocityView velocity={velocity} />
+        ) : portfolio ? (
           <PortfolioView portfolio={portfolio} />
         ) : (
           <SingleBoardView board={dashboard?.board} />

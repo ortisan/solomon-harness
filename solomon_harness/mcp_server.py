@@ -130,10 +130,17 @@ def build_server() -> Any:
 
     @server.tool()
     def save_session(
-        session_id: str, agent_name: str, task: str, messages: List[Any]
+        session_id: str,
+        agent_name: str,
+        task: str,
+        messages: List[Any],
+        status: str = "active",
+        issues: Optional[List[int]] = None,
     ) -> dict:
-        """Persist a session (conversation state) for later resume."""
-        return service.save_session(session_id, agent_name, task, messages)
+        """Persist a session (conversation state) for later resume. Status is active or done. Pass the GitHub issue numbers the session worked on as issues; each becomes a worked_on edge so resume is a graph query (ADR-0018)."""
+        return service.save_session(
+            session_id, agent_name, task, messages, status, issues
+        )
 
     @server.tool()
     def get_session(session_id: str) -> dict:
@@ -147,14 +154,27 @@ def build_server() -> Any:
         contract_type: str,
         contract_path: str,
         status: str,
+        summary: str = "",
     ) -> dict:
-        """Record a handoff between agents."""
-        return service.log_handoff(sender, recipient, contract_type, contract_path, status)
+        """Record a handoff between agents. The summary is a short "what this stage did" text persisted on the row so a resume survives worktree teardown."""
+        return service.log_handoff(
+            sender, recipient, contract_type, contract_path, status, summary
+        )
+
+    @server.tool()
+    def update_handoff_status(handoff_id: str, status: str) -> dict:
+        """Move a handoff along its lifecycle (open, accepted, done)."""
+        return service.update_handoff_status(handoff_id, status)
 
     @server.tool()
     def get_latest_activity() -> dict:
         """Return the most recent session or handoff, for resume."""
         return service.get_latest_activity()
+
+    @server.tool()
+    def get_backend_status() -> dict:
+        """Report which memory backend serves this session: surrealdb, or the sqlite fallback with the degradation reason."""
+        return service.get_backend_status()
 
     @server.tool()
     def relate(

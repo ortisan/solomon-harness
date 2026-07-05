@@ -177,17 +177,17 @@ def check_shared_home(home: Optional[str] = None) -> Dict:
 
 def check_git_config(workspace_root: str) -> Dict:
     """Check for stray core.worktree or core.bare=true in .git/config (issue #38)."""
-    from solomon_harness.worktree import _clean_git_env
+    from solomon_harness.subprocess_env import clean_git_env
 
     # Check core.worktree
     proc_wt = subprocess.run(
         ["git", "-C", workspace_root, "config", "--local", "--get", "core.worktree"],
-        capture_output=True, text=True, check=False, env=_clean_git_env()
+        capture_output=True, text=True, check=False, env=clean_git_env()
     )
     # Check core.bare
     proc_bare = subprocess.run(
         ["git", "-C", workspace_root, "config", "--local", "--get", "core.bare"],
-        capture_output=True, text=True, check=False, env=_clean_git_env()
+        capture_output=True, text=True, check=False, env=clean_git_env()
     )
 
     has_wt = proc_wt.returncode == 0 and proc_wt.stdout.strip() != ""

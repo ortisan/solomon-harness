@@ -1,45 +1,53 @@
-# Plan - loop_policy human-gate merge/release enforcement (#183)
+# PLAN.md: refactor(workflow): update command descriptions and synchronize global install
 
-## Problem Statement
-The default unconfigured `human` autonomy level allows the permanently human-gated `release` stage (and potentially other future gated stages) to execute. The policy layer should enforce that permanently human-gated stages (e.g., `release`) are always blocked, regardless of the configured autonomy level.
-Refs #183.
+Problem statement: 
+The user wants `/solomon-workflow` to be clearly defined as the command that runs a task end-to-end or continues from a previous execution, and `/solomon-loop` to be defined as the parallel autonomous loop (the current `/solomon-loop-auto`). In the codebase, these commands are already renamed, but the user's local workspace and IDE settings are still showing stale names (`solomon-loop` as the orchestrator and `solomon-loop-auto` as the parallel loop) and the generated global command files are corrupt or outdated.
 
-## Proposed Change and Boundary
-- In `solomon_harness/loop_policy.py`, reorder the checks inside `LoopPolicy.decide_stage` to run the `stage in HUMAN_GATED_STAGES` check before checking if `self.level == "human"`.
-- This ensures that human-gated stages are checked and rejected first, before allowing unrestricted actions under the `"human"` autonomy level.
-- Non-gated stages (like `review` or `start`) must remain unaffected and allowed under the `"human"` level.
+We need to:
+1. Update descriptions for `solomon-workflow` in `.claude/commands/solomon-workflow.md`, `solomon_harness/cli.py`, `README.md`, `docs/solomon-workflow.md`, and `docs/wiki/Commands-Reference.md` to indicate it runs a task end-to-end or continues from a previous execution.
+2. Synchronize directories in `solomon_harness/install_global.py` so that old/stale commands (like `solomon-loop-auto.toml`) are deleted from the global directories.
+3. Clean up the stale `solomon-loop-auto` directory from the user's `~/.gemini/config/plugins/solomon/skills/` during global installation.
+4. Fix the test suite `tests/test_install_global.py` so it does not overwrite the real user's `~/.gemini` folder during test execution.
 
-## Target Files
-- `solomon_harness/loop_policy.py`
+## Proposed changes
 
-## Edge Cases as Observable Outcomes
-1. Stage `release` (in `HUMAN_GATED_STAGES`) is called when autonomy is `human`. Result: Rejected with explanation.
-2. Stage `review` (not in `HUMAN_GATED_STAGES`) is called when autonomy is `human`. Result: Allowed.
-3. Stage `release` is called when autonomy is `L1`/`L2`/`L3`. Result: Rejected.
-4. Stage `review` is called when autonomy is `L2`/`L3`. Result: Allowed.
+- In `.claude/commands/solomon-workflow.md`:
+  - Change description frontmatter to "Run a task end-to-end, or continue from a previous execution".
+- In `solomon_harness/cli.py`:
+  - Update `"/solomon-workflow"` description to "run a task end-to-end, or continue from a previous execution".
+- In `README.md`:
+  - Update `/solomon-workflow` description to "run a task end-to-end or continue".
+- In `docs/solomon-workflow.md`:
+  - Update `/solomon-workflow` table row to "runs a task end-to-end or continues".
+- In `docs/wiki/Commands-Reference.md`:
+  - Update `/solomon-workflow` heading to `### \`/solomon-workflow\` (End-to-End Orchestrator)` and description.
+- In `solomon_harness/install_global.py`:
+  - In `_copy_dir_contents`, add logic to delete files in `dest` with the matching suffixes that are not present in `src`.
+  - In `install_global`, add cleanup for stale skills in `~/.gemini/config/plugins/solomon/skills/` that do not match the current commands in the source repository.
+- In `tests/test_install_global.py`:
+  - In tests that call `install_global` with `default_gemini`, patch `os.path.expanduser` so that `"~/.gemini"` points to `self.gemini` instead of the user's real home folder.
+  - Update assertions to verify that stale commands in the destination directory are deleted.
 
-## TDD Step Breakdown
+## Target files
+- `.claude/commands/solomon-workflow.md`
+- `solomon_harness/cli.py`
+- `solomon_harness/install_global.py`
+- `tests/test_install_global.py`
+- `README.md`
+- `docs/solomon-workflow.md`
+- `docs/wiki/Commands-Reference.md`
 
-### Step 1: Red (failing tests for the bug)
-Modify `tests/test_loop_policy.py` to assert that:
-- `release` is blocked under autonomy level `"human"`.
-- `review` is allowed under autonomy level `"human"`.
-This step should fail because today `release` is allowed under `"human"`.
-Commit message: `test(workflow): add failing regression tests for human-level release gate`
+## Edge cases
+- Stale folders in `~/.gemini/config/plugins/solomon/skills/` not being deleted. We handle this explicitly in the `install_global` logic.
+- Permissions to read/write/delete files in `~/.gemini/`. We will run standard file operations under defensive try-except blocks.
 
-### Step 2: Green (fix the bug)
-Reorder checks in `solomon_harness/loop_policy.py` so `HUMAN_GATED_STAGES` is checked before `self.level == "human"`.
-Verify tests pass.
-Commit message: `fix(workflow): check permanently human-gated stages before human autonomy early-return`
+## TDD breakdown
+1. **Red**: Update `tests/test_install_global.py` to assert that stale command files in the destination directories are successfully deleted during installation.
+2. **Green**: Implement file deletion in `_copy_dir_contents` in `solomon_harness/install_global.py`.
+3. **Red**: Update `tests/test_install_global.py` to verify that stale skills directories are cleaned up when `is_default_gemini` is true.
+4. **Green**: Implement the stale skills clean-up in `install_global` in `solomon_harness/install_global.py`.
+5. Update command descriptions in target files and regenerate Gemini commands.
 
-### Step 3: Refactor (clean up/polish)
-Ensure code is well-formatted and docstrings are accurate. No logical changes.
-Commit message: `refactor(workflow): clean up decide_stage comments and formatting`
-
-## STRIDE Threat Notes
-- **Elevation of Privilege**: This fix mitigates potential elevation of privilege where a client running unattended loop commands at the default `human` level could inadvertently run a release stage. By locking this down in python-enforced policy, we avoid privilege escalation.
-- **T/I/D/E**: No direct input validation or data serialization changes.
-
-## Verification Criteria
-- Run `uv run pytest tests/test_loop_policy.py` and ensure all tests pass.
-- Run `uv run python -m solomon_harness.cli loop-policy` to view status.
+## Verification criteria
+- Run `uv run pytest` to verify all tests pass.
+- Run `solomon-harness compile` and `solomon-harness install-global` to verify that global files are updated and stale commands are removed.
