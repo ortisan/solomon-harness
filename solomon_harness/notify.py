@@ -90,6 +90,17 @@ def send(workspace_root: str, event: str, message: str, env: Optional[Dict[str, 
         return False
 
 
+def get_agent_prefix() -> str:
+    """Resolve the current session ID to a deterministic Agent1-9 identifier."""
+    session_id = os.environ.get("SOLOMON_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID")
+    if not session_id:
+        session_id = str(os.getpid())
+    import hashlib
+    h = hashlib.md5(session_id.encode("utf-8")).hexdigest()
+    idx = (int(h, 16) % 9) + 1
+    return f"Agent{idx}"
+
+
 def log_progress(message: str) -> None:
     """Write progress/informational messages so they are visible to the user.
 
@@ -97,7 +108,8 @@ def log_progress(message: str) -> None:
     If sys.stderr is not a TTY (meaning it is redirected or captured), it additionally writes
     directly to the controlling terminal (/dev/tty) so that the user still sees it.
     """
-    formatted = f"[solomon:info] {message}"
+    prefix = get_agent_prefix()
+    formatted = f"{prefix}: {message}"
     sys.stderr.write(formatted + "\n")
     sys.stderr.flush()
     if not sys.stderr.isatty():
