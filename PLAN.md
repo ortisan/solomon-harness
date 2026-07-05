@@ -1,53 +1,44 @@
-# PLAN.md: refactor(workflow): update command descriptions and synchronize global install
+# PLAN.md: feat(memory): living project memory — scan structure/architecture at loop start, refresh on handoff and delivery
 
-Problem statement: 
-The user wants `/solomon-workflow` to be clearly defined as the command that runs a task end-to-end or continues from a previous execution, and `/solomon-loop` to be defined as the parallel autonomous loop (the current `/solomon-loop-auto`). In the codebase, these commands are already renamed, but the user's local workspace and IDE settings are still showing stale names (`solomon-loop` as the orchestrator and `solomon-loop-auto` as the parallel loop) and the generated global command files are corrupt or outdated.
+Problem statement:
+The harness lacks a continuously updated "living" project memory. The current codebase index only stores raw file content, and the code overview is just a file-type histogram. These snapshots are only refreshed on `init` and `/solomon-release`, rather than dynamically when a session starts, when the loop starts, or when a stage handoff occurs. Consequently, agents and the loop reason from outdated project structures. We need to implement dynamic codebase scanning/indexing, idempotent skips when the codebase is unchanged, incremental updates, handoff-triggered refreshes, delivery evolution logging, and loop proposal integration.
 
-We need to:
-1. Update descriptions for `solomon-workflow` in `.claude/commands/solomon-workflow.md`, `solomon_harness/cli.py`, `README.md`, `docs/solomon-workflow.md`, and `docs/wiki/Commands-Reference.md` to indicate it runs a task end-to-end or continues from a previous execution.
-2. Synchronize directories in `solomon_harness/install_global.py` so that old/stale commands (like `solomon-loop-auto.toml`) are deleted from the global directories.
-3. Clean up the stale `solomon-loop-auto` directory from the user's `~/.gemini/config/plugins/solomon/skills/` during global installation.
-4. Fix the test suite `tests/test_install_global.py` so it does not overwrite the real user's `~/.gemini` folder during test execution.
+Proposed changes:
+1. **Project structure scanner**: Implement `scan_project_structure(workspace_root, db)` in `solomon_harness/bootstrap.py`. It will serialize top-level layout, stack/frameworks, entry points, modules and local dependencies, test layout, and patterns (ADRs, agents, commands). It will save this under `__project_structure__` in category `project_model` along with `manifest_signature` and a UTC timestamp.
+2. **Idempotent skip & Incremental delta**: Check if `manifest_signature` (SHA256 of `__code_index_manifest__` content) matches the saved record. If yes, skip the scan. If no, scan and update.
+3. **Session start trigger**: Call `scan_project_structure` inside `handle_run` in `solomon_harness/cli.py` on session start.
+4. **Loop/Stage start trigger**: Call `scan_project_structure` inside `run_stage` in `solomon_harness/workflows.py` before running stages.
+5. **Handoff trigger**: In `log_handoff` inside `solomon_harness/tools/database_client.py`, run `index_codebase` followed by `scan_project_structure`.
+6. **Delivery evolution & refresh**: In `save_release` inside `solomon_harness/tools/database_client.py`, append an evolution entry (issue number, title, version, date) under key `__project_evolution__` and refresh the project structure record.
+7. **Loop proposal integration**: Update `.claude/commands/solomon-workflow.md` and `.claude/commands/solomon-loop.md` to request/read `__project_structure__` and `__project_evolution__` from memory and factor it into the proposed next-step rationale. Flag discrepancies if the model is stale vs. the code.
+8. **Failure path safety**: Wrap all triggers and the scanner in try-except blocks so any backend/scan failure logs a single warning and never blocks the execution.
 
-## Proposed changes
-
-- In `.claude/commands/solomon-workflow.md`:
-  - Change description frontmatter to "Run a task end-to-end, or continue from a previous execution".
-- In `solomon_harness/cli.py`:
-  - Update `"/solomon-workflow"` description to "run a task end-to-end, or continue from a previous execution".
-- In `README.md`:
-  - Update `/solomon-workflow` description to "run a task end-to-end or continue".
-- In `docs/solomon-workflow.md`:
-  - Update `/solomon-workflow` table row to "runs a task end-to-end or continues".
-- In `docs/wiki/Commands-Reference.md`:
-  - Update `/solomon-workflow` heading to `### \`/solomon-workflow\` (End-to-End Orchestrator)` and description.
-- In `solomon_harness/install_global.py`:
-  - In `_copy_dir_contents`, add logic to delete files in `dest` with the matching suffixes that are not present in `src`.
-  - In `install_global`, add cleanup for stale skills in `~/.gemini/config/plugins/solomon/skills/` that do not match the current commands in the source repository.
-- In `tests/test_install_global.py`:
-  - In tests that call `install_global` with `default_gemini`, patch `os.path.expanduser` so that `"~/.gemini"` points to `self.gemini` instead of the user's real home folder.
-  - Update assertions to verify that stale commands in the destination directory are deleted.
-
-## Target files
-- `.claude/commands/solomon-workflow.md`
+Target files:
+- `solomon_harness/bootstrap.py`
 - `solomon_harness/cli.py`
-- `solomon_harness/install_global.py`
-- `tests/test_install_global.py`
-- `README.md`
-- `docs/solomon-workflow.md`
-- `docs/wiki/Commands-Reference.md`
+- `solomon_harness/workflows.py`
+- `solomon_harness/tools/database_client.py`
+- `.claude/commands/solomon-workflow.md`
+- `.claude/commands/solomon-loop.md`
 
-## Edge cases
-- Stale folders in `~/.gemini/config/plugins/solomon/skills/` not being deleted. We handle this explicitly in the `install_global` logic.
-- Permissions to read/write/delete files in `~/.gemini/`. We will run standard file operations under defensive try-except blocks.
+Edge cases:
+- Missing database or network failure during scan: wrapped in try-except, fails safe with a single warning and does not write partial/corrupt state.
+- Empty manifest: will trigger initial `index_codebase` to build the manifest before scanning.
+- Import cycles: keep import statements inside functions rather than at the top of database_client.py.
 
-## TDD breakdown
-1. **Red**: Update `tests/test_install_global.py` to assert that stale command files in the destination directories are successfully deleted during installation.
-2. **Green**: Implement file deletion in `_copy_dir_contents` in `solomon_harness/install_global.py`.
-3. **Red**: Update `tests/test_install_global.py` to verify that stale skills directories are cleaned up when `is_default_gemini` is true.
-4. **Green**: Implement the stale skills clean-up in `install_global` in `solomon_harness/install_global.py`.
-5. Update command descriptions in target files and regenerate Gemini commands.
+TDD breakdown:
+1. **Red**: Write a unit test `tests/test_project_structure.py` verifying that `scan_project_structure` saves a valid JSON project structure with timestamp and manifest signature under `__project_structure__` and skips scanning when the manifest matches.
+2. **Green**: Implement `scan_project_structure` in `solomon_harness/bootstrap.py`.
+3. **Red**: Add test assertions verifying incremental update on file change and failure safety (best-effort, non-blocking on database/file errors).
+4. **Green**: Implement incremental updates and error boundaries in the scanner.
+5. **Red**: Write unit tests verifying that calling `log_handoff` and `save_release` trigger a project structure scan and that `save_release` writes to `__project_evolution__`.
+6. **Green**: Implement the triggers in `log_handoff` and `save_release` inside `solomon_harness/tools/database_client.py`.
+7. **Refactor & Integration**: Update triggers in `cli.py` and `workflows.py`, update prompt command files, verify that all test suites pass.
 
-## Verification criteria
-- Run `uv run pytest` to verify all tests pass.
-- Run `solomon-harness compile` and `solomon-harness install-global` to verify that global files are updated and stale commands are removed.
+STRIDE notes:
+- Input validation: the keys and paths are verified to be inside the repository root.
+- Information disclosure: error messages on failed database writes or scans are logged by exception type to prevent leaking internal database schemas or system configurations.
+
+Verification criteria:
+- Run `uv run pytest tests/test_project_structure.py` to verify functionality.
+- Run `uv run pytest` to ensure no regressions in existing tests.
