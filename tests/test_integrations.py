@@ -51,8 +51,8 @@ class TestThinPointers(unittest.TestCase):
             _read(os.path.join(".github", "copilot-instructions.md")),
         )
 
-    def test_gemini_md_imports_central_source(self):
-        self.assertIn("@agents/AGENTS.md", _read("GEMINI.md"))
+    def test_agy_md_imports_central_source(self):
+        self.assertIn("@agents/AGENTS.md", _read("AGY.md"))
 
 
 class TestMcpRegistration(unittest.TestCase):

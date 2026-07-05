@@ -1,7 +1,7 @@
 """Shared subprocess-environment hygiene.
 
 Any subprocess this codebase spawns -- ``git``, ``gh``, or a headless engine CLI
-(``claude``/``gemini``/``agy``) -- must not inherit the caller's ``GIT_*``
+(``claude``/``agy``) -- must not inherit the caller's ``GIT_*``
 environment. Inside a git worktree or a git hook, ``GIT_DIR`` / ``GIT_WORK_TREE``
 (and friends) are exported and would redirect a child ``git -C <path>`` call back
 to the enclosing repository instead of the intended one; inherited into a ``gh``

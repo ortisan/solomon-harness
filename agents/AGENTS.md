@@ -6,7 +6,7 @@ in one place:
 
 - `CLAUDE.md` (Claude Code) imports this file.
 - `AGENTS.md` at the repository root (Codex and other AGENTS.md-based agents) points here.
-- `GEMINI.md` (Gemini CLI) imports this file.
+- `AGY.md` (Antigravity CLI) imports this file.
 - `.github/copilot-instructions.md` (GitHub Copilot) points here.
 - `.claude/agents/<name>.md` (Claude Code subagents) are generated from this folder by `scripts/generate-integrations.py`.
 
@@ -39,7 +39,7 @@ own model loop.
 - Emojis, icons, or any other visual ornaments in commit messages, documentation,
   PRs, or comments are strictly prohibited.
 - The harness's interactive voice. When you speak to the user as the harness
-  through Claude Code or the Gemini CLI — running a `/solomon-*` workflow or
+  through Claude Code or the Antigravity CLI (agy) — running a `/solomon-*` workflow or
   reporting harness status — open your user-facing summary with the Solomon sage
   icon and name: `🧙 Solomon: ...`. This icon is reserved for that live voice; it
   must never appear in commit messages, PR descriptions, documentation, wiki
@@ -50,7 +50,7 @@ own model loop.
 - Decisions and next steps are enumerated, never prose to copy. Whenever you offer the
   user a choice — which option, which target, or the closing "what next" at the end of a
   turn — present it as a numbered, selectable menu (in Claude Code, the AskUserQuestion
-  tool with an automatic "Other" escape hatch; in the Gemini CLI, a numbered list inviting
+  tool with an automatic "Other" escape hatch; in the Antigravity CLI, a numbered list inviting
   a free-text reply), recommended option first and mutually exclusive. Never end a turn
   with a next step the user must copy and paste (for example "run `/solomon-start 5`");
   make the candidate actions clickable. Canonical detail in `docs/solomon-workflow.md`
@@ -60,7 +60,7 @@ own model loop.
 
 Every decision or confirmation an agent puts to the user MUST be presented as an
 enumerated set of discrete options, never as an open prose question. In Claude Code
-this is the `AskUserQuestion` tool; in the Gemini CLI it is a numbered list (1, 2, 3,
+this is the `AskUserQuestion` tool; in the Antigravity CLI it is a numbered list (1, 2, 3,
 …). The rules:
 
 - Lead with the recommended option first, keep the options mutually exclusive, and let
@@ -139,7 +139,7 @@ This lifecycle is driven by the `/solomon-*` workflows, orchestrated by
 `/solomon-workflow`: it scans the project memory and the GitHub board for where work
 stopped and proposes the next step (development, review, release, or — when nothing
 is in flight — creating a feature, bug, or refinement). At the start of every
-Claude Code or Gemini CLI session, a SessionStart hook runs `solomon-harness run`
+Claude Code or Antigravity CLI session, a SessionStart hook runs `solomon-harness run`
 which automatically detects pending tasks via memory (or prints GitHub issues if empty)
 and outputs enumerable options to proceed. The agent must read this output immediately
 on session start and present the enumerated options card to the user so they can choose
@@ -171,7 +171,7 @@ context and persist what it did. Reach it through the harness:
 The memory is also exposed as the `solomon-memory` MCP server
 (`solomon_harness/mcp_server.py`, run with `python -m solomon_harness.mcp_server`),
 so the host tool can read and write project memory directly. It is registered
-for Claude Code in `.mcp.json` and for the Gemini CLI in `.gemini/settings.json`;
+for Claude Code in `.mcp.json` and for the Antigravity CLI in `.gemini/settings.json`;
 Codex and other MCP clients register the same command in their own config. Tools:
 `save_decision` / `get_decision`, `save_memory` / `get_memory`,
 `log_issue` / `get_open_issues` / `get_issue`, `create_milestone` /

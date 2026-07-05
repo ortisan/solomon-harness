@@ -145,7 +145,7 @@ def handle_run(harness_dir: str, task=None) -> None:
 
         print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
         workflows = [
-            ("/solomon-workflow", "scan where work stopped and propose the next step"),
+            ("/solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
             ("/solomon-loop", "autonomous parallel loop over Ready issues"),
             ("/solomon-idea", "capture a product idea"),
             ("/solomon-issue", "create a feature or story issue"),

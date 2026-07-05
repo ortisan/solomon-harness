@@ -301,7 +301,7 @@ def _install_harness_files(workspace_root: str) -> None:
     # instance in ~/.solomon-harness (see solomon_harness/memory.py).
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "GEMINI.md", "CLAUDE.md", "README.md", "skill-sources.json",
+        "AGENTS.md", "AGY.md", "CLAUDE.md", "README.md", "skill-sources.json",
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)

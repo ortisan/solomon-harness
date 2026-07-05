@@ -10,7 +10,7 @@ Before installing the harness, ensure you have the following tools installed and
 
 * **Python 3.10+** (managed easily with [uv](https://github.com/astral-sh/uv)).
 * **GitHub CLI (`gh`):** Authenticated with `gh auth login`. Ensure your token has the `project` scope to allow board manipulation.
-* **Host Tool:** [Claude Code](https://claude.com/claude-code) or the **Gemini CLI** to run the agent models.
+* **Host Tool:** [Claude Code](https://claude.com/claude-code) or the **Antigravity CLI (agy)** to run the agent models.
 * **Docker (Optional):** Required to run the SurrealDB memory backend. The harness automatically falls back to SQLite if Docker is not running.
 
 ---
@@ -56,7 +56,7 @@ solomon-harness init
 
 ## 4. Running Your First Workflow
 
-Once initialized, start your session inside Claude Code or the Gemini CLI. The SessionStart hook will surface current issues and state.
+Once initialized, start your session inside Claude Code or the Antigravity CLI (agy). The SessionStart hook will surface current issues and state.
 
 To start the automated workflow loop, type:
 

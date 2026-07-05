@@ -212,8 +212,8 @@ def run_stage(
         print(f"Error: unknown stage '{stage}'. Stages: {', '.join(STAGES)}", file=sys.stderr)
         return 1
     engine = (engine or os.environ.get("SOLOMON_ENGINE") or "claude").lower()
-    if engine not in ("claude", "gemini", "agy"):
-        print(f"Error: unknown engine '{engine}'. Use 'claude', 'gemini' or 'agy'.", file=sys.stderr)
+    if engine not in ("claude", "agy"):
+        print(f"Error: unknown engine '{engine}'. Use 'claude' or 'agy'.", file=sys.stderr)
         return 1
 
     # `loop` has no command file of its own: it drives N iterations of the
@@ -296,10 +296,6 @@ def run_stage(
                 cmd = [exec_path, "-p", "Execute prompt from stdin", "--dangerously-skip-permissions"]
                 if capture_cost:
                     cmd.extend(["-o", "json"])
-            elif engine == "gemini":
-                cmd = [engine, "-p", "Execute prompt from stdin", "--skip-trust"]
-                if capture_cost:
-                    cmd.extend(["--output-format", "json"])
             else:
                 cmd = [engine, "-p"]
                 if capture_cost:

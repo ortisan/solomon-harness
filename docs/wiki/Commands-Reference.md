@@ -6,8 +6,8 @@ This document provides a detailed reference of all custom slash commands (`/solo
 
 ## 1. Lifecycle Commands
 
-### `/solomon-workflow` (Master Orchestrator)
-The core engine command. It scans the repository's current state, checked-out branch, open issues, and board status to determine where development stopped, then proposes or automatically runs the next logical step.
+### `/solomon-workflow` (End-to-End Orchestrator)
+Runs a task end-to-end, or continues from a previous execution. It scans the repository's current state, checked-out branch, open issues, and board status to determine where development stopped, then proposes or automatically runs the next logical step.
 * **Arguments:** Optional focus (e.g., issue or PR number).
 * **Primary Agent:** Orchestrator (hierarchical coordinator).
 * **Workflows:**

@@ -2,7 +2,7 @@
 
 Shared conventions for the `/solomon-*` workflows. Every workflow command
 reads this file and follows it so the lifecycle is consistent, auditable, and
-backed by the project memory. The host tool (Claude Code or Gemini CLI) provides
+backed by the project memory. The host tool (Claude Code or Antigravity CLI) provides
 the model; these workflows orchestrate the specialist agents, the GitHub project,
 and the memory layer.
 
@@ -14,7 +14,7 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 
 | Stage | Workflow | Driving agents | Board move |
 | --- | --- | --- | --- |
-| Orchestrate (scan + next) | `/solomon-workflow` | scrum_master | proposes the next step |
+| Orchestrate (scan + next) | `/solomon-workflow` | scrum_master | runs a task end-to-end or continues |
 | Capture an idea | `/solomon-idea` | product_owner | → `Ideas` |
 | Create a feature/story | `/solomon-issue` | product_owner | → `Backlog` |
 | Create a bug | `/solomon-bug` | qa, software_engineer | → `Backlog` |
@@ -52,11 +52,11 @@ invocation: when work is in flight it proposes development, review, or release;
 when nothing is in progress it proposes creating a feature, bug, or refinement.
 
 The loop is host-orchestrated and human-gated, not fully autonomous: no code
-decides the next stage — the host tool (Claude Code or the Gemini CLI) runs these
+decides the next stage — the host tool (Claude Code or the Antigravity CLI) runs these
 markdown prompts — and the merge, release, and move-to-Done gates always require a
 human.
 
-At the start of every Claude Code or Gemini CLI session, the harness surfaces the
+At the start of every Claude Code or Antigravity CLI session, the harness surfaces the
 project status (latest activity and open issues) through a SessionStart hook that
 runs `solomon-harness run`. This hook automatically checks memory for pending tasks
 (or prints open issues if none) and outputs the options card. The agent reads this
@@ -67,7 +67,7 @@ on start and immediately prompts the user with the enumerated choices.
 When a workflow needs a decision or confirmation from the user — which next step,
 which option, which target — present the choices as an enumerated list (1, 2, 3, …),
 with the final option always being "Other", where the user types a free-form answer.
-In Claude Code this is the AskUserQuestion tool; in the Gemini CLI, present a numbered
+In Claude Code this is the AskUserQuestion tool; in the Antigravity CLI, present a numbered
 list and invite a free-text reply. Lead with the recommended option first and keep the
 options mutually exclusive. This is mandatory, not a preference (the non-negotiable
 Enumerable decisions rule in `agents/AGENTS.md`): never end a turn with an open prose
@@ -317,7 +317,7 @@ safety floor prevents that by construction:
   pid, or a cross-host lock past the TTL (`DEFAULT_TTL_SECONDS = 1800`, since a
   remote pid cannot be probed), is reclaimed. Implementation:
   `solomon_harness/loop_lock.py`; the portable gate lives in `run_stage` so it
-  enforces on both Claude Code and the Gemini CLI. (`workflows.LOCKED_STAGES` is
+  enforces on both Claude Code and the Antigravity CLI. (`workflows.LOCKED_STAGES` is
   the source of truth for the static set.)
 - **PreToolUse guard (Claude Code only).** A `loop-guard` hook in
   `.claude/settings.json` blocks `git push` / `gh pr merge` while another live
@@ -343,7 +343,7 @@ How far the automation path (`solomon-harness dev <stage>` and any host-schedule
 cadence) may act is one dial, set in the project's `.agent/config.json` `loop`
 block (overridable with `SOLOMON_LOOP_AUTONOMY`) and enforced in portable Python
 inside `run_stage` (`solomon_harness/loop_policy.py`), so it holds on both Claude
-Code and the Gemini CLI — not only in a Claude-only hook.
+Code and the Antigravity CLI — not only in a Claude-only hook.
 
 ```json
 "loop": { "autonomy": "L2", "maker_model": "...", "checker_model": "...",
