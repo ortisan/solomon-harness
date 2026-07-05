@@ -1,53 +1,48 @@
-# PLAN.md: refactor(workflow): update command descriptions and synchronize global install
+# PLAN.md: fix(testing): test suite passes inside a git worktree (test_home tenant, test_bootstrap kanban)
 
-Problem statement: 
-The user wants `/solomon-workflow` to be clearly defined as the command that runs a task end-to-end or continues from a previous execution, and `/solomon-loop` to be defined as the parallel autonomous loop (the current `/solomon-loop-auto`). In the codebase, these commands are already renamed, but the user's local workspace and IDE settings are still showing stale names (`solomon-loop` as the orchestrator and `solomon-loop-auto` as the parallel loop) and the generated global command files are corrupt or outdated.
+Problem statement (Refs #30):
+Two tests fail inside a git worktree but pass in the main checkout:
+- `test_home.test_real_git_repo_resolves_remote`: a temp repo's tenant resolves to the enclosing repo's remote (`ortisan-solomon-harness`) instead of its own (`acme-widget`).
+- `test_bootstrap`: the kanban fallback check resolves to the enclosing repository's remote, which has Projects/Wiki enabled, and skips local `KANBAN.md` / wiki creation, causing test assertions to fail.
 
-We need to:
-1. Update descriptions for `solomon-workflow` in `.claude/commands/solomon-workflow.md`, `solomon_harness/cli.py`, `README.md`, `docs/solomon-workflow.md`, and `docs/wiki/Commands-Reference.md` to indicate it runs a task end-to-end or continues from a previous execution.
-2. Synchronize directories in `solomon_harness/install_global.py` so that old/stale commands (like `solomon-loop-auto.toml`) are deleted from the global directories.
-3. Clean up the stale `solomon-loop-auto` directory from the user's `~/.gemini/config/plugins/solomon/skills/` during global installation.
-4. Fix the test suite `tests/test_install_global.py` so it does not overwrite the real user's `~/.gemini` folder during test execution.
+Both issues are caused by `git` and `gh` subprocess calls inheriting the parent process's `GIT_*` environment variables (such as `GIT_DIR` and `GIT_WORK_TREE` set by git when running inside a worktree). Even when a test initializes a repo in a temporary directory, git commands run in that temporary directory are redirected back to the enclosing repository.
 
-## Proposed changes
+## Proposed Change
+We will ensure that all `git` and `gh` subprocesses spawned by the test setup, test cases, and the bootstrap/wiki code run with a cleaned environment where all `GIT_*` variables are stripped. This is done by passing `env=clean_git_env()` to the subprocess calls.
 
-- In `.claude/commands/solomon-workflow.md`:
-  - Change description frontmatter to "Run a task end-to-end, or continue from a previous execution".
-- In `solomon_harness/cli.py`:
-  - Update `"/solomon-workflow"` description to "run a task end-to-end, or continue from a previous execution".
-- In `README.md`:
-  - Update `/solomon-workflow` description to "run a task end-to-end or continue".
-- In `docs/solomon-workflow.md`:
-  - Update `/solomon-workflow` table row to "runs a task end-to-end or continues".
-- In `docs/wiki/Commands-Reference.md`:
-  - Update `/solomon-workflow` heading to `### \`/solomon-workflow\` (End-to-End Orchestrator)` and description.
-- In `solomon_harness/install_global.py`:
-  - In `_copy_dir_contents`, add logic to delete files in `dest` with the matching suffixes that are not present in `src`.
-  - In `install_global`, add cleanup for stale skills in `~/.gemini/config/plugins/solomon/skills/` that do not match the current commands in the source repository.
-- In `tests/test_install_global.py`:
-  - In tests that call `install_global` with `default_gemini`, patch `os.path.expanduser` so that `"~/.gemini"` points to `self.gemini` instead of the user's real home folder.
-  - Update assertions to verify that stale commands in the destination directory are deleted.
+Specifically:
+1. In `tests/test_bootstrap.py`:
+   - Import `clean_git_env` from `solomon_harness.subprocess_env`.
+   - Update all `subprocess.run` calls (in `setUp` and individual tests) to include `env=clean_git_env()`.
+2. In `tests/test_home.py`:
+   - Import `clean_git_env` from `solomon_harness.subprocess_env`.
+   - Update `test_real_git_repo_resolves_remote` to use `clean_git_env()` instead of manual dict filtering.
+3. In `solomon_harness/bootstrap.py`:
+   - Update the `gh repo view` calls in `has_github_project_and_wiki` and `github_wiki_enabled` to use `env=clean_git_env()`.
+   - Update the `git ls-remote` call for checking wiki initialization to use `env=clean_git_env()`.
+   - Update the `git rev-parse` hook directory lookup to use `env=clean_git_env()`.
+4. In `solomon_harness/wiki_bootstrap.py`:
+   - Import `clean_git_env` from `solomon_harness.subprocess_env`.
+   - Update `wiki_refs_present` to pass `env=clean_git_env()` to the subprocess runner.
 
-## Target files
-- `.claude/commands/solomon-workflow.md`
-- `solomon_harness/cli.py`
-- `solomon_harness/install_global.py`
-- `tests/test_install_global.py`
-- `README.md`
-- `docs/solomon-workflow.md`
-- `docs/wiki/Commands-Reference.md`
+## Target Files
+- [solomon_harness/bootstrap.py](file:///Users/marcelo/.gemini/antigravity-cli/scratch/solomon-harness-review-worktrees/bugfix-test-suite-passes-inside-git-worktree/solomon_harness/bootstrap.py)
+- [solomon_harness/wiki_bootstrap.py](file:///Users/marcelo/.gemini/antigravity-cli/scratch/solomon-harness-review-worktrees/bugfix-test-suite-passes-inside-git-worktree/solomon_harness/wiki_bootstrap.py)
+- [tests/test_bootstrap.py](file:///Users/marcelo/.gemini/antigravity-cli/scratch/solomon-harness-review-worktrees/bugfix-test-suite-passes-inside-git-worktree/tests/test_bootstrap.py)
+- [tests/test_home.py](file:///Users/marcelo/.gemini/antigravity-cli/scratch/solomon-harness-review-worktrees/bugfix-test-suite-passes-inside-git-worktree/tests/test_home.py)
 
-## Edge cases
-- Stale folders in `~/.gemini/config/plugins/solomon/skills/` not being deleted. We handle this explicitly in the `install_global` logic.
-- Permissions to read/write/delete files in `~/.gemini/`. We will run standard file operations under defensive try-except blocks.
+## Edge Cases
+- Test environments might mock `subprocess.run` or `subprocess.check_output` (e.g. `wiki_refs_present` accepts a `runner` parameter). The mock runners must handle the `env` keyword argument correctly without raising `TypeError`. (Verified that `TestWikiRefsPresent` uses mock runners that accept `**kwargs` and will not raise).
 
-## TDD breakdown
-1. **Red**: Update `tests/test_install_global.py` to assert that stale command files in the destination directories are successfully deleted during installation.
-2. **Green**: Implement file deletion in `_copy_dir_contents` in `solomon_harness/install_global.py`.
-3. **Red**: Update `tests/test_install_global.py` to verify that stale skills directories are cleaned up when `is_default_gemini` is true.
-4. **Green**: Implement the stale skills clean-up in `install_global` in `solomon_harness/install_global.py`.
-5. Update command descriptions in target files and regenerate Gemini commands.
+## TDD Breakdown
+1. **Red**: Modify `tests/test_bootstrap.py` to run the setup/test commands with a simulated worktree environment containing dummy `GIT_DIR` / `GIT_WORK_TREE` values. Confirm that `test_bootstrap_creates_fallback_kanban_and_wiki_when_no_github` fails due to git command leakage.
+2. **Green**: Clean environment variables for `git` and `gh` subprocess calls in `solomon_harness/bootstrap.py`, `solomon_harness/wiki_bootstrap.py`, and `tests/test_bootstrap.py`. Verify that `test_bootstrap` tests now pass under the simulated worktree environment.
+3. **Red**: Update `tests/test_home.py` to run `test_real_git_repo_resolves_remote` under a simulated `GIT_DIR` environment without manual env filtering, and verify it fails.
+4. **Green**: Update `tests/test_home.py` to use `clean_git_env()` and verify it passes.
 
-## Verification criteria
-- Run `uv run pytest` to verify all tests pass.
-- Run `solomon-harness compile` and `solomon-harness install-global` to verify that global files are updated and stale commands are removed.
+## STRIDE Notes
+- **Information Disclosure**: Subprocesses executing git commands could potentially leak path structures or repository metadata if environment variables are not sanitized. Sanitizing the environment limits the command scope strictly to the target repository directory.
+
+## Verification Criteria
+- Run `uv run pytest` in the worktree and verify all tests pass.
+- Verify that `test_bootstrap` and `test_home` run successfully and isolate their git contexts.

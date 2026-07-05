@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from solomon_harness import home
+from solomon_harness.subprocess_env import clean_git_env
 
 
 class TestHarnessHome(unittest.TestCase):
@@ -70,16 +71,16 @@ class TestDeriveTenant(unittest.TestCase):
         self.assertNotEqual(ta, tb)
 
     def test_real_git_repo_resolves_remote(self):
-        # Clear GIT_* so the temp repo is not redirected to an enclosing repo or
-        # worktree (the suite itself may run inside one).
-        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run(["git", "init"], cwd=tmp, capture_output=True, env=env)
-            subprocess.run(
-                ["git", "remote", "add", "origin", "git@github.com:acme/widget.git"],
-                cwd=tmp, capture_output=True, env=env,
-            )
-            self.assertEqual(home.derive_tenant(tmp), "acme-widget")
+        # Simulate being run from a git hook by setting GIT_DIR in os.environ.
+        # This GIT_DIR would normally redirect git commands.
+        with patch.dict(os.environ, {"GIT_DIR": "/tmp/fake-git-dir-non-existent"}):
+            with tempfile.TemporaryDirectory() as tmp:
+                subprocess.run(["git", "init"], cwd=tmp, capture_output=True, env=clean_git_env())
+                subprocess.run(
+                    ["git", "remote", "add", "origin", "git@github.com:acme/widget.git"],
+                    cwd=tmp, capture_output=True, env=clean_git_env(),
+                )
+                self.assertEqual(home.derive_tenant(tmp), "acme-widget")
 
 
 class TestPortAssignment(unittest.TestCase):
