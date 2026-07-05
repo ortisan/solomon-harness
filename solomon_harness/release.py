@@ -832,7 +832,8 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
             exec_path = os.path.expanduser("~/.local/bin/agy")
             if not os.path.isfile(exec_path):
                 exec_path = "agy"
-            cmd = [exec_path, "-p", "Execute prompt from stdin", "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
+            import uuid
+            cmd = [exec_path, "-p", "-", "--conversation", str(uuid.uuid4()), "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
         elif engine == "claude":
             cmd = [engine, "-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
         else:
