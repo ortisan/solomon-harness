@@ -113,6 +113,23 @@ def handle_run(harness_dir: str, task=None) -> None:
     from solomon_harness.voice import say
 
     with db_client as db:
+        try:
+            # Determine workspace root
+            project_root = harness_dir
+            found_root = False
+            while project_root and project_root != os.path.dirname(project_root):
+                if os.path.exists(os.path.join(project_root, ".git")):
+                    found_root = True
+                    break
+                project_root = os.path.dirname(project_root)
+            workspace_root = project_root if found_root else harness_dir
+
+            from solomon_harness.bootstrap import scan_project_structure
+            scan_project_structure(workspace_root, db)
+        except Exception as exc:
+            import logging
+            logging.warning(f"Project structure scan failed at session start: {type(exc).__name__}")
+
         print(say("project status"))
 
         # One-screen board digest: resume point, open work, the last loop run,
