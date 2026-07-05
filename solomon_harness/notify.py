@@ -110,13 +110,13 @@ def log_progress(message: str) -> None:
     """
     prefix = get_agent_prefix()
     formatted = f"{prefix}: {message}"
-    sys.stderr.write(formatted + "\n")
+    sys.stderr.write(formatted + "\r\n")
     sys.stderr.flush()
-    if not sys.stderr.isatty():
+    if not sys.stderr.isatty() and not os.environ.get("SOLOMON_SUBPROCESS"):
         # Standard error is redirected/captured. Try to write directly to TTY.
         try:
             with open("/dev/tty", "w", encoding="utf-8") as tty:
-                tty.write(formatted + "\n")
+                tty.write(formatted + "\r\n")
                 tty.flush()
         except OSError:
             pass

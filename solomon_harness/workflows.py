@@ -326,6 +326,7 @@ def run_stage(
             from solomon_harness.subprocess_env import clean_git_env
 
             child_env = clean_git_env()
+            child_env["SOLOMON_SUBPROCESS"] = "1"
             if lock is not None:
                 # Propagate this driver's own identity into the engine child so
                 # that a nested `solomon-harness dev <stage>` it shells out to
@@ -372,7 +373,7 @@ def run_stage(
                     def read_stderr():
                         for chunk in iter(lambda: proc.stderr.read(1024), ""):
                             stderr_buf.append(chunk)
-                            sys.stderr.write(chunk)
+                            sys.stderr.write(chunk.replace("\r\n", "\n").replace("\n", "\r\n"))
                             sys.stderr.flush()
 
                     t = threading.Thread(target=read_stderr, daemon=True)
@@ -380,7 +381,7 @@ def run_stage(
 
                     for chunk in iter(lambda: proc.stdout.read(1024), ""):
                         stdout_buf.append(chunk)
-                        sys.stdout.write(chunk)
+                        sys.stdout.write(chunk.replace("\r\n", "\n").replace("\n", "\r\n"))
                         sys.stdout.flush()
 
                     proc.wait()
