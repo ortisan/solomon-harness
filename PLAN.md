@@ -1,34 +1,43 @@
-# PLAN.md: feat(agents): practice_curator as a capability-broker proxy that acquires missing agents/skills on demand
+# Plan: feat(agents): agent_builder meta-agent; delegate new-agent construction
 
-Problem statement:
-This is the parent epic issue #43 for the self-extending fleet model. No code lands directly on this issue; it tracks child issues #46 (Slice A: demand routing), #47 (Slice B: skill acquisition), #48 (Slice C: direct agent scaffolding), #49 (Slice D: agent_builder delegation), and #50 (Slice E: start/refine integration). Slice A is already implemented on main (carrying the capability router core, the curator's capability_broker skill, and ADR-0008). We are initializing this epic's branch to establish the tracking PR and memory state.
+## 1. Problem Statement
+Link #49 (feat(agents): agent_builder meta-agent; delegate new-agent construction). Address SOLID/DRY violation and separation of concerns by extracting agent construction/scaffolding logic from `practice_curator` to a dedicated `agent_builder` meta-agent.
 
-## Proposed changes
-- Initialize the epic tracking branch `feature/practice-curator-capability-broker-proxy`.
-- Verify the slice A implementation (`solomon_harness/capability_router.py`) and its unit tests (`tests/test_capability_router.py`).
-- Verify ADR-0008 is accepted and documented.
+## 2. Proposed Change and Boundary
+- Create `agents/agent_builder` directory containing its definition (`persona.md`, `agent_builder.md`, `config.json`, and default skill `scope_and_mandate.md`).
+- Add `agent_builder` to `CORE_AGENTS` in `solomon_harness/agent_selection.py`.
+- Refactor `broker_agent` in `solomon_harness/curator.py` to delegate agent building to `solomon_harness/agent_builder.py` (which we will create to represent `agent_builder`'s core construction capability).
+- Register `agent_builder` in `agents/AGENTS.md` and run compile to generate `.claude/agents/agent_builder.md`.
 
-## Target files
-- `PLAN.md` (this file)
-- `.solomon/handoffs/issue-43-start-to-review.md` (handoff contract)
+## 3. Target Files
+- `solomon_harness/agent_selection.py`
+- `solomon_harness/curator.py`
+- `solomon_harness/agent_builder.py` (new)
+- `agents/AGENTS.md`
+- `agents/agent_builder/persona.md`
+- `agents/agent_builder/agents/agent_builder.md`
+- `agents/agent_builder/skills/scope_and_mandate.md`
+- `agents/agent_builder/.agent/config.json`
 
-## Edge cases
-- No direct code changes: Since this is an epic, we do not commit functional code to this branch directly. Instead, we verify slice A, generate the plan, and hand off to Code Review.
-- Non-interactive execution: We proceed automatically without prompting the user.
+## 4. Edge Cases
+- **Invalid agent names**: Handled via regex to ensure only valid snake_case names are allowed.
+- **Path traversal / confinement escape**: Strict verification that the target path resolved via realpath starts with the `agents/` directory prefix.
+- **Non-interactive/headless execution defaults**: Sensible fallback behaviors when executing without human interaction.
 
-## TDD breakdown
-1. **Red**: Run the existing capability router tests to verify they are registered and executable.
-2. **Green**: Ensure all 21 tests in `tests/test_capability_router.py` pass successfully.
-3. **Refactor**: Verify the architectural design decision is recorded in the ADR and project memory.
+## 5. TDD Breakdown
+- **Commit 1**: Write failing test verifying `agent_builder` is included in `CORE_AGENTS` and `select_agents` returns it.
+- **Commit 2**: Implement `agent_builder` agent definition files under `agents/agent_builder`, add to `CORE_AGENTS`, register in `agents/AGENTS.md`, and run compile so it becomes green.
+- **Commit 3**: Write failing test verifying `broker_agent` delegates to `agent_builder` (e.g. check it calls the new delegate module).
+- **Commit 4**: Create `solomon_harness/agent_builder.py` and refactor `broker_agent` to import and delegate to `agent_builder.build_agent`.
+- **Commit 5**: Verify all tests in `tests/test_curator.py` pass with zero regressions.
 
-## STRIDE notes
-- **Spoofing**: Matcher functions are injected as ports/stubs; production LLM call boundaries are clean.
-- **Tampering**: Catalog loading strictly enforces path confinement and rejects symlinks.
-- **Repudiation**: Decisions and handoffs are logged in the project SurrealDB.
-- **Information Disclosure**: Catalog read limits protect memory; no data is leaked.
-- **Denial of Service**: Giant catalog files are read-capped to prevent memory exhaustion.
-- **Elevation of Privilege**: No fetched code is executed; skills are quarantined.
+## 6. STRIDE Notes
+- **Spoofing/Tampering**: Restrict scaffolding target path to realpath under `agents/` (confinement check).
+- **Information Disclosure**: Strict validation of `agent_name` preventing injects or path disclosure.
 
-## Verification criteria
-- `uv run pytest tests/test_capability_router.py` passes all 21 tests.
-- Handoff contract exists at `.solomon/handoffs/issue-43-start-to-review.md`.
+## 7. Objectively Checkable Verification Criteria
+- `select_agents` returns `agent_builder`.
+- `agents/agent_builder/` directory exists and contains persona, agent definition, and config.json.
+- `solomon-harness compile` command successfully compiles the integrations and generates `.claude/agents/agent_builder.md`.
+- `broker_agent` delegates to `solomon_harness/agent_builder.py`.
+- Running `uv run pytest` yields passing tests across all modules.

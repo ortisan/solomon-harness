@@ -143,7 +143,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-six role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-seven role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed to the host tools as Claude Code
 subagents and Antigravity commands. The count above is the number of `agents/*/agents/*.md`
@@ -152,6 +152,7 @@ from that directory listing.
 
 | Agent | Focus |
 | --- | --- |
+| `agent_builder` | scaffolds new specialist agents |
 | `product_owner` | PRDs, user stories, acceptance criteria, roadmapping, traceability |
 | `scrum_master` | milestones, backlog, sprints, flow metrics, Git Flow |
 | `software_architect` | C4, ADRs, design contracts, resilience patterns, review gate |

@@ -22,6 +22,10 @@ class TestAgentSelection(unittest.TestCase):
         for agent in CORE_AGENTS:
             self.assertIn(agent, selected)
 
+    def test_agent_builder_in_core_agents(self):
+        self.assertIn("agent_builder", CORE_AGENTS)
+
+
     def test_plain_python_does_not_pull_platform_agents(self):
         root = _project({"main.py": "print(1)", "requirements.txt": "requests\n"})
         selected = select_agents(root)
