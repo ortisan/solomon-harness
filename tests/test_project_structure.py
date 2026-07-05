@@ -3,7 +3,7 @@ import tempfile
 import shutil
 import json
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from solomon_harness.tools.database_client import DatabaseClient
 from solomon_harness.bootstrap import index_codebase, scan_project_structure
