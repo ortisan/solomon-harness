@@ -483,7 +483,6 @@ def broker_agent(
     """
     import os
     import re
-    from solomon_harness.bootstrap import scaffold_new_agent
 
     # Validate agent name strictly to prevent path traversal/confinement escape
     if not re.match(r"^[a-z0-9_]+$", agent_name):
