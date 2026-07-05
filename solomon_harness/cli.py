@@ -734,6 +734,11 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
             Defaults to the current working directory when omitted.
         argv: Optional argument list (defaults to sys.argv[1:]).
     """
+    import sys
+    from solomon_harness.notify import log_progress
+    cmd_args = argv if argv is not None else sys.argv[1:]
+    log_progress(f"Executing: solomon-harness {' '.join(cmd_args)}")
+
     parser = build_parser()
     args = parser.parse_args(argv)
 

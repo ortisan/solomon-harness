@@ -88,3 +88,26 @@ def send(workspace_root: str, event: str, message: str, env: Optional[Dict[str, 
         return True
     except Exception:
         return False
+
+
+def log_progress(message: str) -> None:
+    """Write progress/informational messages so they are visible to the user.
+
+    It always writes to stderr (so it doesn't pollute stdout for parseable commands).
+    If sys.stderr is not a TTY (meaning it is redirected or captured), it additionally writes
+    directly to the controlling terminal (/dev/tty) so that the user still sees it.
+    """
+    formatted = f"[solomon:info] {message}"
+    sys.stderr.write(formatted + "\n")
+    sys.stderr.flush()
+    if not sys.stderr.isatty():
+        # Standard error is redirected/captured. Try to write directly to TTY.
+        try:
+            with open("/dev/tty", "w", encoding="utf-8") as tty:
+                tty.write(formatted + "\n")
+                tty.flush()
+        except OSError:
+            pass
+
+
+
