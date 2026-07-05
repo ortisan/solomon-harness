@@ -884,8 +884,26 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
             bootstrapper=None,
         )
         if not outcome.proceed:
-            print(outcome.message, file=sys.stderr)
-            sys.exit(outcome.exit_code)
+            is_private = False
+            try:
+                import json
+                import subprocess
+                out = subprocess.check_output(
+                    ["gh", "repo", "view", "--json", "isPrivate"],
+                    cwd=workspace_root,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2.0,
+                )
+                is_private = json.loads(out).get("isPrivate", False)
+            except Exception:
+                pass
+
+            if is_private:
+                print("Warning: Wiki is not initialized or not detected for a private repository. Skipping remote wiki update.")
+            else:
+                print(outcome.message, file=sys.stderr)
+                sys.exit(outcome.exit_code)
         try:
             with DatabaseClient(harness_dir=workspace_root) as db:
                 index_codebase(workspace_root, db)

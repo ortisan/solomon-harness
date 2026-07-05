@@ -101,6 +101,14 @@ PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
 DETECT_STATUS=$?
 set -e
 if [[ "$DETECT_STATUS" -ne 0 ]]; then
+  IS_PRIVATE="false"
+  if [[ "$REMOTE_URL" == *"github.com"* ]]; then
+    IS_PRIVATE=$(gh repo view --json isPrivate -q .isPrivate 2>/dev/null || echo "true")
+  fi
+  if [[ "$IS_PRIVATE" == "true" ]]; then
+    echo "Warning: Wiki not initialized or not detected for a private repository. Skipping wiki sync." >&2
+    exit 0
+  fi
   exit "$DETECT_STATUS"
 fi
 
@@ -126,6 +134,14 @@ trap cleanup EXIT
 # local-init-then-push fallback to attempt.
 echo "Cloning wiki repository..."
 if ! git clone "$WIKI_URL" "$TEMP_DIR" 2>/dev/null; then
+  IS_PRIVATE="false"
+  if [[ "$REMOTE_URL" == *"github.com"* ]]; then
+    IS_PRIVATE=$(gh repo view --json isPrivate -q .isPrivate 2>/dev/null || echo "true")
+  fi
+  if [[ "$IS_PRIVATE" == "true" ]]; then
+    echo "Warning: Failed to clone the wiki repository for a private project. Skipping wiki sync." >&2
+    exit 0
+  fi
   echo "Error: Failed to clone the wiki repository." >&2
   exit 3
 fi
