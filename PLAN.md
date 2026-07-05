@@ -1,53 +1,43 @@
-# PLAN.md: refactor(workflow): update command descriptions and synchronize global install
+# Plan: feat(agents): agent_builder meta-agent; delegate new-agent construction
 
-Problem statement: 
-The user wants `/solomon-workflow` to be clearly defined as the command that runs a task end-to-end or continues from a previous execution, and `/solomon-loop` to be defined as the parallel autonomous loop (the current `/solomon-loop-auto`). In the codebase, these commands are already renamed, but the user's local workspace and IDE settings are still showing stale names (`solomon-loop` as the orchestrator and `solomon-loop-auto` as the parallel loop) and the generated global command files are corrupt or outdated.
+## 1. Problem Statement
+Link #49 (feat(agents): agent_builder meta-agent; delegate new-agent construction). Address SOLID/DRY violation and separation of concerns by extracting agent construction/scaffolding logic from `practice_curator` to a dedicated `agent_builder` meta-agent.
 
-We need to:
-1. Update descriptions for `solomon-workflow` in `.claude/commands/solomon-workflow.md`, `solomon_harness/cli.py`, `README.md`, `docs/solomon-workflow.md`, and `docs/wiki/Commands-Reference.md` to indicate it runs a task end-to-end or continues from a previous execution.
-2. Synchronize directories in `solomon_harness/install_global.py` so that old/stale commands (like `solomon-loop-auto.toml`) are deleted from the global directories.
-3. Clean up the stale `solomon-loop-auto` directory from the user's `~/.gemini/config/plugins/solomon/skills/` during global installation.
-4. Fix the test suite `tests/test_install_global.py` so it does not overwrite the real user's `~/.gemini` folder during test execution.
+## 2. Proposed Change and Boundary
+- Create `agents/agent_builder` directory containing its definition (`persona.md`, `agent_builder.md`, `config.json`, and default skill `scope_and_mandate.md`).
+- Add `agent_builder` to `CORE_AGENTS` in `solomon_harness/agent_selection.py`.
+- Refactor `broker_agent` in `solomon_harness/curator.py` to delegate agent building to `solomon_harness/agent_builder.py` (which we will create to represent `agent_builder`'s core construction capability).
+- Register `agent_builder` in `agents/AGENTS.md` and run compile to generate `.claude/agents/agent_builder.md`.
 
-## Proposed changes
+## 3. Target Files
+- `solomon_harness/agent_selection.py`
+- `solomon_harness/curator.py`
+- `solomon_harness/agent_builder.py` (new)
+- `agents/AGENTS.md`
+- `agents/agent_builder/persona.md`
+- `agents/agent_builder/agents/agent_builder.md`
+- `agents/agent_builder/skills/scope_and_mandate.md`
+- `agents/agent_builder/.agent/config.json`
 
-- In `.claude/commands/solomon-workflow.md`:
-  - Change description frontmatter to "Run a task end-to-end, or continue from a previous execution".
-- In `solomon_harness/cli.py`:
-  - Update `"/solomon-workflow"` description to "run a task end-to-end, or continue from a previous execution".
-- In `README.md`:
-  - Update `/solomon-workflow` description to "run a task end-to-end or continue".
-- In `docs/solomon-workflow.md`:
-  - Update `/solomon-workflow` table row to "runs a task end-to-end or continues".
-- In `docs/wiki/Commands-Reference.md`:
-  - Update `/solomon-workflow` heading to `### \`/solomon-workflow\` (End-to-End Orchestrator)` and description.
-- In `solomon_harness/install_global.py`:
-  - In `_copy_dir_contents`, add logic to delete files in `dest` with the matching suffixes that are not present in `src`.
-  - In `install_global`, add cleanup for stale skills in `~/.gemini/config/plugins/solomon/skills/` that do not match the current commands in the source repository.
-- In `tests/test_install_global.py`:
-  - In tests that call `install_global` with `default_gemini`, patch `os.path.expanduser` so that `"~/.gemini"` points to `self.gemini` instead of the user's real home folder.
-  - Update assertions to verify that stale commands in the destination directory are deleted.
+## 4. Edge Cases
+- **Invalid agent names**: Handled via regex to ensure only valid snake_case names are allowed.
+- **Path traversal / confinement escape**: Strict verification that the target path resolved via realpath starts with the `agents/` directory prefix.
+- **Non-interactive/headless execution defaults**: Sensible fallback behaviors when executing without human interaction.
 
-## Target files
-- `.claude/commands/solomon-workflow.md`
-- `solomon_harness/cli.py`
-- `solomon_harness/install_global.py`
-- `tests/test_install_global.py`
-- `README.md`
-- `docs/solomon-workflow.md`
-- `docs/wiki/Commands-Reference.md`
+## 5. TDD Breakdown
+- **Commit 1**: Write failing test verifying `agent_builder` is included in `CORE_AGENTS` and `select_agents` returns it.
+- **Commit 2**: Implement `agent_builder` agent definition files under `agents/agent_builder`, add to `CORE_AGENTS`, register in `agents/AGENTS.md`, and run compile so it becomes green.
+- **Commit 3**: Write failing test verifying `broker_agent` delegates to `agent_builder` (e.g. check it calls the new delegate module).
+- **Commit 4**: Create `solomon_harness/agent_builder.py` and refactor `broker_agent` to import and delegate to `agent_builder.build_agent`.
+- **Commit 5**: Verify all tests in `tests/test_curator.py` pass with zero regressions.
 
-## Edge cases
-- Stale folders in `~/.gemini/config/plugins/solomon/skills/` not being deleted. We handle this explicitly in the `install_global` logic.
-- Permissions to read/write/delete files in `~/.gemini/`. We will run standard file operations under defensive try-except blocks.
+## 6. STRIDE Notes
+- **Spoofing/Tampering**: Restrict scaffolding target path to realpath under `agents/` (confinement check).
+- **Information Disclosure**: Strict validation of `agent_name` preventing injects or path disclosure.
 
-## TDD breakdown
-1. **Red**: Update `tests/test_install_global.py` to assert that stale command files in the destination directories are successfully deleted during installation.
-2. **Green**: Implement file deletion in `_copy_dir_contents` in `solomon_harness/install_global.py`.
-3. **Red**: Update `tests/test_install_global.py` to verify that stale skills directories are cleaned up when `is_default_gemini` is true.
-4. **Green**: Implement the stale skills clean-up in `install_global` in `solomon_harness/install_global.py`.
-5. Update command descriptions in target files and regenerate Gemini commands.
-
-## Verification criteria
-- Run `uv run pytest` to verify all tests pass.
-- Run `solomon-harness compile` and `solomon-harness install-global` to verify that global files are updated and stale commands are removed.
+## 7. Objectively Checkable Verification Criteria
+- `select_agents` returns `agent_builder`.
+- `agents/agent_builder/` directory exists and contains persona, agent definition, and config.json.
+- `solomon-harness compile` command successfully compiles the integrations and generates `.claude/agents/agent_builder.md`.
+- `broker_agent` delegates to `solomon_harness/agent_builder.py`.
+- Running `uv run pytest` yields passing tests across all modules.
