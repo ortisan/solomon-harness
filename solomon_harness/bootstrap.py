@@ -211,16 +211,15 @@ def github_prereq_status(
 ) -> tuple[bool, bool, bool]:
     """Decide whether `init` should block on the GitHub Wiki/Projects check.
 
-    Wiki is only a hard requirement for public repos: a private repo may not
-    be able to enable it at all (org policy, plan restrictions), so it is
-    reported but never blocks init on its own. GitHub Projects always blocks,
-    since the delivery board depends on it.
+    Wiki and Projects are only hard requirements for public repos: a private repo may not
+    be able to enable them at all (org policy, plan restrictions), so they are
+    reported but never block init on their own.
 
     Returns (wiki_ok, wiki_blocking, blocked).
     """
     wiki_ok = wiki_enabled and wiki_initialized
     wiki_blocking = not wiki_ok and is_public
-    blocked = wiki_blocking or not projects_ok
+    blocked = wiki_blocking or (not projects_ok and is_public)
     return wiki_ok, wiki_blocking, blocked
 
 
@@ -624,12 +623,12 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
 
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr.strip() if e.stderr else str(e)
-            print(f"Error: Failed to verify GitHub repository settings via gh CLI: {error_msg}")
-            print("Please ensure you are authenticated via 'gh auth login' and have access to the repository.")
-            sys.exit(1)
+            print(f"  Warning: Failed to verify GitHub repository settings via gh CLI: {error_msg}")
+            print("  Please ensure you are authenticated via 'gh auth login' if this is a public repository.")
+            print("  Proceeding without GitHub prerequisites checks (falling back to local Kanban/Wiki templates).")
         except Exception as e:
-            print(f"Error checking GitHub prerequisites: {e}")
-            sys.exit(1)
+            print(f"  Warning checking GitHub prerequisites: {e}")
+            print("  Proceeding without GitHub prerequisites checks (falling back to local Kanban/Wiki templates).")
 
     tenant = ensure_database_config(workspace_root)
     try:

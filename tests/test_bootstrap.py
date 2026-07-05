@@ -342,14 +342,14 @@ class TestGithubPrereqStatus(unittest.TestCase):
         self.assertFalse(wiki_blocking)
         self.assertFalse(blocked)
 
-    def test_private_repo_missing_projects_still_blocks(self):
+    def test_private_repo_missing_projects_does_not_block(self):
         from solomon_harness.bootstrap import github_prereq_status
 
         wiki_ok, wiki_blocking, blocked = github_prereq_status(
             wiki_enabled=False, wiki_initialized=False, projects_ok=False, is_public=False
         )
         self.assertFalse(wiki_blocking)
-        self.assertTrue(blocked)
+        self.assertFalse(blocked)
 
     def test_public_repo_with_wiki_and_projects_does_not_block(self):
         from solomon_harness.bootstrap import github_prereq_status
