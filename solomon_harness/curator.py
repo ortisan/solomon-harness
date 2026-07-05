@@ -496,8 +496,8 @@ def broker_agent(
         if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
             raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
 
-        # Delegate directly to scaffold_new_agent
-        scaffold_new_agent(
+        from solomon_harness.agent_builder import build_agent
+        build_agent(
             workspace_root,
             agent_name,
             description,
