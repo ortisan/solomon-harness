@@ -102,10 +102,10 @@ class LoopPolicy:
         """Decide whether the automation path may run ``stage`` now."""
         if self.is_halted():
             return Decision(False, "loop halted by kill-switch; clear with 'solomon-harness loop-stop --clear'")
-        if self.level == "human":
-            return Decision(True, "")
         if stage in HUMAN_GATED_STAGES:
             return Decision(False, f"'{stage}' is permanently human-gated (merge/release/Done are never autonomous)")
+        if self.level == "human":
+            return Decision(True, "")
         if self.level == "L1":
             if stage in L1_ALLOWED_STAGES:
                 return Decision(True, "")

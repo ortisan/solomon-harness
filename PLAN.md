@@ -1,42 +1,45 @@
-# PLAN.md: chore(agents): capability-router hardening follow-ups
+# Plan - loop_policy human-gate merge/release enforcement (#183)
 
-Problem statement: Harden the capability-router module by implementing safety caps, path confinement/symlink rejection, import-graph/no-write fitness checks, distinct matcher contract error type, and order assertions (#85).
+## Problem Statement
+The default unconfigured `human` autonomy level allows the permanently human-gated `release` stage (and potentially other future gated stages) to execute. The policy layer should enforce that permanently human-gated stages (e.g., `release`) are always blocked, regardless of the configured autonomy level.
+Refs #183.
 
-## Proposed changes
-- Introduce `MatcherContractError` in `solomon_harness/capability_router.py`.
-- Update `_role_description` to prevent unbounded memory read by reading at most 8192 bytes per readline call and handling line continuation.
-- Update `load_catalog` to resolve realpaths, ensure paths are confined within the `agents` folder, and reject symlink files/directories.
-- Raise `MatcherContractError` (instead of `CatalogError`) when the matcher returns an agent not in the catalog.
-- Write unit tests covering read-capping, path confinement, symlink rejection, the new error type, alternatives ordering, and module isolation/no-write fitness check.
+## Proposed Change and Boundary
+- In `solomon_harness/loop_policy.py`, reorder the checks inside `LoopPolicy.decide_stage` to run the `stage in HUMAN_GATED_STAGES` check before checking if `self.level == "human"`.
+- This ensures that human-gated stages are checked and rejected first, before allowing unrestricted actions under the `"human"` autonomy level.
+- Non-gated stages (like `review` or `start`) must remain unaffected and allowed under the `"human"` level.
 
-## Target files
-- `solomon_harness/capability_router.py`
-- `tests/test_capability_router.py`
+## Target Files
+- `solomon_harness/loop_policy.py`
 
-## Edge cases
-- Giant single-line role file (memory safety).
-- Directory traversal using symlink.
-- Matcher returning an agent not present in the catalog.
-- Alternatives containing invalid/valid agents in specific order.
-- Module attempting to import blacklisted libraries (e.g. requests, urllib, torch).
+## Edge Cases as Observable Outcomes
+1. Stage `release` (in `HUMAN_GATED_STAGES`) is called when autonomy is `human`. Result: Rejected with explanation.
+2. Stage `review` (not in `HUMAN_GATED_STAGES`) is called when autonomy is `human`. Result: Allowed.
+3. Stage `release` is called when autonomy is `L1`/`L2`/`L3`. Result: Rejected.
+4. Stage `review` is called when autonomy is `L2`/`L3`. Result: Allowed.
 
-## TDD breakdown
-1. **Red**: Write a test in `tests/test_capability_router.py` for giant single-line files and read capping.
-   **Green**: Update `_role_description` to read in chunks of 8192 bytes and handle line continuation.
-   *Commit: test: add read cap tests and implement readline capping*
-2. **Red**: Write a test for symlink rejection and path confinement.
-   **Green**: Update `load_catalog` to verify realpaths and reject symlinks using `os.path.islink`.
-   *Commit: test: add confinement/symlink tests and implement catalog protection*
-3. **Red**: Write a test asserting that `MatcherContractError` is raised when the matcher returns an invalid agent.
-   **Green**: Define `MatcherContractError` and raise it in `route`.
-   *Commit: test: add matcher contract error test and implement error type*
-4. **Red**: Write a test asserting that alternatives ordering is preserved.
-   **Green**: Verify alternatives tuple is constructed preserving order.
-   *Commit: test: add alternatives order assertion test*
-5. **Red**: Write a test parsing `solomon_harness/capability_router.py` AST to check imports (fitness check) and ensuring no write operations.
-   **Green**: Ensure AST validation test passes.
-   *Commit: test: add CI fitness check for module isolation*
+## TDD Step Breakdown
 
-## Verification criteria
-- `PYTHONPATH=. uv run pytest tests/test_capability_router.py` passes.
-- All 387 tests pass.
+### Step 1: Red (failing tests for the bug)
+Modify `tests/test_loop_policy.py` to assert that:
+- `release` is blocked under autonomy level `"human"`.
+- `review` is allowed under autonomy level `"human"`.
+This step should fail because today `release` is allowed under `"human"`.
+Commit message: `test(workflow): add failing regression tests for human-level release gate`
+
+### Step 2: Green (fix the bug)
+Reorder checks in `solomon_harness/loop_policy.py` so `HUMAN_GATED_STAGES` is checked before `self.level == "human"`.
+Verify tests pass.
+Commit message: `fix(workflow): check permanently human-gated stages before human autonomy early-return`
+
+### Step 3: Refactor (clean up/polish)
+Ensure code is well-formatted and docstrings are accurate. No logical changes.
+Commit message: `refactor(workflow): clean up decide_stage comments and formatting`
+
+## STRIDE Threat Notes
+- **Elevation of Privilege**: This fix mitigates potential elevation of privilege where a client running unattended loop commands at the default `human` level could inadvertently run a release stage. By locking this down in python-enforced policy, we avoid privilege escalation.
+- **T/I/D/E**: No direct input validation or data serialization changes.
+
+## Verification Criteria
+- Run `uv run pytest tests/test_loop_policy.py` and ensure all tests pass.
+- Run `uv run python -m solomon_harness.cli loop-policy` to view status.
