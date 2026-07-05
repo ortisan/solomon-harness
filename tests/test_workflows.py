@@ -210,14 +210,14 @@ class TestWorkflows(unittest.TestCase):
 
     def _run_stage_capturing_engine_cmd(self, root, stage, args, engine):
         # worktree_root() (and LoopLock's `ps` liveness probe) call the real
-        # subprocess.run; only the actual engine launch (claude/gemini/agy)
+        # subprocess.run; only the actual engine launch (claude/agy)
         # must be faked, so real git calls resolve against the git repo
         # _git_workspace_with_command set up rather than a blanket mock.
         real_run = subprocess.run
         captured = []
 
         def fake_run(cmd, *a, **kw):
-            if cmd[0] in ("claude", "gemini", "agy"):
+            if cmd and os.path.basename(cmd[0]) in ("claude", "agy"):
                 captured.append(cmd)
 
                 class _Proc:
@@ -242,7 +242,7 @@ class TestWorkflows(unittest.TestCase):
 
     def test_run_stage_omits_add_dir_for_non_claude_engine(self):
         root = _git_workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
-        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "gemini")
+        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "agy")
         self.assertNotIn("--add-dir", cmd)
 
     def test_run_stage_omits_add_dir_for_a_non_locked_stage(self):
