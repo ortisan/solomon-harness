@@ -95,10 +95,10 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 
 ## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
-- Open a draft PR: `gh pr create --draft --base develop --title "<conventional title>" --body "..."`.
+- Open a draft PR: `uv run python -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
   The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
   (`docs/adr/NNNN-<slug>.md`) or state that no ADR was warranted and why.
-- `uv run python -m solomon_harness.github set-status --issue $ARGUMENTS --status "Code Review"`.
+- `uv run python -m solomon_harness.cli github set-status --issue $ARGUMENTS --status "Code Review"`.
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.

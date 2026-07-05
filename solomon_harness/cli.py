@@ -723,6 +723,16 @@ def build_parser() -> argparse.ArgumentParser:
     scaffold_parser.add_argument("agent_name", type=str, help="Agent name")
     scaffold_parser.add_argument("--description", type=str, required=True, help="Agent description")
 
+    github_parser = subparsers.add_parser(
+        "github",
+        help="GitHub board and PR helpers (ensure-board, set-status, add-issue, merge, pr-create)",
+    )
+    github_parser.add_argument(
+        "github_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments passed to the github helper module",
+    )
+
     return parser
 
 
@@ -845,6 +855,9 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
             ))
         else:
             _subparser(parser, "memory").print_help()
+    elif args.command == "github":
+        from solomon_harness.github import main as github_main
+        sys.exit(github_main(args.github_args))
     elif args.command == "install-global":
         from solomon_harness.install_global import describe, install_global
         result = install_global(register_mcp=not args.no_mcp)

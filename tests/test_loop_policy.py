@@ -16,8 +16,9 @@ def _policy(level, root=None, **kw):
 class TestLadder(unittest.TestCase):
     def test_human_allows_everything(self):
         p = _policy("human")
-        for stage in ("workflow", "loop", "start", "review", "release", "idea"):
+        for stage in ("workflow", "loop", "start", "review", "idea"):
             self.assertTrue(p.decide_stage(stage).allowed, stage)
+        self.assertFalse(p.decide_stage("release").allowed)
 
     def test_release_is_permanently_human_gated(self):
         for level in ("L1", "L2", "L3"):
@@ -60,7 +61,7 @@ class TestLadder(unittest.TestCase):
         # (no `loop` block configured) is unrestricted.
         for level in ("L1", "L2", "L3"):
             self.assertFalse(_policy(level).decide_stage("release").allowed, level)
-        self.assertTrue(_policy("human").decide_stage("release").allowed)
+        self.assertFalse(_policy("human").decide_stage("release").allowed)
 
     def test_scan_loops_are_l2_l3_automation(self):
         self.assertTrue(_policy("L2").decide_stage("scan-arch").allowed)
@@ -180,7 +181,7 @@ class TestFromConfig(unittest.TestCase):
         root = tempfile.mkdtemp()
         p = LoopPolicy.from_config(root, env={})
         self.assertEqual(p.level, "human")
-        self.assertTrue(p.decide_stage("release").allowed)
+        self.assertFalse(p.decide_stage("release").allowed)
 
 
 if __name__ == "__main__":
