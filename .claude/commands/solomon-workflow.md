@@ -1,7 +1,7 @@
 ---
 description: Run a task end-to-end, or continue from a previous execution
 argument-hint: (optional) a focus, e.g. an issue or PR number
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, AskUserQuestion, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, AskUserQuestion, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__get_open_issues, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__get_memory
 ---
 
 You are the orchestrator for the solomon delivery lifecycle. Read
@@ -19,6 +19,7 @@ move-to-Done gates always require a human.
 Gather these and summarize them concisely:
 
 - `mcp__solomon-memory__get_latest_activity` — the last recorded session or handoff (where the team stopped). If it returns a handoff with a `contract_path`, read that handoff contract first and treat it as the bounded input — open the artifacts it points to (PLAN.md, the diff, the ADR, the PR) only when you need them, instead of re-deriving prior context.
+- `mcp__solomon-memory__get_memory("__project_structure__")` and `mcp__solomon-memory__get_memory("__project_evolution__")` — the living project model and its evolution log. Compare the model's manifest signature with the current codebase state to check if the memory is stale vs. the code (flag any discrepancy).
 - `mcp__solomon-memory__get_open_issues` and `gh issue list --state open` — open work and its labels.
 - `gh pr list --state open` — pull requests and their review/approval state.
 - The board columns (Ready / In Progress / Code Review / QA) via `gh project item-list` or `solomon_harness.github`.
@@ -34,6 +35,8 @@ Gather these and summarize them concisely:
 7. **Nothing in progress and the backlog is empty** → there is no work to advance; ask the user whether to create one — `/solomon-idea`, `/solomon-issue`, or `/solomon-bug` — and what it is about.
 
 If `$ARGUMENTS` names a specific issue or PR, evaluate that item and pick its next step.
+
+When deciding the next step, your rationale MUST cite the living project model (current structure and/or the most recent delivered evolution) retrieved from memory, not only the board column state. If the model and the board disagree (e.g. memory is stale vs. the code), flag the discrepancy instead of silently trusting one.
 
 ## 3. Propose as an enumerated decision card, confirm, run
 
