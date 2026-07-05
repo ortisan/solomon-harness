@@ -411,6 +411,17 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     return {"ok": True, "pr": pr_number, "issue": issue_number}
 
 
+def create_pull_request(draft: bool, base: str, title: str, body: str) -> Dict[str, Any]:
+    """Create a pull request using gh CLI."""
+    cmd = ["pr", "create", "--base", base, "--title", title, "--body", body]
+    if draft:
+        cmd.append("--draft")
+    res = _gh(cmd)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error", "gh pr create failed.")}
+    return {"ok": True, "url": res.get("stdout", "").strip()}
+
+
 STANDARD_LABELS = [
     ("type:feature", "0E8A16", "A new capability or user story"),
     ("type:bug", "D73A4A", "A defect to fix"),
@@ -587,6 +598,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_merge.add_argument("--pr", type=int, required=True)
     p_merge.add_argument("--issue", type=int, required=True)
 
+    p_pr_create = sub.add_parser("pr-create", help="Create a Pull Request")
+    p_pr_create.add_argument("--draft", action="store_true")
+    p_pr_create.add_argument("--base", default="main")
+    p_pr_create.add_argument("--title", required=True)
+    p_pr_create.add_argument("--body", required=True)
+
     args = parser.parse_args(argv)
 
     if args.command == "ensure-board":
@@ -623,6 +640,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = add_issue_to_board(args.issue, title=args.title)
     elif args.command == "merge":
         result = merge_pr_and_close(args.pr, args.issue)
+    elif args.command == "pr-create":
+        result = create_pull_request(draft=args.draft, base=args.base, title=args.title, body=args.body)
     else:
         parser.print_help()
         return 1

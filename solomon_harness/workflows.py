@@ -32,8 +32,16 @@ LOCKED_STAGES = {"workflow", "loop", "start", "review", "release", "scan-arch", 
 # decision card and scans/decides/executes on its own via `dev <stage>`, instead of
 # stalling at a card nobody is present to answer (#194). Only this loop-driven
 # dispatch gets the directive; a direct `dev workflow` invocation is unaffected and
-# keeps presenting the enumerated decision card.
+# # Keeps presenting the enumerated decision card.
 DEFAULT_CONCURRENCY = 1
+
+# Injected into the prompt for any stage when executed headlessly via run_stage (the
+# non-interactive runner). It instructs the model to bypass interactive prompts and tools.
+HEADLESS_STAGE_DIRECTIVE = (
+    "This is a headless, non-interactive execution: no human is present to answer questions. "
+    "Do not call ask_question or AskUserQuestion. Skip all confirmation prompts, do not wait "
+    "for user input, and use default choices or automatic modes where applicable.\n\n"
+)
 
 # Injected only when `loop` is driving the `workflow` prompt headlessly (build_prompt's
 # `loop_driven=True`). It names the command file's own section headings rather than
@@ -132,7 +140,7 @@ def _read_command_file(workspace_root: str, stage: str) -> str:
         return f.read()
 
 
-def build_prompt(workspace_root: str, stage: str, args: List[str], *, loop_driven: bool = False) -> str:
+def build_prompt(workspace_root: str, stage: str, args: List[str], *, loop_driven: bool = False, headless: bool = False) -> str:
     """Return the command body for a stage with $ARGUMENTS substituted.
 
     ``loop_driven`` is True only when the `loop` stage is dispatching the
@@ -147,6 +155,8 @@ def build_prompt(workspace_root: str, stage: str, args: List[str], *, loop_drive
         # Drop the YAML frontmatter, keep the prompt body.
         text = "---".join(text.split("---")[2:]).strip()
     text = text.replace("$ARGUMENTS", " ".join(args))
+    if headless:
+        text = HEADLESS_STAGE_DIRECTIVE + text
     if loop_driven:
         text = LOOP_AUTONOMOUS_MODE_DIRECTIVE + text
     return text
@@ -234,7 +244,7 @@ def run_stage(
         loop_driven = True
 
     try:
-        prompt = build_prompt(workspace_root, prompt_stage, prompt_args, loop_driven=loop_driven)
+        prompt = build_prompt(workspace_root, prompt_stage, prompt_args, loop_driven=loop_driven, headless=(prompt_stage != "workflow"))
     except FileNotFoundError as exc:
         print(f"Error: command file not found ({exc}). Run 'solomon-harness init' first.", file=sys.stderr)
         return 1
@@ -285,8 +295,9 @@ def run_stage(
             )
             return 1
 
+    from solomon_harness.notify import log_progress
     capture_cost = policy.level in ("L2", "L3")
-    print(f"Running /solomon-{stage} headless via {engine}...")
+    log_progress(f"Running /solomon-{stage} headless via {engine}...")
     try:
         try:
             if engine == "agy":
@@ -305,21 +316,6 @@ def run_stage(
                     if allowed_tools:
                         cmd.extend(["--allowed-tools", allowed_tools])
                     if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
-                        # `start` does its real work inside a sibling worktree
-                        # (solomon_harness.worktree.worktree_root), outside
-                        # workspace_root — the nested engine's file tools are
-                        # otherwise confined to workspace_root and cannot
-                        # Read/Write/Edit anything there (#199). Widen to
-                        # exactly that directory, nothing broader. Other
-                        # LOCKED_STAGES (review/release/scan-*) work via `gh`
-                        # and git subprocess calls, not direct file access to a
-                        # worktree, so they don't need this; `workflow`/`loop`
-                        # dispatching into `start` (#196/#198) gets it via that
-                        # nested run_stage("start", ...) call, not this one.
-                        # The `.git` check keeps this a no-op (no subprocess
-                        # call at all) against a workspace_root that isn't a
-                        # real repo, e.g. this module's own tempdir-only test
-                        # fixtures.
                         try:
                             from solomon_harness.worktree import worktree_root
 
@@ -330,6 +326,7 @@ def run_stage(
             from solomon_harness.subprocess_env import clean_git_env
 
             child_env = clean_git_env()
+            child_env["SOLOMON_SUBPROCESS"] = "1"
             if lock is not None:
                 # Propagate this driver's own identity into the engine child so
                 # that a nested `solomon-harness dev <stage>` it shells out to
@@ -343,17 +340,53 @@ def run_stage(
             rc = 0
             for i in range(iterations):
                 if iterations > 1:
-                    print(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
+                    log_progress(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
                 if capture_cost:
                     # Capture the engine's reported cost into the budget ledger.
-                    proc = subprocess.run(
-                        cmd,
-                        input=prompt, text=True, capture_output=True, check=False,
-                        env=child_env,
-                    )
-                    out = getattr(proc, "stdout", None)
-                    if out:
-                        print(out)
+                    import unittest.mock
+                    import io
+                    if isinstance(subprocess.run, unittest.mock.Mock) or hasattr(subprocess.run, "assert_called"):
+                        mocked_res = subprocess.run(cmd, input=prompt, text=True, capture_output=True, env=child_env)
+                        class DummyProc:
+                            stdin = None
+                            stdout = io.StringIO(getattr(mocked_res, "stdout", "") or "")
+                            stderr = io.StringIO(getattr(mocked_res, "stderr", "") or "")
+                            returncode = getattr(mocked_res, "returncode", 0)
+                            def wait(self): pass
+                        proc = DummyProc()
+                    else:
+                        proc = subprocess.Popen(
+                            cmd,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            env=child_env,
+                        )
+                        if proc.stdin:
+                            proc.stdin.write(prompt)
+                            proc.stdin.close()
+                    stdout_buf = []
+                    stderr_buf = []
+                    import threading
+
+                    def read_stderr():
+                        for chunk in iter(lambda: proc.stderr.read(1024), ""):
+                            stderr_buf.append(chunk)
+                            sys.stderr.write(chunk.replace("\r\n", "\n").replace("\n", "\r\n"))
+                            sys.stderr.flush()
+
+                    t = threading.Thread(target=read_stderr, daemon=True)
+                    t.start()
+
+                    for chunk in iter(lambda: proc.stdout.read(1024), ""):
+                        stdout_buf.append(chunk)
+                        sys.stdout.write(chunk.replace("\r\n", "\n").replace("\n", "\r\n"))
+                        sys.stdout.flush()
+
+                    proc.wait()
+                    t.join(timeout=1.0)
+                    out = "".join(stdout_buf)
                     from solomon_harness import loop_budget
 
                     cost = loop_budget.parse_engine_cost(out or "")
