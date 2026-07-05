@@ -257,6 +257,158 @@ class TestBootstrapAgent(unittest.TestCase):
             bootstrap_project(self.workspace_dir, non_interactive=True)
 
 
+class TestProjectIdentityNotClobberedByHarnessInstall(unittest.TestCase):
+    """A fresh project with no pyproject.toml/package.json of its own must keep
+    its own directory name as its identity. Regression: _install_harness_files
+    copies this repo's own pyproject.toml (name = "solomon-harness") into any
+    workspace that lacks one, so reading project metadata after that copy
+    misidentified every from-scratch install as "solomon-harness"."""
+
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.workspace_dir = os.path.join(self.test_dir.name, "acme-trader")
+        os.makedirs(self.workspace_dir)
+
+        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=self.workspace_dir,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=self.workspace_dir,
+            capture_output=True,
+        )
+
+        self._home = tempfile.mkdtemp()
+        self._prev_home = os.environ.get("SOLOMON_HARNESS_HOME")
+        os.environ["SOLOMON_HARNESS_HOME"] = self._home
+
+        self._prev_skip_gh = os.environ.get("SOLOMON_SKIP_GH_CHECK")
+        os.environ["SOLOMON_SKIP_GH_CHECK"] = "true"
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+        if self._prev_home is None:
+            os.environ.pop("SOLOMON_HARNESS_HOME", None)
+        else:
+            os.environ["SOLOMON_HARNESS_HOME"] = self._prev_home
+
+        if self._prev_skip_gh is None:
+            os.environ.pop("SOLOMON_SKIP_GH_CHECK", None)
+        else:
+            os.environ["SOLOMON_SKIP_GH_CHECK"] = self._prev_skip_gh
+        shutil.rmtree(self._home, ignore_errors=True)
+
+    def test_fresh_project_keeps_its_own_name_not_the_harness_own(self):
+        from solomon_harness.bootstrap import bootstrap_project
+
+        bootstrap_project(self.workspace_dir, non_interactive=True)
+
+        # The harness's own pyproject.toml is installed since none existed --
+        # confirms the copy happened, so the assertion below is meaningful.
+        self.assertTrue(os.path.isfile(os.path.join(self.workspace_dir, "pyproject.toml")))
+
+        kanban_path = os.path.join(self.workspace_dir, "planning", "KANBAN.md")
+        self.assertTrue(os.path.isfile(kanban_path))
+        with open(kanban_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("acme-trader", content)
+        self.assertNotIn("solomon-harness", content)
+
+
+class TestGithubPrereqStatus(unittest.TestCase):
+    """Wiki is only a hard requirement for public repos; GitHub Projects always
+    blocks init, since the delivery board depends on it."""
+
+    def test_public_repo_missing_wiki_blocks(self):
+        from solomon_harness.bootstrap import github_prereq_status
+
+        wiki_ok, wiki_blocking, blocked = github_prereq_status(
+            wiki_enabled=False, wiki_initialized=False, projects_ok=True, is_public=True
+        )
+        self.assertFalse(wiki_ok)
+        self.assertTrue(wiki_blocking)
+        self.assertTrue(blocked)
+
+    def test_private_repo_missing_wiki_does_not_block(self):
+        from solomon_harness.bootstrap import github_prereq_status
+
+        wiki_ok, wiki_blocking, blocked = github_prereq_status(
+            wiki_enabled=False, wiki_initialized=False, projects_ok=True, is_public=False
+        )
+        self.assertFalse(wiki_ok)
+        self.assertFalse(wiki_blocking)
+        self.assertFalse(blocked)
+
+    def test_private_repo_missing_projects_still_blocks(self):
+        from solomon_harness.bootstrap import github_prereq_status
+
+        wiki_ok, wiki_blocking, blocked = github_prereq_status(
+            wiki_enabled=False, wiki_initialized=False, projects_ok=False, is_public=False
+        )
+        self.assertFalse(wiki_blocking)
+        self.assertTrue(blocked)
+
+    def test_public_repo_with_wiki_and_projects_does_not_block(self):
+        from solomon_harness.bootstrap import github_prereq_status
+
+        wiki_ok, wiki_blocking, blocked = github_prereq_status(
+            wiki_enabled=True, wiki_initialized=True, projects_ok=True, is_public=True
+        )
+        self.assertTrue(wiki_ok)
+        self.assertFalse(wiki_blocking)
+        self.assertFalse(blocked)
+
+
+class TestHasGithubProjectAndWiki(unittest.TestCase):
+    """The local-Kanban-fallback check: wiki is only required alongside the
+    project board for public repos."""
+
+    def _fake_gh_output(self, has_projects, has_wiki, is_private):
+        return json.dumps(
+            {
+                "hasProjectsEnabled": has_projects,
+                "hasWikiEnabled": has_wiki,
+                "isPrivate": is_private,
+            }
+        )
+
+    def test_private_repo_with_projects_no_wiki_counts_as_ready(self):
+        from unittest.mock import patch
+
+        from solomon_harness.bootstrap import has_github_project_and_wiki
+
+        with patch(
+            "subprocess.check_output",
+            return_value=self._fake_gh_output(True, False, True),
+        ):
+            self.assertTrue(has_github_project_and_wiki("/ws", "git@github.com:o/r.git"))
+
+    def test_public_repo_with_projects_no_wiki_is_not_ready(self):
+        from unittest.mock import patch
+
+        from solomon_harness.bootstrap import has_github_project_and_wiki
+
+        with patch(
+            "subprocess.check_output",
+            return_value=self._fake_gh_output(True, False, False),
+        ):
+            self.assertFalse(has_github_project_and_wiki("/ws", "git@github.com:o/r.git"))
+
+    def test_no_projects_board_is_never_ready(self):
+        from unittest.mock import patch
+
+        from solomon_harness.bootstrap import has_github_project_and_wiki
+
+        with patch(
+            "subprocess.check_output",
+            return_value=self._fake_gh_output(False, True, True),
+        ):
+            self.assertFalse(has_github_project_and_wiki("/ws", "git@github.com:o/r.git"))
+
+
 class TestInitWikiHint(unittest.TestCase):
     """The init flow detects an uninitialized GitHub wiki and only hints; it must
     never bootstrap it, since init commonly runs non-interactive."""

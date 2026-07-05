@@ -36,7 +36,7 @@ Clearly define the boundaries of the implementation to manage stakeholders' expe
 
 ### Out of Scope
 * Publishing packages to PyPI (distributed as source tree tags).
-* Running agents on external hosting platforms (runs locally via Claude Code/Gemini CLI).
+* Running agents on external hosting platforms (runs locally via Claude Code/Antigravity CLI (agy)).
 
 ---
 

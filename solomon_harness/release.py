@@ -833,8 +833,6 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
             if not os.path.isfile(exec_path):
                 exec_path = "agy"
             cmd = [exec_path, "-p", "Execute prompt from stdin", "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
-        elif engine == "gemini":
-            cmd = [engine, "-p", "Execute prompt from stdin", "--skip-trust"]
         elif engine == "claude":
             cmd = [engine, "-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
         else:

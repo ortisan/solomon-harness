@@ -27,18 +27,35 @@ def _repo_root() -> str:
 
 
 def _copy_dir_contents(src: str, dest: str, suffixes: tuple) -> List[str]:
-    """Copy files with the given suffixes from src into dest. Returns names copied."""
+    """Copy files with the given suffixes from src into dest. Returns names copied.
+    Also deletes files in dest with matching suffixes that are not present in src.
+    """
     copied: List[str] = []
     if not os.path.isdir(src):
         return copied
     os.makedirs(dest, exist_ok=True)
-    for name in sorted(os.listdir(src)):
-        if not name.endswith(suffixes):
-            continue
+    
+    src_names = set()
+    for name in os.listdir(src):
+        if name.endswith(suffixes):
+            s = os.path.join(src, name)
+            if os.path.isfile(s):
+                src_names.add(name)
+                
+    for name in sorted(src_names):
         s = os.path.join(src, name)
-        if os.path.isfile(s):
-            shutil.copyfile(s, os.path.join(dest, name))
-            copied.append(name)
+        shutil.copyfile(s, os.path.join(dest, name))
+        copied.append(name)
+        
+    for name in os.listdir(dest):
+        if name.endswith(suffixes) and name not in src_names:
+            d = os.path.join(dest, name)
+            if os.path.isfile(d):
+                try:
+                    os.remove(d)
+                except OSError:
+                    pass
+                    
     return copied
 
 
@@ -201,6 +218,23 @@ def install_global(
     # automatically run import to convert to Antigravity plugin/skills
     is_default_gemini = os.path.abspath(gemini_dir) == os.path.abspath(os.path.expanduser("~/.gemini"))
     if is_default_gemini:
+        # Clean up any stale skills in ~/.gemini/config/plugins/solomon/skills
+        skills_dir = os.path.join(gemini_dir, "config", "plugins", "solomon", "skills")
+        src_commands_dir = os.path.join(source_root, ".gemini", "commands")
+        if os.path.isdir(skills_dir) and os.path.isdir(src_commands_dir):
+            try:
+                active_commands = {
+                    name[:-5] for name in os.listdir(src_commands_dir)
+                    if name.endswith(".toml")
+                }
+                for skill_name in os.listdir(skills_dir):
+                    if skill_name not in active_commands:
+                        skill_path = os.path.join(skills_dir, skill_name)
+                        if os.path.isdir(skill_path):
+                            shutil.rmtree(skill_path)
+            except Exception:
+                pass
+
         agy_bin = shutil.which("agy")
         if not agy_bin:
             candidate = os.path.expanduser("~/.local/bin/agy")
@@ -244,11 +278,6 @@ def install_global(
              sys.executable, "-m", "solomon_harness.mcp_server"],
             "claude",
         )
-        result["mcp_gemini"] = _register_mcp(
-            ["mcp", "add", "--scope", "user", "solomon-memory", "--",
-             sys.executable, "-m", "solomon_harness.mcp_server"],
-            "gemini",
-        )
 
     return result
 
@@ -276,9 +305,4 @@ def describe(result: dict) -> str:
         lines.append("  MCP (claude): claude CLI not found; register manually")
     else:
         lines.append(f"  MCP (claude, user scope): {'registered' if mcp_c else 'registration failed'}")
-    mcp_g = result.get("mcp_gemini")
-    if mcp_g is None:
-        lines.append("  MCP (gemini): gemini CLI not found; register manually")
-    else:
-        lines.append(f"  MCP (gemini, user scope): {'registered' if mcp_g else 'registration failed'}")
     return "\n".join(lines)

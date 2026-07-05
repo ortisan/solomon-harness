@@ -6,6 +6,8 @@ from unittest.mock import patch, MagicMock
 
 from solomon_harness import install_global as ig
 
+real_expanduser = os.path.expanduser
+
 
 def _make_source(root):
     """Build a minimal package-like source tree for the installer to copy from."""
@@ -149,15 +151,15 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertTrue(res.get("gemini_extension"))
 
     def test_agy_import_triggers_on_default_gemini_path(self):
-        default_gemini = os.path.expanduser("~/.gemini")
         with (
+            patch("solomon_harness.install_global.os.path.expanduser", side_effect=lambda p: self.gemini if p == "~/.gemini" else real_expanduser(p)),
             patch("solomon_harness.install_global.shutil.which", return_value="/usr/local/bin/agy"),
             patch("solomon_harness.install_global.subprocess.run") as mock_run,
         ):
             res = ig.install_global(
                 source_root=self.src.name,
                 claude_dir=self.claude,
-                gemini_dir=default_gemini,
+                gemini_dir=self.gemini,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -169,8 +171,8 @@ class TestInstallGlobal(unittest.TestCase):
             self.assertEqual(args[0], ["/usr/local/bin/agy", "plugin", "import", "gemini", "--force"])
 
     def test_agy_import_skips_when_agy_absent(self):
-        default_gemini = os.path.expanduser("~/.gemini")
         with (
+            patch("solomon_harness.install_global.os.path.expanduser", side_effect=lambda p: self.gemini if p == "~/.gemini" else real_expanduser(p)),
             patch("solomon_harness.install_global.shutil.which", return_value=None),
             patch("solomon_harness.install_global.os.path.isfile", return_value=False),
             patch("solomon_harness.install_global.subprocess.run") as mock_run,
@@ -178,7 +180,7 @@ class TestInstallGlobal(unittest.TestCase):
             res = ig.install_global(
                 source_root=self.src.name,
                 claude_dir=self.claude,
-                gemini_dir=default_gemini,
+                gemini_dir=self.gemini,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -199,7 +201,6 @@ class TestInstallGlobal(unittest.TestCase):
             "hook_installed": True,
             "gemini_hook_installed": True,
             "mcp_claude": True,
-            "mcp_gemini": True,
         }
         summary = ig.describe(res_val)
         self.assertIn("SurrealDB host port 8099", summary)
@@ -207,7 +208,6 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertIn("session hook (claude): installed", summary)
         self.assertIn("session hook (gemini): installed", summary)
         self.assertIn("MCP (claude, user scope): registered", summary)
-        self.assertIn("MCP (gemini, user scope): registered", summary)
 
         # Case 2: MCPs missing (None) and agy failed
         res_val2 = {
@@ -216,13 +216,11 @@ class TestInstallGlobal(unittest.TestCase):
             "hook_installed": False,
             "gemini_hook_installed": False,
             "mcp_claude": None,
-            "mcp_gemini": None,
         }
         summary2 = ig.describe(res_val2)
         self.assertIn("import run failed", summary2)
         self.assertIn("session hook (claude): already present", summary2)
         self.assertIn("MCP (claude): claude CLI not found", summary2)
-        self.assertIn("MCP (gemini): gemini CLI not found", summary2)
 
         # Case 3: agy_imported is None and gemini_extension is True
         res_val3 = {
@@ -278,13 +276,13 @@ class TestInstallGlobal(unittest.TestCase):
 
     def test_install_global_agy_fallback_and_exception(self):
         from os.path import isfile as real_isfile
-        default_gemini = os.path.expanduser("~/.gemini")
         def custom_isfile(path):
             if "agy" in str(path):
                 return True
             return real_isfile(path)
             
         with (
+            patch("solomon_harness.install_global.os.path.expanduser", side_effect=lambda p: self.gemini if p == "~/.gemini" else real_expanduser(p)),
             patch("solomon_harness.install_global.shutil.which", return_value=None),
             patch("solomon_harness.install_global.os.path.isfile", side_effect=custom_isfile),
             patch("solomon_harness.install_global.os.access", return_value=True),
@@ -294,7 +292,7 @@ class TestInstallGlobal(unittest.TestCase):
             res = ig.install_global(
                 source_root=self.src.name,
                 claude_dir=self.claude,
-                gemini_dir=default_gemini,
+                gemini_dir=self.gemini,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -305,13 +303,70 @@ class TestInstallGlobal(unittest.TestCase):
             res_exc = ig.install_global(
                 source_root=self.src.name,
                 claude_dir=self.claude,
-                gemini_dir=default_gemini,
+                gemini_dir=self.gemini,
                 home_dir=self.home,
                 register_mcp=False,
             )
             self.assertFalse(res_exc.get("agy_imported"))
 
+    def test_reinstall_removes_stale_command_files(self):
+        # Initial install
+        self._install()
+        
+        # Drop a stale command file in gemini and claude commands directory
+        claude_stale = os.path.join(self.claude, "commands", "solomon-stale.md")
+        gemini_stale = os.path.join(self.gemini, "commands", "solomon-stale.toml")
+        ext_stale = os.path.join(self.gemini, "extensions", "solomon", "commands", "solomon-stale.toml")
+        
+        os.makedirs(os.path.dirname(claude_stale), exist_ok=True)
+        os.makedirs(os.path.dirname(gemini_stale), exist_ok=True)
+        os.makedirs(os.path.dirname(ext_stale), exist_ok=True)
+        
+        with open(claude_stale, "w") as f:
+            f.write("stale")
+        with open(gemini_stale, "w") as f:
+            f.write("stale")
+        with open(ext_stale, "w") as f:
+            f.write("stale")
+            
+        # Reinstall should remove them because they are not in self.src.name
+        self._install()
+        
+        self.assertFalse(os.path.exists(claude_stale))
+        self.assertFalse(os.path.exists(gemini_stale))
+        self.assertFalse(os.path.exists(ext_stale))
+
+    def test_reinstall_removes_stale_skills_on_default_gemini_path(self):
+        # We simulate the default path by patching expanduser to return self.gemini
+        with (
+            patch("solomon_harness.install_global.os.path.expanduser", side_effect=lambda p: self.gemini if p == "~/.gemini" else real_expanduser(p)),
+            patch("solomon_harness.install_global.shutil.which", return_value=None),
+        ):
+            # Create a stale skill folder under ~/.gemini/config/plugins/solomon/skills/solomon-stale
+            stale_skill_dir = os.path.join(self.gemini, "config", "plugins", "solomon", "skills", "solomon-stale")
+            os.makedirs(stale_skill_dir, exist_ok=True)
+            with open(os.path.join(stale_skill_dir, "SKILL.md"), "w") as f:
+                f.write("stale skill")
+                
+            # Create a valid skill folder (matching solomon-workflow)
+            valid_skill_dir = os.path.join(self.gemini, "config", "plugins", "solomon", "skills", "solomon-workflow")
+            os.makedirs(valid_skill_dir, exist_ok=True)
+            with open(os.path.join(valid_skill_dir, "SKILL.md"), "w") as f:
+                f.write("valid skill")
+                
+            ig.install_global(
+                source_root=self.src.name,
+                claude_dir=self.claude,
+                gemini_dir=self.gemini,
+                home_dir=self.home,
+                register_mcp=False,
+            )
+            
+            # Stale skill folder should be deleted
+            self.assertFalse(os.path.exists(stale_skill_dir))
+            # Valid skill folder should remain
+            self.assertTrue(os.path.exists(valid_skill_dir))
+
 
 if __name__ == "__main__":
     unittest.main()
-

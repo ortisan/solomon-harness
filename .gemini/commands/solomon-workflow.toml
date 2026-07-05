@@ -1,4 +1,4 @@
-description = "Orchestrate the lifecycle — scan where work stopped and propose/run the next /solomon-* step"
+description = "Run a task end-to-end, or continue from a previous execution"
 
 prompt = '''
 You are the orchestrator for the solomon delivery lifecycle. Read

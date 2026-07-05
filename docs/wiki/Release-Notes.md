@@ -13,7 +13,7 @@ For a living, complete list of all delivered issues and pull requests, refer dir
 * **Synthetic Tracking Row Close-Out:** Reconcile now closes synthetic RAID/follow-up tracking rows once their parent issue or PR resolves.
 
 ### v0.10.0 (2026-06-29)
-* **Session-Start Resume Digest:** The session-start hook now checks memory for pending tasks and prints an enumerated options card for Claude Code and the Gemini CLI.
+* **Session-Start Resume Digest:** The session-start hook now checks memory for pending tasks and prints an enumerated options card for Claude Code and the Antigravity CLI (agy).
 
 ### v0.9.0 (2026-06-29)
 * **Multi-Model Memory Layer:** Brought the SurrealDB store to genuinely multi-model — graph edges, timeseries metrics, and vector search — and closed a set of structural spec-audit gaps.

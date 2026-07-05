@@ -1,52 +1,53 @@
-# PLAN.md: feat(agents): scaffold, register, and compile a new agent (direct)
+# PLAN.md: refactor(workflow): update command descriptions and synchronize global install
 
-Problem statement: When no agent fits and no skill closes the gap, scaffold a new agent directory (`agents/<new>/`) from templates, register it in `agents/AGENTS.md`, run `scripts/document-skills.py` and `solomon-harness compile` to generate integrations, and open a draft PR adding exactly that one agent (#48).
+Problem statement: 
+The user wants `/solomon-workflow` to be clearly defined as the command that runs a task end-to-end or continues from a previous execution, and `/solomon-loop` to be defined as the parallel autonomous loop (the current `/solomon-loop-auto`). In the codebase, these commands are already renamed, but the user's local workspace and IDE settings are still showing stale names (`solomon-loop` as the orchestrator and `solomon-loop-auto` as the parallel loop) and the generated global command files are corrupt or outdated.
+
+We need to:
+1. Update descriptions for `solomon-workflow` in `.claude/commands/solomon-workflow.md`, `solomon_harness/cli.py`, `README.md`, `docs/solomon-workflow.md`, and `docs/wiki/Commands-Reference.md` to indicate it runs a task end-to-end or continues from a previous execution.
+2. Synchronize directories in `solomon_harness/install_global.py` so that old/stale commands (like `solomon-loop-auto.toml`) are deleted from the global directories.
+3. Clean up the stale `solomon-loop-auto` directory from the user's `~/.gemini/config/plugins/solomon/skills/` during global installation.
+4. Fix the test suite `tests/test_install_global.py` so it does not overwrite the real user's `~/.gemini` folder during test execution.
 
 ## Proposed changes
-- Implement `scaffold_new_agent(workspace_root, name, description)` in `solomon_harness/bootstrap.py` to:
-  1. Validate the agent name using a strict regex (`^[a-z0-9_]+$`) and verify the resolved path is confined within `agents/`.
-  2. Create the directories `agents/<name>/`, `agents/<name>/agents/`, and `agents/<name>/skills/`.
-  3. Write `persona.md`, `agents/<name>.md`, and `skills/scope_and_mandate.md` from templates.
-  4. Call `scaffold_agents(workspace_root)` to populate `main.py` and `.agent/config.json`.
-  5. Register the new agent alphabetically in `agents/AGENTS.md` under `## The specialist agents`.
-  6. Execute `scripts/document-skills.py` to document the new agent's skills.
-  7. Run compile (`scaffold_agents` + `_generate_integrations`) to create `.claude/agents/<name>.md`.
-- Wire `scaffold` subcommand under `agents` in `solomon_harness/cli.py` to support `solomon-harness agents scaffold <name> --description "<desc>"`.
-- Implement unit tests in `tests/test_scaffold_agent.py` to verify scaffolding, validation, AGENTS.md registration, idempotency, compiling, and CLI parsing.
+
+- In `.claude/commands/solomon-workflow.md`:
+  - Change description frontmatter to "Run a task end-to-end, or continue from a previous execution".
+- In `solomon_harness/cli.py`:
+  - Update `"/solomon-workflow"` description to "run a task end-to-end, or continue from a previous execution".
+- In `README.md`:
+  - Update `/solomon-workflow` description to "run a task end-to-end or continue".
+- In `docs/solomon-workflow.md`:
+  - Update `/solomon-workflow` table row to "runs a task end-to-end or continues".
+- In `docs/wiki/Commands-Reference.md`:
+  - Update `/solomon-workflow` heading to `### \`/solomon-workflow\` (End-to-End Orchestrator)` and description.
+- In `solomon_harness/install_global.py`:
+  - In `_copy_dir_contents`, add logic to delete files in `dest` with the matching suffixes that are not present in `src`.
+  - In `install_global`, add cleanup for stale skills in `~/.gemini/config/plugins/solomon/skills/` that do not match the current commands in the source repository.
+- In `tests/test_install_global.py`:
+  - In tests that call `install_global` with `default_gemini`, patch `os.path.expanduser` so that `"~/.gemini"` points to `self.gemini` instead of the user's real home folder.
+  - Update assertions to verify that stale commands in the destination directory are deleted.
 
 ## Target files
-- `solomon_harness/bootstrap.py`
+- `.claude/commands/solomon-workflow.md`
 - `solomon_harness/cli.py`
-- `tests/test_scaffold_agent.py`
+- `solomon_harness/install_global.py`
+- `tests/test_install_global.py`
+- `README.md`
+- `docs/solomon-workflow.md`
+- `docs/wiki/Commands-Reference.md`
 
 ## Edge cases
-- Invalid agent name (spaces, uppercase, symbols, path traversal like `../foo`).
-- Agent directory already exists (idempotency - should print a message and exit cleanly without duplicate PR/scaffolding).
-- `agents/AGENTS.md` missing or does not contain `## The specialist agents` section.
-- Newly scaffolded agent is correctly discoverable by `discover_agents()`.
-
-## STRIDE notes
-- **Elevation of Privilege / Path Traversal**: Creating a new agent with a name like `../../bad_path` could write files outside `agents/`.
-  *Mitigation*: Validate the agent name using a strict regex: `^[a-z0-9_]+$` and check confinement using `os.path.realpath`.
+- Stale folders in `~/.gemini/config/plugins/solomon/skills/` not being deleted. We handle this explicitly in the `install_global` logic.
+- Permissions to read/write/delete files in `~/.gemini/`. We will run standard file operations under defensive try-except blocks.
 
 ## TDD breakdown
-1. **Red**: Write a test in `tests/test_scaffold_agent.py` that asserts `scaffold_new_agent` validates name formats, checks path confinement, and creates basic directories and files (`persona.md`, `agents/<name>.md`, `skills/scope_and_mandate.md`).
-   **Green**: Implement name validation, path confinement checks, and directory/file creation in `solomon_harness/bootstrap.py`.
-   *Commit: test: add basic scaffold validation and directory/file creation tests and implementation*
-2. **Red**: Write a test asserting that `scaffold_new_agent` copies `main.py` and `.agent/config.json` via `scaffold_agents(workspace_root)`.
-   **Green**: Call `scaffold_agents(workspace_root)` within `scaffold_new_agent`.
-   *Commit: test: verify main.py and config.json are scaffolded*
-3. **Red**: Write a test asserting that `scaffold_new_agent` registers the new agent alphabetically in `agents/AGENTS.md` under `## The specialist agents` and doesn't create duplicate entries (idempotency).
-   **Green**: Parse `agents/AGENTS.md`, insert the new agent alphabetically in the bulleted list under `## The specialist agents`, write it back, and ensure no duplicates.
-   *Commit: test: verify AGENTS.md registration and idempotence*
-4. **Red**: Write a test verifying that `scripts/document-skills.py` and `_generate_integrations` are invoked, updating the profile file and generating `.claude/agents/<name>.md`.
-   **Green**: Wire up `document-skills.py` execution (via subprocess) and compile steps (via `scaffold_agents` and `_generate_integrations`) inside `scaffold_new_agent`.
-   *Commit: test: verify compile and document-skills integration*
-5. **Red**: Write a test verifying the CLI command `solomon-harness agents scaffold <name> --description <desc>` parses arguments correctly and invokes `scaffold_new_agent`.
-   **Green**: Update `solomon_harness/cli.py` to support `agents scaffold` parser and handler.
-   *Commit: test: add CLI parser and handler tests and implementation*
+1. **Red**: Update `tests/test_install_global.py` to assert that stale command files in the destination directories are successfully deleted during installation.
+2. **Green**: Implement file deletion in `_copy_dir_contents` in `solomon_harness/install_global.py`.
+3. **Red**: Update `tests/test_install_global.py` to verify that stale skills directories are cleaned up when `is_default_gemini` is true.
+4. **Green**: Implement the stale skills clean-up in `install_global` in `solomon_harness/install_global.py`.
+5. Update command descriptions in target files and regenerate Gemini commands.
 
 ## Verification criteria
-- Run pytest suite: `PYTHONPATH=. uv run pytest tests/test_scaffold_agent.py` passes.
-- Scaffolded agent is listed by `discover_agents`.
-- No files under `agents/` are modified other than the newly scaffolded agent and `AGENTS.md` (read-only confinement for other agents).
+- Run `uv run pytest` to verify all tests pass.
+- Run `solomon-harness compile` and `solomon-harness install-global` to verify that global files are updated and stale commands are removed.

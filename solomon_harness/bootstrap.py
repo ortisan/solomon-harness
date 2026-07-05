@@ -177,24 +177,51 @@ def interpolate_and_write(template_path: str, dest_path: str, replacements: Dict
 
 
 def has_github_project_and_wiki(workspace_root: str, git_remote: str) -> bool:
-    """Checks if the target repository has active project boards and wiki on GitHub."""
+    """Checks if the target repository has an active GitHub Projects board.
+
+    Wiki is only required alongside the project board for public repos; a
+    private repo may not be able to enable a wiki at all, so it does not
+    factor into whether the local Kanban fallback is needed.
+    """
     if git_remote == "none" or "github.com" not in git_remote:
         return False
     try:
         out = subprocess.check_output(
-            ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled"],
+            ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled,isPrivate"],
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=2.0
         )
         data = json.loads(out)
-        return data.get("hasWikiEnabled", False) and data.get("hasProjectsEnabled", False)
+        if not data.get("hasProjectsEnabled", False):
+            return False
+        if data.get("isPrivate", False):
+            return True
+        return data.get("hasWikiEnabled", False)
     except Exception:
         wiki_dir = os.path.join(workspace_root, "docs", "wiki")
         if os.path.isdir(wiki_dir) and os.listdir(wiki_dir):
             return True
         return False
+
+
+def github_prereq_status(
+    wiki_enabled: bool, wiki_initialized: bool, projects_ok: bool, is_public: bool
+) -> tuple[bool, bool, bool]:
+    """Decide whether `init` should block on the GitHub Wiki/Projects check.
+
+    Wiki is only a hard requirement for public repos: a private repo may not
+    be able to enable it at all (org policy, plan restrictions), so it is
+    reported but never blocks init on its own. GitHub Projects always blocks,
+    since the delivery board depends on it.
+
+    Returns (wiki_ok, wiki_blocking, blocked).
+    """
+    wiki_ok = wiki_enabled and wiki_initialized
+    wiki_blocking = not wiki_ok and is_public
+    blocked = wiki_blocking or not projects_ok
+    return wiki_ok, wiki_blocking, blocked
 
 
 def github_wiki_enabled(workspace_root: str) -> bool | None:
@@ -274,7 +301,7 @@ def _install_harness_files(workspace_root: str) -> None:
     # instance in ~/.solomon-harness (see solomon_harness/memory.py).
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "GEMINI.md", "CLAUDE.md", "README.md", "skill-sources.json",
+        "AGENTS.md", "AGY.md", "CLAUDE.md", "README.md", "skill-sources.json",
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -492,11 +519,16 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     except Exception as exc:
         print(f"  Warning: prerequisite check failed: {exc}")
 
+    # Read the target project's own identity before the harness plants its
+    # files: _install_harness_files copies this repo's own pyproject.toml into
+    # any workspace that doesn't have one yet, so detecting metadata afterward
+    # would read the harness's identity ("solomon-harness") instead of the
+    # host project's.
+    project_name, git_remote, technologies = get_project_metadata(workspace_root)
+
     # When run in a fresh project (no agents/ yet), install the harness files from
     # this package's repository into the workspace before configuring it.
     _install_harness_files(workspace_root)
-
-    project_name, git_remote, technologies = get_project_metadata(workspace_root)
     print(f"  - Project Name: {project_name}")
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
@@ -507,7 +539,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # prompts for nothing, and never creates the first page.
     hint_uninitialized_wiki(workspace_root, git_remote)
 
-    # Enforce GitHub prerequisites if the project is hosted on GitHub
+    # Enforce GitHub prerequisites if the project is hosted on GitHub. Wiki is
+    # only required for public repos; private repos may not be able to enable
+    # it (org policy, plan restrictions), so it is reported but not enforced.
+    # GitHub Projects is always required, since the delivery board depends on it.
     if "github.com" in git_remote and not os.environ.get("SOLOMON_SKIP_GH_CHECK"):
         print("Checking GitHub prerequisites (Wiki and Project)...")
         import sys
@@ -539,17 +574,18 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             
         try:
             out = subprocess.check_output(
-                ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled"],
+                ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled,isPrivate"],
                 cwd=workspace_root,
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=5.0
             )
             data = json.loads(out)
-            
+
             wiki_enabled = data.get("hasWikiEnabled", False)
             projects_ok = data.get("hasProjectsEnabled", False)
-            
+            is_public = not data.get("isPrivate", False)
+
             # Check if the Wiki repository is initialized (first page created)
             wiki_initialized = False
             if wiki_enabled:
@@ -562,25 +598,30 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                     wiki_initialized = True
                 except Exception:
                     pass
-            
-            wiki_ok = wiki_enabled and wiki_initialized
-            
+
+            wiki_ok, wiki_blocking, blocked = github_prereq_status(
+                wiki_enabled, wiki_initialized, projects_ok, is_public
+            )
+
             wiki_icon = "\033[32m✓\033[0m" if wiki_ok else "\033[31m✗\033[0m"
             projects_icon = "\033[32m✓\033[0m" if projects_ok else "\033[31m✗\033[0m"
-            
+
             print(f"  {wiki_icon}  GitHub Wiki")
             print(f"  {projects_icon}  GitHub Projects")
-            
-            if not wiki_ok or not projects_ok:
+
+            if blocked:
                 print("\nError: Prerequisite checks failed. Please enable the missing features in your GitHub repository settings.")
-                if not wiki_enabled:
-                    print("  - Enable Wikis: Settings -> General -> Features -> Wikis")
-                elif not wiki_initialized:
-                    print(f"  - Initialize Wiki: Visit {web_wiki_url} and click 'Create the first page' or 'Save page'.")
+                if wiki_blocking:
+                    if not wiki_enabled:
+                        print("  - Enable Wikis: Settings -> General -> Features -> Wikis")
+                    elif not wiki_initialized:
+                        print(f"  - Initialize Wiki: Visit {web_wiki_url} and click 'Create the first page' or 'Save page'.")
                 if not projects_ok:
                     print("  - Enable Projects: Settings -> General -> Features -> Projects")
                 sys.exit(1)
-                
+            elif not wiki_ok:
+                print("  Note: wiki is not required for a private repository; skipping wiki-dependent docs publishing until it is available.")
+
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr.strip() if e.stderr else str(e)
             print(f"Error: Failed to verify GitHub repository settings via gh CLI: {error_msg}")

@@ -204,7 +204,7 @@ class TestWorkflows(unittest.TestCase):
             returncode = 0
 
         with patch("subprocess.run", return_value=_Proc()) as mock_run:
-            workflows.run_stage(root, "refine", ["172"], engine="gemini")
+            workflows.run_stage(root, "refine", ["172"], engine="agy")
         args, _kwargs = mock_run.call_args
         self.assertNotIn("--allowed-tools", args[0])
 

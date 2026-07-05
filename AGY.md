@@ -1,4 +1,4 @@
-# solomon-harness — Gemini Agent Guidelines
+# solomon-harness — Antigravity Agent Guidelines
 
 The canonical project rules and specialist agent definitions are maintained in a central source. Read it before starting any work:
 @agents/AGENTS.md
