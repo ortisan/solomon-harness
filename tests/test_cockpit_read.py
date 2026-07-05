@@ -1920,5 +1920,11 @@ class TestVelocityCli(unittest.TestCase):
         self.assertEqual(rows["alice@example.com"]["count"], 1)
 
 
+class TestEpicTracking(unittest.TestCase):
+    def test_epic_exists(self):
+        self.assertTrue(False, "Epic visibility test: Red phase (Refs #44)")
+
+
 if __name__ == "__main__":
     unittest.main()
+
