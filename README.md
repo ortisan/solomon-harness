@@ -319,6 +319,7 @@ table.
 | `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
 | `agents list \| help \| show <name>` | List or show the generated subagents |
+| `github <args>` | GitHub board and PR helpers (ensure-board, set-status, add-issue, merge, pr-create) |
 
 For `dev`, set `SOLOMON_ENGINE=claude` (default) or `agy` to choose the engine.
 `python -m solomon_harness.github ensure-board | set-status --issue N --status "<col>" | add-issue --issue N`
