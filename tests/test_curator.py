@@ -955,6 +955,32 @@ class TestBrokerAgent(TestBrokerAcquisition):
         found_order = re.findall(r"- `([^`]+)`", agents_md)
         self.assertEqual(found_order, ["expert_coder", "qa"])
 
+    @mock.patch("solomon_harness.agent_builder.build_agent")
+    def test_broker_agent_delegates_to_agent_builder(self, mock_build):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/999\n"
+
+        def gh_runner(args):
+            return MockCompletedProcess()
+
+        curator.broker_agent(
+            self.root,
+            "expert_coder",
+            "Expert Coder",
+            "Scaffolds code with ultimate precision.",
+            ["Scaffold complex architectures"],
+            gh_runner=gh_runner
+        )
+        mock_build.assert_called_once_with(
+            self.root,
+            "expert_coder",
+            "Scaffolds code with ultimate precision.",
+            title="Expert Coder",
+            duties=["Scaffold complex architectures"]
+        )
+
+
 
 class TestBrokerAcquisitionMemory(TestBrokerAcquisition):
     def test_broker_skill_records_decision_and_handoff(self):
