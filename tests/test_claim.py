@@ -151,5 +151,17 @@ class TestClaimGitOperations(unittest.TestCase):
         res = _git(self.local, "ls-remote", "origin", "refs/claims/issue-99")
         self.assertNotIn("refs/claims/issue-99", res.stdout)
 
+    @patch("solomon_harness.claim.get_claim")
+    @patch("solomon_harness.claim.is_claim_active")
+    @patch("solomon_harness.workflows._read_command_file")
+    def test_run_stage_start_blocked_on_active_claim(self, mock_read, mock_active, mock_get):
+        from solomon_harness import workflows
+        mock_read.return_value = "---\nallowed-tools: Bash\n---\nbody"
+        mock_get.return_value = {"session_id": "other-session", "acquired_at": "2026-07-06T00:00:00Z"}
+        mock_active.return_value = True
+        
+        rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+        self.assertEqual(rc, 1)
+
 if __name__ == '__main__':
     unittest.main()
