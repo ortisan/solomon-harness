@@ -20,6 +20,12 @@ CLICHES = [
 
 # Required keywords per profile
 REQUIRED_KEYWORDS = {
+    "agent_builder.md": [
+        "Agent Builder",
+        "scaffolds new",
+        "compiled agents",
+        "scope_and_mandate",
+    ],
     "practice_curator.md": [
         "Practice Curator",
         "best practices",
