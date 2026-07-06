@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import subprocess
 import json
+from io import StringIO
 
 from solomon_harness import claim
 
@@ -193,5 +194,27 @@ class TestClaimGitOperations(unittest.TestCase):
         self.assertIn("2", github_ids)
         self.assertIn("tracking-row", github_ids)
 
+    @patch("sys.stdout", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.get_claim")
+    def test_cli_claim_status_unclaimed(self, mock_get, mock_stdout):
+        from io import StringIO
+        from solomon_harness.cli import main
+        mock_get.return_value = None
+        
+        main(harness_dir=self.local, argv=["claim", "status", "99"])
+        self.assertIn("Issue #99 is unclaimed.", mock_stdout.getvalue())
+
+    @patch("sys.stdout", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.release_claim")
+    def test_cli_claim_release(self, mock_release, mock_stdout):
+        from io import StringIO
+        from solomon_harness.cli import main
+        mock_release.return_value = True
+        
+        main(harness_dir=self.local, argv=["claim", "release", "99"])
+        mock_release.assert_called_once_with(self.local, 99, current_session_id=unittest.mock.ANY)
+        self.assertIn("Released claim on issue #99.", mock_stdout.getvalue())
+
 if __name__ == '__main__':
+    from io import StringIO
     unittest.main()

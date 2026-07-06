@@ -715,6 +715,13 @@ class TestMergePrAndClose(unittest.TestCase):
     that succeeds but whose board move fails, it must report the accurate
     partial state (merged, but not fully converged) rather than a blanket ok."""
 
+    def setUp(self):
+        self.claim_patcher = patch("solomon_harness.claim.release_claim")
+        self.mock_release_claim = self.claim_patcher.start()
+
+    def tearDown(self):
+        self.claim_patcher.stop()
+
     def test_successful_merge_completes_the_done_transition(self):
         with (
             patch("solomon_harness.github._gh", return_value={"ok": True}) as gh,

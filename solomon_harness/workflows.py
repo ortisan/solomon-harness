@@ -295,29 +295,32 @@ def run_stage(
             )
             return 1
 
-    # Per-issue claim checking for start stage
-    if stage == "start":
+    # Per-issue claim gate + acquisition (ADR-0016): layered on top of the
+    # repo-wide lock above, not a replacement for it. Only meaningful inside a
+    # real git repo -- a plain workspace with no `.git` has no claims remote
+    # to check or race against in the first place.
+    if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
         issue_number = _target_issue_from_args(args)
         if issue_number is not None:
             from solomon_harness import claim
             import datetime
 
-            active_claim = claim.get_claim(workspace_root, issue_number)
-            has_pr = claim.has_active_pr_or_review(workspace_root, issue_number)
-            current_sess = claim.get_current_session_id()
-            if active_claim and claim.is_claim_active(active_claim, current_sess, has_open_pr=has_pr):
-                acquired_str = active_claim.get("acquired_at") or "unknown"
-                age_str = "unknown"
+            def _claim_age(claim_data: dict) -> str:
+                acquired_str = claim_data.get("acquired_at") or "unknown"
                 try:
                     acquired = datetime.datetime.fromisoformat(acquired_str.replace("Z", "+00:00"))
                     now = datetime.datetime.now(datetime.timezone.utc)
-                    diff = now - acquired
-                    age_str = f"{int(diff.total_seconds() / 60)} minutes"
-                except Exception:
-                    pass
+                    return f"{int((now - acquired).total_seconds() / 60)} minutes"
+                except (ValueError, AttributeError):
+                    return "unknown"
+
+            current_sess = claim.get_current_session_id()
+            active_claim = claim.get_claim(workspace_root, issue_number)
+            has_pr = claim.has_active_pr_or_review(workspace_root, issue_number)
+            if active_claim and claim.is_claim_active(active_claim, current_sess, has_open_pr=has_pr):
                 print(
                     f"Error: issue #{issue_number} is already claimed by session "
-                    f"'{active_claim.get('session_id')}' (claim age: {age_str}). "
+                    f"'{active_claim.get('session_id')}' (claim age: {_claim_age(active_claim)}). "
                     f"Refusing to start. Use 'solomon-harness claim release {issue_number}' to clear it.",
                     file=sys.stderr,
                 )
@@ -325,16 +328,28 @@ def run_stage(
                     lock.release()
                 return 1
 
-            # Atomically claim
+            # Atomically claim. A push failure here only blocks the stage once
+            # confirmed as a genuine lost race (a re-fetch shows another
+            # session's claim now live on the ref) -- otherwise it just means
+            # this workspace has no claims remote to push to (no `origin`, no
+            # network), which is a no-op environment, not a collision.
             if not claim.claim_issue(workspace_root, issue_number, current_session_id=current_sess):
+                recheck = claim.get_claim(workspace_root, issue_number)
+                if recheck and claim.is_claim_active(recheck, current_sess):
+                    print(
+                        f"Error: issue #{issue_number} was claimed by session "
+                        f"'{recheck.get('session_id')}' before this one -- lost the race. "
+                        "Refusing to start.",
+                        file=sys.stderr,
+                    )
+                    if lock is not None:
+                        lock.release()
+                    return 1
                 print(
-                    f"Error: failed to atomically claim issue #{issue_number}. "
-                    f"Another session may have claimed it concurrently.",
+                    f"Warning: could not record a claim ref for issue #{issue_number} "
+                    "(no claims remote configured?); proceeding without one.",
                     file=sys.stderr,
                 )
-                if lock is not None:
-                    lock.release()
-                return 1
 
     from solomon_harness.notify import log_progress
     capture_cost = policy.level in ("L2", "L3")

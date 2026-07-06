@@ -398,6 +398,24 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     res = _gh(["pr", "merge", str(pr_number), "--squash"])
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error", "gh pr merge failed.")}
+
+    # Release per-issue claim on merge
+    try:
+        from solomon_harness import claim
+        workspace_root = os.getcwd()
+        found_root = False
+        curr = workspace_root
+        while curr and curr != os.path.dirname(curr):
+            if os.path.exists(os.path.join(curr, ".git")):
+                found_root = True
+                workspace_root = curr
+                break
+            curr = os.path.dirname(curr)
+        if found_root:
+            claim.release_claim(workspace_root, issue_number)
+    except Exception:
+        pass
+
     status_res = set_issue_status(issue_number, "Done")
     record_terminal_status(issue_number)
     if not status_res.get("ok"):

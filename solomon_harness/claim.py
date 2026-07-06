@@ -103,7 +103,8 @@ def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str,
     )
     if sha_res.returncode != 0:
         return None
-    sha = sha_res.stdout.strip()
+    sha_stdout = getattr(sha_res, "stdout", "") or ""
+    sha = sha_stdout.strip()
     
     msg_res = subprocess.run(
         ["git", "log", "-1", "--format=%B", remote_ref],
@@ -115,7 +116,8 @@ def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str,
     if msg_res.returncode != 0:
         return None
         
-    claim_dict = parse_claim_commit_message(msg_res.stdout.strip())
+    msg_stdout = getattr(msg_res, "stdout", "") or ""
+    claim_dict = parse_claim_commit_message(msg_stdout.strip())
     if claim_dict:
         return sha, claim_dict
     return None
