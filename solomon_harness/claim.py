@@ -8,7 +8,8 @@ import json
 import os
 import socket
 import datetime
-from typing import Any, Dict, Optional
+import subprocess
+from typing import Any, Dict, Optional, Tuple
 
 CLAIM_TTL_SECONDS = 1800.0  # 30 minutes
 
@@ -76,3 +77,230 @@ def is_claim_active(
         return elapsed <= CLAIM_TTL_SECONDS
     except ValueError:
         return False
+
+def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Fetch the claim ref from origin and return (sha, parsed_metadata) or None."""
+    ref = f"refs/claims/issue-{issue_number}"
+    remote_ref = f"refs/remotes/origin/claims/issue-{issue_number}"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    
+    res = subprocess.run(
+        ["git", "fetch", "-q", "origin", f"+{ref}:{remote_ref}"],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if res.returncode != 0:
+        return None
+        
+    sha_res = subprocess.run(
+        ["git", "rev-parse", remote_ref],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if sha_res.returncode != 0:
+        return None
+    sha = sha_res.stdout.strip()
+    
+    msg_res = subprocess.run(
+        ["git", "log", "-1", "--format=%B", remote_ref],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if msg_res.returncode != 0:
+        return None
+        
+    claim_dict = parse_claim_commit_message(msg_res.stdout.strip())
+    if claim_dict:
+        return sha, claim_dict
+    return None
+
+def has_active_pr_or_review(workspace_root: str, issue_number: int) -> bool:
+    """Check if the issue is closed or has active review status on the project board."""
+    from solomon_harness.github import repo_owner, board_title, find_project, _gh
+    
+    # Check closed state
+    res = _gh(["issue", "view", str(issue_number), "--json", "state"], parse_json=True)
+    if res.get("ok") and res.get("data"):
+        if res["data"].get("state") == "CLOSED":
+            return False
+            
+    # Check board columns status
+    try:
+        owner = repo_owner()
+        title = board_title()
+        project = find_project(owner, title)
+        if project:
+            res = _gh(["project", "item-list", str(project.get("number")), "--owner", owner, "--format", "json"], parse_json=True)
+            items = res.get("data", {}).get("items", [])
+            for item in items:
+                content = item.get("content", {})
+                if content.get("number") == issue_number:
+                    status = item.get("status")
+                    if status in ("Code Review", "QA"):
+                        return True
+    except Exception:
+        pass
+    return False
+
+def get_claim(workspace_root: str, issue_number: int) -> Optional[Dict[str, Any]]:
+    """Return the parsed claim metadata dict for the issue, or None."""
+    ref_info = get_claim_ref(workspace_root, issue_number)
+    if ref_info:
+        return ref_info[1]
+    return None
+
+def claim_issue(workspace_root: str, issue_number: int, current_session_id: Optional[str] = None) -> bool:
+    """Atomically claim the issue using git CAS branch lease pushing."""
+    if current_session_id is None:
+        current_session_id = get_current_session_id()
+        
+    active_claim = get_claim(workspace_root, issue_number)
+    has_pr = has_active_pr_or_review(workspace_root, issue_number)
+    
+    existing_sha = None
+    if active_claim:
+        if is_claim_active(active_claim, current_session_id, has_open_pr=has_pr):
+            return False
+        ref_info = get_claim_ref(workspace_root, issue_number)
+        if ref_info:
+            existing_sha = ref_info[0]
+            
+    now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    claim_data = {
+        "session_id": current_session_id,
+        "acquired_at": now_str,
+        "heartbeat_at": now_str,
+    }
+    
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    tree_res = subprocess.run(
+        ["git", "write-tree"],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if tree_res.returncode != 0:
+        return False
+    tree_sha = tree_res.stdout.strip()
+
+    commit_res = subprocess.run(
+        ["git", "commit-tree", "-m", json.dumps(claim_data), tree_sha],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if commit_res.returncode != 0:
+        return False
+    new_sha = commit_res.stdout.strip()
+    
+    ref = f"refs/claims/issue-{issue_number}"
+    if existing_sha:
+        push_cmd = ["git", "push", f"--force-with-lease={ref}:{existing_sha}", "origin", f"{new_sha}:{ref}"]
+    else:
+        push_cmd = ["git", "push", f"--force-with-lease={ref}:", "origin", f"{new_sha}:{ref}"]
+        
+    push_res = subprocess.run(
+        push_cmd,
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if push_res.returncode != 0:
+        return False
+        
+    # Assign issue to harness user on GitHub
+    from solomon_harness.github import _gh
+    _gh(["issue", "edit", str(issue_number), "--add-assignee", "@me"])
+    
+    return True
+
+def release_claim(workspace_root: str, issue_number: int, current_session_id: Optional[str] = None) -> bool:
+    """Release the issue claim, removing the git remote ref and assignee."""
+    if current_session_id is None:
+        current_session_id = get_current_session_id()
+        
+    ref_info = get_claim_ref(workspace_root, issue_number)
+    if not ref_info:
+        # Clean up assignee just in case
+        from solomon_harness.github import _gh
+        _gh(["issue", "edit", str(issue_number), "--remove-assignee", "@me"])
+        return True
+        
+    sha, claim_data = ref_info
+    has_pr = has_active_pr_or_review(workspace_root, issue_number)
+    if claim_data.get("session_id") != current_session_id and is_claim_active(claim_data, current_session_id, has_open_pr=has_pr):
+        return False
+        
+    ref = f"refs/claims/issue-{issue_number}"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    push_res = subprocess.run(
+        ["git", "push", f"--force-with-lease={ref}:{sha}", "origin", f":{ref}"],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if push_res.returncode != 0:
+        return False
+        
+    from solomon_harness.github import _gh
+    _gh(["issue", "edit", str(issue_number), "--remove-assignee", "@me"])
+    return True
+
+def fetch_all_claims(workspace_root: str) -> Dict[int, Dict[str, Any]]:
+    """Fetch all claim references from the remote and return a dict of active claims."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(
+        ["git", "fetch", "-q", "origin", "+refs/claims/*:refs/remotes/origin/claims/*"],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    
+    res = subprocess.run(
+        ["git", "for-each-ref", "refs/remotes/origin/claims/", "--format=%(refname) %(objectname)"],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    
+    claims = {}
+    if res.returncode != 0 or not res.stdout.strip():
+        return claims
+        
+    for line in res.stdout.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) != 2:
+            continue
+        refname, sha = parts
+        basename = refname.split("/")[-1]
+        if not basename.startswith("issue-"):
+            continue
+        try:
+            issue_num = int(basename.split("-")[1])
+        except (IndexError, ValueError):
+            continue
+            
+        msg_res = subprocess.run(
+            ["git", "log", "-1", "--format=%B", refname],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if msg_res.returncode == 0:
+            claim_dict = parse_claim_commit_message(msg_res.stdout.strip())
+            if claim_dict:
+                claims[issue_num] = claim_dict
+    return claims
