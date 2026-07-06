@@ -27,7 +27,9 @@ CORE_AGENTS = [
     "sre",
     "observability",
     "documenter",
+    "agent_builder",
 ]
+
 
 ML_DEPS = ("torch", "tensorflow", "scikit-learn", "sklearn", "pandas", "numpy", "keras", "xgboost")
 TRADING_DEPS = ("backtrader", "ccxt", "zipline", "vectorbt", "ta-lib", "alpaca")
