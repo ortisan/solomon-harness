@@ -182,8 +182,18 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     }
     
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    # Use empty tree SHA to avoid leaking developer's dirty index
-    tree_sha = "4b825dc642cb6eb9a019e2c088c2236077717310"
+    mktree_res = subprocess.run(
+        ["git", "mktree"],
+        input="",
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if mktree_res.returncode != 0:
+        return False
+    mktree_stdout = getattr(mktree_res, "stdout", "") or ""
+    tree_sha = mktree_stdout.strip()
 
     commit_res = subprocess.run(
         ["git", "commit-tree", "-m", json.dumps(claim_data), tree_sha],
