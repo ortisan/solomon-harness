@@ -1264,9 +1264,9 @@ def scan_project_structure(workspace_root: str, db) -> dict:
             
             # Test layout detection
             if rel_dir.startswith("tests") or "tests" in rel_dir.split(os.sep):
-                for f in files:
-                    if f.endswith(".py"):
-                        test_layout.append(os.path.join(rel_dir, f))
+                for fname in files:
+                    if fname.endswith(".py"):
+                        test_layout.append(os.path.join(rel_dir, fname))
                 continue
 
             if "__init__.py" in files:
@@ -1274,9 +1274,9 @@ def scan_project_structure(workspace_root: str, db) -> dict:
                 module_name = rel_dir.replace(os.sep, ".")
                 deps = set()
                 # Scan files inside this directory for imports
-                for f in files:
-                    if f.endswith(".py"):
-                        file_path = os.path.join(root, f)
+                for fname in files:
+                    if fname.endswith(".py"):
+                        file_path = os.path.join(root, fname)
                         try:
                             with open(file_path, "r", encoding="utf-8", errors="ignore") as py_file:
                                 for line in py_file:
@@ -1293,7 +1293,7 @@ def scan_project_structure(workspace_root: str, db) -> dict:
                 modules[module_name] = sorted(list(deps))
 
         # 6. Recurring architectural patterns
-        patterns = {
+        patterns: dict[str, list[str]] = {
             "adrs": [],
             "agents": [],
             "commands": []
