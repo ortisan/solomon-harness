@@ -811,9 +811,19 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         harness_dir = os.getcwd()
 
     # Determine workspace root
+    ceilings = []
+    if "GIT_CEILING_DIRECTORIES" in os.environ:
+        ceilings = [
+            os.path.abspath(p)
+            for p in os.environ["GIT_CEILING_DIRECTORIES"].split(os.pathsep)
+            if p
+        ]
+
     project_root = harness_dir
     found_root = False
     while project_root and project_root != os.path.dirname(project_root):
+        if os.path.abspath(project_root) in ceilings:
+            break
         if os.path.exists(os.path.join(project_root, ".git")):
             found_root = True
             break
