@@ -25,10 +25,11 @@ Gather these and summarize them concisely:
 1. A pull request that is **approved** → `/solomon-release <pr>`.
 2. A pull request **open and awaiting review** → `/solomon-review <pr>`.
 3. An issue **In Progress** with a branch but no PR yet → resume with `/solomon-start <issue>` (continue the TDD loop and open the PR).
-4. A **Ready** issue (refined, Definition of Ready met) → `/solomon-start <issue>`.
-5. A **Backlog** issue not yet refined → `/solomon-refine <issue>`.
-6. An **Idea** worth promoting → `/solomon-issue` (or `/solomon-refine`).
-7. **Nothing in progress and the backlog is empty** → there is no work to advance; ask the user whether to create one — `/solomon-idea`, `/solomon-issue`, or `/solomon-bug` — and what it is about.
+4. A **Ready** or **Backlog** issue with a capability gap detected in its context (missing agent/skill in catalog) → run `/solomon-start <issue>` or `/solomon-refine <issue>` to invoke the capability broker and acquire the capability.
+5. A **Ready** issue (refined, Definition of Ready met) → `/solomon-start <issue>`.
+6. A **Backlog** issue not yet refined → `/solomon-refine <issue>`.
+7. An **Idea** worth promoting → `/solomon-issue` (or `/solomon-refine`).
+8. **Nothing in progress and the backlog is empty** → there is no work to advance; ask the user whether to create one — `/solomon-idea`, `/solomon-issue`, or `/solomon-bug` — and what it is about.
 
 If `{{args}}` names a specific issue or PR, evaluate that item and pick its next step.
 

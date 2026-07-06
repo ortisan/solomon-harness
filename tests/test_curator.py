@@ -956,6 +956,104 @@ class TestBrokerAgent(TestBrokerAcquisition):
         self.assertEqual(found_order, ["expert_coder", "qa"])
 
 
+class TestBrokerAcquisitionMemory(TestBrokerAcquisition):
+    def test_broker_skill_records_decision_and_handoff(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+        
+        def gh_runner(args):
+            return MockCompletedProcess()
+
+        # Initialize the db first so there are tables
+        from solomon_harness.tools.database_client import DatabaseClient
+        with DatabaseClient(harness_dir=self.root) as db:
+            db.log_issue(
+                github_id="50",
+                title="Wire broker into refine/start",
+                type_="feature",
+                status="Ready",
+                milestone_id="v0.6.0"
+            )
+
+        # Execute broker_skill with issue_id="50"
+        pr_url = curator.broker_skill(
+            self.root,
+            "mock-source",
+            "standalone",
+            "qa",
+            gh_runner=gh_runner,
+            issue_id="50"
+        )
+        
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/123")
+        
+        # Verify contract file was written
+        contract_path = os.path.join(self.root, ".solomon", "handoffs", "issue-50-start-to-review.md")
+        self.assertTrue(os.path.isfile(contract_path))
+        with open(contract_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Handoff: start -> review · issue #50", content)
+        self.assertIn("PR: https://github.com/ortisan/solomon-harness/pull/123", content)
+        
+        # Verify db records
+        with DatabaseClient(harness_dir=self.root) as db:
+            # Check decision
+            decisions = db.list_decisions()
+            self.assertTrue(any("ADR-Broker" in d.get("title", "") for d in decisions))
+            
+            # Check handoffs
+            handoffs = db.list_handoffs()
+            self.assertTrue(any(h.get("contract_type") == "pull_request" and h.get("sender") == "practice_curator" for h in handoffs))
+
+    def test_broker_agent_records_decision_and_handoff(self):
+        class MockCompletedProcess:
+            def __init__(self):
+                self.stdout = "https://github.com/ortisan/solomon-harness/pull/999\n"
+
+        def gh_runner(args):
+            return MockCompletedProcess()
+
+        # Scaffolding requirements for broker_agent
+        agents_md_dir = os.path.join(self.root, "agents")
+        os.makedirs(agents_md_dir, exist_ok=True)
+        with open(os.path.join(agents_md_dir, "AGENTS.md"), "w", encoding="utf-8") as f:
+            f.write("# Rules\n- `qa` — QA\n")
+            
+        scripts_dir = os.path.join(self.root, "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+        with open(os.path.join(scripts_dir, "document-skills.py"), "w", encoding="utf-8") as f:
+            f.write("print('mock')\n")
+
+        from solomon_harness.tools.database_client import DatabaseClient
+        with DatabaseClient(harness_dir=self.root) as db:
+            db.log_issue(
+                github_id="51",
+                title="Create expert agent",
+                type_="feature",
+                status="Ready",
+                milestone_id="v0.6.0"
+            )
+
+        pr_url = curator.broker_agent(
+            self.root,
+            "expert_coder",
+            "Expert Coder",
+            "Scaffolds code with ultimate precision.",
+            ["Scaffold complex architectures"],
+            gh_runner=gh_runner,
+            issue_id="51"
+        )
+        self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/999")
+
+        contract_path = os.path.join(self.root, ".solomon", "handoffs", "issue-51-start-to-review.md")
+        self.assertTrue(os.path.isfile(contract_path))
+        
+        with DatabaseClient(harness_dir=self.root) as db:
+            decisions = db.list_decisions()
+            self.assertTrue(any("Creating missing agent expert_coder" in d.get("rationale", "") for d in decisions))
+
+
 class TestPinnedManifestFitness(unittest.TestCase):
     """Fitness function over the committed skill-sources.json manifest.
 

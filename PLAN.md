@@ -1,53 +1,57 @@
-# PLAN.md: refactor(workflow): update command descriptions and synchronize global install
+# PLAN.md: feat(agents): wire broker into refine/start with the propose/approve/apply loop
 
-Problem statement: 
-The user wants `/solomon-workflow` to be clearly defined as the command that runs a task end-to-end or continues from a previous execution, and `/solomon-loop` to be defined as the parallel autonomous loop (the current `/solomon-loop-auto`). In the codebase, these commands are already renamed, but the user's local workspace and IDE settings are still showing stale names (`solomon-loop` as the orchestrator and `solomon-loop-auto` as the parallel loop) and the generated global command files are corrupt or outdated.
-
-We need to:
-1. Update descriptions for `solomon-workflow` in `.claude/commands/solomon-workflow.md`, `solomon_harness/cli.py`, `README.md`, `docs/solomon-workflow.md`, and `docs/wiki/Commands-Reference.md` to indicate it runs a task end-to-end or continues from a previous execution.
-2. Synchronize directories in `solomon_harness/install_global.py` so that old/stale commands (like `solomon-loop-auto.toml`) are deleted from the global directories.
-3. Clean up the stale `solomon-loop-auto` directory from the user's `~/.gemini/config/plugins/solomon/skills/` during global installation.
-4. Fix the test suite `tests/test_install_global.py` so it does not overwrite the real user's `~/.gemini` folder during test execution.
+Problem statement:
+Issue #50 requires wiring the routing core (capability broker) into the delivery lifecycle. Gap detection and acquisition must be folded into `/solomon-refine` and `/solomon-start`, and the loop must surface the gap as the next proposed step. When the broker is applied (via #20's reviewed-PR path), it must record the design decision using `save_decision` and a `log_handoff` contract when memory is available. The "propose" step runs only when invoked (no unattended/autonomous cadence), and verdicts must be presented as enumerated choices (with "Other" option).
 
 ## Proposed changes
 
-- In `.claude/commands/solomon-workflow.md`:
-  - Change description frontmatter to "Run a task end-to-end, or continue from a previous execution".
-- In `solomon_harness/cli.py`:
-  - Update `"/solomon-workflow"` description to "run a task end-to-end, or continue from a previous execution".
-- In `README.md`:
-  - Update `/solomon-workflow` description to "run a task end-to-end or continue".
-- In `docs/solomon-workflow.md`:
-  - Update `/solomon-workflow` table row to "runs a task end-to-end or continues".
-- In `docs/wiki/Commands-Reference.md`:
-  - Update `/solomon-workflow` heading to `### \`/solomon-workflow\` (End-to-End Orchestrator)` and description.
-- In `solomon_harness/install_global.py`:
-  - In `_copy_dir_contents`, add logic to delete files in `dest` with the matching suffixes that are not present in `src`.
-  - In `install_global`, add cleanup for stale skills in `~/.gemini/config/plugins/solomon/skills/` that do not match the current commands in the source repository.
-- In `tests/test_install_global.py`:
-  - In tests that call `install_global` with `default_gemini`, patch `os.path.expanduser` so that `"~/.gemini"` points to `self.gemini` instead of the user's real home folder.
-  - Update assertions to verify that stale commands in the destination directory are deleted.
+1. **Broker Memory Integration (`solomon_harness/curator.py`)**:
+   - Update `broker_skill` and `broker_agent` signatures to accept an optional `issue_id: Optional[str] = None` argument.
+   - Update `Proposal` mapping to set `decision_id = issue_id` (so it flows to git commits and PR descriptions).
+   - In `apply_proposal`, after a draft PR is successfully created:
+     - Instantiate `DatabaseClient` using the workspace root.
+     - Call `db.log_decision` to record the broker decision.
+     - If `proposal.decision_id` (the issue ID) is present, write a handoff contract file `.solomon/handoffs/issue-<issue_id>-start-to-review.md` and call `db.log_handoff` to create a `pull_request` handoff.
+
+2. **Workflow Prompt Integration**:
+   - **`.claude/commands/solomon-refine.md`** & **`.gemini/commands/solomon-refine.toml`**:
+     - Instruct the agent to run a capability check against the discovered agents.
+     - If the issue requires a missing capability, run the capability router, present the route/gap verdict as enumerated choices (e.g. 1. Invoke broker to adapt skill, 2. Other).
+     - If selected, execute the broker via python command (passing workspace root and issue number), and stop refinement.
+   - **`.claude/commands/solomon-start.md`** & **`.gemini/commands/solomon-start.toml`**:
+     - Check if the target agent/capability is missing. If so, present route/gap verdict as enumerated choices.
+     - If confirmed, execute the broker via python, log the decision/handoff, and stop development.
+   - **`.claude/commands/solomon-workflow.md`** & **`.gemini/commands/solomon-workflow.toml`**:
+     - Under "Decide the next step", add a rule: if an issue has a capability gap or pending broker proposal, recommend `/solomon-start <issue>` or `/solomon-refine <issue>` (which will run the broker).
+
+3. **Acquisition / Verification Tests (`tests/test_curator.py`)**:
+   - Add a test checking that `broker_skill` and `broker_agent` record decisions and handoffs correctly in memory.
 
 ## Target files
+- `solomon_harness/curator.py`
+- `.claude/commands/solomon-refine.md`
+- `.claude/commands/solomon-start.md`
 - `.claude/commands/solomon-workflow.md`
-- `solomon_harness/cli.py`
-- `solomon_harness/install_global.py`
-- `tests/test_install_global.py`
-- `README.md`
-- `docs/solomon-workflow.md`
-- `docs/wiki/Commands-Reference.md`
+- `.gemini/commands/solomon-refine.toml`
+- `.gemini/commands/solomon-start.toml`
+- `.gemini/commands/solomon-workflow.toml`
+- `tests/test_curator.py`
+
+## STRIDE Security Considerations
+- **Information Disclosure**: Handoff contracts and PRs must not contain PII or secrets. PII is minimized by using normalized person keys.
+- **Elevation of Privilege**: Fetches must use allowed sources from `skill-sources.json`, and the quarantine logic blocks scripts/executables.
+- **Tampering**: The single-driver lock protects database operations, and all acquisitions land as draft PRs reviewed by humans.
 
 ## Edge cases
-- Stale folders in `~/.gemini/config/plugins/solomon/skills/` not being deleted. We handle this explicitly in the `install_global` logic.
-- Permissions to read/write/delete files in `~/.gemini/`. We will run standard file operations under defensive try-except blocks.
+- Database/memory service is offline or not configured: wrapped inside try-except blocks so failures to write memory do not block delivery.
+- Empty or invalid `issue_id`: handle gracefully (do not write handoff files).
 
 ## TDD breakdown
-1. **Red**: Update `tests/test_install_global.py` to assert that stale command files in the destination directories are successfully deleted during installation.
-2. **Green**: Implement file deletion in `_copy_dir_contents` in `solomon_harness/install_global.py`.
-3. **Red**: Update `tests/test_install_global.py` to verify that stale skills directories are cleaned up when `is_default_gemini` is true.
-4. **Green**: Implement the stale skills clean-up in `install_global` in `solomon_harness/install_global.py`.
-5. Update command descriptions in target files and regenerate Gemini commands.
+1. **Red**: Add tests in `tests/test_curator.py` verifying that broker calls with an `issue_id` write a handoff contract file and record the decision and handoff in memory.
+2. **Green**: Implement database logging and handoff contract file writing in `apply_proposal` in `solomon_harness/curator.py`.
+3. **Refactor**: Verify all existing tests pass and refine database client usage.
+4. **Integration**: Update workflow/command markdown and toml templates.
 
 ## Verification criteria
-- Run `uv run pytest` to verify all tests pass.
-- Run `solomon-harness compile` and `solomon-harness install-global` to verify that global files are updated and stale commands are removed.
+- Run `uv run pytest` to ensure all tests pass (including the new TDD tests).
+- Validate the new command file formatting.

@@ -21,6 +21,18 @@ Steps:
    any prior contract) only when needed, instead of re-deriving prior context.
    Confirm it is in `Backlog`; if it is already `Ready` or further, stop and report.
 
+1b. **Capability Check**: Before starting refinement, check if the project has the necessary capability (agents/skills) to implement this issue.
+    - Run the capability router via python to check for any gap:
+      `uv run python -c "from solomon_harness.capability_router import load_catalog; print([a.name for a in load_catalog()])"`
+    - If a capability gap is detected (no fitting agent or missing skill), present the verdict to the user as enumerated choices:
+      1. Propose capability broker to acquire/adapt the capability (adapt skill or create agent).
+      2. Other.
+    - If option 1 is selected (or in non-interactive/headless mode, which defaults to option 1):
+      - Run the broker to apply the proposal:
+        - For adapting skill: `uv run python -c "from solomon_harness.curator import broker_skill; broker_skill('.', '<source_name>', '<skill_name>', '<agent_name>', issue_id='<issue_number>')"`
+        - For creating agent: `uv run python -c "from solomon_harness.curator import broker_agent; broker_agent('.', '<agent_name>', '<title>', '<description>', <duties_list>, issue_id='<issue_number>')"`
+      - Report the created PR and stop execution (do not proceed to Step 2).
+
 2. Strengthen the issue body (product_owner). Rewrite to the feature template in
    the workflow doc: problem statement, user story (`As a … I want … so that …`),
    and acceptance criteria as **Given/When/Then** covering happy, boundary, and

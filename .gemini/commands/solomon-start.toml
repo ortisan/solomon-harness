@@ -17,6 +17,17 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - `gh issue view {{args}}` to read the title, body, acceptance criteria, and labels.
 - `get_issue("{{args}}")` for prior context; check the card is in
   `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
+- **Capability Check**: Check if the project has the necessary capability (agents/skills) to implement this issue.
+  - Run the capability router via python to check for any gap:
+    `uv run python -c "from solomon_harness.capability_router import load_catalog; print([a.name for a in load_catalog()])"`
+  - If a capability gap is detected (no fitting agent or missing skill), present the verdict to the user as enumerated choices:
+    1. Propose capability broker to acquire/adapt the capability (adapt skill or create agent).
+    2. Other.
+  - If option 1 is selected (or in non-interactive/headless mode, which defaults to option 1):
+    - Run the broker to apply the proposal:
+      - For adapting skill: `uv run python -c "from solomon_harness.curator import broker_skill; broker_skill('.', '<source_name>', '<skill_name>', '<agent_name>', issue_id='{{args}}')"`
+      - For creating agent: `uv run python -c "from solomon_harness.curator import broker_agent; broker_agent('.', '<agent_name>', '<title>', '<description>', <duties_list>, issue_id='{{args}}')"`
+    - Report the created PR and stop execution (do not proceed to Step 2).
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 

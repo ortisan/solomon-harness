@@ -236,6 +236,64 @@ def apply_proposal(
                 else:
                     raise
             
+        try:
+            from solomon_harness.tools.database_client import DatabaseClient
+            import datetime
+            with DatabaseClient(harness_dir=root) as db:
+                title = f"ADR-Broker: Applied {proposal.kind} for {proposal.agent}"
+                if proposal.decision_id:
+                    title += f" for #{proposal.decision_id}"
+                outcome = f"PR: {pr_url}\nBranch: {branch_name}"
+                db.log_decision(
+                    title=title,
+                    rationale=proposal.rationale,
+                    outcome=outcome,
+                    author="practice_curator",
+                    branch=branch_name,
+                    commit_sha="",
+                )
+                
+                if proposal.decision_id:
+                    date_str = datetime.date.today().isoformat()
+                    contract_dir = os.path.join(root, ".solomon", "handoffs")
+                    os.makedirs(contract_dir, exist_ok=True)
+                    contract_path = os.path.join(contract_dir, f"issue-{proposal.decision_id}-start-to-review.md")
+                    
+                    content = f"""# Handoff: start -> review · issue #{proposal.decision_id}
+- Date: {date_str} · Author: practice_curator
+- Issue: #{proposal.decision_id} · Branch: {branch_name} · PR: {pr_url}
+
+## What this stage did
+Acquired missing capability via capability broker: {proposal.drift_description}. Scaffolds and files created/updated, compiled, and draft PR opened.
+
+## Artifacts (open only if needed)
+- PR: {pr_url}
+- Branch: {branch_name}
+
+## Acceptance criteria status
+Ready for review and verification.
+
+## Input for the next stage (review)
+Verify the newly created/adapted agent or skill on the PR branch.
+
+## Open questions / risks
+None.
+"""
+                    with open(contract_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    
+                    db.log_handoff(
+                        sender="practice_curator",
+                        recipient="qa",
+                        contract_type="pull_request",
+                        contract_path=f".solomon/handoffs/issue-{proposal.decision_id}-start-to-review.md",
+                        status="ready",
+                        summary=f"Acquired capability: {proposal.drift_description}",
+                    )
+        except Exception as db_exc:
+            import logging
+            logging.warning(f"Could not log broker decisions to database: {db_exc}")
+
         return pr_url
     except Exception:
         raise
@@ -434,7 +492,8 @@ def broker_skill(
     source_name: str,
     skill_name: str,
     agent_name: str,
-    gh_runner: Optional[Callable[[List[str]], Any]] = None
+    gh_runner: Optional[Callable[[List[str]], Any]] = None,
+    issue_id: Optional[str] = None
 ) -> str:
     """Acquires a skill from an allowlisted external source, adapts it, and installs it via apply_proposal."""
     import tempfile
@@ -463,7 +522,7 @@ def broker_skill(
             drift_description=f"Adapt skill {skill_name} from {source_name}",
             sources=(f"{source_name}@{source.get('pin')}",),
             rationale=f"Acquiring missing capability '{skill_name}' via broker",
-            decision_id=None,
+            decision_id=issue_id,
             kind=ADAPT_SKILL_KIND,
         )
         return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
@@ -475,7 +534,8 @@ def broker_agent(
     title: str,
     description: str,
     duties: List[str],
-    gh_runner: Optional[Callable[[List[str]], Any]] = None
+    gh_runner: Optional[Callable[[List[str]], Any]] = None,
+    issue_id: Optional[str] = None
 ) -> str:
     """Acquires a new agent by scaffolding its directories, files, and default skill,
 
@@ -510,7 +570,7 @@ def broker_agent(
         drift_description=f"Create agent {agent_name}",
         sources=(f"demand@{agent_name}", f"template@{agent_name}"),
         rationale=f"Creating missing agent {agent_name} for capability",
-        decision_id=None,
+        decision_id=issue_id,
         kind="create_agent",
     )
     return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
