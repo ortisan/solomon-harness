@@ -412,7 +412,7 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
                 break
             curr = os.path.dirname(curr)
         if found_root:
-            claim.release_claim(workspace_root, issue_number)
+            claim.release_claim(workspace_root, issue_number, force=True)
     except Exception:
         pass
 

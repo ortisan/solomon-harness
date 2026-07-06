@@ -8,7 +8,7 @@ so the workflows can run in CI and automation, not only inside the host tool.
 import os
 import subprocess
 import sys
-from typing import List, Optional
+from typing import Any, List, Optional
 
 STAGES = [
     "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
@@ -397,6 +397,7 @@ def run_stage(
             for i in range(iterations):
                 if iterations > 1:
                     log_progress(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
+                proc: Any = None
                 if capture_cost:
                     # Capture the engine's reported cost into the budget ledger.
                     import unittest.mock

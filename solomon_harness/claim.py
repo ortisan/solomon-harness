@@ -136,6 +136,8 @@ def has_active_pr_or_review(workspace_root: str, issue_number: int) -> bool:
     try:
         owner = repo_owner()
         title = board_title()
+        if not owner or not title:
+            return False
         project = find_project(owner, title)
         if project:
             res = _gh(["project", "item-list", str(project.get("number")), "--owner", owner, "--format", "json"], parse_json=True)
@@ -162,16 +164,15 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     if current_session_id is None:
         current_session_id = get_current_session_id()
         
-    active_claim = get_claim(workspace_root, issue_number)
+    ref_info = get_claim_ref(workspace_root, issue_number)
     has_pr = has_active_pr_or_review(workspace_root, issue_number)
     
     existing_sha = None
-    if active_claim:
+    if ref_info:
+        existing_sha = ref_info[0]
+        active_claim = ref_info[1]
         if is_claim_active(active_claim, current_session_id, has_open_pr=has_pr):
             return False
-        ref_info = get_claim_ref(workspace_root, issue_number)
-        if ref_info:
-            existing_sha = ref_info[0]
             
     now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
     claim_data = {
@@ -181,16 +182,8 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     }
     
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    tree_res = subprocess.run(
-        ["git", "write-tree"],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    if tree_res.returncode != 0:
-        return False
-    tree_sha = tree_res.stdout.strip()
+    # Use empty tree SHA to avoid leaking developer's dirty index
+    tree_sha = "4b825dc642cb6eb9a019e2c088c2236077717310"
 
     commit_res = subprocess.run(
         ["git", "commit-tree", "-m", json.dumps(claim_data), tree_sha],
@@ -201,7 +194,8 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     )
     if commit_res.returncode != 0:
         return False
-    new_sha = commit_res.stdout.strip()
+    new_sha_stdout = getattr(commit_res, "stdout", "") or ""
+    new_sha = new_sha_stdout.strip()
     
     ref = f"refs/claims/issue-{issue_number}"
     if existing_sha:
@@ -225,7 +219,7 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     
     return True
 
-def release_claim(workspace_root: str, issue_number: int, current_session_id: Optional[str] = None) -> bool:
+def release_claim(workspace_root: str, issue_number: int, current_session_id: Optional[str] = None, force: bool = False) -> bool:
     """Release the issue claim, removing the git remote ref and assignee."""
     if current_session_id is None:
         current_session_id = get_current_session_id()
@@ -239,7 +233,7 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
         
     sha, claim_data = ref_info
     has_pr = has_active_pr_or_review(workspace_root, issue_number)
-    if claim_data.get("session_id") != current_session_id and is_claim_active(claim_data, current_session_id, has_open_pr=has_pr):
+    if not force and claim_data.get("session_id") != current_session_id and is_claim_active(claim_data, current_session_id, has_open_pr=has_pr):
         return False
         
     ref = f"refs/claims/issue-{issue_number}"
@@ -277,7 +271,7 @@ def fetch_all_claims(workspace_root: str) -> Dict[int, Dict[str, Any]]:
         env=env,
     )
     
-    claims = {}
+    claims: Dict[int, Dict[str, Any]] = {}
     if res.returncode != 0 or not res.stdout.strip():
         return claims
         
