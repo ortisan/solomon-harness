@@ -81,7 +81,31 @@ class MemoryService:
         return {"ok": True, "github_id": github_id}
 
     def get_open_issues(self) -> Dict[str, List[Dict[str, Any]]]:
-        return {"issues": self.client.get_open_issues()}
+        issues = self.client.get_open_issues()
+        try:
+            from solomon_harness import claim
+            workspace_root = self.client.harness_dir
+            claims = claim.fetch_all_claims(workspace_root)
+            current_sess = claim.get_current_session_id()
+            
+            unclaimed = []
+            for issue in issues:
+                issue_id_str = issue.get("github_id")
+                try:
+                    issue_num = int(issue_id_str)
+                except (TypeError, ValueError):
+                    unclaimed.append(issue)
+                    continue
+                    
+                if issue_num in claims:
+                    has_pr = claim.has_active_pr_or_review(workspace_root, issue_num)
+                    if claim.is_claim_active(claims[issue_num], current_sess, has_open_pr=has_pr):
+                        continue
+                unclaimed.append(issue)
+            issues = unclaimed
+        except Exception:
+            pass
+        return {"issues": issues}
 
     def get_issue(self, github_id: str) -> Dict[str, Any]:
         return {"issue": self.client.get_issue(github_id)}

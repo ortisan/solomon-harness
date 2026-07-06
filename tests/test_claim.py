@@ -163,5 +163,35 @@ class TestClaimGitOperations(unittest.TestCase):
         rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
         self.assertEqual(rc, 1)
 
+    @patch("solomon_harness.tools.database_client.DatabaseClient.get_open_issues")
+    @patch("solomon_harness.claim.fetch_all_claims")
+    @patch("solomon_harness.claim.is_claim_active")
+    def test_memory_service_filters_claimed_issues(self, mock_active, mock_fetch, mock_db_issues):
+        from solomon_harness.memory_service import MemoryService
+        
+        mock_db_issues.return_value = [
+            {"github_id": "1", "title": "issue 1"},
+            {"github_id": "2", "title": "issue 2"},
+            {"github_id": "tracking-row", "title": "RAID row"},
+        ]
+        
+        mock_fetch.return_value = {
+            1: {"session_id": "other-sess"}
+        }
+        
+        def side_effect(claim_data, current_session_id, **kw):
+            return claim_data.get("session_id") == "other-sess"
+        mock_active.side_effect = side_effect
+        
+        service = MemoryService(harness_dir=self.local)
+        res = service.get_open_issues()
+        issues = res["issues"]
+        
+        self.assertEqual(len(issues), 2)
+        github_ids = [i["github_id"] for i in issues]
+        self.assertNotIn("1", github_ids)
+        self.assertIn("2", github_ids)
+        self.assertIn("tracking-row", github_ids)
+
 if __name__ == '__main__':
     unittest.main()
