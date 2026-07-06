@@ -197,6 +197,49 @@ def handle_loop_lock(workspace_root: str, action: str) -> None:
         print("No loop lock to release.")
 
 
+def handle_claim(workspace_root: str, action: str, issue_number: int) -> None:
+    """Inspect or release an issue claim/lease."""
+    from solomon_harness import claim
+    import datetime
+    import sys
+
+    if action == "status":
+        c = claim.get_claim(workspace_root, issue_number)
+        if not c:
+            print(f"Issue #{issue_number} is unclaimed.")
+            return
+        has_pr = claim.has_active_pr_or_review(workspace_root, issue_number)
+        current_sess = claim.get_current_session_id()
+        active = claim.is_claim_active(c, current_sess, has_open_pr=has_pr)
+        status_str = "ACTIVE" if active else "STALE"
+        acquired_str = c.get("acquired_at") or "unknown"
+        age_str = "unknown"
+        try:
+            acquired = datetime.datetime.fromisoformat(acquired_str.replace("Z", "+00:00"))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            diff = now - acquired
+            age_str = f"{int(diff.total_seconds() / 60)} minutes"
+        except Exception:
+            pass
+        print(f"Claim status: {status_str}")
+        print(f"  Holder (session): {c.get('session_id')}")
+        print(f"  Acquired: {acquired_str} (age: {age_str})")
+        print(f"  Protected by open PR/review: {has_pr}")
+        return
+
+    if action == "release":
+        current_sess = claim.get_current_session_id()
+        if claim.release_claim(workspace_root, issue_number, current_session_id=current_sess):
+            print(f"Released claim on issue #{issue_number}.")
+        else:
+            print(
+                f"Error: failed to release claim on issue #{issue_number} "
+                "(it may be active and owned by another session).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def handle_loop_stop(workspace_root: str, clear: bool) -> None:
     """Kill-switch: halt all autonomous loop stages immediately, or clear it."""
     from solomon_harness import loop_policy
@@ -653,6 +696,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="status (default) shows the holder; release clears a stale or stuck lock",
     )
 
+    claim_parser = subparsers.add_parser(
+        "claim", help="Inspect or release an issue claim/lease"
+    )
+    claim_parser.add_argument(
+        "action", choices=["status", "release"],
+        help="status shows the holder; release clears a claim",
+    )
+    claim_parser.add_argument(
+        "issue", type=int,
+        help="The issue number to inspect or release",
+    )
+
     log_parser = subparsers.add_parser(
         "log", help="Show the loop activity feed (loop runs, decisions, handoffs)"
     )
@@ -795,6 +850,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         sys.exit(0)
     elif args.command == "loop-lock":
         handle_loop_lock(workspace_root, args.action)
+    elif args.command == "claim":
+        handle_claim(workspace_root, args.action, args.issue)
     elif args.command == "loop-guard":
         handle_loop_guard(workspace_root)
     elif args.command == "loop-stop":
