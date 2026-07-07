@@ -839,6 +839,11 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
             cmd = [exec_path, "-p", "-", "--conversation", str(uuid.uuid4()), "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
         elif engine == "claude":
             cmd = [engine, "-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
+            from solomon_harness.loop_policy import LoopPolicy
+
+            policy = LoopPolicy.from_config(workspace_root)
+            if policy.orchestrator_model:
+                cmd.extend(["--model", policy.orchestrator_model])
         else:
             cmd = [engine, "-p"]
 

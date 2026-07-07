@@ -12,6 +12,11 @@ the agent content is never duplicated. Run from the repository root:
 import os
 import sys
 
+# Every generated specialist subagent is pinned to this model so it never
+# silently inherits whatever model the orchestrating session runs under (the
+# harness's own convention: an Opus orchestrator delegates to Sonnet subagents).
+DEFAULT_SUBAGENT_MODEL = "sonnet"
+
 
 def discover_agents(agents_dir: str):
     """Returns sorted agent names: subdirectories with an agents/<name>.md role file."""
@@ -61,11 +66,12 @@ def yaml_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def subagent_markdown(agent_name: str, description: str) -> str:
+def subagent_markdown(agent_name: str, description: str, model: str = DEFAULT_SUBAGENT_MODEL) -> str:
     return (
         f"---\n"
         f"name: {agent_name}\n"
         f"description: {yaml_quote(description)}\n"
+        f"model: {model}\n"
         f"---\n\n"
         f"You are the {agent_name} specialist agent for solomon-harness.\n\n"
         f"Your role is defined in agents/{agent_name}/agents/{agent_name}.md and your "

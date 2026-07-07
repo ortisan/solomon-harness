@@ -393,17 +393,94 @@ def test_cmd_audit_trigger_success(repo, capsys):
 
 def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
     from unittest.mock import patch
-    
+
     curator_dir = Path(repo) / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
-    
+
     with patch("subprocess.run", side_effect=Exception("Sourcing tool is down")):
         rc = release.cmd_audit_trigger(repo, version="1.0.0")
-        
+
         assert rc == 0
         out_err = capsys.readouterr()
         combined = out_err.out + out_err.err
         assert "audit skipped: sourcing unavailable" in combined
+
+
+def _configure_orchestrator_model(repo, model):
+    import json
+
+    agent_dir = Path(repo) / ".agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "config.json").write_text(
+        json.dumps({"agent_name": "x", "loop": {"orchestrator_model": model}}),
+        encoding="utf-8",
+    )
+
+
+def test_cmd_audit_trigger_passes_orchestrator_model_to_claude_engine(repo, capsys):
+    # The practice_curator audit trigger is a second headless-engine call site
+    # (independent of workflows.run_stage) -- it must honor the same
+    # loop.orchestrator_model config, or an Opus-orchestrator setup silently
+    # leaves this one trigger on the CLI's default model.
+    from unittest.mock import patch, MagicMock
+    import subprocess
+
+    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+    _configure_orchestrator_model(repo, "opus")
+
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+
+        rc = release.cmd_audit_trigger(repo, version="1.0.0")
+
+        assert rc == 0
+        args, _kwargs = mock_run.call_args
+        cmd = args[0]
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "opus"
+
+
+def test_cmd_audit_trigger_omits_model_flag_when_not_configured(repo, capsys):
+    from unittest.mock import patch, MagicMock
+    import subprocess
+
+    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+
+        rc = release.cmd_audit_trigger(repo, version="1.0.0")
+
+        assert rc == 0
+        args, _kwargs = mock_run.call_args
+        assert "--model" not in args[0]
+
+
+def test_cmd_audit_trigger_omits_model_flag_for_non_claude_engine(repo, capsys, monkeypatch):
+    from unittest.mock import patch, MagicMock
+    import subprocess
+
+    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+    _configure_orchestrator_model(repo, "opus")
+    monkeypatch.setenv("SOLOMON_ENGINE", "agy")
+
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+
+        rc = release.cmd_audit_trigger(repo, version="1.0.0")
+
+        assert rc == 0
+        args, _kwargs = mock_run.call_args
+        assert "--model" not in args[0]
 
 
 # --- Merge-time release-window recompute (catches a prep PR going stale) ----
