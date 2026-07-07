@@ -98,6 +98,25 @@ class TestGeneratedSubagents(unittest.TestCase):
         discovered = module.discover_agents(os.path.join(WORKSPACE, "agents"))
         self.assertEqual(sorted(discovered), sorted(_agent_names()))
 
+    def test_every_subagent_is_pinned_to_sonnet(self):
+        # Task-tool subagents must never silently inherit whatever model the
+        # orchestrating session happens to run under (e.g. Opus) -- each
+        # specialist subagent is pinned to Sonnet in its own frontmatter, per
+        # the Agent tool's documented `model:` field.
+        for name in _agent_names():
+            body = _read(os.path.join(".claude", "agents", f"{name}.md"))
+            self.assertIn("model: sonnet", body, f"{name} subagent is not pinned to sonnet")
+
+    def test_subagent_markdown_emits_the_model_field(self):
+        path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
+        spec = importlib.util.spec_from_file_location("gen_integrations_model", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        body = module.subagent_markdown("software_engineer", "desc")
+        self.assertIn("model: sonnet", body)
+        front, _, _rest = body.partition("\n\n")
+        self.assertIn("model:", front)
+
 
 class TestGeminiCommands(unittest.TestCase):
     def test_every_slash_command_has_a_gemini_mirror(self):

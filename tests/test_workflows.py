@@ -354,6 +354,54 @@ class TestRunStageDriverLock(unittest.TestCase):
         mock_run.assert_called_once()  # idea creates no branch/merge, so it is not gated
 
 
+class TestRunStageOrchestratorModel(unittest.TestCase):
+    """The headless engine invocation is the orchestrator: it may be pinned to
+    a different model than the specialist subagents it delegates to via the
+    Task tool (each subagent pins its own model in `.claude/agents/<name>.md`,
+    see scripts/generate-integrations.py). Configured via `loop.orchestrator_model`
+    in `.agent/config.json` (or the SOLOMON_ORCHESTRATOR_MODEL env override)."""
+
+    def test_passes_model_flag_to_claude_engine_when_configured(self):
+        root = _workspace_with_loop(
+            "start", "---\nx\n---\nDo work on $ARGUMENTS", {"orchestrator_model": "opus"}
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "start", ["42"], engine="claude")
+        self.assertEqual(rc, 0)
+        args, _kwargs = mock_run.call_args
+        cmd = args[0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "opus")
+
+    def test_omits_model_flag_when_not_configured(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "start", ["42"], engine="claude")
+        args, _kwargs = mock_run.call_args
+        self.assertNotIn("--model", args[0])
+
+    def test_omits_model_flag_for_non_claude_engine(self):
+        root = _workspace_with_loop(
+            "start", "---\nx\n---\nDo work on $ARGUMENTS", {"orchestrator_model": "opus"}
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "start", ["42"], engine="agy")
+        args, _kwargs = mock_run.call_args
+        self.assertNotIn("--model", args[0])
+
+
 class TestRunStageSessionIdPropagation(unittest.TestCase):
     """#197: the loop-driven `claude -p` child must inherit the driver's own
     session_id, so a nested `solomon-harness dev <stage>` it shells out to

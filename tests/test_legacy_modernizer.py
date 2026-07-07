@@ -155,8 +155,8 @@ class TestCompile(unittest.TestCase):
         )
         self.assertEqual(
             _front_matter_keys(content),
-            ["name", "description"],
-            "front-matter keys must be exactly name and description",
+            ["name", "description", "model"],
+            "front-matter keys must be exactly name, description, and model",
         )
 
 

@@ -1,6 +1,7 @@
 ---
 name: agent_builder
 description: The Agent Builder specialist agent scaffolds new specialist agents.
+model: sonnet
 ---
 
 You are the agent_builder specialist agent for solomon-harness.

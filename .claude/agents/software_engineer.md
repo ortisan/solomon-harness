@@ -1,6 +1,7 @@
 ---
 name: software_engineer
 description: The Software Engineer implements features, debugs issues, and ensures code quality by writing modular, maintainable, and clean code.
+model: sonnet
 ---
 
 You are the software_engineer specialist agent for solomon-harness.
