@@ -59,6 +59,12 @@ _DIRECT_SECTION_MAP = {
 # Traceability never falls back to this: it is always synthesized.
 TBD_PLACEHOLDER = "TBD (refine)"
 
+# Filesystem-safety cap on the slug (STRIDE: Denial of Service via an
+# unbounded filename -- an issue title of a few hundred characters used to
+# turn into a filename long enough to trip a filesystem's name-length limit,
+# raising a raw OSError out of write_spec).
+_MAX_SLUG_LENGTH = 80
+
 
 def slugify(title: str) -> str:
     """Return an ASCII kebab-case slug safe to embed in a filesystem path.
@@ -68,10 +74,13 @@ def slugify(title: str) -> str:
     with a single dash, so no path-traversal sequence can survive into the
     result (STRIDE: Tampering). An all-symbol title collapses to the empty
     string, which falls back to the fixed slug "untitled" rather than an
-    empty or colliding filename.
+    empty or colliding filename. The result is capped at `_MAX_SLUG_LENGTH`
+    characters, with any dash left dangling by the cut stripped off, so a very
+    long title cannot produce an unwieldy or filesystem-hostile filename.
     """
     normalized = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
     slug = _NON_ALNUM_RE.sub("-", normalized.lower()).strip("-")
+    slug = slug[:_MAX_SLUG_LENGTH].rstrip("-")
     return slug or "untitled"
 
 
@@ -213,11 +222,18 @@ def write_spec(
 
     Creates docs/specs/ if it does not already exist. Write-only: performs no
     git operation (the caller, /solomon-issue, stays git-free by design).
+
+    Raises OSError on a failed write (for example, a read-only filesystem);
+    the error is re-raised carrying only the file's basename, never the full
+    (potentially absolute) path, so a caller that reports it cannot leak one.
     """
     docs_specs = root / "docs" / "specs"
     docs_specs.mkdir(parents=True, exist_ok=True)
     path = docs_specs / spec_filename(issue_number, title)
-    path.write_text(render_spec(issue_number, title, body, adr_ref=adr_ref), encoding="utf-8")
+    try:
+        path.write_text(render_spec(issue_number, title, body, adr_ref=adr_ref), encoding="utf-8")
+    except OSError as exc:
+        raise OSError(exc.errno, exc.strerror or str(exc), path.name) from exc
     return path
 
 
@@ -244,9 +260,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    body = Path(args.body_file).read_text(encoding="utf-8")
     root = Path(args.root)
-    path = write_spec(root, args.issue, args.title, body, adr_ref=args.adr)
+    try:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+        path = write_spec(root, args.issue, args.title, body, adr_ref=args.adr)
+    except OSError as exc:
+        # One clean stderr line, never a raw traceback, and never an
+        # absolute path: only the basename and the OS's own error text.
+        name = Path(exc.filename).name if exc.filename else Path(args.body_file).name
+        reason = exc.strerror or str(exc)
+        print(f"error: {reason}: {name}", file=sys.stderr)
+        return 1
+
     try:
         rel = path.relative_to(root)
     except ValueError:

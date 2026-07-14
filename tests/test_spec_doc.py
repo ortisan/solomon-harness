@@ -53,6 +53,13 @@ def test_slugify_never_yields_leading_or_trailing_dash():
     assert not slug.endswith("-")
 
 
+def test_slugify_caps_length_for_very_long_titles():
+    slug = spec_doc.slugify("Word " * 100)  # 500 chars before slugifying
+
+    assert len(slug) <= 80
+    assert not slug.endswith("-")
+
+
 # --- spec_filename -------------------------------------------------------------
 
 
@@ -285,6 +292,19 @@ def test_write_spec_front_matter_does_not_break_spec_lint_order(tmp_path):
     assert result.stdout.strip() == "OK"
 
 
+def test_write_spec_long_title_produces_a_lint_clean_short_filename(tmp_path):
+    root = _seed_fake_repo(tmp_path)
+    long_title = "Word " * 100  # 500 chars
+
+    path = spec_doc.write_spec(root, 1, long_title, MINIMAL_ISSUE_BODY)
+
+    slug = path.stem.split("-", 1)[1]
+    assert len(slug) <= 80
+
+    result = _spec_lint(path)
+    assert result.returncode == 0, result.stderr
+
+
 def test_write_spec_creates_docs_specs_if_missing(tmp_path):
     # No docs/specs directory pre-seeded at all this time.
     path = spec_doc.write_spec(tmp_path, 5, "Another one", MINIMAL_ISSUE_BODY)
@@ -376,6 +396,40 @@ def test_generate_cli_writes_spec_and_prints_uncommitted_note(tmp_path):
     assert "uncommitted" in low
     assert "commit" not in low.replace("uncommitted", "")
     assert "push" not in low
+
+
+def test_generate_cli_missing_body_file_fails_cleanly(tmp_path):
+    import subprocess
+    import sys
+
+    missing_body_file = tmp_path / "does-not-exist.md"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "solomon_harness.spec_doc",
+            "generate",
+            "--issue",
+            "1",
+            "--title",
+            "Title",
+            "--body-file",
+            str(missing_body_file),
+            "--root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert len(result.stderr.strip().splitlines()) == 1
+    # The basename is fine to report; the absolute directory path is not.
+    assert missing_body_file.name in result.stderr
+    assert str(tmp_path) not in result.stderr
 
 
 # --- command wiring: /solomon-issue calls the generator, write-only ---------------
