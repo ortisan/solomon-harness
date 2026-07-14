@@ -1,6 +1,6 @@
 # Socratic Elicitation
 
-Run a bounded Socratic elicitation before shaping any feature/story: evaluate the demand against the six readiness criteria, question only what is missing — at most 3 rounds of at most 4 questions, presented as enumerated options — and skip questioning entirely when the demand already passes all six. The gate exists to stop guessed intent from becoming an issue; it must never become an interrogation that stalls a well-formed request, and it never replaces the confirm-before-create step.
+Gate every feature demand through the six readiness criteria, asking bounded Socratic questions only for the gaps. Evaluate first, then question only what is missing — at most 3 rounds of at most 4 questions, presented as enumerated options — and skip questioning entirely when the demand already passes all six. The gate exists to stop guessed intent from becoming an issue; it must never become an interrogation that stalls a well-formed request, and it never replaces the confirm-before-create step.
 
 ## The readiness checklist
 
@@ -22,7 +22,7 @@ One question archetype per criterion, always as enumerated options (2-4 plausibl
 - Outcome: "What would you observe when this works?" — options are measurable or at least checkable states.
 - Boundary: "What is explicitly out for the first slice?" — options propose concrete exclusions.
 - Single reading: state both interpretations verbatim as the options; do not pick one silently.
-- Job: "If we could not build <the named solution>, what need would still exist?" — options are candidate jobs-to-be-done.
+- Job: "What do you do today without <the named solution>, and what need does that workaround serve?" — anchored in current behavior rather than a hypothetical; options are candidate jobs-to-be-done.
 
 Derive options from the project context (memory, open issues, the codebase) so each is genuinely plausible; a question whose options are filler pushes the user to "Other" and wastes the round.
 
