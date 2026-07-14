@@ -11,6 +11,8 @@ import importlib.util
 import time
 from pathlib import Path
 
+import yaml
+
 from solomon_harness import spec_doc
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -326,3 +328,45 @@ def test_generate_cli_writes_spec_and_prints_uncommitted_note(tmp_path):
     assert "uncommitted" in low
     assert "commit" not in low.replace("uncommitted", "")
     assert "push" not in low
+
+
+# --- command wiring: /solomon-issue calls the generator, write-only ---------------
+
+
+def _command_content(rel_path: str) -> str:
+    return (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+
+
+def test_claude_command_wires_spec_generation():
+    content = _command_content(".claude/commands/solomon-issue.md")
+
+    assert "solomon_harness.spec_doc generate" in content
+    assert "docs/specs/<n>-<slug>.md" in content.lower()
+    # Write-only delivery (user decision): the command must never instruct a
+    # git commit or push of the spec it just generated.
+    assert "git commit" not in content
+    assert "git push" not in content
+
+
+def test_gemini_command_wires_spec_generation():
+    content = _command_content(".gemini/commands/solomon-issue.toml")
+
+    assert "solomon_harness.spec_doc generate" in content
+    assert "docs/specs/<n>-<slug>.md" in content.lower()
+    assert "git commit" not in content
+    assert "git push" not in content
+
+
+def test_ci_workflow_wires_spec_lint():
+    with open(REPO_ROOT / ".github" / "workflows" / "ci.yml", encoding="utf-8") as fh:
+        workflow = yaml.safe_load(fh)
+
+    validate_job = workflow["jobs"]["validate"]
+    validate_step = None
+    for step in validate_job.get("steps", []):
+        if step.get("name") == "Validate workspace (ADRs, workflows, agents, templates, skills)":
+            validate_step = step
+            break
+
+    assert validate_step is not None, "the 'Validate workspace' step must exist"
+    assert "scripts/spec-lint.py" in validate_step.get("run", "")

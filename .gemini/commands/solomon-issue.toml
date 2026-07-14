@@ -43,6 +43,18 @@ Steps:
      If you use a new `area:<domain>`, create it: `gh label create "area:<domain>" --color BFD4F2 --force`.
    - `gh issue create --title "<title>" --body "<body>" --label type:feature --label priority:pN --label area:<domain>`.
    Capture the returned issue number and URL.
+   - Generate the structured spec document from the same rendered body: write
+     the body to a temp file, then run
+     `uv run python -m solomon_harness.spec_doc generate --issue <n> --title "<title>" --body-file <path> [--adr "<ADR ref>"]`
+     (pass `--adr` only when an ADR already exists for this change; omit it
+     otherwise — the Traceability section then reads "No related ADR"). This
+     writes `docs/specs/<n>-<slug>.md` into the working tree and prints a
+     one-line note that the file was created and is uncommitted. This step is
+     write-only: it performs no version-control operation whatsoever on the
+     spec — `main` is protected, so the spec rides into the repository
+     through the author's normal flow (typically checked in on the feature
+     branch at `/solomon-start`, alongside the code and any ADR the change
+     warrants).
 
 6. Place it on the board Backlog:
    - `uv run python -m solomon_harness.github ensure-board`

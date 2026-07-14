@@ -87,6 +87,7 @@ jobs:
           uv run python scripts/validate-agents.py
           uv run python scripts/validate-templates.py
           uv run python scripts/check-skill-depth.py
+          uv run python scripts/spec-lint.py docs/specs
 
       - name: Set up Node.js
         uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
