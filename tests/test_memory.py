@@ -109,10 +109,40 @@ class TestEnsureMemoryUp(unittest.TestCase):
         self.assertIn("not local", res["skipped"])
 
     def test_already_running_when_surreal_serving(self):
-        with patch.object(memory, "is_serving", return_value=True):
+        called = []
+
+        def fake_run(cmd, **kwargs):
+            called.append(cmd)
+            return _Proc(0)
+
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=True), \
+             patch("subprocess.run", side_effect=fake_run):
             res = memory.ensure_memory_up(self.root)
         self.assertTrue(res["ok"])
         self.assertTrue(res["already_running"])
+        self.assertEqual(called, [])
+
+    def test_serving_backend_with_stale_compose_is_recreated(self):
+        # A backend already serving on an all-interfaces bind is the very
+        # exposure the loopback pin closes: memory-up must recreate it now,
+        # not skip it as already_running (PR #245 review blocker).
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return _Proc(0, "", "")
+
+        with patch.object(memory, "heal_home_compose", return_value="/home/sh/docker-compose.yml"), \
+             patch.object(memory, "is_serving", return_value=True), \
+             patch.object(memory, "ensure_home_compose", return_value="/home/sh/docker-compose.yml"), \
+             patch.object(memory, "_compose_command", return_value=["docker", "compose"]), \
+             patch("subprocess.run", side_effect=fake_run):
+            res = memory.ensure_memory_up(self.root, wait_seconds=5)
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["started"])
+        self.assertTrue(res["loopback_healed"])
+        self.assertTrue(any("up" in c and "-d" in c for c in calls))
 
     def test_port_conflict_when_foreign_process_holds_port(self):
         called = []
@@ -123,7 +153,8 @@ class TestEnsureMemoryUp(unittest.TestCase):
 
         # Not SurrealDB (is_serving False) but the port is open (_tcp_open True):
         # a foreign process holds it. We must not run compose.
-        with patch.object(memory, "is_serving", return_value=False), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=False), \
              patch.object(memory, "_tcp_open", return_value=True), \
              patch("subprocess.run", side_effect=fake_run):
             res = memory.ensure_memory_up(self.root)
@@ -133,7 +164,8 @@ class TestEnsureMemoryUp(unittest.TestCase):
 
     def test_missing_compose_file(self):
         # No shared compose and none bundled -> reported, not started.
-        with patch.object(memory, "is_serving", return_value=False), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=False), \
              patch.object(memory, "_tcp_open", return_value=False), \
              patch.object(memory, "ensure_home_compose", return_value=None):
             res = memory.ensure_memory_up(self.root)
@@ -141,7 +173,8 @@ class TestEnsureMemoryUp(unittest.TestCase):
         self.assertIn("shared docker-compose.yml not found", res["error"])
 
     def test_docker_unavailable(self):
-        with patch.object(memory, "is_serving", return_value=False), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=False), \
              patch.object(memory, "_tcp_open", return_value=False), \
              patch.object(memory, "ensure_home_compose", return_value="/home/sh/docker-compose.yml"), \
              patch.object(memory, "_compose_command", return_value=None):
@@ -158,7 +191,8 @@ class TestEnsureMemoryUp(unittest.TestCase):
 
         # Port free (_tcp_open False). is_serving: False on the pre-check, True
         # after `up -d`. Compose comes from the shared home, not the project.
-        with patch.object(memory, "is_serving", side_effect=[False, True]), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", side_effect=[False, True]), \
              patch.object(memory, "_tcp_open", return_value=False), \
              patch.object(memory, "ensure_home_compose", return_value="/home/sh/docker-compose.yml"), \
              patch.object(memory, "_compose_command", return_value=["docker", "compose"]), \
@@ -171,7 +205,8 @@ class TestEnsureMemoryUp(unittest.TestCase):
         self.assertIn("-d", calls[0])
 
     def test_compose_failure_is_reported(self):
-        with patch.object(memory, "is_serving", return_value=False), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=False), \
              patch.object(memory, "_tcp_open", return_value=False), \
              patch.object(memory, "ensure_home_compose", return_value="/home/sh/docker-compose.yml"), \
              patch.object(memory, "_compose_command", return_value=["docker", "compose"]), \
@@ -198,7 +233,8 @@ class TestMemoryUpReconcile(unittest.TestCase):
 
     def test_reconcile_runs_when_backend_already_up(self):
         recon = MagicMock(return_value={"synced": 1, "remaining": 0})
-        with patch.object(memory, "is_serving", return_value=True), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=True), \
              patch.object(memory, "reconcile_pending", recon):
             res = memory.ensure_memory_up(self.root)
         self.assertTrue(res["already_running"])
@@ -206,7 +242,8 @@ class TestMemoryUpReconcile(unittest.TestCase):
 
     def test_reconcile_runs_after_compose_start(self):
         recon = MagicMock(return_value={"synced": 0, "remaining": 0})
-        with patch.object(memory, "is_serving", side_effect=[False, True]), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", side_effect=[False, True]), \
              patch.object(memory, "_tcp_open", return_value=False), \
              patch.object(memory, "ensure_home_compose", return_value="/home/sh/docker-compose.yml"), \
              patch.object(memory, "_compose_command", return_value=["docker", "compose"]), \
@@ -221,7 +258,8 @@ class TestMemoryUpReconcile(unittest.TestCase):
         # build raises. ensure_memory_up must still return cleanly -- the
         # session-start hook is never broken (best-effort, swallowing).
         import solomon_harness.tools.database_client as dbc
-        with patch.object(memory, "is_serving", return_value=True), \
+        with patch.object(memory, "heal_home_compose", return_value=None), \
+             patch.object(memory, "is_serving", return_value=True), \
              patch("solomon_harness.healthcheck.pending_reconcile_count", return_value=1), \
              patch.object(dbc, "DatabaseClient", side_effect=RuntimeError("boom")):
             with redirect_stderr(io.StringIO()):
@@ -291,6 +329,73 @@ class TestEnsureHomeCompose(unittest.TestCase):
                 content = f.read()
             self.assertIn('"127.0.0.1:8137:8000"', content)
             self.assertNotIn('"8000:8000"', content)
+
+    def test_existing_home_compose_is_healed(self):
+        # ensure_home_compose used to early-return an existing file untouched,
+        # leaving pre-loopback installs exposed forever (PR #245 review
+        # blocker). An existing stale file must come back pinned, with the
+        # machine's already-assigned port preserved.
+        with tempfile.TemporaryDirectory() as home:
+            dest = os.path.join(home, "docker-compose.yml")
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write('    ports:\n      - "8137:8000"\n      - "3000:80"\n')
+            with patch.object(memory, "harness_home", return_value=home):
+                out = memory.ensure_home_compose()
+            self.assertEqual(out, dest)
+            with open(dest, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn('"127.0.0.1:8137:8000"', content)
+            self.assertIn('"127.0.0.1:3000:80"', content)
+
+
+class TestPinPublishedToLoopback(unittest.TestCase):
+    def test_pins_bare_and_zero_bind_preserving_ports(self):
+        text = '    ports:\n      - "8099:8000"\n      - "0.0.0.0:3000:80"\n'
+        pinned = memory._pin_published_to_loopback(text)
+        self.assertIn('"127.0.0.1:8099:8000"', pinned)
+        self.assertIn('"127.0.0.1:3000:80"', pinned)
+
+    def test_idempotent_on_already_pinned_text(self):
+        text = '    ports:\n      - "127.0.0.1:8137:8000"\n      - "127.0.0.1:3000:80"\n'
+        self.assertEqual(memory._pin_published_to_loopback(text), text)
+
+    def test_leaves_unrelated_mappings_and_healthcheck_alone(self):
+        text = (
+            '      - "5432:5432"\n'
+            '      test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]\n'
+        )
+        self.assertEqual(memory._pin_published_to_loopback(text), text)
+
+
+class TestHealHomeCompose(unittest.TestCase):
+    def test_pins_existing_stale_file_preserving_port(self):
+        with tempfile.TemporaryDirectory() as home:
+            dest = os.path.join(home, "docker-compose.yml")
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write('    ports:\n      - "8137:8000"\n      - "3000:80"\n')
+            with patch.object(memory, "harness_home", return_value=home):
+                healed = memory.heal_home_compose()
+            self.assertEqual(healed, dest)
+            with open(dest, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn('"127.0.0.1:8137:8000"', content)
+            self.assertIn('"127.0.0.1:3000:80"', content)
+
+    def test_returns_none_when_already_pinned(self):
+        with tempfile.TemporaryDirectory() as home:
+            dest = os.path.join(home, "docker-compose.yml")
+            text = '    ports:\n      - "127.0.0.1:8137:8000"\n'
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(text)
+            with patch.object(memory, "harness_home", return_value=home):
+                self.assertIsNone(memory.heal_home_compose())
+            with open(dest, encoding="utf-8") as f:
+                self.assertEqual(f.read(), text)
+
+    def test_returns_none_when_missing(self):
+        with tempfile.TemporaryDirectory() as home:
+            with patch.object(memory, "harness_home", return_value=home):
+                self.assertIsNone(memory.heal_home_compose())
 
 
 class TestStopMemory(unittest.TestCase):

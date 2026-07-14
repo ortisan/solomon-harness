@@ -26,9 +26,10 @@ uv run python -m solomon_harness.cli compile || { echo "Error: Harness compilati
 # temp repo (see bug-test-isolation). Unsetting them runs the suite in a clean
 # git environment.
 # pytest, not "unittest discover": discover only collects unittest.TestCase
-# subclasses and silently skips pytest-style function tests (97 of the suite's
-# 1024 tests, including all of tests/test_release.py), reporting green on an
-# incomplete run.
+# subclasses and silently skips pytest-style function tests (measured at this
+# fix: 139 of 1220 collected tests across 8 files, including all of
+# tests/test_release.py and the validator regression tests), reporting green
+# on an incomplete run.
 echo "Running project test suite..."
 env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
     -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
