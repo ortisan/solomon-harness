@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate that every ADR has a unique number that matches its H1 title.
 
-Scans the ADR directory (``docs/adr`` by default), skipping the template and the
+Scans the ADR directory (``docs/adrs`` by default), skipping the template and the
 README index. For each ADR file it reads the leading number from the filename
 and the number in the H1 line (``# ADR-NNNN: ...``). It exits non-zero if any
 number is shared by more than one file, or if a file's filename number and H1
@@ -69,12 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check ADR numbers are unique and match their H1 titles."
     )
-    default_dir = Path(__file__).resolve().parent.parent / "docs" / "adr"
+    default_dir = Path(__file__).resolve().parent.parent / "docs" / "adrs"
     parser.add_argument(
         "adr_dir",
         nargs="?",
         default=str(default_dir),
-        help="Directory containing ADR markdown files (default: docs/adr).",
+        help="Directory containing ADR markdown files (default: docs/adrs).",
     )
     args = parser.parse_args(argv)
 

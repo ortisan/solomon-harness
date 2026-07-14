@@ -89,11 +89,11 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Show PLAN.md to the user before coding.
 
 ## 4. ADR evaluation (software_architect)
-- Evaluate architectural significance against `docs/adr/README.md` and the
+- Evaluate architectural significance against `docs/adrs/README.md` and the
   `architecture_decisions_in_project_memory` skill (new dependency/datastore, changed public
   contract or data model, cross-cutting pattern, quality-attribute trade-off, hard to reverse).
-- If significant: the `software_architect` subagent copies `docs/adr/0000-adr-template.md` to
-  `docs/adr/NNNN-<slug>.md` (next number), fills the MADR sections, and records it with
+- If significant: the `software_architect` subagent copies `docs/adrs/0000-adr-template.md` to
+  `docs/adrs/NNNN-<slug>.md` (next number), fills the MADR sections, and records it with
   `mcp__solomon-memory__save_decision(title="ADR-NNNN: ...", outcome="Status: Accepted\n...", author="software_architect", branch="feature/<slug>")`.
 - If not significant: state that explicitly (you will repeat it in the PR body).
 
@@ -128,7 +128,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
 - Open a draft PR: `uv run python -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
   The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
-  (`docs/adr/NNNN-<slug>.md`) or state that no ADR was warranted and why.
+  (`docs/adrs/NNNN-<slug>.md`) or state that no ADR was warranted and why.
 - `uv run python -m solomon_harness.cli github set-status --issue $ARGUMENTS --status "Code Review"`.
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,

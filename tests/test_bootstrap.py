@@ -446,3 +446,49 @@ class TestInitWikiHint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInstallDocsBoundary(unittest.TestCase):
+    """The harness's own documents never travel into installed projects
+    (maintainer directive, #234 review round): an install receives only the
+    operating docs the commands read and the convention scaffolding, and each
+    project's record trees start empty."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_install_ships_skeleton_docs_without_harness_records(self):
+        from solomon_harness import bootstrap
+
+        bootstrap._install_harness_files(self.workspace)
+
+        adrs = os.path.join(self.workspace, "docs", "adrs")
+        specs = os.path.join(self.workspace, "docs", "specs")
+        self.assertEqual(
+            sorted(os.listdir(adrs)), ["0000-adr-template.md", "README.md"],
+            "an installed project's docs/adrs holds only the convention scaffolding",
+        )
+        self.assertEqual(
+            sorted(os.listdir(specs)), ["0000-spec-template.md", "README.md"],
+            "an installed project's docs/specs holds only the convention scaffolding",
+        )
+        # Nothing else from the harness's docs travels (ADR-0029): no wiki,
+        # no conventions, no templates tree, no root README — the record
+        # scaffolding above is the entire docs payload.
+        self.assertFalse(os.path.isdir(os.path.join(self.workspace, "docs", "wiki")))
+        self.assertFalse(os.path.isfile(os.path.join(self.workspace, "README.md")))
+        self.assertFalse(
+            os.path.isfile(os.path.join(self.workspace, "docs", "solomon-workflow.md"))
+        )
+        self.assertFalse(
+            os.path.isdir(os.path.join(self.workspace, "docs", "templates"))
+        )
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.workspace, "docs"))),
+            ["adrs", "specs"],
+            "the record scaffolding is the entire docs payload of an install",
+        )

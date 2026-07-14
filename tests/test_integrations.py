@@ -241,7 +241,7 @@ class TestStartAdr(unittest.TestCase):
     def test_adr_0001_records_the_start_stage_decision(self):
         adr = _read(
             os.path.join(
-                "docs", "adr", "0001-isolated-worktree-and-implementation-mode-on-start.md"
+                "docs", "adrs", "0001-isolated-worktree-and-implementation-mode-on-start.md"
             )
         )
         low = adr.lower()

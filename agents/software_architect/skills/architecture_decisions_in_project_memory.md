@@ -1,6 +1,6 @@
 ---
 name: architecture-decisions-in-project-memory
-description: Governs mirroring an ADR into project memory through save_decision, encoding MADR sections into the title, rationale, and outcome fields, maintaining the adr:NNNN:status index for lookup, and superseding a prior decision without editing it. Use when recording, retrieving, or superseding an architecture decision in the SurrealDB-backed memory store rather than only in the docs/adr file.
+description: Governs mirroring an ADR into project memory through save_decision, encoding MADR sections into the title, rationale, and outcome fields, maintaining the adr:NNNN:status index for lookup, and superseding a prior decision without editing it. Use when recording, retrieving, or superseding an architecture decision in the SurrealDB-backed memory store rather than only in the docs/adrs file.
 ---
 
 # Architecture Decisions in Project Memory
@@ -11,7 +11,7 @@ Persist every architecture decision as an MADR-shaped record in the project memo
 
 Keep two representations of the same decision, deliberately:
 
-- The version-controlled file `docs/adr/NNNN-kebab-title.md` is the canonical, reviewable, diffable ADR. It carries the full MADR prose and its status field is mutable (you edit it when the decision is deprecated or superseded).
+- The version-controlled file `docs/adrs/NNNN-kebab-title.md` is the canonical, reviewable, diffable ADR. It carries the full MADR prose and its status field is mutable (you edit it when the decision is deprecated or superseded).
 - The `decisions` table in project memory is an append-only event log reachable by any agent over the `solomon-memory` MCP server, without a git checkout. It is what `get_latest_activity` surfaces and what a downstream agent (the `software_engineer` implementing the change, the `qa` agent verifying it) reads to learn why the structure is the way it is.
 
 The file is the source of truth for the text; memory is the source of truth for "what was decided, by whom, on which branch, against which commit". Never let one exist without the other: a memory record with no file has no reviewable rationale, and a file never written to memory is invisible to agents that do not open the repo.
@@ -20,7 +20,7 @@ The file is the source of truth for the text; memory is the source of truth for 
 
 The schema is flat: `save_decision(title, rationale, outcome, author, branch="main", commit_sha="")`. MADR has more sections than the schema has fields, so use a fixed encoding so every record is parseable the same way:
 
-- `title` — prefix with the ADR number: `"ADR-0007: Adopt SurrealDB as the primary memory store"`. The number is the stable handle that correlates the memory record with `docs/adr/0007-*.md`; without it you cannot join the two layers.
+- `title` — prefix with the ADR number: `"ADR-0007: Adopt SurrealDB as the primary memory store"`. The number is the stable handle that correlates the memory record with `docs/adrs/0007-*.md`; without it you cannot join the two layers.
 - `rationale` — the MADR **Context** plus **Options considered**: the forces, NFR targets, constraints, and at least two rejected alternatives with the reason each lost. This is the "why", stated as facts, not the position.
 - `outcome` — a structured block carrying the remaining MADR sections so status is machine-findable:
 
@@ -64,7 +64,7 @@ Before opening a new decision, read the index and `get_latest_activity` to confi
 Decisions in memory are immutable, matching the ADR rule in `architectural_decision_records`. You never edit an accepted record's substance through `save_decision`; you write a new one and re-point the index:
 
 1. Write the new decision (`ADR-0011`) with `Supersedes: ADR-0007` in its `outcome`.
-2. Update the canonical file: set `docs/adr/0007-*.md` status to `Superseded by ADR-0011`, and `docs/adr/0011-*.md` to `Accepted`. The file is where the human-readable status lives.
+2. Update the canonical file: set `docs/adrs/0007-*.md` status to `Superseded by ADR-0011`, and `docs/adrs/0011-*.md` to `Accepted`. The file is where the human-readable status lives.
 3. Re-point the index entries: `save_memory("adr:0007:status", "superseded-by:0011", "adr-index")` and `save_memory("adr:0011:status", "accepted:<new_id>", "adr-index")`.
 
 The old memory record stays untouched as a historical fact; the index, not the record, tells a reader it is dead. Querying `get_decision` on the superseded id must still return the original rationale, because the audit value of an ADR is that the wrong-in-hindsight decision and its reasoning remain visible.
@@ -75,7 +75,7 @@ An ADR that governs nothing concrete is decision theater. Bind it in both direct
 
 - **To the issue that drove it.** When a decision answers a question raised in an issue, name the github id in the `rationale` (`"Driven by #142"`). Use `get_open_issues` before deciding to find the architecture-affecting work in flight, and `get_issue("142")` to pull the constraints into the Context. When the ADR creates follow-up work, `log_issue(github_id, title="Implement ADR-0007: ...", type_="task", status="open")` so the implementation is tracked and traceable back to the decision.
 - **To the code that implements it.** Backfill `commit_sha` (and the right `branch`) when the change merges, so the decision points at the diff that realizes it. Reference `ADR-0007` in the commit message and the `design contract` the decision produces, closing the loop from code back to rationale.
-- **To the next agent.** When you hand the accepted ADR to implementers, `log_handoff(sender="software_architect", recipient="software_engineer", contract_type="adr", contract_path="docs/adr/0007-*.md", status="ready")` so the decision is picked up as work, not lost in a folder.
+- **To the next agent.** When you hand the accepted ADR to implementers, `log_handoff(sender="software_architect", recipient="software_engineer", contract_type="adr", contract_path="docs/adrs/0007-*.md", status="ready")` so the decision is picked up as work, not lost in a folder.
 
 ## Common pitfalls
 
@@ -91,7 +91,7 @@ An ADR that governs nothing concrete is decision theater. Bind it in both direct
 
 ## Definition of done
 
-- [ ] Every architecture decision exists as both a `docs/adr/NNNN-*.md` file and a `save_decision` record, and the `decision_id` is stored in an `adr:NNNN:status` memory key.
+- [ ] Every architecture decision exists as both a `docs/adrs/NNNN-*.md` file and a `save_decision` record, and the `decision_id` is stored in an `adr:NNNN:status` memory key.
 - [ ] `title` carries the `ADR-NNNN:` prefix; `rationale` holds Context plus at least two rejected options; `outcome` carries `Status:`, `Decision:`, and a `Consequences:` line that names a cost.
 - [ ] `author` is the deciding agent id; `branch` and `commit_sha` link the record to the implementing change, with `commit_sha` backfilled at merge.
 - [ ] Superseding writes a new ADR with `Supersedes: ADR-NNNN`, flips both file statuses, and re-points the index; the old `get_decision` record is left intact and still retrievable.

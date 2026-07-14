@@ -296,12 +296,14 @@ def _install_harness_files(workspace_root: str) -> None:
 
     print("Installing harness files into the project...")
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "build", "node_modules")
-    trees = ["agents", "scripts", "solomon_harness", "docs", ".claude", ".gemini"]
+    trees = ["agents", "scripts", "solomon_harness", ".claude", ".gemini"]
     # No per-project docker-compose.yml: the memory backend is a single shared
     # instance in ~/.solomon-harness (see solomon_harness/memory.py).
+    # The harness's own README stays home: an installed project's README is its
+    # own document (maintainer directive recorded in ADR-0028).
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "AGY.md", "CLAUDE.md", "README.md", "skill-sources.json",
+        "AGENTS.md", "AGY.md", "CLAUDE.md", "skill-sources.json",
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -313,7 +315,40 @@ def _install_harness_files(workspace_root: str) -> None:
         dest = os.path.join(workspace_root, name)
         if os.path.isfile(src) and not os.path.exists(dest):
             shutil.copy2(src, dest)
+    _install_docs_skeleton(repo_root, workspace_root)
     print("  Harness files installed.")
+
+
+# The harness's documents never travel into installed projects (ADR-0029):
+# a child project's docs/ receives ONLY its own empty record trees, seeded
+# with each convention's template and README so the project can write ITS
+# decisions and specs. The operating conventions the commands read re-home
+# into the tooling layer with #240 (.agents/solomon).
+DOCS_RECORD_TREES = {
+    "adrs": ("0000-adr-template.md", "README.md"),
+    "specs": ("0000-spec-template.md", "README.md"),
+}
+
+
+def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
+    """Scaffold the project's own record trees; nothing else travels.
+
+    An installed project's docs/adrs and docs/specs hold that project's OWN
+    decisions and specs; every harness document (records, specs, wiki,
+    conventions, README) stays in the harness repository.
+    """
+    src_docs = os.path.join(repo_root, "docs")
+    dest_docs = os.path.join(workspace_root, "docs")
+    if not os.path.isdir(src_docs):
+        return
+    for tree, scaffolding in DOCS_RECORD_TREES.items():
+        dest_tree = os.path.join(dest_docs, tree)
+        os.makedirs(dest_tree, exist_ok=True)
+        for name in scaffolding:
+            src = os.path.join(src_docs, tree, name)
+            dest = os.path.join(dest_tree, name)
+            if os.path.isfile(src) and not os.path.exists(dest):
+                shutil.copy2(src, dest)
 
 
 def scaffold_agents(workspace_root: str) -> None:
