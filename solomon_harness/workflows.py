@@ -309,6 +309,14 @@ def run_stage(
     # repo-wide lock above, not a replacement for it. Only meaningful inside a
     # real git repo -- a plain workspace with no `.git` has no claims remote
     # to check or race against in the first place.
+    #
+    # heartbeat_stop_event/heartbeat_thread stay None unless a claim is
+    # actually acquired below; the outer finally always stops them, so every
+    # early return between here and the try/finally must go through
+    # lock.release() but never needs to touch the heartbeat (it cannot have
+    # started yet on any of those paths).
+    heartbeat_stop_event = None
+    heartbeat_thread = None
     if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
         issue_number = _target_issue_from_args(args)
         if issue_number is not None:
@@ -343,7 +351,32 @@ def run_stage(
             # session's claim now live on the ref) -- otherwise it just means
             # this workspace has no claims remote to push to (no `origin`, no
             # network), which is a no-op environment, not a collision.
-            if not claim.claim_issue(workspace_root, issue_number, current_session_id=current_sess):
+            if claim.claim_issue(workspace_root, issue_number, current_session_id=current_sess):
+                # Heartbeat writer (B5a): a `start` that runs longer than the
+                # claim TTL before a PR exists would otherwise become
+                # reclaimable mid-implementation (the #24 double-pick).
+                # Periodically re-touch the claim's heartbeat_at until the
+                # stage completes; the outer finally stops this thread.
+                import threading
+
+                heartbeat_stop_event = threading.Event()
+
+                def _claim_heartbeat_loop(
+                    issue: int = issue_number,
+                    session: str = current_sess,
+                    stop: "threading.Event" = heartbeat_stop_event,
+                ) -> None:
+                    while not stop.wait(claim.CLAIM_HEARTBEAT_INTERVAL_SECONDS):
+                        if not claim.refresh_claim(workspace_root, issue, session):
+                            break
+
+                heartbeat_thread = threading.Thread(
+                    target=_claim_heartbeat_loop,
+                    daemon=True,
+                    name=f"claim-heartbeat-issue-{issue_number}",
+                )
+                heartbeat_thread.start()
+            else:
                 recheck = claim.get_claim(workspace_root, issue_number)
                 if recheck and claim.is_claim_active(recheck, current_sess):
                     print(
@@ -478,5 +511,9 @@ def run_stage(
             notify.send(workspace_root, f"stage:{stage}", f"/solomon-{stage} {' '.join(args)} -> ok")
         return rc
     finally:
+        if heartbeat_stop_event is not None:
+            heartbeat_stop_event.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=2.0)
         if lock is not None:
             lock.release()

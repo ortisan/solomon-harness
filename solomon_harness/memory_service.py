@@ -6,8 +6,11 @@ tools (Claude Code, Codex, Gemini CLI, Copilot) can read and write the project
 memory. The service is directly testable without the MCP SDK installed.
 """
 
+import logging
 import os
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_harness_dir(start: Optional[str] = None) -> str:
@@ -103,8 +106,12 @@ class MemoryService:
                         continue
                 unclaimed.append(issue)
             issues = unclaimed
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - degrade to unfiltered, but log (item 8)
+            logger.warning(
+                "claim-aware issue filtering degraded (%s); returning the "
+                "unfiltered issue list.",
+                exc,
+            )
         return {"issues": issues}
 
     def get_issue(self, github_id: str) -> Dict[str, Any]:
