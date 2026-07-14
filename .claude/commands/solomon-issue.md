@@ -78,7 +78,19 @@ Steps:
    - `uv run python -m solomon_harness.github ensure-board`
    - `uv run python -m solomon_harness.github set-status --issue <n> --status "Backlog"`
 
-8. Persist to memory per the handoff contract:
+8. Generate the spec document (#221 S1). Copy `docs/specs/0000-spec-template.md`
+   to `docs/specs/<N>-<slug>.md` (`<N>` = the created issue number, `<slug>` =
+   the kebab-case title) with the Write tool, pre-filled from the shaped body:
+   the elicitation trace into Context, the problem statement into Problem, the
+   scope into Requirements, the Gherkin into Acceptance Criteria, the
+   out-of-scope list into Out of Scope, and Traceability citing issue `#<N>`
+   and any related ADR. Any section without content carries the explicit
+   placeholder `TBD (refine)`. Run
+   `uv run python scripts/spec-lint.py docs/specs/<N>-<slug>.md` and fix until
+   it exits 0. The spec ships with the issue's first implementation PR —
+   never pushed to a protected branch directly.
+
+9. Persist to memory per the handoff contract:
    - `mcp__solomon-memory__log_issue` (github_id=<n>, title, type_="feature",
      status="Backlog", milestone_id if known).
    - `mcp__solomon-memory__save_decision` — record the product decision (title,
@@ -96,7 +108,7 @@ Steps:
      `mcp__solomon-memory__link_session_handoff(session_id="issue-<n>", handoff_id=<the returned handoff id>)`
      to record the produced edge (ADR-0018).
 
-9. Output the issue URL and a one-line summary (number, title, priority, area).
+10. Output the issue URL and a one-line summary (number, title, priority, area).
    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
