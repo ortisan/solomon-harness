@@ -1,3 +1,8 @@
+---
+name: sql-analytics
+description: Governs correctness patterns in analytical SQL, including window function frames, CTE structure, grouping sets, NULL and join-fan-out handling, and Postgres-versus-ClickHouse dialect differences. Use when writing or reviewing an analytical query, debugging an inflated aggregate, or choosing between Postgres and ClickHouse constructs.
+---
+
 # SQL Analytics
 
 Analytical SQL that is correct first and fast second: window functions instead of self-joins, CTEs instead of nested subqueries, grouping sets instead of UNION stacks, and explicit handling of the NULL, duplicate, and boundary cases that silently corrupt aggregates. Write for the dialect actually in use — Postgres 16+ and ClickHouse 25.x differ in ways that change results, not just performance. Query plans, index design, and server tuning belong to the `dba` agent; hand off once a correct query needs physical optimization.

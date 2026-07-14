@@ -1,3 +1,8 @@
+---
+name: kubernetes-operations
+description: Governs Kubernetes Deployment rollout strategy, liveness/readiness/startup probes, resource requests and limits, HorizontalPodAutoscaler and PodDisruptionBudget configuration, and troubleshooting CrashLoopBackOff and OOMKilled pods. Use when configuring or debugging a Kubernetes workload or tuning autoscaling.
+---
+
 # Kubernetes Operations
 
 Operate workloads on Kubernetes so that every rollout is reversible, every Pod declares how to be probed and how much it may consume, and the cluster sheds and reschedules failures without paging a human. Treat the Deployment spec as the contract: probes, resources, autoscaling, and disruption budgets are not optional polish, they are what makes the workload self-healing. Configuration and secrets are injected, never baked into the image, which keeps this skill aligned with twelve_factor_app.

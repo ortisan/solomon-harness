@@ -1,3 +1,8 @@
+---
+name: data-wrangling
+description: Governs cleaning raw extracts into analysis-ready tables with pandas or Polars, covering dtype discipline, validated joins, a written missing-data policy, and memory management for single-node pipelines. Use when writing an ingestion script, reviewing a join or dedup step, or debugging a memory or dtype defect.
+---
+
 # Data Wrangling
 
 Turning raw extracts into analysis-ready tables with pandas or Polars: explicit dtypes at the ingestion boundary, validated joins, a written missing-data policy, and memory discipline that keeps single-node work single-node. The stance: every transformation must be reproducible from the raw file by rerunning one script, and every row that is dropped or imputed must be counted and reported. Statistical imputation models and feature engineering for training belong to the `ml_engineer` agent; this skill covers analytical cleaning, not model pipelines.

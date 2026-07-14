@@ -1,3 +1,8 @@
+---
+name: alerting
+description: Governs alert design covering symptom-based paging over cause-based noise, the P1-P4 severity ladder, numeric pager-hygiene targets, mandatory runbooks, and the weekly alert review loop. Use when defining, reviewing, or pruning alert rules, assigning severities, or investigating pager fatigue and alert precision.
+---
+
 # Alerting
 
 This skill sets the alerting standard: page on symptoms that map to user pain, keep a strict severity ladder, protect the pager with numeric hygiene targets, require a runbook on every alert, and run a review loop that deletes alerts as readily as it adds them. An alert is a product with a user — the responder at 3 a.m. — and it is designed to that user's needs.

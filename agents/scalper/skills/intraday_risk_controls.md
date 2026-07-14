@@ -1,3 +1,8 @@
+---
+name: intraday-risk-controls
+description: Governs the risk envelope a scalping strategy carries from day one: per-trade stops in ticks, a daily loss limit with a hard kill switch, position caps, fat-finger bounds, and cancel-on-disconnect. Use when designing a scalping strategy's risk controls or confirming they were fixed before the signal.
+---
+
 # Intraday Risk Controls
 
 This skill governs the risk envelope every scalping strategy carries from design day one: per-trade stops in ticks, a daily loss limit backed by a hard kill switch, position and order-rate caps, fat-finger bounds, cancel-on-disconnect, and defined circuit-breaker behavior. A scalping edge is a small positive expectancy multiplied by thousands of trades; one uncontrolled loss erases weeks of it, so the controls are designed before the signal and are not tunable by the strategy they constrain.

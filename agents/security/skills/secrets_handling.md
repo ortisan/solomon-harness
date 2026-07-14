@@ -1,3 +1,8 @@
+---
+name: secrets-handling
+description: Standardizes where credentials live (OIDC federation, secret managers, environment variables), how gitleaks and trufflehog detect leaks before and after they land in git, rotation SLAs by credential class, and the revoke-first leak playbook. Use when configuring a new credential's storage, wiring secret scanning into pre-commit or CI, or responding to a leaked or suspected-leaked secret.
+---
+
 # Secrets Handling
 
 The standard for where credentials live, how leaks are detected before and after they land in git, how fast keys rotate, and exactly what to do the moment one leaks. The stance: a secret that has touched a commit, a log line, or a chat window is compromised — containment starts with revocation, never with cleanup.

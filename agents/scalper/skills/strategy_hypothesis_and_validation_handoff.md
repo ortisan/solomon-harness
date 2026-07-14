@@ -1,3 +1,8 @@
+---
+name: strategy-hypothesis-and-validation-handoff
+description: Governs the two bookends of a scalping strategy: the mandatory hypothesis card written before any code and the validation handoff to quant_trader deciding whether the strategy is more than a hypothesis. Use when starting a scalping strategy or handing a completed design to quant_trader for tick-level validation.
+---
+
 # Strategy Hypothesis And Validation Handoff
 
 This skill governs the two bookends of every scalping strategy: the mandatory hypothesis card written before any code, and the validation handoff to quant_trader that decides whether the strategy is anything more than a hypothesis. The scalper designs; quant_trader validates; live-readiness exists only on the far side of that handoff. A strategy without a card is not started, and a strategy without quant_trader's verdict is not finished.

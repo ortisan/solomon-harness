@@ -1,3 +1,8 @@
+---
+name: architecture-layering
+description: Governs the three-layer UI/domain/data split for Android features, unidirectional data flow, immutable StateFlow-based UiState, Hilt scoping, and repository single-source-of-truth patterns. Use when designing or reviewing an Android feature's layering, ViewModel state shape, dependency injection scopes, or DTO/entity/domain mapping.
+---
+
 # Architecture Layering
 
 Structure every Android feature as three layers — UI, domain, data — with a strictly unidirectional flow where state descends and events ascend, so each layer is independently testable and the ViewModel never touches Android UI types. Treat an immutable `UiState` exposed as `StateFlow`, a repository that owns the single source of truth, and a Hilt graph that draws the seams as non-negotiable; the domain layer stays a pure Kotlin module with no Android dependencies.

@@ -1,3 +1,8 @@
+---
+name: hexagonal-architecture-ports-and-adapters
+description: Governs keeping business logic free of frameworks, databases, and transport by defining ports as Protocol interfaces the domain owns and adapters that implement them, wired only at the composition root. Use when adding a new outgoing dependency, writing a repository or gateway, or reviewing whether a module has leaked infrastructure into the domain.
+---
+
 # Hexagonal Architecture (Ports and Adapters)
 
 This skill governs how to keep business logic independent of frameworks, databases, and transport. The stance: the domain depends on nothing; everything depends on the domain. A port is an interface owned by the core; an adapter is a replaceable implementation of that interface living at the edge. If swapping Postgres for DynamoDB, or REST for gRPC, forces a change inside the domain, the dependency arrow is pointing the wrong way and the design is wrong.

@@ -1,3 +1,8 @@
+---
+name: risk-parameter-enforcement
+description: Fixes the house risk numbers enforced in code, not reported after the fact: position-sizing formulas, drawdown governors, VaR/ES limits, position caps, and kill-switch conditions that flatten the book. Use when implementing or reviewing position sizing, exposure limits, or automated risk controls.
+---
+
 # Risk Parameter Enforcement
 
 Risk limits are controls enforced in code before and during trading, not statistics reported after the fact, and this skill fixes the house numbers: sizing formulas, drawdown governors, VaR/ES limits, position caps, and the kill-switch conditions that flatten the book. A limit that cannot halt trading automatically is a wish.

@@ -6,7 +6,7 @@ allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, AskUs
 
 You are running the Review stage of the solomon lifecycle for PR #$ARGUMENTS.
 
-First, read `docs/solomon-workflow.md` and `docs/adr/README.md` so the board
+First, read `docs/solomon-workflow.md` and `docs/adrs/README.md` so the board
 columns, labels, the ADR trigger, and the memory handoff contract are exact. This
 stage is driven by three mandatory gate agents — qa, security, and
 software_architect — plus up to two domain lenses selected from the changed
@@ -45,6 +45,10 @@ subagents); do not review with a single generic pass.
 - software_architect agent: apply the `architecture_review_gate` checklist against
   the design contracts, the fitness functions, and any ADR the change touches.
   If the change is architecturally significant but no ADR exists, that is a blocker.
+  Run the mechanical body gate first — `gh pr view <n> --json body --jq .body > <tmp> &&
+  uv run python scripts/check-adr-gate.py --body-file <tmp>` — a violation is a blocker;
+  then judge whether the line's CONTENT is honest (a skip reason that hides a
+  significant change is still a blocker).
 - Domain lenses (conditional): `gh pr diff $ARGUMENTS --name-only | uv run python -m solomon_harness.review_roster`
   prints up to two extra specialists (auth_engineer, dba, sre, loop_engineer, frontend,
   observability, practice_curator, documenter) selected deterministically

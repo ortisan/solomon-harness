@@ -296,12 +296,14 @@ def _install_harness_files(workspace_root: str) -> None:
 
     print("Installing harness files into the project...")
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "build", "node_modules")
-    trees = ["agents", "scripts", "solomon_harness", "docs", ".claude", ".gemini"]
+    trees = ["agents", "scripts", "solomon_harness", ".claude", ".gemini"]
     # No per-project docker-compose.yml: the memory backend is a single shared
     # instance in ~/.solomon-harness (see solomon_harness/memory.py).
+    # The harness's own README stays home: an installed project's README is its
+    # own document (maintainer directive recorded in ADR-0028).
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "AGY.md", "CLAUDE.md", "README.md", "skill-sources.json",
+        "AGENTS.md", "AGY.md", "CLAUDE.md", "skill-sources.json",
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -313,7 +315,40 @@ def _install_harness_files(workspace_root: str) -> None:
         dest = os.path.join(workspace_root, name)
         if os.path.isfile(src) and not os.path.exists(dest):
             shutil.copy2(src, dest)
+    _install_docs_skeleton(repo_root, workspace_root)
     print("  Harness files installed.")
+
+
+# The harness's documents never travel into installed projects (ADR-0029):
+# a child project's docs/ receives ONLY its own empty record trees, seeded
+# with each convention's template and README so the project can write ITS
+# decisions and specs. The operating conventions the commands read re-home
+# into the tooling layer with #240 (.agents/solomon).
+DOCS_RECORD_TREES = {
+    "adrs": ("0000-adr-template.md", "README.md"),
+    "specs": ("0000-spec-template.md", "README.md"),
+}
+
+
+def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
+    """Scaffold the project's own record trees; nothing else travels.
+
+    An installed project's docs/adrs and docs/specs hold that project's OWN
+    decisions and specs; every harness document (records, specs, wiki,
+    conventions, README) stays in the harness repository.
+    """
+    src_docs = os.path.join(repo_root, "docs")
+    dest_docs = os.path.join(workspace_root, "docs")
+    if not os.path.isdir(src_docs):
+        return
+    for tree, scaffolding in DOCS_RECORD_TREES.items():
+        dest_tree = os.path.join(dest_docs, tree)
+        os.makedirs(dest_tree, exist_ok=True)
+        for name in scaffolding:
+            src = os.path.join(src_docs, tree, name)
+            dest = os.path.join(dest_tree, name)
+            if os.path.isfile(src) and not os.path.exists(dest):
+                shutil.copy2(src, dest)
 
 
 def scaffold_agents(workspace_root: str) -> None:
@@ -400,6 +435,10 @@ This agent is the {name} brain for solomon-harness. It reasons within the shared
 
 {description}
 
+## Delegation cue
+
+Use this agent when the task falls within this mandate: {description}
+
 ## Core Duties
 {duties_str}
 
@@ -418,13 +457,26 @@ solomon-harness skills add <source> <skill> --agent {name}
         f.write(role_content)
 
     # Write scope_and_mandate.md skill
-    skill_content = f"""# {title} Best Practices
+    skill_content = f"""---
+name: scope-and-mandate
+description: Defines what the {name} specialist owns and what it hands off. Use when clarifying whether a task belongs to this agent.
+---
+
+# {title} Best Practices
 
 Reference standard for the {name} specialist.
 
 ## Scope and mandate
 
 This skill covers the {name} role's duties.
+
+## Common pitfalls
+
+- Acting outside the {name} mandate instead of handing the work to the owning specialist.
+
+## Definition of done
+
+- [ ] The work stayed within this agent's mandate or was handed off explicitly.
 """
     with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
         f.write(skill_content)
@@ -455,7 +507,11 @@ This skill covers the {name} role's duties.
                     in_list = False
                     other_lines.append(line)
 
-            formatted_desc = description
+            # The roster is one line per agent, and AGENTS.md is the trust
+            # root every session reads as instructions: collapse the
+            # description to a single line so embedded newlines can never
+            # splice new sections into it.
+            formatted_desc = " ".join(str(description).split())
             if formatted_desc:
                 formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
 

@@ -1,3 +1,8 @@
+---
+name: flow-metrics-and-forecasting
+description: Governs measuring delivery as a flow system using WIP, cycle time, and throughput, the Kanban Guide flow metrics, to forecast sprint and release dates from data instead of gut feel or story-point velocity. Use when forecasting a sprint or release date, diagnosing where work stalls, or defining a flow metric.
+---
+
 # Flow Metrics and Forecasting
 
 Run the team's delivery system as a flow system: measure how long work takes and how reliably it moves, find where it stalls, and forecast sprint and release dates from data instead of from gut feel or story-point velocity. Every metric here is a property of the system and the queue, not of a person; use them to fix the workflow and to set honest expectations, never to rank or pace individuals. For the requirements and stakeholder-commitment side of these same numbers, cross-reference the product_owner `delivery_forecasting_and_flow_metrics` skill; for how forecasts feed capacity, see the sibling `sprint_planning` skill.

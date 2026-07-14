@@ -1,3 +1,8 @@
+---
+name: error-handling-and-problem-details
+description: Governs the protocol-agnostic domain error model and its per-transport mapping to RFC 9457 problem+json, gRPC google.rpc.Status, GraphQL errors, async dead-lettering, and CLI exit codes, with reference implementations in Rust, Go, Python, TypeScript, Java, and C#. Use when implementing, centralizing, or reviewing how a service reports failures across any transport boundary.
+---
+
 # Error Handling and Problem Details
 
 Centralize error handling so the domain defines each failure once, a single handler per transport renders it, and the wire format is chosen only at the boundary. Domain and adapter code throws or returns one typed error model; never let a request handler hand-build an error response inline, because scattered `try/catch`-to-JSON blocks drift apart and leak internals. This is the canonical error reference for the harness; the `rest_api_implementation` skill defers HTTP error shaping to it.

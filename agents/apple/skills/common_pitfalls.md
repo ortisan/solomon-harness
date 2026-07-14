@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Governs the review checklist for Apple-platform defects that compile but fail at runtime, covering retain cycles, main-actor isolation violations, force-unwraps, unjustified Sendable suppression, missing privacy manifests, broad ATS exceptions, and Keychain misuse. Use when reviewing Swift or SwiftUI changes for memory leaks, concurrency races, crashes, or App Review rejection risk.
+---
+
 # Common Pitfalls
 
 Reject the Apple-platform failure modes that compile cleanly but crash, leak, freeze the UI, or get the app rejected from App Review. This skill is the checklist a reviewer applies to Swift/SwiftUI changes: retain cycles, main-actor isolation violations, force-unwraps, ignored Sendable/concurrency diagnostics, a missing or wrong privacy manifest, broad ATS exceptions, Keychain misuse, and main-thread blocking. Each rule states the failure and the reason, with the current Swift 6.2 / Xcode 17 / iOS 26 behavior, so "it builds" is never the bar.

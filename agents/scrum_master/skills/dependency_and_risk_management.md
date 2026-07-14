@@ -1,3 +1,8 @@
+---
+name: dependency-and-risk-management
+description: Governs the live RAID log (risks, assumptions, issues, dependencies) so cross-team dependencies and risks are named, scored, owned, and escalated before they become spillover. Use when logging a new risk, assumption, or external dependency, or reviewing whether the RAID log and backlog have drifted apart.
+---
+
 # Dependency and Risk Management
 
 Keep a live RAID log so cross-team dependencies and risks are named, scored, owned, and escalated before they become spillover. The Scrum Master owns the log as a coordination artifact, not a compliance form: every entry has an owner, a date, a trigger, and a response, and every open risk or external dependency is mirrored as a tracked issue in project memory so the backlog and the RAID never drift apart.

@@ -1,3 +1,8 @@
+---
+name: c4-model-diagrams
+description: Governs the four C4 zoom levels — System Context, Container, Component, Code — notation discipline for labeled protocol arrows, and authoring diagrams as version-controlled text with Structurizr, PlantUML, or Mermaid rather than binary exports. Use when producing or updating a system, container, or component diagram alongside a structural code change.
+---
+
 # C4 Model Diagrams
 
 Model software at the four C4 zoom levels — System Context, Container, Component, Code — and keep every diagram as version-controlled text so it changes in the same pull request as the code it describes.

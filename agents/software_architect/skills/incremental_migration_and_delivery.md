@@ -1,3 +1,8 @@
+---
+name: incremental-migration-and-delivery
+description: Governs decomposing a large architectural change into strangler-fig slices, expand-migrate-contract schema evolution, branch-by-abstraction seams, and short-lived feature-flagged cutovers with N-1 backward and forward compatibility. Use when planning a schema migration, a service split, or any change too large to ship as one atomic, reversible step.
+---
+
 # Incremental Migration and Delivery
 
 Deliver large architectural changes as a sequence of small, reversible, always-shippable steps instead of a big-bang rewrite, so the system stays releasable at every commit and a failed step rolls back without a data-loss event. Decompose the change into a migration spine, run old and new behaviour in parallel behind a seam, cut traffic over incrementally, and only retire the old path once the new one has proven itself in production. Big-bang rewrites fail because they couple a long no-release window to a single irreversible switch; every pattern here exists to break that coupling.

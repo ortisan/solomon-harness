@@ -18,9 +18,36 @@ Steps:
    `gh issue list --state open` to avoid duplicating an existing story. If this
    request duplicates one, stop and point the user to it.
 
-2. Shape the issue body (use the Feature/story template in the conventions doc).
+2. Elicitation gate (see "Elicitation gate" in `docs/solomon-workflow.md` and
+   the product_owner `socratic_elicitation` skill). Evaluate the demand against
+   the six readiness criteria — the explicit doubt-detection checklist:
+   **Problem** (the pain and why now), **Persona** (a real user type, never
+   "the user"), **Outcome** (the observable change that means success),
+   **Boundary** (at least one scope limit or constraint), **Single reading**
+   (no two conflicting interpretations of comparable plausibility), and
+   **Job behind the solution** (a solution-phrased demand also states the
+   underlying need). Then:
+   - All six hold: skip questioning entirely and carry the line
+     `Elicitation: skipped — all 6 readiness criteria met` in the issue body.
+   - Any criterion fails: enter Socratic mode. Ask via AskUserQuestion,
+     at most 4 questions per round, one per failed criterion and
+     only for failed criteria — never re-ask one already satisfied — for
+     at most 3 rounds, then proceed to shaping. An empty demand starts from
+     the job-to-be-done question. Record which criteria failed in the issue
+     body's elicitation line.
+   - The user declines (an "Other" answer such as "just file it"): stop
+     eliciting immediately and record each unanswered criterion under an
+     `Assumptions (unelicited)` heading in the issue body.
+   - Non-interactive/headless runs never block: ask nothing, print
+     `Elicitation: skipped (non-interactive)`, and record unmet criteria as
+     assumptions exactly as in the decline path.
+   Fold every elicited answer into the context and user story below.
+   The gate changes only how the demand is understood; the confirm-before-create
+   step below is untouched.
+
+3. Shape the issue body (use the Feature/story template in the conventions doc).
    Produce, in this order:
-   - **Problem statement** — the user need and why it matters. No solutioning.
+   - **Context** — the user need and why it matters. No solutioning.
    - **User story** — `As a <real persona>, I want <capability> so that <outcome>`,
      passing INVEST (vertical slice, one sprint, estimable, testable).
    - **Acceptance criteria** — Gherkin `Scenario / Given / When / Then`, covering
@@ -34,24 +61,40 @@ Steps:
      green, and docs updated. `/solomon-review` and `/solomon-release` enforce it as
      the close gate.
 
-3. Choose labels: `type:feature` plus a priority (`priority:p0|p1|p2`, justified
+4. Choose labels: `type:feature` plus a priority (`priority:p0|p1|p2`, justified
    with a named method — MoSCoW or RICE, show the inputs) and an `area:<domain>`.
 
-4. Confirm before creating. Show the user the rendered body, labels, and title
+5. Confirm before creating. Show the user the rendered body, labels, and title
    (conventional, concise). Proceed only on explicit approval — issue creation is
    an outward-facing action.
 
-5. Create the issue:
+6. Create the issue:
    - Ensure the standard labels exist first: `uv run python -m solomon_harness.github ensure-labels`.
      If you use a new `area:<domain>`, create it: `gh label create "area:<domain>" --color BFD4F2 --force`.
    - `gh issue create --title "<title>" --body "<body>" --label type:feature --label priority:pN --label area:<domain>`.
    Capture the returned issue number and URL.
 
-6. Place it on the board Backlog:
+7. Place it on the board Backlog:
    - `uv run python -m solomon_harness.github ensure-board`
    - `uv run python -m solomon_harness.github set-status --issue <n> --status "Backlog"`
 
-7. Persist to memory per the handoff contract:
+8. Generate the spec document (#221 S1; see "Spec generation" in
+   `docs/solomon-workflow.md`). Copy `docs/specs/0000-spec-template.md` to
+   `docs/specs/<N>-<slug>.md` with the Write tool — `<N>` = the created issue
+   number with no leading zeros, `<slug>` = the kebab-case title reduced to
+   ASCII lowercase `[a-z0-9]` and single hyphens, everything else stripped.
+   Pre-fill from the shaped body: the elicitation trace into the spec's Context, the
+   issue's Context section (the need and why) into the spec's Problem, the scope into Requirements, the Gherkin
+   into Acceptance Criteria, the house rules that bound the solution
+   (architecture style, security posture, conventions) into
+   Design Constraints, the out-of-scope list into Out of Scope, and
+   Traceability citing issue `#<N>` and any related ADR. Any section without content
+   carries the explicit placeholder `TBD (refine)`. Run
+   `uv run python scripts/spec-lint.py docs/specs/<N>-<slug>.md` and fix until
+   it exits 0. The spec ships with the issue's first implementation PR —
+   never pushed to a protected branch directly.
+
+9. Persist to memory per the handoff contract:
    - `mcp__solomon-memory__log_issue` (github_id=<n>, title, type_="feature",
      status="Backlog", milestone_id if known).
    - `mcp__solomon-memory__save_decision` — record the product decision (title,
@@ -69,7 +112,7 @@ Steps:
      `mcp__solomon-memory__link_session_handoff(session_id="issue-<n>", handoff_id=<the returned handoff id>)`
      to record the produced edge (ADR-0018).
 
-8. Output the issue URL and a one-line summary (number, title, priority, area).
-   Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
+10. Output the issue URL and a one-line summary (number, title, priority, area).
+    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.

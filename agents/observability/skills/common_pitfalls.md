@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the review-reject defects across metrics, tracing, sampling, alerting, and dashboards that break the three-signal correlation model, paired with the definition-of-done gate proving they were avoided. Use when reviewing observability code or configs, or auditing whether telemetry work is actually complete.
+---
+
 # Observability Common Pitfalls
 
 The review reject list for telemetry work: the metric, tracing, sampling, alerting, and dashboard defects that break the three-signal model. Each bullet names a failure a reviewer must block, and the Definition of done below is the gate proving the instrumentation avoided every one of them.

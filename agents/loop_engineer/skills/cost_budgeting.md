@@ -1,3 +1,8 @@
+---
+name: cost-budgeting
+description: Governs the post-hoc daily cost ceiling in solomon_harness/loop_budget.py that degrades an unattended loop to report-only once spend is reached, based on the engine's reported actual cost, not a self-estimate. Use when configuring daily_cost_ceiling_usd or diagnosing an over-budget block.
+---
+
 # Cost Budgeting
 
 An unattended loop must throttle itself; this skill governs the post-hoc cost budget that degrades the automation path to report-only when the daily ceiling is reached. A loop that self-estimates with numbers the model cannot count is unsafe — the budget reads the engine's reported actuals.

@@ -1,3 +1,8 @@
+---
+name: react-standards
+description: Governs every React component, hook, and server/client boundary in this workspace: React 19 under Next.js 16 baseline, function components, effects as a last resort, and an explicit Server/Client split recorded in the plan. Use when writing or reviewing React components, hooks, or a page's server/client boundary.
+---
+
 # React Standards
 
 This skill governs every React component, hook, and server/client boundary shipped in this workspace. The stance: React 19 is the baseline (the `ui/` app pins `react` 19.2.4 under Next.js 16.2.9), components are functions, effects are a last resort, and the Server/Client Component split is an explicit architectural decision recorded in the plan, never an accident of where the code happened to be written.

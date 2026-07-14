@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: States the operational standard for Flutter and Dart changes, covering strict TDD, SOLID modularity, typed Either/Result design contracts at boundaries, mocked external services, and preserved docstrings, applied on feature and bugfix branches. Use when scoping or reviewing any Flutter widget, state, navigation, platform-integration, or test change for baseline compliance.
+---
+
 # Flutter and Dart Best Practices
 
 Operational standard for building cross-platform Flutter apps with clean architecture, predictable state, responsive UI, and a trustworthy test suite.

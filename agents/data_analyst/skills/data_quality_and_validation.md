@@ -1,3 +1,8 @@
+---
+name: data-quality-and-validation
+description: Governs executable data-quality checks at pipeline boundaries: pandera and Great Expectations schema contracts, freshness/completeness/uniqueness/validity checks, source reconciliation, and block-versus-warn severity policy. Use when a pipeline lacks validation, a number needs reconciling against source, or a quality alert fires.
+---
+
 # Data Quality and Validation
 
 Data quality expressed as executable expectations at pipeline boundaries: schema contracts on ingestion, freshness/completeness/uniqueness checks on every table a report depends on, and reconciliation against the source system before a number is published. The stance: an unchecked dataset is an unverified claim, and a dashboard fed by one is a liability. Checks live in version control next to the pipeline, run automatically, and have a declared severity — block or warn — decided before the first failure, not during it.

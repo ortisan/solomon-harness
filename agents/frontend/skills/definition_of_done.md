@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the completion gate every React and Angular change must clear before UI work counts as done, naming the ways work gets marked done while still failing the checklist. Use when closing out a frontend task or reviewing whether a pull request is ready to merge.
+---
+
 # Frontend Definition of Done
 
 The completion gate for every React and Angular change: what must hold before UI work is called done. The pitfalls below name the ways frontend work gets marked done while failing this checklist; verify against them before ticking any box.

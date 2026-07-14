@@ -1,3 +1,8 @@
+---
+name: migration-planning
+description: Governs how the Legacy Modernizer assesses a codebase and sequences it toward the house standards (TDD, secure-by-default, OpenTelemetry, hexagonal architecture) as a dependency- and risk-first roadmap, advancing one bounded step per run and delegating execution to its owning specialist. Use when planning or sequencing a legacy modernization step, or deciding which specialist a roadmap step should route to.
+---
+
 # Migration Planning
 
 This skill governs how the Legacy Modernizer plans a legacy codebase to the house standards, one bounded step per run, delegation only. It turns a non-conformant codebase into a sequenced roadmap of small changes and, on each run, advances exactly one of them and hands it to the specialist who owns the standard it touches. The Legacy Modernizer writes the plan and the handoff; it writes no source-refactor diff.

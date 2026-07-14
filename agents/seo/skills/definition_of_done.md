@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the acceptance gate for an SEO change — semantic heading structure, metadata length and canonical correctness, JSON-LD validation, crawl and index health, and field-measured Core Web Vitals must all verify, since a lab score alone closes nothing here. Use when confirming an SEO or template change is ready to ship, or auditing a completed change against the required verification checklist.
+---
+
 # SEO Definition of Done
 
 The acceptance gate for an SEO change: semantic structure, metadata, structured data, crawl health, and field Core Web Vitals must all verify before it ships. A lab score alone closes nothing here; the field p75 and a post-change crawl are the verdicts.

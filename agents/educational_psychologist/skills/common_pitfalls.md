@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Governs the checklist of recurring failure modes in learning-architecture and instructional-content design, spanning learning-styles fads, cognitive overload, misaligned assessments, and passive review. Use when reviewing a learning design deliverable for rejection-worthy defects before sign-off.
+---
+
 # Educational Psychologist Common Pitfalls
 
 This skill lists common pitfalls to avoid when designing learning architectures and instructional content.

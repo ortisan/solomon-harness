@@ -1,3 +1,8 @@
+---
+name: privacy-and-app-store-compliance
+description: Governs the PrivacyInfo.xcprivacy manifest, required-reason API declarations, App Tracking Transparency consent, App Store Connect nutrition labels, and permission usage-description strings. Use when adding a Required Reason API, third-party SDK, or tracking feature, or when preparing an Apple app for App Store privacy review.
+---
+
 # Privacy and App Store Compliance
 
 App Review rejects a build for privacy reasons before it ever reaches users, so treat the privacy manifest, tracking consent, nutrition labels, and usage strings as release-blocking deliverables that must be true, minimal, and mutually consistent. Declare only the data you actually collect, request only the permissions you actually use, and make the App Store Connect labels, the `PrivacyInfo.xcprivacy` manifest, and the running code tell the same story; any divergence is grounds for rejection under the App Review Guidelines.

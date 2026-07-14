@@ -1,3 +1,8 @@
+---
+name: app-distribution-and-signing
+description: Governs code-signing identities, provisioning profiles and entitlements, fastlane match/gym/pilot automation, build-number policy, TestFlight delivery, and macOS notarization for Apple platforms. Use when configuring release signing, automating a TestFlight or App Store upload, or troubleshooting a signing, provisioning, or notarization failure.
+---
+
 # App Distribution and Signing
 
 Ship signed, notarized Apple builds through a reproducible pipeline where signing identities are shared across the team rather than minted per developer, build numbers increase monotonically, and every artifact is verified before it reaches App Store Connect. Treat code signing as a supply-chain boundary: the identity, the entitlements, and the provisioning profile together decide what the binary is allowed to do, so they belong in version control and CI, not in a developer's keychain.

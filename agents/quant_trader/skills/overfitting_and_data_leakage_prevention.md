@@ -1,3 +1,8 @@
+---
+name: overfitting-and-data-leakage-prevention
+description: Defines the statistical controls against backtest overfitting and leakage: deflated Sharpe, probability of backtest overfitting, multiple-testing haircuts, and the holdout contract of touching out-of-sample data exactly once. Use when validating a backtest's significance or auditing a pipeline for leakage.
+---
+
 # Overfitting and Data-Leakage Prevention
 
 Backtest overfitting and information leakage are the two ways a strategy dies in production, and this skill defines the statistical controls (deflated Sharpe, PBO, multiple-testing haircuts) and the leakage audits every result must pass before it is believed. With enough trials a Sharpe of 2 arises from pure noise, so a raw backtested Sharpe carries no evidential weight until it is deflated by the search that produced it.

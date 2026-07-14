@@ -1,3 +1,8 @@
+---
+name: trend-following-and-momentum
+description: Governs how the long_run_strategist designs trend-following and momentum signals — choosing between time-series and cross-sectional constructions, selecting lookbacks from the 3-to-12-month evidence band, scaling by volatility, and anticipating whipsaw and momentum-crash regimes. Use when specifying a trend or momentum signal's construction, lookback ensemble, and volatility scaling, or when assessing a design's exposure to whipsaw and crash risk.
+---
+
 # Trend Following and Momentum
 
 This skill governs how the long_run_strategist designs trend-following and momentum signals for long-horizon portfolios: choosing between time-series and cross-sectional constructions, selecting lookbacks, scaling by volatility, and anticipating the regimes in which trend loses money. The stance: momentum is among the best-documented return premia in the empirical literature, but it is crowded and crash-prone, so it must be diversified across assets and speeds, sized by risk rather than conviction, and shipped as a hypothesis card for quant_trader to validate — never as a self-graded result.

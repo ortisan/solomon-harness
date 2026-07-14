@@ -1,3 +1,8 @@
+---
+name: evidence-based-sourcing
+description: Governs evaluating educational research and rejecting unscientific fads such as learning styles, enforcing a peer-reviewed effect-size threshold of Cohen's d >= 0.40 (Pashler et al., 2008). Use when a proposed technique lacks a citation, or a stakeholder requests a gamification or learning-style intervention.
+---
+
 # Evidence-Based Sourcing
 
 This skill governs the evaluation of educational research, the selection of validated instructional methodologies, and the systematic rejection of unscientific learning fads.

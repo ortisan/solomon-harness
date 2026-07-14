@@ -1,3 +1,8 @@
+---
+name: angular-standards
+description: Governs Angular components, services, and templates: Angular 20+ baseline, standalone-only components, signals as the primary reactive primitive, mandatory OnPush or zoneless detection, and RxJS reserved for event-stream problems. Use when writing or reviewing Angular components, services, or templates.
+---
+
 # Angular Standards
 
 This skill governs every Angular component, service, and template shipped in this workspace. The stance: Angular 20+ is the baseline, standalone components are the only component style, signals are the primary reactive primitive, `OnPush` (or zoneless) change detection is mandatory, and RxJS is reserved for genuinely event-stream-shaped problems at the edges.

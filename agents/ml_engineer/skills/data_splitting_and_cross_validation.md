@@ -1,3 +1,8 @@
+---
+name: data-splitting-and-cross-validation
+description: Governs how datasets are partitioned for training, model selection, and final evaluation, matching the splitter (StratifiedKFold, GroupKFold, TimeSeriesSplit) to the data's dependence structure. Use when choosing a cross-validation strategy, splitting time-ordered or grouped data, or reviewing whether a reported metric came from a valid split.
+---
+
 # Data Splitting and Cross-Validation
 
 This skill governs how datasets are partitioned for training, model selection, and final evaluation. The split protocol is chosen from the data's dependence structure before any modeling starts, and the final holdout is opened exactly once; a metric produced by the wrong splitter is not an estimate of anything, no matter how many folds it averaged.

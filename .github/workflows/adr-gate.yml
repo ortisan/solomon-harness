@@ -1,0 +1,28 @@
+name: ADR gate
+
+# A dedicated, minimal workflow so the body contract stays fresh: it re-runs
+# on body edits (the heavy CI workflow deliberately does not) and gives
+# feedback in seconds instead of after the full suite.
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  adr-gate:
+    name: Enforce the ADR line on the PR body
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Check the canonical ADR line
+        env:
+          # The body reaches the validator as an environment variable, never
+          # interpolated into the shell command (untrusted text).
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/check-adr-gate.py --env PR_BODY

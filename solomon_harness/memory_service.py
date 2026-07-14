@@ -6,8 +6,14 @@ tools (Claude Code, Codex, Gemini CLI, Copilot) can read and write the project
 memory. The service is directly testable without the MCP SDK installed.
 """
 
+import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimStore
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_harness_dir(start: Optional[str] = None) -> str:
@@ -26,12 +32,20 @@ class MemoryService:
     lifetime; each method returns a plain dict."""
 
     def __init__(
-        self, harness_dir: Optional[str] = None, db_path: Optional[str] = None
+        self,
+        harness_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
+        claim_store: Optional["ClaimStore"] = None,
     ) -> None:
         from solomon_harness.tools.database_client import DatabaseClient
 
         resolved = harness_dir if harness_dir is not None else resolve_harness_dir()
         self.client = DatabaseClient(harness_dir=resolved, db_path=db_path)
+        if claim_store is None:
+            from solomon_harness.claim import GitClaimStore
+
+            claim_store = GitClaimStore(resolved)
+        self._claim_store: "ClaimStore" = claim_store
 
     def close(self) -> None:
         self.client.close()
@@ -81,7 +95,38 @@ class MemoryService:
         return {"ok": True, "github_id": github_id}
 
     def get_open_issues(self) -> Dict[str, List[Dict[str, Any]]]:
-        return {"issues": self.client.get_open_issues()}
+        issues = self.client.get_open_issues()
+        try:
+            # Numeric ids only; non-numeric rows (RAID/tracking items) are
+            # never claimed and always kept.
+            numeric_ids = []
+            for issue in issues:
+                try:
+                    numeric_ids.append(int(str(issue.get("github_id"))))
+                except (TypeError, ValueError):
+                    continue
+            # One shared claim filter -- the SAME port method
+            # github.list_open_issues uses -- so the two scan read paths can
+            # never diverge on how a claim is judged (a future filter fix
+            # lands in exactly one place). Defaults to GitClaimStore, which
+            # delegates to claim.filter_unclaimed; a caller can inject a
+            # different ClaimStore via the constructor.
+            unclaimed_ids = set(self._claim_store.filter_unclaimed(numeric_ids))
+
+            def _keep(issue: Dict[str, Any]) -> bool:
+                try:
+                    return int(str(issue.get("github_id"))) in unclaimed_ids
+                except (TypeError, ValueError):
+                    return True  # non-numeric tracking rows are never claimed
+
+            issues = [issue for issue in issues if _keep(issue)]
+        except Exception as exc:  # noqa: BLE001 - degrade to unfiltered, but log (item 8)
+            logger.warning(
+                "claim-aware issue filtering degraded (%s); returning the "
+                "unfiltered issue list.",
+                exc,
+            )
+        return {"issues": issues}
 
     def get_issue(self, github_id: str) -> Dict[str, Any]:
         return {"issue": self.client.get_issue(github_id)}

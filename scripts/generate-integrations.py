@@ -24,24 +24,48 @@ def discover_agents(agents_dir: str):
 
 
 def role_description(role_path: str, agent_name: str) -> str:
-    """Uses the first non-heading, non-empty line of the role file as a one-line
-    description so the subagent description tracks the role definition."""
+    """Builds the subagent description from the role file: its opening line
+    (what the agent does) plus the first line of the `## Delegation cue`
+    section (when to delegate to it), so generated subagents carry a trigger
+    condition, not just a role label."""
+    one_liner = ""
+    cue = ""
+    in_cue = False
     try:
         with open(role_path, "r", encoding="utf-8") as f:
             for line in f:
                 stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    return stripped
+                if stripped.startswith("## "):
+                    in_cue = stripped.lower() == "## delegation cue"
+                    continue
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if in_cue:
+                    cue = stripped
+                    break
+                if not one_liner:
+                    one_liner = stripped
     except OSError:
         pass
-    return f"The {agent_name} specialist for solomon-harness."
+    if one_liner and cue:
+        return f"{one_liner} {cue}"
+    return one_liner or f"The {agent_name} specialist for solomon-harness."
+
+
+def yaml_quote(value: str) -> str:
+    """Render a single-line string as a double-quoted YAML scalar.
+
+    Descriptions are natural-language sentences, so unquoted colons or hashes
+    would break the generated frontmatter for any strict YAML consumer.
+    """
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def subagent_markdown(agent_name: str, description: str) -> str:
     return (
         f"---\n"
         f"name: {agent_name}\n"
-        f"description: {description}\n"
+        f"description: {yaml_quote(description)}\n"
         f"---\n\n"
         f"You are the {agent_name} specialist agent for solomon-harness.\n\n"
         f"Your role is defined in agents/{agent_name}/agents/{agent_name}.md and your "

@@ -1,3 +1,8 @@
+---
+name: single-driver-lock
+description: Governs the single-driver lock protocol in solomon_harness/loop_lock.py, including atomic acquisition, git-common-dir anchoring, stale and pid-reuse reclaim rules, and recovery via loop-lock status and release. Use when debugging a blocked headless stage, a stuck lock, or the loop-guard hook blocking a driver's own push.
+---
+
 # Single-Driver Lock
 
 Every HEADLESS driver (the `solomon-harness dev` cadence path) acquires the single-driver lock before a mutating stage touches git or the board; this skill governs the lock protocol and its recovery, the precondition that makes a cadence safe. Two concurrent drivers once produced premature merges that bypassed the review gate and flipped `core.bare=true`; the lock makes that race impossible-by-construction on the headless path. Interactive `/solomon-*` sessions do not acquire the lock — they are bounded by the human merge gate and the `loop-guard` hook, and operators run one at a time; do not claim the lock protects concurrent interactive drivers.

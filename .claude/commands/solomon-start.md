@@ -1,7 +1,7 @@
 ---
 description: Start development on a Ready issue: branch, PLAN.md, TDD loop, ADR check, draft PR.
 argument-hint: [issue-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, AskUserQuestion, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues
 ---
 
 Begin implementation of issue **#$ARGUMENTS**. First read `docs/solomon-workflow.md`
@@ -18,8 +18,39 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   and open the artifacts it points to (the refined issue, acceptance criteria) only when you need them,
   instead of re-deriving prior context.
 - `gh issue view $ARGUMENTS` to read the title, body, acceptance criteria, and labels.
+- Acquire the per-issue claim BEFORE creating any branch, PLAN, or worktree (ADR-0027 —
+  interactive sessions get the same mutual exclusion as headless runs):
+  `uv run solomon-harness claim acquire $ARGUMENTS`. A non-zero exit means another live
+  session holds the issue (the error names the holder and claim age) or its liveness
+  could not be confirmed — STOP and report that to the user; do not proceed, do not
+  release the other session's claim. The claim is released automatically on merge, by a
+  failed headless run, or manually with `solomon-harness claim release $ARGUMENTS`.
 - `mcp__solomon-memory__get_issue("$ARGUMENTS")` for prior context; check the card is in
   `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
+- **Capability Check** (see "Capability check" in `docs/solomon-workflow.md`):
+  Verify the project has the capability (agent + skills) this issue needs.
+  The deterministic router core builds the verdict (ADR-0008); you supply the
+  match judgment as data — never build inline Python over issue text.
+  - Write your demand and match judgment to `.solomon/broker/route-$ARGUMENTS.json`
+    with the Write tool (so issue-derived text never touches a shell string):
+    `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`
+  - Run `uv run python -m solomon_harness.cli broker route --file .solomon/broker/route-$ARGUMENTS.json`
+    and read the verdict JSON. The core validates the match against the catalog
+    and fails closed (exit 3) on an empty catalog or a matcher-contract violation.
+  - Route verdict: note the routed agent and continue the stage.
+  - Gap verdict, interactive session: present the choice via AskUserQuestion:
+    1. Acquire the capability via the broker (recommended) — adapt the named
+       skill into the nearest agent, or create the suggested agent.
+    2. Proceed without acquiring (the gap stays recorded).
+    3. Other.
+    On option 1, write the proposal to `.solomon/broker/proposal-$ARGUMENTS.json`
+    (`{"kind": "adapt_skill", "source_name": "...", "skill_name": "...", "agent_name": "...", "issue": "$ARGUMENTS"}` or
+    `{"kind": "create_agent", "agent_name": "...", "title": "...", "description": "...", "duties": ["..."], "issue": "$ARGUMENTS"}`),
+    then run `uv run python -m solomon_harness.cli broker apply --file .solomon/broker/proposal-$ARGUMENTS.json`.
+    Report the created PR and stop execution (do not proceed to Step 2).
+  - Gap verdict, non-interactive/headless run: acquisition is human-gated and
+    `broker apply` refuses it (exit 3) — do not attempt it. Record the gap
+    verdict in the run report and continue the stage without acquiring.
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 
@@ -58,13 +89,17 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Show PLAN.md to the user before coding.
 
 ## 4. ADR evaluation (software_architect)
-- Evaluate architectural significance against `docs/adr/README.md` and the
+- Evaluate architectural significance against `docs/adrs/README.md` and the
   `architecture_decisions_in_project_memory` skill (new dependency/datastore, changed public
   contract or data model, cross-cutting pattern, quality-attribute trade-off, hard to reverse).
-- If significant: the `software_architect` subagent copies `docs/adr/0000-adr-template.md` to
-  `docs/adr/NNNN-<slug>.md` (next number), fills the MADR sections, and records it with
+- If significant: the `software_architect` subagent copies `docs/adrs/0000-adr-template.md` to
+  `docs/adrs/NNNN-<slug>.md` (next number), fills the MADR sections, and records it with
   `mcp__solomon-memory__save_decision(title="ADR-NNNN: ...", outcome="Status: Accepted\n...", author="software_architect", branch="feature/<slug>")`.
 - If not significant: state that explicitly (you will repeat it in the PR body).
+- Either way the PR body will carry exactly one canonical, machine-checked
+  line (`scripts/check-adr-gate.py` fails CI otherwise):
+  `ADR: docs/adrs/NNNN-<slug>.md` when a record was written, or
+  `ADR: not warranted — <reason>` when the checklist did not trip.
 
 ## 5. Choose the implementation mode, then implement (software_engineer)
 - Before writing any production or test code, ask how this issue should be implemented,
@@ -96,8 +131,9 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 ## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
 - Open a draft PR: `uv run python -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
-  The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
-  (`docs/adr/NNNN-<slug>.md`) or state that no ADR was warranted and why.
+  The body must contain `Closes #$ARGUMENTS`, summarize the change, and carry the
+  canonical ADR line from step 4 — `ADR: docs/adrs/NNNN-<slug>.md` or
+  `ADR: not warranted — <reason>` — which the CI ADR gate enforces verbatim.
 - `uv run python -m solomon_harness.cli github set-status --issue $ARGUMENTS --status "Code Review"`.
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,

@@ -1,3 +1,8 @@
+---
+name: dual-coding
+description: Governs pairing verbal and visual channels in learning materials per dual coding theory (Paivio) and the cognitive theory of multimedia learning (Mayer), including the mandatory-diagram rule and the three-color maximum. Use when designing or reviewing a diagram or material that pairs text with a visual.
+---
+
 # Dual Coding
 
 This skill governs the integration of verbal and non-verbal representation channels in learning materials to enhance comprehension and memory storage.

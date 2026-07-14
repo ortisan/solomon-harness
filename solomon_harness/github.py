@@ -19,7 +19,10 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimStore
 
 # The board columns have one canonical definition in the memory adapter (the
 # lowest-level module); importing it here keeps github.py and cockpit_read.py from
@@ -28,6 +31,8 @@ from typing import Any, Dict, List, Optional
 # normalize_person_key lives in the same adapter (ADR-0012): the person key is
 # normalized on write at this capture seam, below every read consumer.
 from solomon_harness.tools.database_client import BOARD_COLUMNS, normalize_person_key
+
+logger = logging.getLogger(__name__)
 
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
@@ -376,7 +381,9 @@ def set_issue_status(
     return {"ok": True, "issue": issue_number, "status": status}
 
 
-def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
+def merge_pr_and_close(
+    pr_number: int, issue_number: int, claim_store: Optional["ClaimStore"] = None
+) -> Dict[str, Any]:
     """Squash-merge an approved PR, then complete the Done transition (#172, ADR-0020).
 
     This is the single owning call for the merge-to-Done transition: on a
@@ -394,10 +401,40 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     the memory write-through still fires -- only the board column needs a
     retry. The result reports ``ok: False`` with ``merged: True`` so a caller
     can tell that apart from nothing having happened at all.
+
+    ``claim_store`` defaults to a ``GitClaimStore`` over the resolved
+    workspace root; a caller may inject a different ``ClaimStore``.
     """
     res = _gh(["pr", "merge", str(pr_number), "--squash"])
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error", "gh pr merge failed.")}
+
+    # Release the per-issue claim on merge (best-effort). Reuse the canonical
+    # workspace-root resolver rather than hand-rolling a fourth `.git` walk,
+    # and log on failure instead of swallowing it silently -- a stale claim
+    # ref self-heals via the 30-minute TTL, but a genuine release failure
+    # should leave a diagnostic trail like every other best-effort path here.
+    try:
+        from solomon_harness.skills import get_workspace_root
+
+        store = claim_store
+        if store is None:
+            from solomon_harness.claim import GitClaimStore
+
+            store = GitClaimStore(get_workspace_root())
+        if not store.release(issue_number, force=True):
+            logger.warning(
+                "issue #%s: claim release on merge did not confirm; the stale "
+                "ref self-heals via the claim TTL.",
+                issue_number,
+            )
+    except Exception as exc:  # noqa: BLE001 - best-effort, never break the merge result
+        logger.warning(
+            "issue #%s: best-effort claim release on merge failed (%s).",
+            issue_number,
+            exc,
+        )
+
     status_res = set_issue_status(issue_number, "Done")
     record_terminal_status(issue_number)
     if not status_res.get("ok"):
@@ -409,6 +446,50 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
             "issue": issue_number,
         }
     return {"ok": True, "pr": pr_number, "issue": issue_number}
+
+
+def list_open_issues(
+    workspace_root: str, limit: int = 200, claim_store: Optional["ClaimStore"] = None
+) -> Dict[str, Any]:
+    """List open issues via gh, excluding those actively claimed by another session (ADR-0027).
+
+    The claim-aware read for any scan path that lists open issues directly
+    off the board (rather than through ``MemoryService.get_open_issues``,
+    which applies the same claim filter over the memory-backed issue list):
+    the /solomon-workflow scan step reads ``gh issue list --state open``
+    directly, and without this filter a claimed issue could still surface
+    there even though `start` would refuse it moments later.
+
+    Best-effort: a gh failure returns ``ok: False`` with the underlying
+    error; a claims-fetch failure inside the filter degrades to the
+    unfiltered gh result (logged, not silently dropped -- see
+    ``claim.filter_unclaimed``).
+
+    ``claim_store`` defaults to a ``GitClaimStore(workspace_root)``; a caller
+    may inject a different ``ClaimStore``.
+    """
+    res = _gh(
+        ["issue", "list", "--state", "open", "--limit", str(limit), "--json", "number,title"],
+        parse_json=True,
+    )
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error", "gh issue list failed.")}
+
+    raw_issues = res.get("data") or []
+    numbers: List[int] = [
+        item["number"]
+        for item in raw_issues
+        if isinstance(item, dict) and isinstance(item.get("number"), int)
+    ]
+
+    if claim_store is None:
+        from solomon_harness.claim import GitClaimStore
+
+        claim_store = GitClaimStore(workspace_root)
+
+    unclaimed_numbers = set(claim_store.filter_unclaimed(numbers))
+    issues = [item for item in raw_issues if item.get("number") in unclaimed_numbers]
+    return {"ok": True, "issues": issues}
 
 
 def create_pull_request(draft: bool, base: str, title: str, body: str) -> Dict[str, Any]:
@@ -598,6 +679,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_merge.add_argument("--pr", type=int, required=True)
     p_merge.add_argument("--issue", type=int, required=True)
 
+    p_list = sub.add_parser(
+        "list-open-issues",
+        help="List open issues, excluding ones actively claimed by another session (ADR-0027)",
+    )
+    p_list.add_argument("--workspace", default=os.getcwd())
+    p_list.add_argument("--limit", type=int, default=200)
+
     p_pr_create = sub.add_parser("pr-create", help="Create a Pull Request")
     p_pr_create.add_argument("--draft", action="store_true")
     p_pr_create.add_argument("--base", default="main")
@@ -638,6 +726,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 record_terminal_status(args.issue)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
+    elif args.command == "list-open-issues":
+        result = list_open_issues(args.workspace, limit=args.limit)
     elif args.command == "merge":
         result = merge_pr_and_close(args.pr, args.issue)
     elif args.command == "pr-create":

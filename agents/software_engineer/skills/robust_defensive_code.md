@@ -1,3 +1,8 @@
+---
+name: robust-defensive-code
+description: Governs defending code at trust boundaries through parse-don't-validate typed inputs, guard clauses, total functions, explicit handling of None, empty, zero, and non-finite values, and narrow exception handling that never swallows an error. Use when validating external input, writing a numeric or boundary-crossing function, or reviewing code for sentinel returns and bare except blocks.
+---
+
 # Robust, Defensive Code
 
 This skill governs where and how to defend code against bad input and undefined states. The stance: validate hard at trust boundaries, then trust your own validated types inside; defend the edges, not every line. Defensive coding is about making invalid states unrepresentable and failing fast and loud when they slip through, never about scattering null checks through a codebase that already proved its invariants.

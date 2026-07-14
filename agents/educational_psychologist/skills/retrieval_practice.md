@@ -1,3 +1,8 @@
+---
+name: retrieval-practice
+description: Governs incorporating active recall and the testing effect (Roediger and Karpicke) into learning designs, including the six-minute recall-prompt cadence and immediate low-stakes feedback. Use when designing a tutorial, quiz, or interactive exercise, or reviewing one that relies on passive re-reading instead of active recall.
+---
+
 # Retrieval Practice
 
 This skill governs the incorporation of active recall, self-testing, and the testing effect into learning designs to promote long-term retention and schema consolidation.

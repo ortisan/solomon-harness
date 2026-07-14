@@ -1,3 +1,8 @@
+---
+name: context-reset-discipline
+description: Governs the Ralph-loop tick contract of disposable context, reading the handoff contract and run-log from disk, bounding each tick to one task, and externalizing state via `dev loop-auto` before the tick ends. Use when reviewing a headless loop tick, or a tick that carried state across iterations.
+---
+
 # Context-Reset Discipline
 
 Treat every loop tick as disposable: start from the handoff contract and the run-log on disk, do exactly one bounded task, externalize all state before the tick ends, and halt at the human review gate. This is the Ralph-loop discipline (Geoffrey Huntley) adapted to the harness — statelessness is the intended contract, not a degradation to tolerate.

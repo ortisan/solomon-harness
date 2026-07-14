@@ -1,3 +1,8 @@
+---
+name: factor-models-and-signal-construction
+description: Governs how the long_run_strategist selects factors and builds portfolio-ready signals — which premia (value, quality, momentum, low volatility) have a real evidence base, how to winsorize and cross-sectionally standardize raw data, and how to monitor crowding and decay. Use when choosing a factor for a design, cleaning or combining signals, or deciding whether a candidate factor has enough out-of-sample and cost-survival evidence to enter a hypothesis card.
+---
+
 # Factor Models and Signal Construction
 
 This skill governs how the long_run_strategist selects factors and turns raw data into portfolio-ready signals: which premia have a real evidence base, how to standardize and clean signals, how to watch for crowding and decay, and how to refuse data-mined factors. The stance: the published factor zoo is mostly noise, so a factor earns a place in a design only with an economic rationale, out-of-sample evidence, and survival after costs — and the eventual test of any signal belongs to quant_trader, not to this agent.

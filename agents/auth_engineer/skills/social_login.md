@@ -1,3 +1,8 @@
+---
+name: social-login
+description: Governs federated sign-in with Google, GitHub, Apple, Microsoft Entra ID, and Facebook, targeting one canonical user identity, safe account linking, and correct email-verification handling, with Authorization Code plus PKCE on every flow. Use when adding or reviewing a social login provider or account-linking logic.
+---
+
 # Social login over OIDC
 
 Scope: federated sign-in with Google, GitHub, Apple, Microsoft (Entra ID), and Facebook (Meta). Goal is one canonical user identity, safe account linking, and correct email-verification handling. Every flow is Authorization Code + PKCE; implicit and hybrid flows are out.

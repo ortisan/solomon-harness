@@ -84,6 +84,70 @@ the lifecycle costs one selection, not a copy-paste. The same holds for every sm
 "proceed / retry / push-or-PR" confirmation. A turn that ends by offering what to do next
 without an enumerated, selectable menu is a defect.
 
+### Elicitation gate (`/solomon-issue`)
+
+Before shaping a feature/story, `/solomon-issue` evaluates the user's demand
+against six readiness criteria — the explicit doubt-detection checklist. A
+demand is ready when all six hold:
+
+1. **Problem** — the pain or trigger is stated (why this matters now).
+2. **Persona** — who is affected is identifiable (a real user type, never
+   "the user").
+3. **Outcome** — the observable change that means success is stated.
+4. **Boundary** — at least one scope limit or constraint is stated.
+5. **Single reading** — the text does not support two conflicting
+   interpretations of comparable plausibility.
+6. **Job behind the solution** — if the demand names a solution, the
+   underlying need is also stated (a request is an untested solution to an
+   unstated job).
+
+When every criterion holds, shaping starts immediately and the issue body
+carries the line `Elicitation: skipped — all 6 readiness criteria met`. When
+any criterion fails, the command enters Socratic mode: questions follow the
+enumerated-options convention above, at most 4 questions per round and one per
+failed criterion — only for failed criteria, never re-asking one already
+satisfied — for at most 3 rounds before shaping proceeds. An empty demand
+starts from the job-to-be-done question. If the user declines to answer,
+elicitation stops immediately and each unanswered criterion is recorded under
+an `Assumptions (unelicited)` heading in the issue body. Non-interactive runs
+never block: they ask nothing, print `Elicitation: skipped (non-interactive)`,
+and record assumptions the same way. The gate changes only how the demand is
+understood before shaping; the confirm-before-create step is untouched. The
+question ladder lives in the product_owner `socratic_elicitation` skill.
+
+### Capability check (`/solomon-refine`, `/solomon-start`)
+
+Before refining or starting an issue, the workflow verifies the project has
+the capability (agent + skills) the issue needs. The division of labor is
+ADR-0008's: the host LLM supplies the match judgment as data, and the
+deterministic router core (`capability_router.route`) owns the verdict —
+matcher-contract validation, alternatives, the suggested action, and
+fail-closed behavior on an empty catalog. The prompts never build inline
+Python over issue text: they write a JSON file with the Write tool and run
+`solomon-harness broker route --file <path>`; on a gap verdict they present
+the enumerated choice (acquire via the broker, recommended; proceed without
+acquiring; Other). Acquisition runs only through
+`solomon-harness broker apply --file <path>`, which validates every field
+(snake_case names, a numeric issue, single-line bounded free text) and is
+permanently human-gated: a headless stage subprocess, an automation autonomy
+level, or an engaged kill-switch is refused (exit 3) before any change — the
+loop surfaces gaps, a human applies them.
+
+### Spec generation (`/solomon-issue`)
+
+Every feature/story issue gets a durable spec document: after creation,
+`/solomon-issue` copies `docs/specs/0000-spec-template.md` to
+`docs/specs/<N>-<slug>.md` via the Write tool and pre-fills the seven mandated
+sections (Context, Problem, Requirements, Acceptance Criteria, Design
+Constraints, Out of Scope, Traceability) from the shaped issue body, with the
+explicit placeholder `TBD (refine)` wherever content is unknown.
+`scripts/spec-lint.py` enforces the convention (filename rule, sections
+present and non-empty, Traceability citing the issue) and runs in the CI
+validators job. The spec ships with the issue's first implementation PR —
+never pushed to a protected branch directly. The convention's full definition
+lives in `docs/specs/README.md`; its decision record is ADR-0028, shipped
+with the migration of the decision tree to `docs/adrs` (#221 S2a).
+
 ## Implementation mode (automatic or manual)
 
 `/solomon-start` asks, before any code is written, whether the change is implemented
@@ -142,7 +206,7 @@ Its own role is milestone-level: once a milestone's issues are already `Done`,
 it drives the version tag through CI, plus a board-hygiene backstop for any
 card GitHub auto-closed outside the CLI `Done` path. The full, canonical
 standard is `docs/release-policy.md` (decision recorded in
-`docs/adr/0004-milestone-gated-releases.md`); this section is the operational
+`docs/adrs/0004-milestone-gated-releases.md`); this section is the operational
 summary the workflow follows.
 
 **Release criterion — milestone-gated, never per-PR.** A tag is cut only when a
@@ -235,7 +299,7 @@ The CLI surface for this stage is `solomon-harness release plan | prep | check |
 
 ## Issue body templates
 
-- Feature/story: problem statement, user story (`As a … I want … so that …`),
+- Feature/story: context, user story (`As a … I want … so that …`),
   acceptance criteria as Given/When/Then, scope and out-of-scope, definition of ready.
 - Bug: summary, steps to reproduce, expected vs actual, environment, severity, and
   a note that a regression test is required before the fix is closed.
@@ -276,7 +340,7 @@ Contract template:
 <2-5 lines>
 
 ## Artifacts (open only if needed)
-- PLAN.md · docs/adr/NNNN-*.md · PR #<M> · test plan · ...
+- PLAN.md · docs/specs/<N>-*.md · docs/adrs/NNNN-*.md · PR #<M> · test plan · ...
 
 ## Acceptance criteria status
 <which acceptance criteria are met; what remains>
@@ -336,6 +400,45 @@ safety floor prevents that by construction:
 Human approval before any merge or release is unchanged: the lock bounds *who*
 may drive, not *whether* a human approves. See `docs/loop-engineering.md` for the
 full adaptation roadmap.
+
+### Per-issue claims (second concurrency layer)
+
+The single-driver lock above governs who may drive one checkout; it says
+nothing about two checkouts, or two host tools, picking the same issue.
+ADR-0027 layers a second mechanism on top of it, never a replacement: the
+repo-wide lock (ADR-0010) serializes headless drivers per checkout; the
+per-issue claim serializes sessions per issue across every checkout and host.
+
+- **Authoritative substrate.** The sole source of truth is the git ref
+  `refs/claims/issue-N`, compare-and-swapped via `git push --force-with-lease`
+  — no database needed, so it works unchanged under the SQLite memory
+  fallback, where every worktree otherwise has its own isolated database.
+  Implementation: `solomon_harness/claim.py`.
+- **Claim fields and TTL.** A claim's commit message is a JSON object with
+  `session_id`, `acquired_at`, and `heartbeat_at`, active for 1800 seconds
+  since the last heartbeat. A headless `dev start` spawns a daemon thread
+  that re-touches `heartbeat_at` every
+  `SOLOMON_CLAIM_HEARTBEAT_INTERVAL_SECONDS` (default 600 seconds), so a
+  stage outliving the TTL before a PR exists never becomes reclaimable
+  mid-implementation.
+- **Stale-claim reclaim.** Past the TTL, another session may reclaim the
+  issue unless its board card sits in `Code Review` or `QA`; when that
+  liveness check cannot be determined (a `gh` failure, not "no PR found"),
+  `claim_issue` fails closed rather than risk a double-pick on a transient
+  outage.
+- **Best-effort mirror and degrade paths.** `claim_issue`/`release_claim`
+  also write or clear a mirror record in the project memory, purely so the
+  holder is queryable via the memory MCP tools and the digest without a git
+  fetch — never consulted for the decision itself. Memory down: the git ref
+  still governs. Git fetch failing: the board-scan filters degrade to the
+  unfiltered list, since the real enforcement point is the compare-and-swap
+  inside `claim_issue` at `start` time, not the scan.
+- **Operator commands and release.** `solomon-harness claim status <issue>`
+  shows the holder, age, and PR/review protection; `claim release <issue>`
+  clears it. A successful `gh pr merge` also force-releases the claim.
+
+See ADR-0027 for the full decision, and ADR-0010 for the repo-wide lock this
+layers on top of.
 
 ## Autonomy levels and the kill-switch
 
@@ -403,10 +506,18 @@ live in the agents' `architecture_scan_loop` / `duplication_scan_loop` skills.
 `/solomon-start` and `/solomon-release` must evaluate whether the change is
 architecturally significant using the checklist in
 `agents/software_architect/skills/architecture_decisions_in_project_memory.md` and
-`docs/adr/README.md`. If significant, the software_architect agent writes
-`docs/adr/NNNN-<slug>.md` from `docs/adr/0000-adr-template.md`, records it with
+`docs/adrs/README.md`. If significant, the software_architect agent writes
+`docs/adrs/NNNN-<slug>.md` from `docs/adrs/0000-adr-template.md`, records it with
 `save_decision`, and links it in the PR. If not significant, state that explicitly
 in the PR so the decision to skip an ADR is also visible.
+
+The statement is machine-checked (ADR-0031): every PR body carries exactly one
+canonical line — `ADR: docs/adrs/NNNN-<slug>.md` or
+`ADR: not warranted — <reason>` — enforced by `scripts/check-adr-gate.py` in a
+dedicated workflow that re-runs on body edits, and re-checked mechanically by
+the review stage before the architect judges whether the line's content is
+honest. Every flow that opens a PR (start, release prep, the scan loops)
+writes the line.
 
 ## Authorization
 

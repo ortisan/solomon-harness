@@ -281,7 +281,7 @@ class TestFetchGhIssueStates(unittest.TestCase):
         _, kwargs = run.call_args
         env = kwargs.get("env")
         self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
-        self.assertFalse(any(k.startswith("GIT_") for k in env))
+        self.assertFalse(any(k.startswith("GIT_") for k in env if k != "GIT_TERMINAL_PROMPT"))
 
     def test_warns_when_gh_returns_the_issue_cap(self):
         """When gh returns exactly the --limit cap, reconcile may miss closed issues

@@ -1,3 +1,8 @@
+---
+name: when-this-skill-applies
+description: Governs triaging which architecture artifact a change deserves — a commit note, a C4 view update, a design contract, or an ADR — by scoring its blast radius against its cost of reversal using Bezos's one-way and two-way door framing. Use when deciding whether a change needs a design contract, a diagram update, a full ADR, or no architecture artifact at all.
+---
+
 # Architecture Engagement Model
 
 Decide which architecture artifact a change deserves from its blast radius and its cost of reversal, not from its line count or who requested it: most changes need only a commit note, a few earn a design contract or a C4 view, and only the expensive-to-reverse decisions justify an ADR.

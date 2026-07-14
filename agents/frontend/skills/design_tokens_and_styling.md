@@ -1,3 +1,8 @@
+---
+name: design-tokens-and-styling
+description: Governs how visual decisions are encoded through design tokens as the single source of truth, so components never hardcode raw values and theming means swapping token values, not rewriting styles. Use when styling a component, adding a color or spacing value, or reviewing a diff for hardcoded values.
+---
+
 # Design Tokens and Styling
 
 This skill governs how visual decisions are encoded and consumed: tokens are the single source of truth, components never touch raw values, and theming happens by swapping token values, not rewriting component styles. A raw hex color or magic pixel number in a component is a review rejection.

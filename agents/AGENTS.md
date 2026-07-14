@@ -189,14 +189,26 @@ file is specific to its topic.
 ### Skill file format
 
 Every skill is a single, self-contained Markdown file that follows the same
-shape, modeled on the `auth_engineer` skills:
+shape, modeled on the `auth_engineer` skills. It opens with discovery
+frontmatter — the same `name`/`description` metadata the open Agent Skills
+format uses — so a host tool or agent can select the right skill from the
+description alone, without loading the body:
 
 ```
+---
+name: <filename stem with underscores replaced by hyphens>
+description: <One line, third person: what the skill governs, then a literal
+  "Use when ..." trigger stating when to load it. Written on a single physical
+  line, at most 1024 characters.>
+---
+
 # <Skill Title>
 
-<One paragraph stating what this skill governs and the stance to take. This
-first paragraph is what scripts/document-skills.py uses as the one-line summary
-in the profile's Active Skills list, so make the first sentence sharp.>
+<One paragraph stating what this skill governs and the stance to take. The
+frontmatter description is what scripts/document-skills.py uses as the
+one-line summary in the profile's Active Skills list, so make its first
+sentence sharp; this paragraph is the fallback when the frontmatter is
+missing.>
 
 ## <Topic sections>
 
@@ -215,7 +227,11 @@ Be specific to the topic; do not restate the shared rules in this file.
 
 Keep filenames `snake_case.md`. Prefer depth over breadth: a skill should read
 like a senior engineer's reference, with real APIs and numbers, not platitudes.
-The cross-cutting files that recur across agents use the same names:
+The body (excluding frontmatter) of every role-core skill must exceed 600
+words; `scripts/check-skill-depth.py` enforces the depth bar and the format
+gate (frontmatter, matching name, "Use when" trigger, both closing sections)
+across the whole roster in CI. The cross-cutting files that recur across
+agents use the same names:
 `definition_of_done`, `common_pitfalls`, `scope_and_non_negotiables`.
 
 You can also pull skills from external skill-server repositories instead of
@@ -232,7 +248,14 @@ directory.
 
 ## The specialist agents
 
-Each agent's full definition is in `agents/<name>/agents/<name>.md`.
+Each agent's full definition is in `agents/<name>/agents/<name>.md`. Every
+profile follows the same shape: the `# <Title> Profile` heading, a one-sentence
+opening line (reused as the roster and subagent description), a `## Delegation
+cue` section whose single `Use this agent when ...` sentence tells the host
+tool when to route work here (the generated `.claude/agents/<name>.md`
+description is the opening line plus this cue), `## Core Duties`, `## Outputs`,
+an optional `## Handoffs` section naming the agents it delegates to or receives
+from, and the generated `## Active Skills` / `## External Skills` lists.
 
 - `agent_builder` — scaffolds new specialist agents.
 - `android` — native Android apps: Kotlin, Jetpack Compose, MVVM, Coroutines/Flow, Room/Retrofit, Gradle, instrumentation and Compose testing.
@@ -248,13 +271,13 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `legacy_modernizer` — plans and sequences the safe modernization of a legacy codebase to the house standards (hexagonal, OpenTelemetry, secure-by-default, TDD), one bounded step per run ordered dependency- and risk-first, delegating each step to its owner; delegation only, human-gated.
 - `loop_engineer` — autonomous-loop mechanics: the single-driver lock, the autonomy ladder and guardrails, the run-log, the cost budget, and the context-reset discipline, so loops run unattended without bypassing the human review gate.
 - `long_run_strategist` — long-horizon (weeks to years) systematic strategy design: trend following and momentum, factor models, portfolio construction and allocation, position sizing and risk budgeting, rebalancing and turnover control, long-horizon backtest hygiene, costs/taxes/capacity; hands backtest validation to quant_trader and fundamental views to research_analyst.
-- `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, and didactic reporting (absorbs data science).
+- `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, deep learning and deep reinforcement learning engineering, strategy-spec intake from the trading agents, and didactic reporting (absorbs data science).
 - `observability` — logging, metrics, tracing, monitoring dashboards, OpenTelemetry.
 - `practice_curator` — benchmarks delivered work and the agents' own guidance against the state of the art (software, architecture, ML/DRL, trading) and proposes reviewed updates; cited sources, one target agent per change.
 - `product_owner` — PRDs, requirements, user stories, scope and deliverables.
 - `qa` — unit, integration and E2E tests, mocking external services, UAT, QA reports.
 - `quant_trader` — quantitative strategies, backtests, slippage and transaction costs, Sharpe/drawdown/profit-factor risk.
-- `research_analyst` — fundamental and qualitative investment research: valuation (DCF, multiples, sum-of-the-parts), qualitative asset selection, and the sources playbook (how to proceed and where to look); sources and timestamps every claim, and hands quantitative validation to quant_trader and statistical-model work to ml_engineer. The fundamental counterpart to quant_trader.
+- `research_analyst` — fundamental and qualitative investment research: valuation (DCF, multiples, sum-of-the-parts), financial-statement quality and forensics, moat and management assessment, catalysts and scenario analysis, the research-note output contract, and the sources playbook (how to proceed and where to look); sources and timestamps every claim, and hands quantitative validation to quant_trader and statistical-model work to ml_engineer. The fundamental counterpart to quant_trader.
 - `scalper` — intraday scalping strategy design (seconds-to-minutes holds): market microstructure, order-flow signals, spread capture, execution and order types, latency budgets, tick-data backtesting, strict intraday risk controls; validation via quant_trader's backtest standards.
 - `scrum_master` — milestones, backlog, sprints, Git Flow, conventional commits.
 - `security` — threat modeling (STRIDE), SAST, dependency and vulnerability checks.
@@ -262,3 +285,4 @@ Each agent's full definition is in `agents/<name>/agents/<name>.md`.
 - `software_architect` — C4 diagrams, Architectural Decision Records, design contracts.
 - `software_engineer` — TDD implementation, clean code, debugging, Git Flow.
 - `sre` — high availability, deployment pipelines, incident runbooks, disaster recovery, SLA/SLO.
+- `swing_trader` — daytrade and swing-trade strategy design (minutes-to-weeks holds, between scalper and long_run_strategist): session structure and multi-day setups, entry/exit and trade management, position sizing and loss limits, overnight and gap risk, bar-data backtest hygiene; writes the hypothesis card first, transmits implementable strategy specs to ml_engineer and software_engineer, and hands every candidate to quant_trader for validation.

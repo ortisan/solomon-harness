@@ -1,3 +1,8 @@
+---
+name: data-driven-reporting
+description: Governs the structure and honesty of analytical and model-evaluation reports, requiring a fixed report order and a baseline, uncertainty, and provenance for every number. Use when writing or reviewing a model-evaluation report, an analytical report, or any results write-up for reproducibility and honesty.
+---
+
 # Data-Driven Reporting
 
 This skill governs the structure and honesty of analytical and model-evaluation reports. A report exists so a reader can weigh the evidence and reproduce it: every number carries its baseline, its uncertainty, and its provenance, and the report's conclusions survive the reader checking any one of them.

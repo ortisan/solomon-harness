@@ -1,3 +1,8 @@
+---
+name: roadmapping-and-release-planning
+description: Governs building an outcome-based now/next/later roadmap, slicing releases into thin vertical increments, and planning milestone-driven releases where a tag is cut only when a milestone reaches zero open issues, forecast by Monte Carlo. Use when structuring a roadmap or a release plan.
+---
+
 # Roadmapping and Release Planning
 
 Build a roadmap that commits to outcomes and problems, not to a dated list of features, and a release plan that ships value in thin vertical slices grouped into milestones. Treat the roadmap as a statement of intent under uncertainty: it tells stakeholders what problems you will attack and roughly when, while leaving the team free to discover the cheapest solution. Dates are forecasts with a confidence interval, never promises pulled from a Gantt chart. Releases themselves are milestone-driven: a tag is cut when a GitHub milestone reaches zero open issues with CI green on `main`, not on a calendar and not per merge, so "when will it ship" is a forecast of milestone burndown.

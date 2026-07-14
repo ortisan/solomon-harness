@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the completion gate for a Flutter change covering TDD evidence, layering, state-management discipline, disposal, performance, responsiveness, coverage, analyzer and format checks, secrets, and branch and commit conventions. Use when deciding whether a Flutter feature or fix is actually ready to ship.
+---
+
 # Flutter Definition of Done
 
 The completion gate for every Flutter change: what must hold before work is called done. The pitfalls below name the ways a change gets marked done while failing this checklist; check against them before ticking any box.

@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the recurring React and Angular defects rejected on sight in review: index keys, stale closures, leaked subscriptions, unsanitized HTML, grounded in this agent's hooks and RxJS teardown standards. Use when reviewing a frontend diff, or before submitting one, against the standing pitfall checklist.
+---
+
 # Frontend Common Pitfalls
 
 The React and Angular defects that recur in review, from index keys and stale closures to leaked subscriptions and unsanitized HTML. Each bullet is a rejection on sight, grounded in this agent's standards for hooks, RxJS teardown, design tokens, and server state; the closing checklist verifies a diff carries none of them.

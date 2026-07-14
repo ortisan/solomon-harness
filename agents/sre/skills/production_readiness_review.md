@@ -1,3 +1,8 @@
+---
+name: production-readiness-review
+description: Governs the Production Readiness Review go/no-go gate before a service serves live traffic, covering SLI/SLO/error-budget checks, actionable alerting, capacity headroom, tested rollback, on-call ownership, and dependency review. Use when launching a service or deciding a GO/GO-WITH-CONDITIONS/NO-GO verdict.
+---
+
 # Production Readiness Review
 
 The Production Readiness Review (PRR) is the go/no-go gate a service must clear before it serves live traffic, and again before a major change to its risk profile (new region, new dependency, 10x traffic). It is a structured audit against a fixed checklist: defined SLIs/SLOs with an error budget, runbooks, actionable alerts and dashboards, capacity and load headroom, a tested rollback, named on-call ownership, and a reviewed dependency graph. The output is a single recorded decision with `save_decision` (GO, GO-WITH-CONDITIONS, or NO-GO) and a `log_handoff` to whoever owns the launch. Treat a PRR as falsifiable: every item is either demonstrated with evidence (a link, a graph, a passing test) or it fails.

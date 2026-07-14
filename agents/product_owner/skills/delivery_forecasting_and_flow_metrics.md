@@ -1,3 +1,8 @@
+---
+name: delivery-forecasting-and-flow-metrics
+description: Governs forecasting delivery from measured flow - cycle time, throughput, work-in-progress, Little's Law, cumulative flow diagrams, and Monte Carlo simulation - publishing a percentile-based date range instead of a wished-for date. Use when committing or re-forecasting a delivery date.
+---
+
 # Delivery Forecasting and Flow Metrics
 
 Forecast delivery from how work actually flows instead of from a wished-for single date: measure cycle time, throughput, and work-in-progress, run a Monte Carlo simulation over historical throughput, and publish a probabilistic range (50th/85th/95th percentile) the business can plan against and trade against scope. As Product Owner you own the external commitment and the scope decisions that follow from it; the team's flow discipline, board hygiene, and chart maintenance belong to the scrum_master skill `flow_metrics_and_forecasting`. Pull their data, do not reproduce their process.

@@ -1,3 +1,8 @@
+---
+name: mfa-passkeys
+description: Governs the second-factor and passwordless layer, making the strongest available authenticator the default and weaker factors fallbacks with a migration path, with every enrollment and recovery step replay-safe and rate-limited. Use when adding or reviewing MFA, WebAuthn/passkeys, TOTP, or SMS-based authentication.
+---
+
 # MFA and Passkeys
 
 Build the second-factor and passwordless layer so that the strongest available authenticator is the default, weaker factors are fallbacks with a migration path, and every enrollment, verification, and recovery step is replay-safe and rate-limited. Treat phishing-resistant authenticators (WebAuthn/passkeys) as the target and TOTP/SMS as the legacy on-ramp, not the destination.

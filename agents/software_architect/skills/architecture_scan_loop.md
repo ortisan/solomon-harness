@@ -1,3 +1,8 @@
+---
+name: architecture-scan-loop
+description: Governs the standing architecture-scan maintenance loop that sweeps the repository for layer violations, eroded design contracts, and undocumented ADR-worthy changes, acting on the single highest-confidence finding as a draft PR or a filed idea. Use when running the scheduled architecture drift scan or deciding whether a structural finding warrants a fix now or a triage item.
+---
+
 # Architecture Scan Loop
 
 This skill governs the standing architecture-scan maintenance loop: a generative

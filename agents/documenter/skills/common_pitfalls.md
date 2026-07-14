@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the cross-cutting documentation anti-patterns a reviewer rejects on sight - branching tutorials, hand-maintained reference, unsourced screenshots, unpinned versions, duplicated facts, marketing tone. Use when reviewing any documentation deliverable for release-blocking defects.
+---
+
 # Documenter Common Pitfalls
 
 The documentation anti-patterns a reviewer rejects on sight, and the release checks that prove a deliverable avoids them. These are the cross-cutting failure modes that recur across every Diátaxis quadrant — branching tutorials, hand-maintained reference, unsourced screenshots, unpinned versions, duplicated facts, marketing tone; page-level anatomy and lifecycle mechanics live in their own skills.

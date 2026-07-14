@@ -1,3 +1,8 @@
+---
+name: operational-docs-runbooks-and-user-guides
+description: Governs operational documentation - the fixed eight-section runbook anatomy, the alert-to-runbook link and drill cadence, task-oriented user guides, and Keep a Changelog-style changelogs. Use when writing or reviewing a runbook, an alert's runbook link, a user guide, or a changelog entry.
+---
+
 # Operational Docs: Runbooks and User Guides
 
 This skill governs operational documentation: incident runbooks with a fixed anatomy (preconditions, steps, verification, rollback), the alert-to-runbook link that makes them reachable at 3 a.m., task-oriented user guides, and user-facing changelogs. The stance: a runbook is executed under stress by someone who did not write it, so every ambiguity in it is an incident-time delay you chose in advance.
