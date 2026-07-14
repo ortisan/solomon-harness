@@ -47,10 +47,14 @@ def test_no_reference_to_the_old_adr_path_remains():
         if SCAN_EXCLUDE_PARTS.intersection(path.parts):
             continue
         rel = path.relative_to(REPO)
-        # This test file legitimately spells the old form to define the scan,
-        # and PLAN.md is untracked per-branch state that may describe the
-        # migration itself.
-        if rel in (Path("tests") / "test_adr_migration.py", Path("PLAN.md")):
+        # Legitimate mentions of the old form: this test file (it defines the
+        # scan), PLAN.md (untracked per-branch state that may describe the
+        # migration), and the migration ADR itself (it records the rename).
+        if rel in (
+            Path("tests") / "test_adr_migration.py",
+            Path("PLAN.md"),
+            Path("docs") / "adrs" / "0028-adrs-directory-and-spec-driven-convention.md",
+        ):
             continue
         try:
             text = path.read_text(encoding="utf-8")

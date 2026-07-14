@@ -446,3 +446,43 @@ class TestInitWikiHint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInstallDocsBoundary(unittest.TestCase):
+    """The harness's own documents never travel into installed projects
+    (maintainer directive, #234 review round): an install receives only the
+    operating docs the commands read and the convention scaffolding, and each
+    project's record trees start empty."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_install_ships_skeleton_docs_without_harness_records(self):
+        from solomon_harness import bootstrap
+
+        bootstrap._install_harness_files(self.workspace)
+
+        adrs = os.path.join(self.workspace, "docs", "adrs")
+        specs = os.path.join(self.workspace, "docs", "specs")
+        self.assertEqual(
+            sorted(os.listdir(adrs)), ["0000-adr-template.md", "README.md"],
+            "an installed project's docs/adrs holds only the convention scaffolding",
+        )
+        self.assertEqual(
+            sorted(os.listdir(specs)), ["0000-spec-template.md", "README.md"],
+            "an installed project's docs/specs holds only the convention scaffolding",
+        )
+        # The harness's own wiki pages and root README stay home.
+        self.assertFalse(os.path.isdir(os.path.join(self.workspace, "docs", "wiki")))
+        self.assertFalse(os.path.isfile(os.path.join(self.workspace, "README.md")))
+        # The operating documents the commands read do travel.
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.workspace, "docs", "solomon-workflow.md"))
+        )
+        self.assertTrue(
+            os.path.isdir(os.path.join(self.workspace, "docs", "templates"))
+        )
