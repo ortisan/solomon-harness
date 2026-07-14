@@ -45,6 +45,10 @@ subagents); do not review with a single generic pass.
 - software_architect agent: apply the `architecture_review_gate` checklist against
   the design contracts, the fitness functions, and any ADR the change touches.
   If the change is architecturally significant but no ADR exists, that is a blocker.
+  Run the mechanical body gate first — `gh pr view <n> --json body --jq .body > <tmp> &&
+  uv run python scripts/check-adr-gate.py --body-file <tmp>` — a violation is a blocker;
+  then judge whether the line's CONTENT is honest (a skip reason that hides a
+  significant change is still a blocker).
 - Domain lenses (conditional): `gh pr diff $ARGUMENTS --name-only | uv run python -m solomon_harness.review_roster`
   prints up to two extra specialists (auth_engineer, dba, sre, loop_engineer, frontend,
   observability, practice_curator, documenter) selected deterministically

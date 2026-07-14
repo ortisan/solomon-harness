@@ -34,7 +34,7 @@ Carry forward only the **reversibility kernel** from progressive delivery, and c
 File each gap with `mcp__solomon-memory__log_issue` (and `gh issue create` with `type:chore` + `priority:*` when it needs tracking on the board). A **NO-GO** or any blocking gap halts the release — report and stop. A **GO-WITH-CONDITIONS** records each condition, owner, and due date.
 
 ## 3. ADR re-check
-Re-evaluate architectural significance for anything that emerged across the milestone, using `docs/adrs/README.md` and the software_architect checklist. If significant, delegate the ADR to the software_architect subagent (`docs/adrs/NNNN-<slug>.md`), record it with `save_decision`, and link it in the prep PR. If not, note that no ADR is needed.
+Re-evaluate architectural significance for anything that emerged across the milestone, using `docs/adrs/README.md` and the software_architect checklist. If significant, delegate the ADR to the software_architect subagent (`docs/adrs/NNNN-<slug>.md`), record it with `save_decision`, and link it in the prep PR. If not, note that no ADR is needed. The prep-PR body carries exactly one canonical, machine-checked line (`scripts/check-adr-gate.py` fails CI otherwise): `ADR: docs/adrs/NNNN-<slug>.md` or `ADR: not warranted — <reason>`.
 
 ## 4. Confirm, then open the release prep PR
 Summarize the planned version, the rendered CHANGELOG section, and the readiness verdict, then **ask the user to confirm before opening the prep PR**. Never push to a protected branch directly, and never hand-edit `pyproject.version` or add a CHANGELOG heading by hand — `release prep` writes them, and a CI check rejects any non-release PR that touches them. Only after explicit approval:
