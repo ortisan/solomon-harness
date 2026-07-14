@@ -3,7 +3,7 @@
 Guarantees mutual exclusion at the issue level so parallel/concurrent sessions
 do not double-pick or collide on the same issue.
 
-Storage and read path (ADR-0024): the git ref ``refs/claims/issue-N`` (CAS via
+Storage and read path (ADR-0027): the git ref ``refs/claims/issue-N`` (CAS via
 ``git push --force-with-lease``) is the sole AUTHORITATIVE source of truth for
 the mutual-exclusion decision -- it is the only substrate visible across
 worktrees and under the SQLite memory fallback. Every function in this module
@@ -43,6 +43,44 @@ CLAIM_HEARTBEAT_INTERVAL_SECONDS = float(
 # per process so repeated calls within one process stay stable -- see
 # get_current_session_id.
 _SESSION_ID_CACHE: Optional[str] = None
+
+# Bounded timeout for every git subprocess this module spawns. A stalled origin
+# (credential prompt, DNS hang, dead network) must never hang the `start` stage
+# -- and, worse, the repo-wide single-driver lock the stage holds while the
+# claim gate runs (the ADR-0021-class "loop hung indefinitely holding the lock"
+# incident). A TimeoutExpired is caught and reported as a failed call so every
+# caller degrades through its existing returncode check instead of raising
+# through run_stage's claim gate (which runs before the try/finally and would
+# leak the lock).
+GIT_SUBPROCESS_TIMEOUT_SECONDS = 15.0
+
+
+def _run_git(
+    args: List[str],
+    workspace_root: str,
+    env: Dict[str, str],
+    input_text: Optional[str] = None,
+) -> "subprocess.CompletedProcess[str]":
+    """Run a git subprocess with a bounded timeout; a timeout degrades to a failed call (rc=1)."""
+    try:
+        return subprocess.run(
+            args,
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            env=env,
+            input=input_text,
+            timeout=GIT_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "git %s timed out after %ss in %s; treating as a failed call so the "
+            "stage and the single-driver lock never hang.",
+            (args[1] if len(args) > 1 else "?"),
+            GIT_SUBPROCESS_TIMEOUT_SECONDS,
+            workspace_root,
+        )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="git subprocess timed out")
 
 
 def get_current_session_id() -> str:
@@ -158,35 +196,17 @@ def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str,
     remote_ref = f"refs/remotes/origin/claims/issue-{issue_number}"
     env = clean_git_env(workspace_root)
     
-    res = subprocess.run(
-        ["git", "fetch", "-q", "origin", f"+{ref}:{remote_ref}"],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    res = _run_git(["git", "fetch", "-q", "origin", f"+{ref}:{remote_ref}"], workspace_root, env)
     if res.returncode != 0:
         return None
-        
-    sha_res = subprocess.run(
-        ["git", "rev-parse", remote_ref],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+
+    sha_res = _run_git(["git", "rev-parse", remote_ref], workspace_root, env)
     if sha_res.returncode != 0:
         return None
     sha_stdout = getattr(sha_res, "stdout", "") or ""
     sha = sha_stdout.strip()
     
-    msg_res = subprocess.run(
-        ["git", "log", "-1", "--format=%B", remote_ref],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    msg_res = _run_git(["git", "log", "-1", "--format=%B", remote_ref], workspace_root, env)
     if msg_res.returncode != 0:
         return None
         
@@ -289,32 +309,19 @@ def get_claim(workspace_root: str, issue_number: int) -> Optional[Dict[str, Any]
 
 def _mktree_commit(workspace_root: str, claim_data: Dict[str, Any], env: Dict[str, str]) -> Optional[str]:
     """Build an empty-tree commit carrying ``claim_data`` as its message; return its sha, or None on failure."""
-    mktree_res = subprocess.run(
-        ["git", "mktree"],
-        input="",
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    mktree_res = _run_git(["git", "mktree"], workspace_root, env, input_text="")
     if mktree_res.returncode != 0:
         return None
     tree_sha = (getattr(mktree_res, "stdout", "") or "").strip()
 
-    commit_res = subprocess.run(
-        ["git", "commit-tree", "-m", json.dumps(claim_data), tree_sha],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    commit_res = _run_git(["git", "commit-tree", "-m", json.dumps(claim_data), tree_sha], workspace_root, env)
     if commit_res.returncode != 0:
         return None
     return (getattr(commit_res, "stdout", "") or "").strip()
 
 
 def _mirror_claim(workspace_root: str, issue_number: int, claim_data: Dict[str, Any]) -> None:
-    """Best-effort write-through of the claim into the project memory (ADR-0024).
+    """Best-effort write-through of the claim into the project memory (ADR-0027).
 
     The git ref on ``refs/claims/*`` stays the sole authoritative source of
     truth for the mutual-exclusion decision -- claim_issue/release_claim
@@ -433,13 +440,7 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     else:
         push_cmd = ["git", "push", f"--force-with-lease={ref}:", "origin", f"{new_sha}:{ref}"]
 
-    push_res = subprocess.run(
-        push_cmd,
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    push_res = _run_git(push_cmd, workspace_root, env)
     if push_res.returncode != 0:
         return False
 
@@ -471,13 +472,7 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
 
     ref = f"refs/claims/issue-{issue_number}"
     env = clean_git_env(workspace_root)
-    push_res = subprocess.run(
-        ["git", "push", f"--force-with-lease={ref}:{sha}", "origin", f":{ref}"],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    push_res = _run_git(["git", "push", f"--force-with-lease={ref}:{sha}", "origin", f":{ref}"], workspace_root, env)
     if push_res.returncode != 0:
         return False
 
@@ -494,27 +489,33 @@ def refresh_claim(workspace_root: str, issue_number: int, session_id: str) -> bo
     Called periodically by the heartbeat thread ``workflows.run_stage`` spawns
     after a successful ``start`` claim, so a stage that runs longer than
     CLAIM_TTL_SECONDS before opening a PR does not become reclaimable
-    mid-implementation (the #24 double-pick). Reads the current claim ref
-    and, only when it is still owned by ``session_id``, pushes an updated
-    heartbeat_at via the same CAS (``--force-with-lease`` against the ref's
-    own last-known sha) the initial claim uses.
+    mid-implementation (the #24 double-pick).
 
-    Returns False, without raising, when the ref is missing, no longer owned
-    by ``session_id`` (another session took over after a past-TTL reclaim),
-    or the force-with-lease race is lost (a concurrent refresh or takeover
-    moved the ref first) -- the heartbeat thread treats a False return as its
-    stop signal and exits quietly rather than retrying against a claim that
-    is no longer this session's to refresh.
+    Return contract -- the heartbeat loop stops only on a ``False``:
+
+    - ``False`` ONLY when the claim is *confirmed* to belong to another
+      session now (a different ``session_id`` read off the ref). That is the
+      one case where continuing to heartbeat is pointless.
+    - ``True`` when refreshed successfully, OR on a *transient* technical
+      failure (ref not fetchable, commit not buildable, or the
+      force-with-lease push did not land). A transient failure must NOT stop
+      the heartbeat: the claim ref is still ours on origin, only this refresh
+      did not go through, so the loop retries next interval. Conflating a
+      transient git/network blip with a real takeover is exactly what would
+      let a lapsed heartbeat reopen the #24 double-pick -- a genuine takeover
+      is caught on the next tick, when the ref reads a foreign owner.
     """
     ref_info = get_claim_ref(workspace_root, issue_number)
     if not ref_info:
+        # Transient fetch failure or a momentarily-absent ref -- not a
+        # confirmed takeover. Keep heartbeating; retry next tick.
         logger.warning(
-            "issue #%s: no claim ref found while refreshing the heartbeat "
-            "for session %s; it may have been released or stolen.",
+            "issue #%s: claim ref not readable while refreshing the heartbeat "
+            "for session %s (transient?); will retry next interval.",
             issue_number,
             session_id,
         )
-        return False
+        return True
     sha, claim_data = ref_info
     if claim_data.get("session_id") != session_id:
         logger.warning(
@@ -532,23 +533,24 @@ def refresh_claim(workspace_root: str, issue_number: int, session_id: str) -> bo
     env = clean_git_env(workspace_root)
     new_sha = _mktree_commit(workspace_root, refreshed, env)
     if not new_sha:
-        return False
+        return True  # transient: could not build the commit; retry next tick.
 
     ref = f"refs/claims/issue-{issue_number}"
-    push_res = subprocess.run(
+    push_res = _run_git(
         ["git", "push", f"--force-with-lease={ref}:{sha}", "origin", f"{new_sha}:{ref}"],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
+        workspace_root,
+        env,
     )
     if push_res.returncode != 0:
+        # A lost force-with-lease race or a transient push failure -- we cannot
+        # tell which without re-reading, so keep heartbeating; the next tick's
+        # ownership check turns a genuine takeover into the False stop above.
         logger.warning(
-            "issue #%s: heartbeat refresh lost the force-with-lease race; "
-            "another session likely took the claim.",
+            "issue #%s: heartbeat refresh did not land (race or transient "
+            "failure); will re-check ownership next interval.",
             issue_number,
         )
-        return False
+        return True
 
     _mirror_claim(workspace_root, issue_number, refreshed)
     return True
@@ -556,20 +558,12 @@ def refresh_claim(workspace_root: str, issue_number: int, session_id: str) -> bo
 def fetch_all_claims(workspace_root: str) -> Dict[int, Dict[str, Any]]:
     """Fetch all claim references from the remote and return a dict of active claims."""
     env = clean_git_env(workspace_root)
-    subprocess.run(
-        ["git", "fetch", "-q", "origin", "+refs/claims/*:refs/remotes/origin/claims/*"],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    
-    res = subprocess.run(
+    _run_git(["git", "fetch", "-q", "origin", "+refs/claims/*:refs/remotes/origin/claims/*"], workspace_root, env)
+
+    res = _run_git(
         ["git", "for-each-ref", "refs/remotes/origin/claims/", "--format=%(refname) %(objectname)"],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        env=env,
+        workspace_root,
+        env,
     )
     
     claims: Dict[int, Dict[str, Any]] = {}
@@ -589,13 +583,7 @@ def fetch_all_claims(workspace_root: str) -> Dict[int, Dict[str, Any]]:
         except (IndexError, ValueError):
             continue
             
-        msg_res = subprocess.run(
-            ["git", "log", "-1", "--format=%B", refname],
-            cwd=workspace_root,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        msg_res = _run_git(["git", "log", "-1", "--format=%B", refname], workspace_root, env)
         if msg_res.returncode == 0:
             claim_dict = parse_claim_commit_message(msg_res.stdout.strip())
             if claim_dict:

@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional
 # normalized on write at this capture seam, below every read consumer.
 from solomon_harness.tools.database_client import BOARD_COLUMNS, normalize_person_key
 
+logger = logging.getLogger(__name__)
+
 # Fallback board title when the repository name cannot be resolved.
 DEFAULT_BOARD_TITLE = "solomon"
 
@@ -399,22 +401,28 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error", "gh pr merge failed.")}
 
-    # Release per-issue claim on merge
+    # Release the per-issue claim on merge (best-effort). Reuse the canonical
+    # workspace-root resolver rather than hand-rolling a fourth `.git` walk,
+    # and log on failure instead of swallowing it silently -- a stale claim
+    # ref self-heals via the 30-minute TTL, but a genuine release failure
+    # should leave a diagnostic trail like every other best-effort path here.
     try:
         from solomon_harness import claim
-        workspace_root = os.getcwd()
-        found_root = False
-        curr = workspace_root
-        while curr and curr != os.path.dirname(curr):
-            if os.path.exists(os.path.join(curr, ".git")):
-                found_root = True
-                workspace_root = curr
-                break
-            curr = os.path.dirname(curr)
-        if found_root:
-            claim.release_claim(workspace_root, issue_number, force=True)
-    except Exception:
-        pass
+        from solomon_harness.skills import get_workspace_root
+
+        workspace_root = get_workspace_root()
+        if not claim.release_claim(workspace_root, issue_number, force=True):
+            logger.warning(
+                "issue #%s: claim release on merge did not confirm; the stale "
+                "ref self-heals via the claim TTL.",
+                issue_number,
+            )
+    except Exception as exc:  # noqa: BLE001 - best-effort, never break the merge result
+        logger.warning(
+            "issue #%s: best-effort claim release on merge failed (%s).",
+            issue_number,
+            exc,
+        )
 
     status_res = set_issue_status(issue_number, "Done")
     record_terminal_status(issue_number)
@@ -430,7 +438,7 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
 
 
 def list_open_issues(workspace_root: str, limit: int = 200) -> Dict[str, Any]:
-    """List open issues via gh, excluding those actively claimed by another session (ADR-0024).
+    """List open issues via gh, excluding those actively claimed by another session (ADR-0027).
 
     The claim-aware read for any scan path that lists open issues directly
     off the board (rather than through ``MemoryService.get_open_issues``,
@@ -654,7 +662,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p_list = sub.add_parser(
         "list-open-issues",
-        help="List open issues, excluding ones actively claimed by another session (ADR-0024)",
+        help="List open issues, excluding ones actively claimed by another session (ADR-0027)",
     )
     p_list.add_argument("--workspace", default=os.getcwd())
     p_list.add_argument("--limit", type=int, default=200)

@@ -58,6 +58,28 @@ class TestClaimLiveness(unittest.TestCase):
         now = datetime.datetime.fromisoformat("2026-07-06T00:20:00Z")
         self.assertFalse(claim.is_claim_active(claim_data, current_session_id="session-123", now=now))
 
+    def test_loop_lock_and_claim_share_one_session_identity(self):
+        # Regression: LoopLock's default session_id and claim's must resolve to
+        # the SAME value in one process. If they diverge (the lock on host:pid,
+        # the claim on host:pid:entropy), a nested claim-gated `dev start` tags
+        # its claim with one id while the lock holds another and self-deadlocks
+        # on its own claim.
+        from solomon_harness.loop_lock import LoopLock
+        stripped = {
+            k: v for k, v in os.environ.items()
+            if k not in ("SOLOMON_SESSION_ID", "CLAUDE_SESSION_ID")
+        }
+        with patch.dict(os.environ, stripped, clear=True):
+            lock = LoopLock(lock_path="/tmp/solomon-session-id-regression.lock")
+            self.assertEqual(lock.session_id, claim.get_current_session_id())
+            self.assertEqual(lock.session_id.count(":"), 2)
+
+    def test_claim_category_is_non_semantic(self):
+        # Regression: claim mirror writes (one per heartbeat tick) must NOT be
+        # embedded into the HNSW semantic index or they drown real notes.
+        from solomon_harness.tools.database_client import is_semantic_category
+        self.assertFalse(is_semantic_category("claim"))
+
     # -- M9: TTL lower bound ------------------------------------------------
 
     def test_is_claim_inactive_with_future_heartbeat_clock_skew(self):
@@ -355,8 +377,13 @@ class TestClaimGitOperations(unittest.TestCase):
         c = claim.get_claim(self.local, 99)
         self.assertEqual(c["session_id"], "sess-b")
 
-    def test_refresh_claim_returns_false_when_ref_missing(self):
-        self.assertFalse(claim.refresh_claim(self.local, 99, "sess-a"))
+    def test_refresh_claim_keeps_trying_when_ref_temporarily_missing(self):
+        # A missing/unfetchable ref is a transient condition, not a confirmed
+        # takeover, so the heartbeat must keep trying (True), never stop: a
+        # transient git/network blip must not let a lapsed heartbeat reopen the
+        # #24 double-pick. A genuine takeover is caught on the next tick, when
+        # the ref reads a foreign owner (that path returns False).
+        self.assertTrue(claim.refresh_claim(self.local, 99, "sess-a"))
 
     @patch("solomon_harness.claim.claim_issue")
     @patch("solomon_harness.claim.get_claim")
@@ -457,6 +484,26 @@ class TestClaimGitOperations(unittest.TestCase):
         rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
         self.assertEqual(rc, 1)
 
+    @patch("solomon_harness.claim.claim_issue")
+    @patch("solomon_harness.claim.is_claim_active")
+    @patch("solomon_harness.claim.get_claim")
+    @patch("solomon_harness.workflows._read_command_file")
+    def test_run_stage_start_refuses_when_claim_issue_refuses_with_ref_present(
+        self, mock_read, mock_get, mock_active, mock_claim_issue
+    ):
+        # BLOCKER regression: when claim_issue fails closed (an active claim, or
+        # PR/review liveness it could not confirm), run_stage must refuse -- not
+        # fall through to "proceeding without one" because a weaker TTL-only
+        # recheck reads the stale claim as inactive. Any ref still present after
+        # a refusal means: do not start.
+        from solomon_harness import workflows
+        mock_read.return_value = "---\nallowed-tools: Bash\n---\nbody"
+        mock_active.return_value = False  # pre-check must not block; we reach claim_issue
+        mock_get.return_value = {"session_id": "other-session", "acquired_at": "2026-07-06T00:00:00Z"}
+        mock_claim_issue.return_value = False  # claim_issue fails closed
+        rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+        self.assertEqual(rc, 1)
+
     @patch("solomon_harness.tools.database_client.DatabaseClient.get_open_issues")
     @patch("solomon_harness.claim.fetch_all_claims")
     @patch("solomon_harness.claim.is_claim_active")
@@ -494,18 +541,20 @@ class TestClaimGitOperations(unittest.TestCase):
     ):
         # Item 8: no silent `except Exception: pass` on this safety path -- a
         # claim-lookup failure must degrade to the unfiltered list AND log,
-        # not swallow.
+        # not swallow. Filtering now runs through claim.filter_unclaimed, which
+        # catches the fetch failure and logs (on the claim logger) before
+        # returning the unfiltered set, so the degrade is still observable.
         from solomon_harness.memory_service import MemoryService
 
         mock_db_issues.return_value = [{"github_id": "1", "title": "issue 1"}]
         mock_fetch.side_effect = RuntimeError("git unavailable")
 
         service = MemoryService(harness_dir=self.local)
-        with self.assertLogs("solomon_harness.memory_service", level="WARNING") as logs:
+        with self.assertLogs("solomon_harness.claim", level="WARNING") as logs:
             res = service.get_open_issues()
 
         self.assertEqual(len(res["issues"]), 1)
-        self.assertTrue(any("degraded" in m.lower() for m in logs.output))
+        self.assertTrue(any("unfiltered" in m.lower() for m in logs.output))
 
     @patch("sys.stdout", new_callable=lambda: StringIO())
     @patch("solomon_harness.claim.get_claim")

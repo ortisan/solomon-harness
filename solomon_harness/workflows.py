@@ -305,7 +305,7 @@ def run_stage(
             )
             return 1
 
-    # Per-issue claim gate + acquisition (ADR-0024): layered on top of the
+    # Per-issue claim gate + acquisition (ADR-0027): layered on top of the
     # repo-wide lock above, not a replacement for it. Only meaningful inside a
     # real git repo -- a plain workspace with no `.git` has no claims remote
     # to check or race against in the first place.
@@ -377,12 +377,21 @@ def run_stage(
                 )
                 heartbeat_thread.start()
             else:
+                # claim_issue refused. It fails closed internally (an active
+                # claim, or PR/review liveness that could not be confirmed), so
+                # do NOT re-derive activity here with a weaker TTL-only
+                # is_claim_active(has_open_pr=False) check -- that would let a
+                # stale-but-PR-protected or liveness-uncertain claim slip
+                # through and start a duplicate. Any ref still present means
+                # "refused, do not proceed"; only a genuinely absent ref (no
+                # remote / offline, get_claim returns None) is the safe
+                # "proceed without a claim" fallback.
                 recheck = claim.get_claim(workspace_root, issue_number)
-                if recheck and claim.is_claim_active(recheck, current_sess):
+                if recheck is not None:
                     print(
-                        f"Error: issue #{issue_number} was claimed by session "
-                        f"'{recheck.get('session_id')}' before this one -- lost the race. "
-                        "Refusing to start.",
+                        f"Error: issue #{issue_number} could not be safely claimed "
+                        f"(held by session '{recheck.get('session_id')}', or PR/review "
+                        "liveness could not be confirmed). Refusing to start.",
                         file=sys.stderr,
                     )
                     if lock is not None:

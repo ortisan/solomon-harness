@@ -88,24 +88,26 @@ class MemoryService:
         try:
             from solomon_harness import claim
             workspace_root = self.client.harness_dir
-            claims = claim.fetch_all_claims(workspace_root)
-            current_sess = claim.get_current_session_id()
-            
-            unclaimed = []
+            # Numeric ids only; non-numeric rows (RAID/tracking items) are
+            # never claimed and always kept.
+            numeric_ids = []
             for issue in issues:
-                issue_id_str = issue.get("github_id")
                 try:
-                    issue_num = int(issue_id_str)
+                    numeric_ids.append(int(str(issue.get("github_id"))))
                 except (TypeError, ValueError):
-                    unclaimed.append(issue)
                     continue
-                    
-                if issue_num in claims:
-                    has_pr = claim.has_active_pr_or_review(workspace_root, issue_num)
-                    if claim.is_claim_active(claims[issue_num], current_sess, has_open_pr=has_pr):
-                        continue
-                unclaimed.append(issue)
-            issues = unclaimed
+            # One shared claim filter -- the SAME helper github.list_open_issues
+            # uses -- so the two scan read paths can never diverge on how a
+            # claim is judged (a future filter fix lands in exactly one place).
+            unclaimed_ids = set(claim.filter_unclaimed(workspace_root, numeric_ids))
+
+            def _keep(issue: Dict[str, Any]) -> bool:
+                try:
+                    return int(str(issue.get("github_id"))) in unclaimed_ids
+                except (TypeError, ValueError):
+                    return True  # non-numeric tracking rows are never claimed
+
+            issues = [issue for issue in issues if _keep(issue)]
         except Exception as exc:  # noqa: BLE001 - degrade to unfiltered, but log (item 8)
             logger.warning(
                 "claim-aware issue filtering degraded (%s); returning the "

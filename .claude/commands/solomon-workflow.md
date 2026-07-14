@@ -19,15 +19,15 @@ move-to-Done gates always require a human.
 Gather these and summarize them concisely:
 
 - `mcp__solomon-memory__get_latest_activity` — the last recorded session or handoff (where the team stopped). If it returns a handoff with a `contract_path`, read that handoff contract first and treat it as the bounded input — open the artifacts it points to (PLAN.md, the diff, the ADR, the PR) only when you need them, instead of re-deriving prior context.
-- `mcp__solomon-memory__get_open_issues` and `uv run python -m solomon_harness.github list-open-issues` — open work and its labels. Both are claim-aware (ADR-0024): an issue actively claimed by another session is excluded, so this scan never proposes starting work `start` would immediately refuse. Fall back to plain `gh issue list --state open` only when that command is unavailable.
+- `mcp__solomon-memory__get_open_issues` and `uv run python -m solomon_harness.github list-open-issues` — open work and its labels. Both are claim-aware (ADR-0027): an issue actively claimed by another session is excluded, so this scan never proposes starting work `start` would immediately refuse. Fall back to plain `gh issue list --state open` only when that command is unavailable.
 - `gh pr list --state open` — pull requests and their review/approval state.
-- The board columns (Ready / In Progress / Code Review / QA) via `gh project item-list` or `solomon_harness.github`.
+- The board columns (Ready / In Progress / Code Review / QA) via `gh project item-list` or `solomon_harness.github`. Cross-check any candidate against the claim-aware list above: an In Progress or Ready issue actively claimed by another live session must be excluded from selection here too, not just in the issue list.
 
 ## 2. Decide the next step (first match wins)
 
 1. A pull request that is **approved** → `/solomon-release <pr>`.
 2. A pull request **open and awaiting review** → `/solomon-review <pr>`.
-3. An issue **In Progress** with a branch but no PR yet → resume with `/solomon-start <issue>` (continue the TDD loop and open the PR).
+3. An issue **In Progress** with a branch but no PR yet, and **not claimed by another live session** → resume with `/solomon-start <issue>` (continue the TDD loop and open the PR).
 4. A **Ready** issue (refined, Definition of Ready met) → `/solomon-start <issue>`.
 5. A **Backlog** issue not yet refined → `/solomon-refine <issue>`.
 6. An **Idea** worth promoting → `/solomon-issue` (or `/solomon-refine`).
