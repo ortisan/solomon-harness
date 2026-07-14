@@ -1018,6 +1018,90 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
         self.assertIn("claim age", err)
 
 
+class TestClaimConcurrency(unittest.TestCase):
+    """review-215-b5d: N sessions race one issue against one origin -> exactly one wins.
+
+    The mutual-exclusion guarantee rests on git ``push --force-with-lease``
+    atomicity -- git's own, verified empirically during the #215 review. The
+    sequential tests never exercise a real race, so this locks the guarantee in
+    against a future refactor of ``claim_issue``'s internal ordering. Each
+    session uses its OWN clone of a shared bare origin: the real production
+    shape (independent worktrees/sessions pushing to one GitHub origin).
+    """
+
+    N = 5
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.origin = os.path.join(self.tmp, "origin.git")
+        _git(None, "init", "--bare", "-q", self.origin)
+
+        seed = os.path.join(self.tmp, "seed")
+        _git(None, "clone", "-q", self.origin, seed)
+        _git(seed, "config", "user.email", "t@example.com")
+        _git(seed, "config", "user.name", "Test")
+        with open(os.path.join(seed, "README.md"), "w") as f:
+            f.write("seed")
+        _git(seed, "add", "README.md")
+        _git(seed, "commit", "-q", "-m", "seed")
+        _git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+        self.clones = []
+        for i in range(self.N):
+            path = os.path.join(self.tmp, f"clone-{i}")
+            _git(None, "clone", "-q", self.origin, path)
+            _git(path, "config", "user.email", "t@example.com")
+            _git(path, "config", "user.name", "Test")
+            self.clones.append(path)
+
+        # Isolate every thread from GitHub (mirrors TestClaimGitOperations):
+        # claim_issue consults _pr_liveness and edits the assignee via _gh.
+        for target, kwargs in (
+            ("solomon_harness.claim.has_active_pr_or_review", {"return_value": False}),
+            ("solomon_harness.claim._pr_liveness", {"return_value": (False, False)}),
+            ("solomon_harness.github._gh", {"return_value": {"ok": True, "stdout": ""}}),
+        ):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_exactly_one_session_wins_a_concurrent_race(self):
+        import threading
+
+        results = {}
+        errors = {}
+        start = threading.Barrier(self.N)
+
+        def _attempt(i):
+            try:
+                start.wait(timeout=10)  # release all threads at once -> real contention
+                results[i] = claim.claim_issue(
+                    self.clones[i], 99, current_session_id=f"sess-{i}"
+                )
+            except Exception as exc:  # noqa: BLE001 - a racing thread must never crash the test
+                errors[i] = repr(exc)
+
+        threads = [threading.Thread(target=_attempt, args=(i,)) for i in range(self.N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        self.assertEqual(errors, {}, f"no racing thread should raise: {errors}")
+        self.assertEqual(len(results), self.N, "every thread recorded a result")
+        winners = [i for i, ok in results.items() if ok]
+        self.assertEqual(
+            len(winners), 1, f"exactly one winner expected, got {winners} (results={results})"
+        )
+        # The origin records exactly the winner's session id, not a loser's.
+        recorded = claim.get_claim(self.clones[winners[0]], 99)
+        self.assertIsNotNone(recorded)
+        self.assertEqual(recorded.get("session_id"), f"sess-{winners[0]}")
+
+
 if __name__ == '__main__':
     from io import StringIO
     unittest.main()
