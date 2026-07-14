@@ -24,7 +24,11 @@ import sys
 from pathlib import Path
 
 EXCLUDED = {"README.md", "0000-spec-template.md"}
-FILENAME_RE = re.compile(r"^([0-9]+)-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
+# The issue number carries no leading zeros, so the accepted filename form and
+# the required Traceability citation ("#<N>") are always the same string.
+FILENAME_RE = re.compile(r"^([1-9][0-9]*)-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
+# A spec is prose; anything beyond this is not a spec (guards CI memory/time).
+MAX_SPEC_BYTES = 256 * 1024
 REQUIRED_SECTIONS = (
     "## Context",
     "## Problem",
@@ -36,9 +40,14 @@ REQUIRED_SECTIONS = (
 )
 
 
-def _sections(text: str) -> dict[str, str]:
-    """Map each ``## `` heading to its body text (up to the next heading)."""
+def _sections(text: str) -> tuple[dict[str, str], list[str]]:
+    """Map each ``## `` heading to its body text, plus any duplicated headings.
+
+    A duplicated heading would silently shadow the first occurrence's body, so
+    it is reported as a defect instead of validated last-one-wins.
+    """
     result: dict[str, str] = {}
+    duplicates: list[str] = []
     current: str | None = None
     body: list[str] = []
     for line in text.splitlines():
@@ -46,12 +55,14 @@ def _sections(text: str) -> dict[str, str]:
             if current is not None:
                 result[current] = "\n".join(body)
             current = line.strip()
+            if current in result:
+                duplicates.append(current)
             body = []
         elif current is not None:
             body.append(line)
     if current is not None:
         result[current] = "\n".join(body)
-    return result
+    return result, duplicates
 
 
 def check_spec(path: Path) -> list[str]:
@@ -61,10 +72,14 @@ def check_spec(path: Path) -> list[str]:
     if not match:
         return [
             f"{path}: filename must be <issue-number>-<kebab-slug>.md "
-            f"(lowercase, hyphens), got '{path.name}'"
+            f"(lowercase, hyphens, no leading zeros), got '{path.name}'"
         ]
-    issue_number = str(int(match.group(1)))
-    sections = _sections(path.read_text(encoding="utf-8"))
+    if path.stat().st_size > MAX_SPEC_BYTES:
+        return [f"{path}: larger than {MAX_SPEC_BYTES} bytes — not a spec"]
+    issue_number = match.group(1)
+    sections, duplicates = _sections(path.read_text(encoding="utf-8"))
+    for heading in duplicates:
+        gaps.append(f"{path}: duplicated section heading '{heading}'")
     for heading in REQUIRED_SECTIONS:
         if heading not in sections:
             gaps.append(f"{path}: missing required section '{heading}'")
@@ -74,7 +89,9 @@ def check_spec(path: Path) -> list[str]:
                 f"explicit placeholder 'TBD (refine)'"
             )
     traceability = sections.get("## Traceability", "")
-    if "## Traceability" in sections and f"#{issue_number}" not in traceability:
+    if "## Traceability" in sections and not re.search(
+        rf"#{issue_number}\b", traceability
+    ):
         gaps.append(
             f"{path}: Traceability must cite the filename's issue number "
             f"'#{issue_number}'"

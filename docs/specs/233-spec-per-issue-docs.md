@@ -6,8 +6,9 @@
 ## Context
 
 S1 of umbrella #221 (spec-driven issue docs and automatic ADR capture).
-Elicitation: skipped — the demand arrived fully specified by the refined
-umbrella and its refine-to-start handoff contract.
+Created by the #221 slicing gate from the refined umbrella and its
+refine-to-start handoff contract — not through the interactive elicitation
+flow, so no elicitation trace exists for this issue.
 
 ## Problem
 
@@ -23,24 +24,42 @@ reconstruct intent from scattered issue text.
    and runs in the CI validators job.
 3. `/solomon-issue` generates `docs/specs/<N>-<slug>.md` at creation time in
    both host mirrors, via the Write tool, linted before done.
-4. Spec generation adds less than 2 s to `/solomon-issue` (umbrella DoR).
+4. No runtime package code: docs, a standalone validator, and prompt wiring
+   only.
 
 ## Acceptance Criteria
 
-Scenario: a new issue generates a spec-driven document (sections present,
-Traceability cites #N, spec-lint exits 0). Scenario: a minimal issue still
-yields a valid spec (headings present, `TBD (refine)` placeholders, lint 0).
-Scenario: spec-lint rejects a malformed spec (exit 1 naming the missing
-section or the filename defect). Full Gherkin in issue #233.
+```gherkin
+Scenario: A new issue generates a spec-driven document
+  Given the house spec template at docs/specs/0000-spec-template.md
+  When an author runs /solomon-issue and issue #N is created
+  Then a file exists at docs/specs/<N>-<slug>.md
+  And it contains the sections Context, Problem, Requirements, Acceptance Criteria,
+      Design Constraints, Out of Scope, and Traceability
+  And the Traceability section links issue #N and any related ADR
+  And scripts/spec-lint.py exits 0 for that file
+
+Scenario: Boundary — a minimal issue still yields a valid spec
+  Given an issue created with only a title and a one-line body
+  When the spec document is generated
+  Then all required sections are present as headings
+  And any empty section carries an explicit "TBD (refine)" placeholder
+  And scripts/spec-lint.py exits 0
+
+Scenario: Failure path — spec-lint rejects a malformed spec
+  Given a spec file missing the Traceability section or misnamed <N>-<slug>.md
+  When scripts/spec-lint.py runs
+  Then it exits 1 and names the missing section or the filename defect
+```
 
 ## Design Constraints
 
 No runtime package code: the convention is docs + a standalone validator +
-prompt wiring, pinned by content gates (the ADR-0020/#223 enforcement
+prompt wiring, pinned by content gates (the ADR-0025/#222 enforcement
 pattern). Issue-derived text reaches the spec only through the Write tool —
 never a shell string (the elicitation gate's discipline). The convention's
 decision record lands with S2a (#234), which owns the docs/adr → docs/adrs
-rename.
+rename; S3 (#236) is gated on that record landing first.
 
 ## Out of Scope
 
@@ -50,5 +69,5 @@ ADR migration and automatic capture (S2a #234, S2b #235); install-time wiring
 ## Traceability
 
 - Issue: #233 (parent #221)
-- ADR: none in this slice — recorded with S2a's migration ADR by design
-- PR: opened by this branch (feature/spec-per-issue-docs)
+- ADR: none in this slice — recorded with S2a's (#234) migration ADR by design
+- PR: #237

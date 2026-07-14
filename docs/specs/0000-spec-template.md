@@ -1,6 +1,6 @@
 # Spec <N>: <issue title>
 
-- Issue: #<N> · Status: draft
+- Issue: #<N> · Status: draft | ready | implemented | superseded
 - Date: YYYY-MM-DD · Author: <agent or person>
 
 ## Context

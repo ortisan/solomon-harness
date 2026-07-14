@@ -111,6 +111,39 @@ def test_single_file_argument_is_linted(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_duplicated_heading_is_a_named_defect(tmp_path):
+    body = VALID_SPEC + "\n## Problem\n\nA second problem section.\n"
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "duplicated section heading '## Problem'" in result.stderr
+
+
+def test_leading_zero_filename_is_rejected(tmp_path):
+    (tmp_path / "042-add-csv-export.md").write_text(VALID_SPEC, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "no leading zeros" in result.stderr
+
+
+def test_traceability_superstring_does_not_satisfy_the_citation(tmp_path):
+    # "#423" must not satisfy the required "#42" citation.
+    body = VALID_SPEC.replace("- Issue: #42\n", "- Issue: #423\n")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "must cite the filename's issue number '#42'" in result.stderr
+
+
+def test_oversized_file_is_rejected_without_reading(tmp_path):
+    (tmp_path / "42-add-csv-export.md").write_text(
+        VALID_SPEC + "x" * (256 * 1024), encoding="utf-8"
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "not a spec" in result.stderr
+
+
 def test_missing_specs_directory_is_valid(tmp_path):
     result = subprocess.run(
         [sys.executable, str(SCRIPT)],

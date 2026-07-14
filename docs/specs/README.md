@@ -7,8 +7,9 @@ scattered issue text.
 
 ## Convention
 
-- Filename: `<N>-<slug>.md`, where `<N>` is the plain GitHub issue number and
-  `<slug>` is the kebab-case issue title (lowercase, hyphens only).
+- Filename: `<N>-<slug>.md`, where `<N>` is the plain GitHub issue number (no
+  leading zeros — the lint rejects them) and `<slug>` is the kebab-case issue
+  title (ASCII lowercase `[a-z0-9]` and single hyphens only).
 - Content: copy `0000-spec-template.md` and fill the seven sections — Context,
   Problem, Requirements, Acceptance Criteria, Design Constraints, Out of
   Scope, Traceability. A section with nothing to say carries the explicit
