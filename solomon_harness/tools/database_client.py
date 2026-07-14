@@ -287,7 +287,7 @@ def normalize_milestone_state(state: Optional[str]) -> Optional[str]:
 # A DENYLIST, deliberately: an unknown category keeps its embedding and stays
 # searchable without a code change, whereas an allowlist would silently drop
 # new categories from the index -- the failure mode being fixed, inverted.
-NON_SEMANTIC_MEMORY_CATEGORIES = ("codebase_index", "index", "board_history")
+NON_SEMANTIC_MEMORY_CATEGORIES = ("codebase_index", "index", "board_history", "claim")
 
 
 def is_semantic_category(category: Optional[str]) -> bool:

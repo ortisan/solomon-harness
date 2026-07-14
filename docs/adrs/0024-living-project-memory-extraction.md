@@ -18,7 +18,7 @@ To implement a living project memory, the harness needs to extract structural, d
 ## Considered options
 
 1. **Host-LLM-assisted extraction**: Delegate structure and pattern extraction to the host LLM at runtime via MCP calls.
-2. **Deterministic local codebase scanning**: Walk the codebase, parse local package imports, read configuration files (such as `pyproject.toml`), and list files under known paths (such as `docs/adr/` and `agents/`) using Python.
+2. **Deterministic local codebase scanning**: Walk the codebase, parse local package imports, read configuration files (such as `pyproject.toml`), and list files under known paths (such as `docs/adrs/` and `agents/`) using Python.
 
 ## Decision outcome
 

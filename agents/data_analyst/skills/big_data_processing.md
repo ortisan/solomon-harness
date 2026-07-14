@@ -1,3 +1,8 @@
+---
+name: big-data-processing
+description: Governs engine selection and query design for data exceeding single-machine pandas, covering DuckDB defaults, Spark 4.x shuffle and partitioning tuning, and ClickHouse MergeTree schema design. Use when choosing a processing engine, debugging a slow distributed job, or designing a lake path or MergeTree table for billions of rows.
+---
+
 # Big Data Processing
 
 Choosing and using the right engine for data that outgrows a single pandas process: DuckDB on one machine as the default, Spark 4.x when the data or the organization is genuinely distributed, ClickHouse MergeTree for interactive analytics on billions of rows. The stance: shuffles and small files are where distributed jobs die, so design partitioning first and treat every wide transformation as a cost to justify. Cluster provisioning and database server tuning are `sre`/`dba` handoffs; this skill covers how the analyst structures data and queries on these engines.

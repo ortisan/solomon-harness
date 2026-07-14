@@ -1,3 +1,8 @@
+---
+name: release-and-play-delivery
+description: Governs Android App Bundle builds, Play App Signing and upload-key handling, versionCode/versionName policy, Play Console track promotion with staged rollout, in-app updates, and Android vitals monitoring. Use when preparing an Android release, configuring CI signing, or promoting a build through internal, closed, open, or production tracks.
+---
+
 # Release and Play Delivery
 
 Ship Android releases as signed App Bundles through Play App Signing, with the upload key injected from CI and never committed, version numbers derived deterministically, and every promotion gated by a staged rollout that watches Android vitals before it widens. Treat the production track as the last stop of a track ladder (internal to closed to open to production), make crash and ANR rates a release gate rather than a post-mortem, and wire in-app updates so users on broken builds can be moved forward without waiting for organic adoption.

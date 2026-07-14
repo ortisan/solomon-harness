@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the recurring Flutter defects a reviewer rejects on sight, covering lifecycle misuse after dispose, leaked controllers, unbounded lists, and business logic inside widgets, plus the gate proving a change ships with none of them. Use when reviewing a Flutter diff or verifying a change before it is marked complete.
+---
+
 # Flutter Common Pitfalls
 
 The recurring Flutter defects a reviewer rejects on sight, from lifecycle misuse to leaked controllers and logic in widgets. Each bullet names a concrete failure mode drawn from the state-management, testing, and rendering skills; the closing checklist is the gate proving a change ships with none of them.

@@ -174,11 +174,11 @@ total and deterministic:
 
 ## More information
 
-- ADR-0002 (`docs/adr/0002-cockpit-cross-tenant-read-topology.md`): chose on-demand
+- ADR-0002 (`docs/adrs/0002-cockpit-cross-tenant-read-topology.md`): chose on-demand
   cross-tenant aggregation and deferred this canonical person key; this ADR realizes that
   follow-up. The decision to compute on write (1a) refines ADR-0002's sketch of resolving
   the key in the read composer, for the drift and PII reasons above.
-- ADR-0006 (`docs/adr/0006-canonical-issue-status-vocabulary-and-board-to-memory-write-through.md`):
+- ADR-0006 (`docs/adrs/0006-canonical-issue-status-vocabulary-and-board-to-memory-write-through.md`):
   the on-write `normalize_status` precedent in `database_client.py` and the
   board-to-memory write-through in `github.py` that this capture extends.
 - Epic #44 constraint: analytics use existing memory entities only, captured at sync

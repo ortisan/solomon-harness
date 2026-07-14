@@ -1,3 +1,8 @@
+---
+name: solid-applied-in-python
+description: Governs applying Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, and Dependency Inversion in Python using typing.Protocol, small interfaces, and constructor injection instead of inheritance-heavy machinery. Use when designing a class hierarchy, reviewing a growing if/elif dispatch, or deciding how a dependency should be injected.
+---
+
 # SOLID Applied In Python
 
 SOLID is five constraints that keep a codebase open to change without rewrites; in Python they are expressed with `typing.Protocol`, abstract base classes, and constructor injection rather than the heavy interface machinery of nominally-typed languages. The stance: depend on small abstractions you own, inject them, and let new behavior arrive as new classes instead of edits to old ones.

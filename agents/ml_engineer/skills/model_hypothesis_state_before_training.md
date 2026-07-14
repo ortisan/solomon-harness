@@ -1,3 +1,8 @@
+---
+name: model-hypothesis-state-before-training
+description: Governs the written hypothesis card that must be committed before any training run starts, covering the decision served, primary metric, baseline to beat, dataset, architecture, stopping rule, and resource constraints. Use when starting a new model or DRL training effort, or reviewing whether a hypothesis was pre-registered before training began.
+---
+
 # Model Hypothesis: State Before Training
 
 This skill governs the written hypothesis that must be committed before any training run starts. If the acceptance bar is not written down first, the model will be judged by whatever number it happens to produce, and every threshold will drift to fit the result; the hypothesis card is the pre-registration that prevents that.

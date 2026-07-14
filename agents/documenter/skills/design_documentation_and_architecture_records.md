@@ -1,10 +1,15 @@
+---
+name: design-documentation-and-architecture-records
+description: Governs recording architectural decisions and system designs - MADR-style ADRs with named constraints and per-option rejection reasoning, C4 diagrams drawn only at the level that earns its keep, and design docs stating non-goals. Use when writing or reviewing an ADR, a C4 diagram, or a design doc.
+---
+
 # Design Documentation and Architecture Records
 
 This skill governs how architectural decisions and system designs are recorded: Architecture Decision Records (ADRs) in MADR style, C4 diagrams drawn only at the levels that earn their keep, and design docs that state non-goals and rejected options. The stance: a decision that is not recorded with its context and consequences will be re-litigated, and a diagram that disagrees with the code is worse than no diagram.
 
 ## ADRs: one decision per record
 
-Record every architecturally significant decision as one ADR in `docs/adr/`, numbered sequentially, using the MADR-style template at `docs/adr/0000-adr-template.md`. The required anatomy:
+Record every architecturally significant decision as one ADR in `docs/adrs/`, numbered sequentially, using the MADR-style template at `docs/adrs/0000-adr-template.md`. The required anatomy:
 
 - **Header**: status (proposed / accepted / superseded by ADR-XXXX), date, deciders, and the tracking issue.
 - **Context and problem statement**: the forces at play, named explicitly. Hard constraints get identifiers (ADR-0010 names C1 "the host tool is the model loop" and C5 "dual host") so the outcome section can prove it satisfies each one.
@@ -13,7 +18,7 @@ Record every architecturally significant decision as one ADR in `docs/adr/`, num
 - **Decision outcome**: the chosen option, why it wins against the drivers, and each rejected option with the specific reason it loses. "Rejected: no auditable holder, no portable staleness story" survives review; "rejected: worse" does not.
 - **Consequences**: split into positive, negative, scope (what the decision deliberately does not change), and follow-ups with issue numbers. Negative consequences are mandatory; a decision with no cost was not a decision.
 
-Use `docs/adr/0010-loop-single-driver-lock.md` as the house exemplar of all of the above. Write an ADR when a change swaps a framework, datastore, or major dependency; changes a public contract or data model; establishes a cross-cutting pattern; trades off a quality attribute; or is expensive to reverse (`docs/adr/README.md`). A bug fix or contract-preserving refactor does not need one.
+Use `docs/adrs/0010-loop-single-driver-lock.md` as the house exemplar of all of the above. Write an ADR when a change swaps a framework, datastore, or major dependency; changes a public contract or data model; establishes a cross-cutting pattern; trades off a quality attribute; or is expensive to reverse (`docs/adrs/README.md`). A bug fix or contract-preserving refactor does not need one.
 
 Discipline around the records:
 
@@ -54,7 +59,7 @@ A design doc precedes non-trivial implementation and states: the problem, the co
 
 ## Definition of done
 
-- [ ] The change was checked against the ADR-significance criteria in `docs/adr/README.md`, and an ADR exists if any criterion applies.
+- [ ] The change was checked against the ADR-significance criteria in `docs/adrs/README.md`, and an ADR exists if any criterion applies.
 - [ ] The ADR follows the template: context with named constraints, decision drivers, all considered options, outcome with per-option rejection reasons, and consequences including negatives, scope, and follow-ups.
 - [ ] The ADR number is unique (`check-adr-unique` passes), the status header is correct, and superseded records point to their successor.
 - [ ] The decision is mirrored to project memory via `save_decision` and linked from the implementing PR.

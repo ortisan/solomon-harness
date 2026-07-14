@@ -1,3 +1,8 @@
+---
+name: the-prd-contract-template
+description: Defines the ten mandatory PRD sections from problem statement through rollout and acceptance, the Definition of Ready for a sprint-bound story, and the freeze protocol that assigns requirement IDs and seeds the RTM. Use when drafting, reviewing, or freezing a PRD.
+---
+
 # The PRD Contract Template
 
 A PRD is a contract between product and engineering: it states the problem, the measurable bar for success, and the verifiable scope, so the team builds the right thing once and can prove it later. Treat every section below as mandatory; mark a section "N/A" with a one-line reason rather than deleting it, because a missing section reads as an unanswered question, not a settled one.

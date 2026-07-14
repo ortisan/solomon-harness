@@ -1,3 +1,8 @@
+---
+name: coroutines-and-flow
+description: Governs dispatcher selection, lifecycle-scoped coroutine launching, StateFlow versus SharedFlow choice, flowOn threading, cancellation, exception handling, and coroutine testing with Turbine and test dispatchers. Use when writing or reviewing asynchronous Kotlin code, Flow collection in Compose, or coroutine-based unit tests.
+---
+
 # Coroutines and Flow
 
 Run every piece of asynchronous work inside a lifecycle-scoped coroutine so that cancellation is automatic, threading is explicit, and no collector outlives the UI that started it. Treat structured concurrency as the default: a coroutine that is not a child of a known scope is a leak, a flow collected on the main thread without a `flowOn` boundary is a jank source, and a `StateFlow`/`SharedFlow` chosen by habit instead of by hot/cold semantics is a bug waiting for a configuration change.

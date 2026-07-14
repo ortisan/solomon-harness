@@ -1,3 +1,8 @@
+---
+name: design-contracts-as-component-boundaries
+description: Governs specifying a component boundary as a Design-by-Contract agreement — preconditions, postconditions, invariants, a closed error set, idempotency, and QoS terms in domain types — encoded in OpenAPI, Protobuf, or AsyncAPI and backed by consumer-driven contract tests. Use when a new interface boundary appears or an existing one's observable behavior changes.
+---
+
 # Design Contracts as Component Boundaries
 
 Specify every component boundary as an enforceable contract — preconditions, postconditions, invariants, and a closed error set, all in domain terms — so a boundary can be implemented, replaced, and tested against its agreement rather than against any one implementation.

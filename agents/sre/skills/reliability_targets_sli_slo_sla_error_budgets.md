@@ -1,3 +1,8 @@
+---
+name: reliability-targets-sli-slo-sla-error-budgets
+description: Governs SLI, SLO, and SLA definitions, error-budget math over a rolling window, the error-budget policy, and multi-window multi-burn-rate alerting thresholds. Use when defining a new reliability target, writing an error-budget policy, or configuring burn-rate alerts for a critical user journey.
+---
+
 # Reliability Targets: SLI, SLO, SLA, and Error Budgets
 
 Define reliability before you defend it, then run the service against an error budget instead of chasing 100%.

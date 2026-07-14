@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the implementation failure modes a reviewer must reject on sight in this project's TDD, hexagonal Python codebase, from test-after coding to hexagon-breaking imports and print statements left in a diff. Use when reviewing a pull request or self-checking a diff before requesting code review.
+---
+
 # Software Engineer Common Pitfalls
 
 The implementation failure modes a reviewer must reject on sight in this project's TDD, hexagonal Python codebase. Each pitfall maps to a check in the closing gate below: before requesting review, confirm the diff clears every item.

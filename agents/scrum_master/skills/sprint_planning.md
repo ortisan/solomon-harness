@@ -1,3 +1,8 @@
+---
+name: sprint-planning
+description: Governs how a sprint is planned by deciding what the team can credibly finish, covering capacity and commitment, buffer sizing, and protecting the sprint goal from mid-sprint churn. Use when planning a sprint, computing team capacity, or reviewing whether a sprint commitment is credible against velocity history.
+---
+
 # Sprint Planning
 
 Plan a sprint by deciding what the team can credibly finish, not what it wishes it could start; commit to a single goal and a right-sized, Ready set of items, then protect that commitment from mid-sprint churn. The Scrum Master facilitates the mechanics (capacity, WIP, cadence); the product_owner owns the goal's value and the order of what gets pulled.

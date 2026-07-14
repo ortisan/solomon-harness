@@ -1,3 +1,8 @@
+---
+name: metrics-and-kpi-design
+description: Governs designing and defending KPIs through metric trees, ratio-metric denominator traps, Simpson's paradox decomposition, and a versioned metric definitions registry. Use when proposing a new KPI, defining or changing a metric formula, or investigating a ratio metric that moved unexpectedly.
+---
+
 # Metrics and KPI Design
 
 Designing metrics that survive scrutiny: a metric tree that connects every reported number to the outcome it drives, ratio metrics with explicit denominators and weighting, segment-level checks that catch Simpson's paradox before a stakeholder does, and one versioned definitions registry so two dashboards can never disagree about what "active user" means. The stance: a metric is a contract — name, formula, grain, filters, owner — and changing any part of it is a versioned event, not a quiet edit.

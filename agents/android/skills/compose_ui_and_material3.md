@@ -1,3 +1,8 @@
+---
+name: compose-ui-and-material3
+description: Governs Compose recomposition and stability, state hoisting, side-effect APIs, modifier ordering, Material 3 theming and dynamic color, lazy list keys, and preview construction. Use when writing or reviewing Jetpack Compose screens, diagnosing needless recomposition, or applying Material 3 tokens and adaptive layouts.
+---
+
 # Jetpack Compose UI and Material 3
 
 This skill governs how to build Compose UIs that recompose narrowly, hoist state correctly, and render correct Material 3 theming on Android. The stance: composables are pure, idempotent functions of state; keep them stateless and skippable, push mutable state up to a state holder, and treat every recomposition, side effect, and modifier order as something you justify rather than discover at runtime.

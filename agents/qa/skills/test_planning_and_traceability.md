@@ -1,3 +1,8 @@
+---
+name: test-planning-and-traceability
+description: Governs risk-based test planning per ISO/IEC/IEEE 29119, tying every acceptance criterion to a stable ID, a risk score, a design technique, and a bidirectional traceability matrix. Use when building a test plan, scoring criterion risk, or checking that requirements coverage is reported.
+---
+
 # Test Planning and Traceability
 
 Build a risk-based test plan that ties every acceptance criterion to the tests that verify it, so the release gate measures coverage of requirements, not just lines executed. The plan is a contract: each criterion has a stable identifier, a risk score that sets how deeply it is tested, named design techniques that generate the cases, and a traceability matrix that makes uncovered requirements and orphan tests both visible. Without this, a suite can be green and well-covered by `pytest-cov` while a Must-have requirement was never exercised.

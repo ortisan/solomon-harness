@@ -1,3 +1,8 @@
+---
+name: harness-memory-and-handoff
+description: Governs when and how to write save_decision, log_issue, save_session, and log_handoff records to the harness's SurrealDB-backed project memory so the next agent resumes from state rather than the diff. Use when a non-obvious design choice is made, a defect is found out of scope, a long task needs a checkpoint, or work is ready to hand off to qa.
+---
+
 # Harness Memory and Handoff
 
 Persist the reasoning and state of your work to the project memory so the next agent resumes from a record, not from re-reading the diff. The discipline: capture non-obvious design choices with `save_decision`, file discovered defects with `log_issue`, checkpoint long tasks with `save_session`, and close out with a `log_handoff` to `qa` that points at a written verification contract. Memory is the continuity layer; if a fact is not in it, the next agent does not have it.

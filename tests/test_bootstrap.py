@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 
+from solomon_harness.subprocess_env import clean_git_env
+
 
 class TestBootstrapAgent(unittest.TestCase):
     def setUp(self):
@@ -33,7 +35,7 @@ class TestBootstrapAgent(unittest.TestCase):
 
         # Initialize a dummy git repository in the temporary workspace
         # to satisfy git command dependencies in the bootstrap script.
-        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True)
+        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True, env=clean_git_env())
         subprocess.run(
             [
                 "git",
@@ -44,26 +46,30 @@ class TestBootstrapAgent(unittest.TestCase):
             ],
             cwd=self.workspace_dir,
             capture_output=True,
+            env=clean_git_env(),
         )
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
             cwd=self.workspace_dir,
             capture_output=True,
+            env=clean_git_env(),
         )
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
             cwd=self.workspace_dir,
             capture_output=True,
+            env=clean_git_env(),
         )
         with open(os.path.join(self.workspace_dir, "README.md"), "w") as f:
             f.write("# Dummy project")
         subprocess.run(
-            ["git", "add", "README.md"], cwd=self.workspace_dir, capture_output=True
+            ["git", "add", "README.md"], cwd=self.workspace_dir, capture_output=True, env=clean_git_env()
         )
         subprocess.run(
             ["git", "commit", "-m", "Initial commit"],
             cwd=self.workspace_dir,
             capture_output=True,
+            env=clean_git_env(),
         )
 
         # Setup paths inside the sandboxed directory
@@ -112,7 +118,7 @@ class TestBootstrapAgent(unittest.TestCase):
         shutil.rmtree(self._home, ignore_errors=True)
 
     def test_non_interactive_default_via_env(self):
-        env = os.environ.copy()
+        env = clean_git_env(self.workspace_dir)
         env["NON_INTERACTIVE"] = "true"
 
         result = subprocess.run(
@@ -141,6 +147,7 @@ class TestBootstrapAgent(unittest.TestCase):
             cwd=self.workspace_dir,
             capture_output=True,
             text=True,
+            env=clean_git_env(self.workspace_dir),
         )
 
         self.assertEqual(result.returncode, 0, f"Script failed with: {result.stderr}")
@@ -154,7 +161,7 @@ class TestBootstrapAgent(unittest.TestCase):
         import shutil
         shutil.rmtree(os.path.join(self.workspace_dir, ".git"), ignore_errors=True)
 
-        env = os.environ.copy()
+        env = clean_git_env(self.workspace_dir)
         env["NON_INTERACTIVE"] = "true"
 
         result = subprocess.run(
@@ -269,16 +276,18 @@ class TestProjectIdentityNotClobberedByHarnessInstall(unittest.TestCase):
         self.workspace_dir = os.path.join(self.test_dir.name, "acme-trader")
         os.makedirs(self.workspace_dir)
 
-        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True)
+        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True, env=clean_git_env())
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
             cwd=self.workspace_dir,
             capture_output=True,
+            env=clean_git_env(),
         )
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
             cwd=self.workspace_dir,
             capture_output=True,
+            env=clean_git_env(),
         )
 
         self._home = tempfile.mkdtemp()
@@ -437,3 +446,49 @@ class TestInitWikiHint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInstallDocsBoundary(unittest.TestCase):
+    """The harness's own documents never travel into installed projects
+    (maintainer directive, #234 review round): an install receives only the
+    operating docs the commands read and the convention scaffolding, and each
+    project's record trees start empty."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_install_ships_skeleton_docs_without_harness_records(self):
+        from solomon_harness import bootstrap
+
+        bootstrap._install_harness_files(self.workspace)
+
+        adrs = os.path.join(self.workspace, "docs", "adrs")
+        specs = os.path.join(self.workspace, "docs", "specs")
+        self.assertEqual(
+            sorted(os.listdir(adrs)), ["0000-adr-template.md", "README.md"],
+            "an installed project's docs/adrs holds only the convention scaffolding",
+        )
+        self.assertEqual(
+            sorted(os.listdir(specs)), ["0000-spec-template.md", "README.md"],
+            "an installed project's docs/specs holds only the convention scaffolding",
+        )
+        # Nothing else from the harness's docs travels (ADR-0029): no wiki,
+        # no conventions, no templates tree, no root README — the record
+        # scaffolding above is the entire docs payload.
+        self.assertFalse(os.path.isdir(os.path.join(self.workspace, "docs", "wiki")))
+        self.assertFalse(os.path.isfile(os.path.join(self.workspace, "README.md")))
+        self.assertFalse(
+            os.path.isfile(os.path.join(self.workspace, "docs", "solomon-workflow.md"))
+        )
+        self.assertFalse(
+            os.path.isdir(os.path.join(self.workspace, "docs", "templates"))
+        )
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.workspace, "docs"))),
+            ["adrs", "specs"],
+            "the record scaffolding is the entire docs payload of an install",
+        )

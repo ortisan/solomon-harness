@@ -1,3 +1,8 @@
+---
+name: clean-architecture-layout
+description: Governs feature-first foldering, the presentation/application/domain/data layer split, repository contracts, DTO-to-entity mapping, and mechanical enforcement of the inward dependency rule in a Flutter codebase. Use when structuring a new feature, defining a repository interface, or reviewing whether an import violates the domain/data/presentation boundary.
+---
+
 # Clean Architecture Layout
 
 This skill governs how a Flutter codebase is foldered and layered: feature-first organization, the presentation/application/domain/data split inside each feature, repository contracts, DTO-to-entity mapping, and mechanical enforcement of the dependency rule. The stance: dependencies point inward, `domain/` is pure Dart that knows nothing about Flutter, HTTP, or persistence, and any import that violates that direction is a defect, not a style choice.

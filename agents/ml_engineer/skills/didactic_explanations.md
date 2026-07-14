@@ -1,3 +1,8 @@
+---
+name: didactic-explanations
+description: Governs how models, metrics, and findings are explained to non-specialist decision-makers, translating metrics into decision language with natural frequencies and contextual scales. Use when writing a stakeholder-facing explanation of a model, metric, or finding, or reviewing one for jargon or misleading framing.
+---
+
 # Didactic Explanations
 
 This skill governs how models, metrics, and findings are explained to non-specialist decision-makers. Simplify the language, never the truth: the listener should leave knowing what the model does, how well, how sure we are, and where it fails — and nothing they leave with should have to be walked back later.

@@ -1,3 +1,8 @@
+---
+name: spread-capture-and-market-making-basics
+description: Governs the design of quoting strategies that earn the bid-ask spread: placing and re-centering two-sided quotes, controlling inventory risk, skewing, and recognizing when spread capture stops paying. Use when designing a market-making strategy or reviewing its quoting and inventory-risk logic.
+---
+
 # Spread Capture And Market Making Basics
 
 This skill governs the design of quoting strategies that earn the bid-ask spread: how to place and re-center two-sided quotes, how to control inventory risk, how to skew, and — most important — how to recognize the conditions under which spread capture stops paying and quotes must widen or pull. Spread capture looks like free money in a calm backtest; the entire discipline is in the filters that keep it from being a toxicity collector.

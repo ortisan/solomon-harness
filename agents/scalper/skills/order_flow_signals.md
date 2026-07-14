@@ -1,3 +1,8 @@
+---
+name: order-flow-signals
+description: Governs how the scalper constructs short-horizon signals from order flow, including book imbalance, aggressor-classified trade flow, and footprint delta, each requiring a measured half-life and a stated decay assumption. Use when building or reviewing an order-flow-derived trading signal for a scalping strategy.
+---
+
 # Order Flow Signals
 
 This skill governs how the scalper constructs short-horizon signals from order flow: book imbalance, aggressor-classified trade flow, and footprint delta, each with a measured half-life in seconds and an honest account of alpha decay and crowding. A signal without a measured horizon and a stated decay assumption is a chart pattern, not an input to a strategy.

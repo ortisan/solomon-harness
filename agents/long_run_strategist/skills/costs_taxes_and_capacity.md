@@ -1,3 +1,8 @@
+---
+name: costs-taxes-and-capacity
+description: Governs how the long_run_strategist prices trading frictions across a strategy's life — the spread, impact, and fee cost stack paid at each rebalance, the tax posture and drag assumptions for taxable mandates, and capacity limits derived from participation caps and signal decay. Use when pricing a hypothesis card's cost, tax, and capacity assumptions, or when live slippage or days-to-trade breach the card and the scaling-or-halt ladder must trigger.
+---
+
 # Costs, Taxes and Capacity
 
 This skill governs how the long_run_strategist prices the frictions that separate paper returns from realized ones: the cost stack paid at every rebalance, the tax posture of the design, and the capacity at which the strategy stops working. The stance: a long-horizon strategy's edge is usually small and its life is long, so frictions compound into the dominant term — every hypothesis card states its cost, tax, and capacity assumptions as numbers, and a design whose edge does not clear its friction floor with margin is rejected at the design stage, before anyone spends a backtest on it.

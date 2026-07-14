@@ -1,3 +1,8 @@
+---
+name: position-sizing-and-risk-budgeting
+description: Governs how the long_run_strategist sizes each position and the whole portfolio — volatility targeting, capped fractional Kelly, drawdown-based de-risking ladders, and correlation-aware risk budgets. Use when setting a strategy's volatility target and gross-exposure cap, capping a sizing rule against Kelly, or pre-committing the de-risking ladder before a drawdown occurs.
+---
+
 # Position Sizing and Risk Budgeting
 
 This skill governs how the long_run_strategist decides how much of each position and of the whole portfolio to hold: volatility targeting, capped fractional Kelly, drawdown-based de-risking, and correlation-aware risk budgets. The stance: sizing is where strategies die — a correct signal at the wrong size still ruins the account — so size from risk, not conviction, cap everything that depends on an estimated edge, and pre-commit the de-risking rules before the drawdown, not during it.

@@ -1,3 +1,8 @@
+---
+name: backlog-management
+description: Governs how an item moves from a raw request to a Ready slice, covering refinement cadence and the INVEST/DEEP backlog properties, with the Scrum Master owning flow and readiness while product_owner owns order and value. Use when refining a backlog item toward Ready, planning refinement cadence, or reviewing backlog health against DEEP.
+---
+
 # Backlog Management
 
 Keep the backlog a single ordered list of small, ready, valuable items, refined continuously so the top is always sprint-ready and the bottom is allowed to stay vague. The Scrum Master owns flow and readiness; the product_owner owns order and value. This skill governs how an item moves from a raw request to a Ready slice the team can pull, and how the two roles hand off cleanly.

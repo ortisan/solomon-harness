@@ -1,3 +1,8 @@
+---
+name: acceptance-criteria-given-when-then
+description: Governs writing acceptance criteria in Gherkin Given-When-Then with exact values, requiring happy-path, boundary, and failure-path scenarios where every Then asserts an observable result. Use when drafting or reviewing a story's acceptance criteria before it is marked Ready.
+---
+
 # Acceptance Criteria With Given-When-Then
 
 Write acceptance criteria in Gherkin (Given-When-Then) with exact values so QA can turn each scenario into a test without guessing intent. A story is not ready until its criteria cover the happy path, the boundary values, and at least one failure path, and until every Then asserts something observable and specific. Vague criteria are the most common reason a "done" story comes back.

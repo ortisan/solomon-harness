@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists indexing, rendering, and markup defects a reviewer rejects before they ship, from robots.txt Disallow-as-deindexing and lazy-loaded LCP images to non-reciprocal hreflang and structured data for invisible content, each paired with the mechanism that makes it harmful. Use when reviewing an SEO change for regressions or checking a template against the SEO definition-of-done checklist before merge.
+---
+
 # SEO Common Pitfalls
 
 Indexing, rendering, and markup defects a reviewer rejects before they ship, from robots.txt misuse to structured data for invisible content. Each bullet pairs the mistake with the mechanism that makes it harmful.

@@ -1,3 +1,8 @@
+---
+name: user-stories-invest
+description: Governs writing user stories as vertical slices of observable user value in As-a/I-want/so-that form that pass all six INVEST checks, and splitting oversized stories by workflow step, data variation, or CRUD operation. Use when writing or splitting a story that fails INVEST Small.
+---
+
 # User Stories And INVEST
 
 Write every story as a vertical slice of observable user value that passes INVEST before it enters a sprint, and split anything too big using a named pattern rather than by technical layer. The format is fixed: "As a `<persona>`, I want `<capability>` so that `<outcome>`." The persona must be a real user type, never "the user." The outcome must be the reason the capability matters, not a restatement of the capability.

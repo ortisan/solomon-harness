@@ -1,3 +1,8 @@
+---
+name: valuation-methods
+description: Governs intrinsic-value estimation via discounted cash flow, relative multiples (P/E, EV/EBITDA, P/B, P/S), and sum-of-the-parts, triangulated into a value range with an explicit margin of safety and a reverse-DCF sanity check. Use when valuing a company, sizing a position's margin of safety, or sanity-checking a DCF's terminal-value assumptions.
+---
+
 # Valuation Methods
 
 This skill governs how the research_analyst estimates the intrinsic worth of an asset, triangulating discounted cash flow, relative multiples, and sum-of-the-parts into a defensible value range with an explicit margin of safety.

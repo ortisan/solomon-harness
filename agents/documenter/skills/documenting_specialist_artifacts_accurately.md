@@ -1,3 +1,8 @@
+---
+name: documenting-specialist-artifacts-accurately
+description: Governs transcribing a specialist's artifact (backtest, threat model, dashboard, QA report) into documentation without rounding, softening, or upgrading its claims, and lists each artifact type's mandatory fields. Use when writing up a specialist deliverable for publication.
+---
+
 # Documenting Specialist Artifacts Accurately
 
 This skill governs how the documenter writes up another specialist's output — a backtest, a threat model, a dashboard, a test report — without distorting its claims. The stance: the documenter is a faithful transcriber with an audit function, not a translator into optimism. Every number is copied from the source artifact, every caveat travels with its claim, and a summary that the artifact cannot support does not ship.

@@ -1,3 +1,8 @@
+---
+name: mandatory-model-hypothesis-card
+description: Requires a pre-registered hypothesis card stating target Sharpe, drawdown limit, profit factor, latency and slippage constraints, dataset and features, and model architecture as concrete numbers before strategy code is written. Use when starting a new trading strategy or model, or before any backtest is run.
+---
+
 # Mandatory Model Hypothesis Card
 
 Before writing strategy code, commit a hypothesis card that states — as numbers, not adjectives — the target Sharpe, drawdown limit, profit factor, latency and slippage constraints, dataset and features, and the model architecture; a strategy without a card is not started, and a card without numbers is not a card. The card is a pre-registration: it makes the strategy falsifiable before the backtest can flatter it.

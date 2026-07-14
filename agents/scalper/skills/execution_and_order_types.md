@@ -1,3 +1,8 @@
+---
+name: execution-and-order-types
+description: Governs the execution layer of a scalping strategy: the order types it may use, the venue-level protections it must enable, and the contracts for partial fills, rejects, and reconnects. Use when designing or reviewing a scalping strategy's order-type policy or execution contract.
+---
+
 # Execution And Order Types
 
 This skill governs the execution layer of a scalping strategy: the order types it may use, the venue-level protections it must enable, and the contracts it must define for partial fills, rejects, and reconnects. At scalping horizons the execution specification is part of the strategy, not plumbing: the same signal with a different order-type policy is a different strategy with different economics.

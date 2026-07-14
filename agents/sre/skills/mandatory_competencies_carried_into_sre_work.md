@@ -1,3 +1,8 @@
+---
+name: mandatory-competencies-carried-into-sre-work
+description: Governs how TDD, security, and observability project competencies become concrete SRE artifacts, covering the IaC test pyramid, signed and SBOM'd supply-chain artifacts, structured trace-correlated logging, and secrets-manager hygiene. Use when writing infrastructure code or wiring a signing/SBOM pipeline step.
+---
+
 # Operationalizing the Mandatory Competencies in SRE Work
 
 Turn the shared project competencies into concrete SRE practice rather than treating them as a checklist to recite.

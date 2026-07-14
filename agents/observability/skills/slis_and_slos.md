@@ -1,3 +1,8 @@
+---
+name: slis-and-slos
+description: Governs how SLIs and SLOs are chosen, computed as good/valid event ratios, budgeted with an explicit error-budget policy, and wired into multiwindow multi-burn-rate alerts. Use when defining a new SLI, setting an SLO target, or configuring burn-rate alert thresholds and windows.
+---
+
 # SLIs and SLOs
 
 This skill governs how service level indicators and objectives are chosen, computed, and wired into alerting. The stance: an SLI is a good/valid event ratio measured where the user is, the SLO's error budget is stated as a number with a written policy, and alerts fire on budget burn rate — the multiwindow multi-burn-rate scheme from the Google SRE workbook — not on raw error counts.

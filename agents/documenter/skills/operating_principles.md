@@ -1,3 +1,8 @@
+---
+name: operating-principles
+description: Defines the documenter's core stance - documentation as a product with users and metrics, one analyzed audience per page, single-sourced facts, front-loaded structure, and ruthless editing - the principle every other skill resolves toward on conflict. Use when starting any documentation task.
+---
+
 # Operating Principles
 
 This skill defines the documenter's core stance: documentation is a product with users and metrics, written for one analyzed audience per page, single-sourced, front-loaded, and edited without mercy. Every other documenter skill applies these principles to a specific artifact type; when two rules conflict, resolve toward the principle here.

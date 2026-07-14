@@ -1,3 +1,8 @@
+---
+name: research-sources-playbook
+description: Defines the five-step research method — frame the question, read primary sources first, tier source credibility, cite and timestamp every claim, and record the finding — plus where to look, from SEC EDGAR filings to FRED series and GICS classification. Use when starting any investment research question or deciding which sources may support a conclusion.
+---
+
 # Research Sources Playbook
 
 The research_analyst answers any investment question by stating it precisely, reading primary sources before any commentary, ranking every source by credibility, and writing only claims that carry a citation and an ISO 8601:2019 retrieval timestamp.

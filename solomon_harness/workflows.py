@@ -314,9 +314,143 @@ def run_stage(
             )
             return 1
 
+    # Per-issue claim gate + acquisition (ADR-0027): layered on top of the
+    # repo-wide lock above, not a replacement for it. Only meaningful inside a
+    # real git repo -- a plain workspace with no `.git` has no claims remote
+    # to check or race against in the first place.
+    #
+    # heartbeat_stop_event/heartbeat_thread stay None unless a claim is
+    # actually acquired below; the outer finally always stops them, so every
+    # early return between here and the try/finally must go through
+    # lock.release() but never needs to touch the heartbeat (it cannot have
+    # started yet on any of those paths).
+    heartbeat_stop_event = None
+    heartbeat_thread = None
+    claim_lost_event = None
+    claim_acquired = False
+    claimed_issue_number = None
+    claim_session_id = None
+    claim_store = None
+    if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
+        issue_number = _target_issue_from_args(args)
+        if issue_number is not None:
+            from solomon_harness import claim
+            import datetime
+
+            # One GitClaimStore for the whole claim gate below: pure helpers
+            # (get_current_session_id, is_claim_active, the TTL constant, the
+            # malformed-ref recheck via get_claim_ref) stay direct module
+            # calls -- they carry no IO and are not part of the ClaimStore
+            # port -- while every IO operation (get/pr_protected/acquire/
+            # refresh/release) routes through this one store instance.
+            claim_store = claim.GitClaimStore(workspace_root)
+
+            def _claim_age(claim_data: dict) -> str:
+                acquired_str = claim_data.get("acquired_at") or "unknown"
+                try:
+                    acquired = datetime.datetime.fromisoformat(acquired_str.replace("Z", "+00:00"))
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    return f"{int((now - acquired).total_seconds() / 60)} minutes"
+                except (ValueError, AttributeError):
+                    return "unknown"
+
+            current_sess = claim.get_current_session_id()
+            active_claim = claim_store.get(issue_number)
+            has_pr = claim_store.pr_protected(issue_number)
+            if active_claim and claim.is_claim_active(active_claim, current_sess, has_open_pr=has_pr):
+                print(
+                    f"Error: issue #{issue_number} is already claimed by session "
+                    f"'{active_claim.get('session_id')}' (claim age: {_claim_age(active_claim)}). "
+                    f"Refusing to start. Use 'solomon-harness claim release {issue_number}' to clear it.",
+                    file=sys.stderr,
+                )
+                if lock is not None:
+                    lock.release()
+                return 1
+
+            # Atomically claim. A push failure here only blocks the stage once
+            # confirmed as a genuine lost race (a re-fetch shows another
+            # session's claim now live on the ref) -- otherwise it just means
+            # this workspace has no claims remote to push to (no `origin`, no
+            # network), which is a no-op environment, not a collision.
+            if claim_store.acquire(issue_number, session_id=current_sess):
+                claim_acquired = True
+                claimed_issue_number = issue_number
+                claim_session_id = current_sess
+                # Heartbeat writer (B5a): a `start` that runs longer than the
+                # claim TTL before a PR exists would otherwise become
+                # reclaimable mid-implementation (the #24 double-pick).
+                # Periodically re-touch the claim's heartbeat_at until the
+                # stage completes; the outer finally stops this thread. A
+                # confirmed takeover (refresh_claim returns False only for
+                # that) is surfaced loudly and fails the stage: the work in
+                # flight no longer holds the issue, so its result must not be
+                # reported as a success (B5's abort-on-loss).
+                import threading
+
+                heartbeat_stop_event = threading.Event()
+                claim_lost_event = threading.Event()
+
+                def _claim_heartbeat_loop(
+                    issue: int = issue_number,
+                    session: str = current_sess,
+                    store: "claim.ClaimStore" = claim_store,
+                    stop: "threading.Event" = heartbeat_stop_event,
+                    lost: "threading.Event" = claim_lost_event,
+                ) -> None:
+                    while not stop.wait(claim.CLAIM_HEARTBEAT_INTERVAL_SECONDS):
+                        if not store.refresh(issue, session):
+                            lost.set()
+                            print(
+                                f"CRITICAL: issue #{issue}'s claim was taken over by "
+                                "another session while this stage was running; this "
+                                "run's result will be marked failed to prevent "
+                                "double-shipping the issue.",
+                                file=sys.stderr,
+                            )
+                            break
+
+                heartbeat_thread = threading.Thread(
+                    target=_claim_heartbeat_loop,
+                    daemon=True,
+                    name=f"claim-heartbeat-issue-{issue_number}",
+                )
+                heartbeat_thread.start()
+            else:
+                # claim_issue refused. It fails closed internally (an active
+                # claim, or PR/review liveness that could not be confirmed), so
+                # do NOT re-derive activity here with a weaker TTL-only
+                # is_claim_active(has_open_pr=False) check -- that would let a
+                # stale-but-PR-protected or liveness-uncertain claim slip
+                # through and start a duplicate. Any ref still present --
+                # including one whose content is malformed (get_claim_ref
+                # returns (sha, None) for those) -- means "refused, do not
+                # proceed"; only a genuinely absent ref is the safe "proceed
+                # without a claim" fallback.
+                recheck = claim.get_claim_ref(workspace_root, issue_number)
+                if recheck is not None:
+                    holder = (recheck[1] or {}).get("session_id", "unknown/malformed")
+                    print(
+                        f"Error: issue #{issue_number} could not be safely claimed "
+                        f"(held by session '{holder}', or PR/review "
+                        "liveness could not be confirmed). Refusing to start.",
+                        file=sys.stderr,
+                    )
+                    if lock is not None:
+                        lock.release()
+                    return 1
+                print(
+                    f"Warning: could not record a claim ref for issue #{issue_number} "
+                    "(no claims remote configured?); proceeding without one.",
+                    file=sys.stderr,
+                )
+
     from solomon_harness.notify import log_progress
     capture_cost = policy.level in ("L2", "L3")
     log_progress(f"Running /solomon-{stage} headless via {engine}...")
+    # Pessimistic default so the finally's failed-run claim release covers an
+    # exception thrown before the engine ever assigns a real exit code.
+    rc = 1
     try:
         try:
             if engine == "agy":
@@ -357,7 +491,11 @@ def run_stage(
                 # foreign competing driver.
                 child_env["SOLOMON_SESSION_ID"] = lock.session_id
 
-            rc = 0
+            # rc stays at its pessimistic 1 until the engine reports a real
+            # exit code: re-initializing it to 0 here would make the finally's
+            # failed-run claim release read any mid-run exception (engine
+            # missing, KeyboardInterrupt) as a success and keep the claim for
+            # the whole TTL.
             for i in range(iterations):
                 if iterations > 1:
                     log_progress(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
@@ -422,7 +560,18 @@ def run_stage(
                     break
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
+            rc = 1  # keep the local in sync so the finally releases the claim
             return 1
+        if claim_lost_event is not None and claim_lost_event.is_set():
+            # The claim was confirmed taken over mid-run: whatever the engine
+            # exited with, this run no longer owns the issue and must not be
+            # recorded or notified as a success (B5's abort-on-loss).
+            print(
+                f"Error: /solomon-{stage} finished after its issue claim was "
+                "taken over by another session; marking this run failed.",
+                file=sys.stderr,
+            )
+            rc = 1
         if lock is not None:
             _record_loop_run(workspace_root, stage, args, rc, lock.session_id)
         if rc == 0 and stage in LOCKED_STAGES:
@@ -431,5 +580,33 @@ def run_stage(
             notify.send(workspace_root, f"stage:{stage}", f"/solomon-{stage} {' '.join(args)} -> ok")
         return rc
     finally:
+        if heartbeat_stop_event is not None:
+            heartbeat_stop_event.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=2.0)
+        if (
+            claim_acquired
+            and claimed_issue_number is not None
+            and rc != 0
+            and (claim_lost_event is None or not claim_lost_event.is_set())
+        ):
+            # A failed `start` must not hold the issue for the rest of the
+            # TTL: release the claim this session took (never force -- if the
+            # claim moved on, release_claim refuses and the new holder keeps
+            # it). A successful start keeps its claim: the draft PR now
+            # protects the issue and the merge path releases it.
+            try:
+                if claim_store is None:
+                    from solomon_harness import claim as _claim
+
+                    claim_store = _claim.GitClaimStore(workspace_root)
+                claim_store.release(claimed_issue_number, session_id=claim_session_id)
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup, never mask the stage result
+                print(
+                    f"Warning: could not release the claim on issue "
+                    f"#{claimed_issue_number} after a failed start ({exc}); "
+                    "it will expire via the TTL.",
+                    file=sys.stderr,
+                )
         if lock is not None:
             lock.release()

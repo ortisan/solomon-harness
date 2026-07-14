@@ -40,7 +40,9 @@ uv pip install -e .     # expose the `solomon-harness` CLI on PATH
 From your project directory, run init: it checks prerequisites, copies the harness
 in (agents, the `solomon_harness` package, scripts, config), configures it,
 generates the host-tool integrations, sets the project's memory tenant, and
-indexes the codebase.
+indexes the codebase. The harness's own documents never travel: your project's
+`docs/` receives only its own empty `adrs/` and `specs/` trees, seeded with
+each convention's template and README (ADR-0029).
 
 ```bash
 cd /path/to/your/project
@@ -126,7 +128,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 | --- | --- | --- |
 | `/solomon-workflow` | run a task end-to-end or continue | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
-| `/solomon-issue` | create a feature/story | product_owner |
+| `/solomon-issue` | create a feature/story; a vague demand first passes the Socratic elicitation gate, and every issue gets a `docs/specs/` spec doc | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |
 | `/solomon-refine` | ready an issue | product_owner, scrum_master |
 | `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
@@ -143,7 +145,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-seven role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-eight role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed to the host tools as Claude Code
 subagents and Antigravity commands. The count above is the number of `agents/*/agents/*.md`
@@ -170,6 +172,7 @@ from that directory listing.
 | `quant_trader` | strategies, backtests, slippage/cost, Sharpe/drawdown risk |
 | `long_run_strategist` | long-horizon strategies: trend/momentum, factors, allocation, rebalancing |
 | `scalper` | intraday scalping: microstructure, order flow, execution, tick-data backtests |
+| `swing_trader` | daytrade and swing strategies (minutes-to-weeks holds), overnight risk, spec handoff |
 | `data_analyst` | SQL analytics, big data (Spark/ClickHouse), reporting |
 | `dba` | data modeling, performance tuning, migrations, replication |
 | `documenter` | technical and business docs, user guides, design docs |
@@ -225,8 +228,8 @@ avoid clashing with whatever already holds the preferred port. See *Shared memor
 ### Architecture Decision Records
 
 The `start` and `release` workflows evaluate whether a change is architecturally
-significant (the checklist in `docs/adr/README.md`) and, if so, write a MADR record
-to `docs/adr/NNNN-*.md` and persist it with `save_decision`.
+significant (the checklist in `docs/adrs/README.md`) and, if so, write a MADR record
+to `docs/adrs/NNNN-*.md` and persist it with `save_decision`.
 
 ### Stack-based agent selection
 
@@ -309,6 +312,7 @@ table.
 | `healthcheck` | Report runtime readiness and pending init items (Docker, memory, board, global install) |
 | `git-repair` | Repair local git config by unsetting stray `core.worktree` and setting `core.bare` to false |
 | `loop-lock [status\|release]` | Inspect or clear the single-driver loop lock (crash recovery) |
+| `claim status\|release <issue>` | Inspect or release an issue claim/lease |
 | `log [--last N]` | Show the read-only loop activity feed (loop runs, decisions, handoffs) |
 | `loop-guard` | PreToolUse hook: block push/merge while another driver holds the loop lock |
 | `loop-stop [--clear]` | Kill-switch: halt all autonomous loop stages immediately (or clear it) |
@@ -319,6 +323,7 @@ table.
 | `release plan\|prep [version]\|check\|wiki-page [version]` | Plan, prepare, check, or document a milestone-gated release |
 | `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
+| `broker route \| apply --file <json>` | Capability broker (ADR-0008): build the route/gap verdict, or run a human-approved acquisition |
 | `agents list \| help \| show <name>` | List or show the generated subagents |
 | `github <args>` | GitHub board and PR helpers (ensure-board, set-status, add-issue, merge, pr-create) |
 

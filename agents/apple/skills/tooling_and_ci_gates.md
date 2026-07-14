@@ -1,3 +1,8 @@
+---
+name: tooling-and-ci-gates
+description: Governs Xcode toolchain pinning, Swift Package Manager lockfile discipline, xcodebuild simulator test runs, SwiftLint/SwiftFormat enforcement, .xcconfig build-setting management, and the branch-specific CI gate matrix for Apple platforms. Use when configuring CI for an Apple project, pinning dependencies, or defining which checks gate a feature, release, or hotfix branch.
+---
+
 # Apple Tooling and CI Gates
 
 Pin the toolchain, make every build reproducible from a committed `Package.resolved`, and gate each branch on a defined set of automated checks so that nothing reaches TestFlight or the App Store without passing lint, build, and simulator tests on the exact Xcode the team agreed on. Treat the Xcode version, the resolved dependency graph, and the CI gate list as version-controlled contracts, not local developer preferences.

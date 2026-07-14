@@ -1,3 +1,8 @@
+---
+name: milestones
+description: Governs how a milestone is planned, tracked, and closed in this repository, requiring a hard due date, a written acceptance bar, and a consistent title scheme recorded on GitHub and in project memory. Use when creating, scoping, or closing a milestone, or reviewing whether a milestone's goal and deliverables are well defined.
+---
+
 # Milestones
 
 Governs how a milestone is planned, tracked, and closed in this repository: one milestone equals one release scope with a hard due date and a written acceptance bar, recorded both on GitHub and in the project memory. No open-ended milestones; every milestone must be answerable with "shipped on time, in scope, or not."

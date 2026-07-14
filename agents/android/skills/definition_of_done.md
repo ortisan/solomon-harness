@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Governs the executable merge gate for an Android change, covering unit and instrumented tests, ktlint/detekt/Lint, an R8 release build, a current baseline profile, an accessibility pass, secret scanning, and a memory-persisted design decision. Use when deciding whether an Android pull request is ready to merge or verifying a change meets the project's Definition of Done.
+---
+
 # Android Definition of Done
 
 An Android change is done only when every gate below holds in CI on a clean checkout, not when it builds on the author's machine. Treat the Definition of Done as an executable contract: one Gradle verification command must pass before review, the release build must shrink and start, accessibility must be exercised, no secret may enter history, and the design decision must be written to project memory. A green local `assembleDebug` is not done.

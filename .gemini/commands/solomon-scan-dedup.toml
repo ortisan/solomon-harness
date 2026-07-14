@@ -22,7 +22,9 @@ Act on the single highest-confidence duplication only:
 
 - **Safe to unify:** cut `feature/<slug>` (no issue number), unify the duplication
   behind one shared construct, and add a regression test proving behavior is
-  unchanged (TDD). Open a **draft** PR with a `Refs`/`Closes` line, then stop.
+  unchanged (TDD). Open a **draft** PR with a `Refs`/`Closes` line and the
+  canonical ADR line the CI gate enforces (usually
+  `ADR: not warranted — <reason>` for a deduplication), then stop.
 - **Risky merge:** file a `/solomon-issue` (board `Backlog`) describing the
   duplication and the proposed unification, instead of a PR.
 

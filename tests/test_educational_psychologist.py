@@ -124,7 +124,14 @@ class TestEducationalPsychologist(unittest.TestCase):
             path = os.path.join(self.skills_dir, name)
             self.assertTrue(os.path.isfile(path), f"{name} is missing")
             with open(path, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip()]
+                text = f.read()
+            # Skip the discovery frontmatter block (ADR-0026); the summary is
+            # the first body paragraph.
+            if text.startswith("---\n"):
+                end = text.find("\n---\n", 3)
+                if end != -1:
+                    text = text[end + 5:]
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
             self.assertTrue(len(lines) > 0, f"{name} is empty")
             # First non-empty line (excluding markdown headers) must be a single-sentence summary
             first_para = ""

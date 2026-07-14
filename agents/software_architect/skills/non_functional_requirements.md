@@ -1,3 +1,8 @@
+---
+name: non-functional-requirements
+description: Governs writing every significant non-functional requirement as a six-part, ISO/IEC 25010-checklisted, numeric quality-attribute scenario with a named verification mechanism, and reconciling conflicting attributes through an ATAM utility tree. Use when defining, reviewing, or trading off a performance, availability, scalability, security, or reliability target for a design.
+---
+
 # Non-Functional Requirements
 
 Treat non-functional requirements as part of the architecture and write each one as a testable fit-criteria scenario with a number and a verification mechanism, never as an adjective like "fast" or "scalable" that cannot be reviewed or proven.

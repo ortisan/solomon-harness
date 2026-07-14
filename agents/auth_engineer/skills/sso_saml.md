@@ -1,3 +1,8 @@
+---
+name: sso-saml
+description: Governs implementing and reviewing enterprise single sign-on as a Service Provider or Relying Party: protocol choice, SP- versus IdP-initiated flows, SAML assertion and signature validation, and SCIM 2.0 provisioning. Use when integrating or reviewing an enterprise SSO connection, SAML validation, or SCIM provisioning.
+---
+
 # Enterprise SSO: SAML 2.0, OIDC, and SCIM
 
 Scope: implementing and reviewing enterprise single sign-on as a Service Provider (SP) / Relying Party (RP). Covers protocol choice, SP-initiated vs IdP-initiated flows, SAML assertion and signature validation, the SAML attack classes that keep recurring, OIDC token validation, and SCIM 2.0 provisioning. The recurring theme: signature validation and the binding between a validated signature and the data you actually trust are where these systems break.

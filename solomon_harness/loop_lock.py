@@ -177,9 +177,19 @@ class LoopLock:
         self.path = lock_path
         self.host = host or socket.gethostname()
         self.pid = pid if pid is not None else os.getpid()
-        self.session_id = session_id or os.environ.get(
-            "SOLOMON_SESSION_ID", os.environ.get("CLAUDE_SESSION_ID", f"{self.host}:{self.pid}")
-        )
+        # Single source of process identity, shared with the per-issue claim
+        # layer: LoopLock and claim must resolve the SAME session id in one
+        # process, or a nested claim-gated `dev start` (which inherits the
+        # propagated SOLOMON_SESSION_ID) would tag its claim with one id while
+        # the lock holds another and self-deadlock. get_current_session_id
+        # honours SOLOMON_SESSION_ID/CLAUDE_SESSION_ID first, then a cached
+        # host:pid:entropy default.
+        if session_id:
+            self.session_id = session_id
+        else:
+            from solomon_harness.claim import get_current_session_id
+
+            self.session_id = get_current_session_id()
         self.stage = stage
         self.ttl = float(ttl)
         self._clock = clock

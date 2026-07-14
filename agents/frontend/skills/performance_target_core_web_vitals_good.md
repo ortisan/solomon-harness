@@ -1,3 +1,8 @@
+---
+name: performance-target-core-web-vitals-good
+description: Sets performance budgets for holding Core Web Vitals at "good" at the 75th percentile of real field traffic, enforced as CI failures, with optimization driven by field data over lab data. Use when adding a page, image, or script that could affect load performance, or reviewing a budget failure.
+---
+
 # Performance (Target: Core Web Vitals "Good")
 
 This skill sets the performance budgets and the discipline for meeting them: every user-facing page holds Core Web Vitals "good" at the 75th percentile of real field traffic, budgets are enforced as CI failures rather than warnings, and optimization follows measurement — field data decides what is slow, lab data prevents regressions.

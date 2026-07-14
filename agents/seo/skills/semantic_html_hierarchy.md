@@ -1,3 +1,8 @@
+---
+name: semantic-html-hierarchy
+description: Governs markup as the extraction contract — single-h1 heading outlines with no skipped levels, landmark elements (main, nav, article, section), semantic elements over div soup, and the accessibility overlap with WCAG 2.2 AA. Use when structuring a page template's headings and landmarks, reviewing markup for crawler and screen-reader extraction, or fixing a heading or landmark violation.
+---
+
 # Semantic HTML Hierarchy
 
 Markup is the extraction contract: headings, landmarks, and semantic elements are how search engines, assistive technology, and LLM crawlers segment a page into meaning. The stance: structure is written for machines that cannot see the layout — if the hierarchy only makes sense visually, it does not exist.
