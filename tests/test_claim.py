@@ -579,6 +579,35 @@ class TestClaimGitOperations(unittest.TestCase):
         self.assertEqual(len(res["issues"]), 1)
         self.assertTrue(any("unfiltered" in m.lower() for m in logs.output))
 
+    @patch("solomon_harness.tools.database_client.DatabaseClient.get_open_issues")
+    def test_memory_service_get_open_issues_filters_via_an_injected_fake_claim_store(
+        self, mock_db_issues
+    ):
+        # Proves the seam (issue #238 / review-215-m12): MemoryService.get_open_issues
+        # defers to whatever ClaimStore it was given, so a caller can swap the
+        # git-backed adapter for a test double without patching solomon_harness.claim.*.
+        from solomon_harness.memory_service import MemoryService
+
+        class FakeClaimStore:
+            def filter_unclaimed(self, issue_numbers, session_id=None):
+                return [n for n in issue_numbers if n != 1]
+
+        mock_db_issues.return_value = [
+            {"github_id": "1", "title": "issue 1"},
+            {"github_id": "2", "title": "issue 2"},
+            {"github_id": "tracking-row", "title": "RAID row"},
+        ]
+
+        service = MemoryService(harness_dir=self.local, claim_store=FakeClaimStore())
+        res = service.get_open_issues()
+        issues = res["issues"]
+
+        self.assertEqual(len(issues), 2)
+        github_ids = [i["github_id"] for i in issues]
+        self.assertNotIn("1", github_ids)
+        self.assertIn("2", github_ids)
+        self.assertIn("tracking-row", github_ids)
+
     @patch("sys.stdout", new_callable=lambda: StringIO())
     @patch("solomon_harness.claim.get_claim")
     def test_cli_claim_status_unclaimed(self, mock_get, mock_stdout):
