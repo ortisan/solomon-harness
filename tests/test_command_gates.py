@@ -356,3 +356,35 @@ def test_gemini_mirror_carries_the_spec_generation_step():
     assert "docs/specs/0000-spec-template.md" in body
     assert "spec-lint.py" in body
     assert "Design Constraints" in body
+
+
+# --- Automatic ADR capture gate (#221 S2b, #235) -------------------------------
+
+
+def test_ci_enforces_the_adr_gate_on_pull_requests():
+    ci = _read(os.path.join(".github", "workflows", "ci.yml"))
+    assert "scripts/check-adr-gate.py" in ci
+    # Guarded to pull_request events (push builds carry no PR body)...
+    assert "if: github.event_name == 'pull_request'" in ci
+    # ...and the body travels as an env var, never shell-interpolated.
+    assert "PR_BODY: ${{ github.event.pull_request.body }}" in ci
+
+
+def test_start_release_and_review_carry_the_canonical_adr_line():
+    canonical_link = "ADR: docs/adrs/NNNN-<slug>.md"
+    canonical_skip = "ADR: not warranted — <reason>"
+    for name in ("start", "release"):
+        body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
+        assert canonical_link in body, name
+        assert canonical_skip in body, name
+    review = _read(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "check-adr-gate.py" in review
+
+
+def test_gemini_mirrors_carry_the_canonical_adr_line():
+    for name in ("start", "release"):
+        body = _read(os.path.join(".gemini", "commands", f"solomon-{name}.toml"))
+        assert "ADR: docs/adrs/NNNN-<slug>.md" in body, name
+        assert "ADR: not warranted — <reason>" in body, name
+    review = _read(os.path.join(".gemini", "commands", "solomon-review.toml"))
+    assert "check-adr-gate.py" in review
