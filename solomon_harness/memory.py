@@ -116,9 +116,13 @@ def _set_published_port(compose_text: str, port: int) -> str:
 
     Only the host side of the ``"<host>:8000"`` mapping changes; the container
     still listens on 8000 internally (Surrealist/Spectron reach it by service
-    name). Works whatever the template's current host port is.
+    name). The published mapping is always pinned to the loopback interface —
+    the store ships a fixed root/root development credential, so it must never
+    listen on all interfaces — and a pre-loopback template (bare
+    ``"<port>:8000"``) is normalized on the way through. Works whatever the
+    template's current host port is.
     """
-    return re.sub(r'"\d+:8000"', f'"{port}:8000"', compose_text)
+    return re.sub(r'"(?:[0-9.]+:)?\d+:8000"', f'"127.0.0.1:{port}:8000"', compose_text)
 
 
 def ensure_home_compose() -> Optional[str]:

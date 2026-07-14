@@ -265,6 +265,23 @@ class TestEnsureHomeCompose(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as pkg:
             src = os.path.join(pkg, "docker-compose.yml")
             with open(src, "w", encoding="utf-8") as f:
+                f.write('    ports:\n      - "127.0.0.1:8099:8000"\n')
+            with patch.object(memory, "harness_home", return_value=home), \
+                 patch.object(memory, "_packaged_compose", return_value=src), \
+                 patch.object(memory, "assigned_memory_port", return_value=8137):
+                dest = memory.ensure_home_compose()
+            with open(dest, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn('"127.0.0.1:8137:8000"', content)
+            self.assertNotIn('"127.0.0.1:8099:8000"', content)
+
+    def test_bare_port_mapping_is_pinned_to_loopback(self):
+        # A pre-loopback home compose (bare "<port>:8000") must come out bound to
+        # 127.0.0.1: the store ships a fixed root/root development credential, so
+        # the published mapping must never listen on all interfaces.
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as pkg:
+            src = os.path.join(pkg, "docker-compose.yml")
+            with open(src, "w", encoding="utf-8") as f:
                 f.write('    ports:\n      - "8000:8000"\n')
             with patch.object(memory, "harness_home", return_value=home), \
                  patch.object(memory, "_packaged_compose", return_value=src), \
@@ -272,7 +289,7 @@ class TestEnsureHomeCompose(unittest.TestCase):
                 dest = memory.ensure_home_compose()
             with open(dest, "r", encoding="utf-8") as f:
                 content = f.read()
-            self.assertIn('"8137:8000"', content)
+            self.assertIn('"127.0.0.1:8137:8000"', content)
             self.assertNotIn('"8000:8000"', content)
 
 
