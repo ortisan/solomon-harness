@@ -41,13 +41,13 @@ Steps:
    - Non-interactive/headless runs never block: ask nothing, print
      `Elicitation: skipped (non-interactive)`, and record unmet criteria as
      assumptions exactly as in the decline path.
-   Fold every elicited answer into the problem statement and user story below.
+   Fold every elicited answer into the context and user story below.
    The gate changes only how the demand is understood; the confirm-before-create
    step below is untouched.
 
 3. Shape the issue body (use the Feature/story template in the conventions doc).
    Produce, in this order:
-   - **Problem statement** — the user need and why it matters. No solutioning.
+   - **Context** — the user need and why it matters. No solutioning.
    - **User story** — `As a <real persona>, I want <capability> so that <outcome>`,
      passing INVEST (vertical slice, one sprint, estimable, testable).
    - **Acceptance criteria** — Gherkin `Scenario / Given / When / Then`, covering
@@ -83,8 +83,8 @@ Steps:
    `docs/specs/<N>-<slug>.md` with the Write tool — `<N>` = the created issue
    number with no leading zeros, `<slug>` = the kebab-case title reduced to
    ASCII lowercase `[a-z0-9]` and single hyphens, everything else stripped.
-   Pre-fill from the shaped body: the elicitation trace into Context, the
-   problem statement into Problem, the scope into Requirements, the Gherkin
+   Pre-fill from the shaped body: the elicitation trace into the spec's Context, the
+   issue's Context section (the need and why) into the spec's Problem, the scope into Requirements, the Gherkin
    into Acceptance Criteria, the house rules that bound the solution
    (architecture style, security posture, conventions) into
    Design Constraints, the out-of-scope list into Out of Scope, and

@@ -46,7 +46,7 @@ Steps:
       verdict in the run report and continue the refinement without acquiring.
 
 2. Strengthen the issue body (product_owner). Rewrite to the feature template in
-   the workflow doc: problem statement, user story (`As a … I want … so that …`),
+   the workflow doc: context, user story (`As a … I want … so that …`),
    and acceptance criteria as **Given/When/Then** covering happy, boundary, and
    failure paths. Pull in any non-functional constraints with concrete numbers and
    attribute them to the owning specialist.

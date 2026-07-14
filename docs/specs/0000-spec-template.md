@@ -10,7 +10,7 @@ job-to-be-done, links to prior work or discussions. TBD (refine) if unknown.>
 
 ## Problem
 
-<The pain and why it matters now, from the issue's problem statement. No
+<The pain and why it matters now, from the issue's Context section. No
 solutioning.>
 
 ## Requirements
