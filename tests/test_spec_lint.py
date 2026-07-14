@@ -11,19 +11,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+from solomon_harness import spec_doc
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "spec-lint.py"
 DOCS_SPECS = REPO_ROOT / "docs" / "specs"
 
-SECTION_HEADINGS = [
-    "Context",
-    "Problem",
-    "Requirements",
-    "Acceptance Criteria",
-    "Design Constraints",
-    "Out of Scope",
-    "Traceability",
-]
+# Not a copy: this is the same list object solomon_harness.spec_doc defines,
+# so it cannot silently drift out of sync with the canonical source (a third
+# hand-maintained copy previously lived here alongside spec_doc.py's own list
+# and scripts/spec-lint.py's own list).
+SECTION_HEADINGS = spec_doc.SECTION_HEADINGS
+
+
+def test_section_headings_is_the_canonical_list_not_a_copy():
+    assert SECTION_HEADINGS is spec_doc.SECTION_HEADINGS
 
 
 def _write_spec(path: Path, omit: str | None = None) -> None:
