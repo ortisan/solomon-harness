@@ -8,7 +8,9 @@ services:
     ports:
       # Host port 8099 (8000 is too contended); the harness re-templates this to
       # the auto-assigned port. The container always listens on 8000 internally.
-      - "8099:8000"
+      # Bound to loopback: the server runs with a fixed root/root development
+      # credential, so it must never be reachable from other machines.
+      - "127.0.0.1:8099:8000"
     volumes:
       - ./memory/surrealdb:/data
     environment:
@@ -28,7 +30,9 @@ services:
     image: surrealdb/surrealist:latest
     container_name: solomon_surrealist
     ports:
-      - "3000:80"
+      # Loopback-only for the same reason as the database itself: the admin UI
+      # fronts a store secured with the development credential.
+      - "127.0.0.1:3000:80"
     depends_on:
       surrealdb:
         condition: service_healthy
