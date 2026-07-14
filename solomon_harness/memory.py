@@ -116,9 +116,53 @@ def _set_published_port(compose_text: str, port: int) -> str:
 
     Only the host side of the ``"<host>:8000"`` mapping changes; the container
     still listens on 8000 internally (Surrealist/Spectron reach it by service
-    name). Works whatever the template's current host port is.
+    name). The published mapping is always pinned to the loopback interface —
+    the store ships a fixed root/root development credential, so it must never
+    listen on all interfaces — and a pre-loopback template (bare
+    ``"<port>:8000"``) is normalized on the way through. Works whatever the
+    template's current host port is. Deliberately narrow: matches bare and
+    dotted-decimal host forms only (the two writers — this module and
+    install_global — never emit hostname or IPv6-bracket forms), and assumes
+    the template holds exactly one ``:8000`` mapping, true of the packaged
+    file.
     """
-    return re.sub(r'"\d+:8000"', f'"{port}:8000"', compose_text)
+    return re.sub(r'"(?:[0-9.]+:)?\d+:8000"', f'"127.0.0.1:{port}:8000"', compose_text)
+
+
+def _pin_published_to_loopback(compose_text: str) -> str:
+    """Rewrite every published port mapping in a compose file's text to a
+    loopback bind, preserving the published host port.
+
+    Covers both container ports this stack publishes (SurrealDB's 8000 and
+    Surrealist's 80). Same deliberate narrowness as ``_set_published_port``:
+    bare (``"8099:8000"``) and dotted-decimal (``"0.0.0.0:8099:8000"``) host
+    forms only, and idempotent on already-pinned text.
+    """
+    return re.sub(r'"(?:[0-9.]+:)?(\d+):(8000|80)"', r'"127.0.0.1:\1:\2"', compose_text)
+
+
+def heal_home_compose() -> Optional[str]:
+    """Pin an existing home compose's published ports to loopback, in place.
+
+    Installs materialized before the loopback pin published the store — which
+    runs with a fixed root/root development credential — on all interfaces,
+    and the exists-early-return in ``ensure_home_compose`` preserved that
+    exposure forever. Returns the compose path when the file was rewritten
+    (the caller must then run compose ``up -d`` so the containers are
+    recreated on the new bind), or None when there is nothing to heal (no
+    file, or already pinned).
+    """
+    dest = os.path.join(harness_home(), "docker-compose.yml")
+    if not os.path.isfile(dest):
+        return None
+    with open(dest, "r", encoding="utf-8") as f:
+        content = f.read()
+    pinned = _pin_published_to_loopback(content)
+    if pinned == content:
+        return None
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(pinned)
+    return dest
 
 
 def ensure_home_compose() -> Optional[str]:
@@ -134,6 +178,7 @@ def ensure_home_compose() -> Optional[str]:
     home = harness_home()
     dest = os.path.join(home, "docker-compose.yml")
     if os.path.isfile(dest):
+        heal_home_compose()
         return dest
     src = _packaged_compose()
     if not src:
@@ -193,15 +238,21 @@ def ensure_memory_up(
     if host not in LOCAL_HOSTS:
         return {"ok": True, "skipped": f"backend host '{host}' is not local"}
 
-    if is_serving(host, port):
-        # The backend is up: replay anything stranded by a prior outage.
-        reconcile_pending(workspace_root)
-        return {"ok": True, "already_running": True}
+    # Converge a pre-loopback home compose before the already-serving
+    # short-circuit: a backend serving on an all-interfaces bind is the very
+    # exposure the loopback pin closes, so it is recreated now rather than on
+    # the next cold start.
+    healed = heal_home_compose()
 
+    if is_serving(host, port):
+        if not healed:
+            # The backend is up: replay anything stranded by a prior outage.
+            reconcile_pending(workspace_root)
+            return {"ok": True, "already_running": True}
     # The port is open but it is not SurrealDB: a foreign process holds it.
     # Starting compose would fail to bind, and the client would silently fall
     # back to SQLite, so report the conflict instead of pretending it is up.
-    if _tcp_open(host, port):
+    elif _tcp_open(host, port):
         return {
             "ok": False,
             "port_conflict": True,
@@ -233,6 +284,7 @@ def ensure_memory_up(
     if proc.returncode != 0:
         return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
 
+    extra = {"loopback_healed": True} if healed else {}
     # Wait for SurrealDB to actually serve (not just for the port to open) so this
     # session connects to it rather than falling back to SQLite mid-startup.
     waited = 0.0
@@ -240,10 +292,10 @@ def ensure_memory_up(
         if is_serving(host, port):
             # Newly serving: replay anything stranded by a prior outage.
             reconcile_pending(workspace_root)
-            return {"ok": True, "started": True}
+            return {"ok": True, "started": True, **extra}
         time.sleep(1.0)
         waited += 1.0
-    return {"ok": True, "started": True, "warning": "compose started; SurrealDB not serving yet"}
+    return {"ok": True, "started": True, "warning": "compose started; SurrealDB not serving yet", **extra}
 
 
 def stop_memory(workspace_root: Optional[str] = None) -> dict:
