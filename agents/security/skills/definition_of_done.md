@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the evidence gate for security work — what must be demonstrably true across STRIDE modeling, SAST and dependency scanning, secrets hygiene, and regression tests before a change merges, checked by artifact or tool output rather than assertion. Use when confirming a security change is ready to merge or auditing a completed fix against the required evidence checklist.
+---
+
 # Security Definition of Done
 
 The evidence gate for security work: what must be demonstrably true across STRIDE modeling, scanning, dependency pinning, secrets hygiene, and regression tests before a change merges. Every item is checked by artifact or tool output, never by assertion.

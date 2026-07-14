@@ -1,3 +1,8 @@
+---
+name: mobile-security-stride
+description: Governs STRIDE-based mobile threat modeling for Android clients, covering Keystore-backed secrets, certificate pinning, Play Integrity verification, exported-component hardening, and WebView isolation under OWASP MASVS. Use when designing or reviewing security-sensitive Android code such as token storage, network trust, exported components, or WebView usage.
+---
+
 # Mobile Security and STRIDE for Android Clients
 
 Treat the Android client as untrusted code running on a possibly hostile device: keep no secret the device does not need, bind every key to hardware, authenticate the channel as well as the user, and let a server-side verdict (not the app) decide whether the runtime is trustworthy. Design against STRIDE per surface, and remember that obfuscation and integrity checks raise an attacker's cost but never replace server-side authorization.

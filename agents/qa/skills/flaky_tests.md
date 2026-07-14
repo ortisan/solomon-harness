@@ -1,3 +1,8 @@
+---
+name: flaky-tests
+description: Defines how flaky tests are detected, quarantined, and permanently fixed rather than retried into silence. Use when a test fails intermittently, a retry annotation is proposed, or CI stability is under review.
+---
+
 # Flaky Tests
 
 A flaky test passes and fails on the same code without any source change. It is not a nuisance, it is a gate failure: once a suite has a known flaker, every red run becomes ambiguous, engineers learn to re-run until green, and a real regression slips through behind the noise. This skill owns the flaky-test policy: the root-cause taxonomy, how to detect intermittent failures, how to quarantine without silently skipping, and the deflaking workflow that pins determinism and removes the quarantine. It does not own the coverage floor or the gate report; the floor lives in `coverage_a_floor_not_a_finish_line` (wired into branch protection by `ci_quality_gates`) and the report in `qa_report_the_required_output`. The deterministic-test rules a healthy test obeys live in `test_design_rules`; this skill is what you run when a test breaks them.

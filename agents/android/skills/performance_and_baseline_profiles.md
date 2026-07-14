@@ -1,3 +1,8 @@
+---
+name: performance-and-baseline-profiles
+description: Governs frame-budget and jank measurement, Compose recomposition cost, Baseline Profile generation and Macrobenchmark validation, R8 full mode, LeakCanary, and StrictMode enforcement on Android. Use when investigating jank, slow cold start, or memory leaks, or when generating and validating a Baseline Profile for a release.
+---
+
 # Performance and Baseline Profiles
 
 Performance on Android is a measured, regression-gated property, not a vibe: every frame must clear its hardware deadline and every cold start must stay fast, proven by instrumentation rather than asserted. The stance is to attach a number to each claim (frame overrun in ms, cold-start TTID/TTFD, recomposition counts), gate those numbers in CI with Macrobenchmark, and ship a Baseline Profile so users hit AOT-compiled code on the first launch. Treat jank, leaks, and slow startup as defects with reproductions and thresholds, not as polish to do later.

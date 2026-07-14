@@ -1,3 +1,8 @@
+---
+name: state-management
+description: Governs where state lives in React and Angular apps, treating server state as a cache and client state as local-first, promoted only under pressure, with the URL treated as state too. Use when choosing a state container, deciding if data needs a global store, or reviewing state-management choices.
+---
+
 # State Management
 
 This skill governs where state lives in React and Angular applications. The stance: server state and client state are different problems with different tools; server data belongs in a query cache, client state starts local and is promoted only under pressure, and the URL is state too. Most "we need a global store" pain is un-cached server data living in the wrong layer.

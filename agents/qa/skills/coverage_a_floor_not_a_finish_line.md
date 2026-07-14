@@ -1,3 +1,8 @@
+---
+name: coverage-a-floor-not-a-finish-line
+description: Governs code coverage as a merge floor rather than proof of correctness, covering line versus branch versus path coverage, coverage.py/pytest-cov configuration, and diff coverage on PRs. Use when setting a coverage threshold, configuring cov-branch/fail-under, or judging a green coverage number.
+---
+
 # Coverage: a Floor, Not a Finish Line
 
 Code coverage measures which lines and branches a test run executed; it is a cheap, fast signal that tells you where the suite has never set foot, and nothing more. Treat it as a floor the `/solomon-review` gate enforces so untested code cannot merge, never as evidence the code is correct. This skill owns coverage measurement and the coverage gate: the `coverage.py`/`pytest-cov` configuration, the line-vs-branch distinction, diff coverage on PRs, and where the floor sits. It deliberately stops at the limit of what execution can prove. Whether the executed code is actually checked is assertion quality, owned by `mutation_testing`; whether the gate is wired into branch protection is owned by `ci_quality_gates`.

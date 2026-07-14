@@ -28,6 +28,16 @@ assignees: []
 ```
 ```
 
+## Suspected Location
+<!-- The file:line(s) most likely at fault, from a quick read of the code, and where the fix will land. Write TBD only when triage genuinely cannot narrow it. -->
+- `path/to/file.py:LINE` — <why this is the suspected cause>
+
+## Verification
+<!-- The exact command(s) that reproduce the defect now and prove the fix later. -->
+```bash
+# e.g. uv run pytest tests/test_<area>.py -q
+```
+
 ## Security/Performance Impact
 <!-- Does this issue expose any vulnerabilities, leak resources, or degrade latency/throughput? -->
 
@@ -40,6 +50,7 @@ assignees: []
 - [ ] Reproduction is deterministic
 - [ ] Severity and priority assigned
 - [ ] Suspected area scoped
+- [ ] Suspected location (file:line) and verification command stated
 
 ## Definition of Done
 <!-- Close gate enforced at review and release: red-then-green regression test, fix merged with CI green, no new failures. -->

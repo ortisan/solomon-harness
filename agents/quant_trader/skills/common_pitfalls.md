@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Catalogs the backtest and risk failures that let a paper trading edge die on contact with live markets, including lookahead fills, survivorship bias, leakage through overlapping labels, and uncapped position sizing. Use when reviewing a backtest result or a strategy before deployment for hidden failure modes.
+---
+
 # Quant Trader Common Pitfalls
 
 The backtest and risk failures that let a paper edge die on contact with live markets: leakage, ignored costs, and uncapped sizing. The closing checklist is the gate proving a result carries none of them.

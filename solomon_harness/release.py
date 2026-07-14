@@ -749,7 +749,10 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     body = (
         f"Release v{new_version} prep. The version bump and CHANGELOG were written by "
         f"`solomon-harness release prep`; merging this PR is the human release gate, after "
-        f"which CI tags and publishes. See docs/release-policy.md.\n"
+        f"which CI tags and publishes. See docs/release-policy.md.\n\n"
+        # The ADR gate requires exactly one canonical line on every PR body.
+        f"ADR: not warranted — release prep carries only the mechanical version "
+        f"bump and CHANGELOG section; decisions live with the merged issues.\n"
     )
     proc = subprocess.run(
         ["gh", "pr", "create", "--base", "main", "--head", branch,

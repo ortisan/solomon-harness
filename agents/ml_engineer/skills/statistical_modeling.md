@@ -1,3 +1,8 @@
+---
+name: statistical-modeling
+description: Governs hypothesis testing and effect estimation, requiring the analysis plan written before outcomes are inspected and results reported as effect sizes with confidence intervals rather than a bare p-value. Use when designing a statistical test, checking test assumptions, or reviewing a reported p-value or effect size.
+---
+
 # Statistical Modeling
 
 This skill governs hypothesis testing, effect estimation, and the choice between classical statistics and machine learning. The analysis plan — hypotheses, test, significance level, and the minimum effect worth acting on — is written before outcomes are inspected, and results are reported as effect sizes with confidence intervals, with the p-value as one input rather than the verdict.

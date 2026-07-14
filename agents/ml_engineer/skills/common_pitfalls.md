@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the review reject list for ML and DRL deliverables, covering validation, leakage, numerical, and reporting defects that invalidate a result. Use when reviewing an ML or DRL deliverable for validation soundness, leakage safety, numerical stability, or reporting honesty before approval.
+---
+
 # ML Engineer Common Pitfalls
 
 The review reject list for ML and DRL deliverables: the validation, leakage, numerical, and reporting defects that invalidate a result. Each bullet names a failure a reviewer must block, and the Definition of done below is the gate proving a deliverable avoided every one of them.

@@ -1,3 +1,8 @@
+---
+name: twelve-factor-app
+description: Governs the operational reading of the twelve-factor app at runtime, covering injected config and secrets, backing services as swappable resources, immutable build/release/run stages, stateless disposable processes, and logs as event streams. Use when writing a Deployment manifest or reviewing config injection.
+---
+
 # Twelve-Factor App at Runtime
 
 Run the workload so the same immutable image moves through every environment, all variable state lives in injected config and attached backing services, and each process can be killed, restarted, or scaled out at any instant without data loss or dropped requests. This skill is the operational reading of the twelve factors (https://12factor.net): how each one lands in a container image, a Deployment spec, and the surrounding platform. The architectural rationale (why statelessness and design contracts) belongs to `software_architect`; this skill governs the runtime contract you enforce in the manifest and the pipeline.

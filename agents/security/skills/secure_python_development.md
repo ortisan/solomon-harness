@@ -1,3 +1,8 @@
+---
+name: secure-python-development
+description: Gives concrete wrong-versus-right code patterns for the vulnerability classes common in Python — SQL/SurrealQL injection, pickle and YAML deserialization, subprocess shell=True misuse, path traversal, SSRF, timing side-channels, and unsafe archive extraction. Use when writing or reviewing code that touches a query, subprocess call, file path, outbound URL fetch, secret comparison, or archive extraction.
+---
+
 # Secure Python Development
 
 Concrete wrong-versus-right patterns for the vulnerability classes that actually appear in Python codebases: injection, unsafe deserialization, subprocess misuse, path traversal, SSRF, timing side-channels, archive extraction, and unsafe parsing. The stance: validate at the boundary with an allowlist, keep user data out of every interpreter (SQL, shell, YAML, pickle), and prefer the standard library's safe construction over sanitizing your way out.

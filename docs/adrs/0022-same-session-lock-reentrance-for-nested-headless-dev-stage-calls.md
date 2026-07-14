@@ -159,8 +159,8 @@ environment, and make a reentrant acquire release-safe.
   `tests/test_workflows.py` (`TestRunStageSessionIdPropagation`) and
   `tests/test_loop_lock.py`.
 - Root-cause and reproduction: issue #197.
-- Prior art this fix does not change: `docs/adr/0010-loop-single-driver-lock.md`
-  (the single-driver lock itself), `docs/adr/0021-headless-loop-autonomous-mode-directive.md`
+- Prior art this fix does not change: `docs/adrs/0010-loop-single-driver-lock.md`
+  (the single-driver lock itself), `docs/adrs/0021-headless-loop-autonomous-mode-directive.md`
   (the layer above this one, fixed by #196).
 - Related incident history: the "loop-guard blocks own worker push" issue is
   the same session-id-not-propagated-parent-to-child root cause, one layer up,

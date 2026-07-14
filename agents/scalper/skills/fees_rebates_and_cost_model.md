@@ -1,3 +1,8 @@
+---
+name: fees-rebates-and-cost-model
+description: Governs the cost model that precedes any signal work: fee structures and tiers, rebates, per-contract versus basis-point costs, and the break-even arithmetic deciding whether a scalping idea can exist. Use when sourcing a venue fee schedule, building a cost model, or checking if a strategy's edge survives real costs.
+---
+
 # Fees Rebates And Cost Model
 
 This skill governs the cost model that comes before any signal work: fee structures and tiers, rebates, per-contract versus basis-point costs, and the break-even arithmetic that decides whether a scalping idea can exist at all. Scalping economics die on costs first — gross edges are fractions of a tick to a few ticks, costs are charged on every one of thousands of trades, and a cost error of half a tick flips a profitable book to a losing one. The cost model is therefore written, sourced from the venue's current schedule, and versioned; it is never an estimate typed from memory.

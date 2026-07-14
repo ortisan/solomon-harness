@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: States the software engineer's non-negotiables — test-first production code, work confined to feature and bugfix branches, the sanctioned pytest, ruff, mypy --strict, and pytest-cov toolchain, preserved unrelated docstrings, and PLAN.md before non-trivial work. Use when starting implementation work or auditing whether a change respects the project's baseline engineering constraints.
+---
+
 # Software Engineer Best Practices
 
 Purpose: the working standard for implementing features and fixes in solomon-harness with strict TDD, clean Python, SOLID design, disciplined debugging, and Git Flow with conventional commits.

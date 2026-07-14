@@ -1,3 +1,8 @@
+---
+name: ci-quality-gates
+description: Defines the CI gate matrix per branch type (feature/*, release/*, nightly), required status checks, branch protection rulesets, and reusable GitHub Actions workflows that make a green merge the verification evidence. Use when configuring CI pipelines or deciding which checks are required versus advisory.
+---
+
 # CI Quality Gates
 
 Encode the verification standard as automated gates the pipeline enforces, so no change reaches `develop` or `main` on a reviewer's good faith. A gate is a required status check whose failure blocks the merge; the gate matrix decides which checks are mandatory per branch type, branch protection makes them unbypassable, and the cost-versus-coverage tradeoff decides what runs on every push versus on a release candidate or a schedule. The goal is a pipeline where a green merge button is itself the verification evidence, not a thing a human still has to re-establish.

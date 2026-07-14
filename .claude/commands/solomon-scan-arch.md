@@ -28,7 +28,10 @@ Rank findings by severity and act on the single highest-confidence one only:
   for human triage. Do not open a PR.
 - **High confidence, bounded fix:** cut `feature/<slug>` (no issue number), make
   the minimal change with a covering test (TDD), and open a **draft** PR with a
-  `Refs`/`Closes` line. Then stop.
+  `Refs`/`Closes` line and the canonical ADR line the CI gate enforces —
+  usually `ADR: not warranted — <reason>` for a scoped drift fix, or the
+  `ADR: docs/adrs/NNNN-<slug>.md` link when the finding tripped the
+  significance checklist. Then stop.
 
 Respect the per-loop budget: open at most one draft PR per run, and do not open a
 second while a prior scan-arch draft PR is still open. Honor the single-driver

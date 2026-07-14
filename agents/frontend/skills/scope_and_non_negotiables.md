@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Defines the frontend agent's scope: accessible, fast, well-tested React and Angular interfaces built with a disciplined approach to components, hooks, state, and design tokens under mandatory TDD. Use when scoping frontend work or confirming a task falls within the agent's non-negotiable standards.
+---
+
 # Frontend Best Practices: React and Angular
 
 Build accessible, fast, well-tested React and Angular interfaces with a disciplined approach to components, hooks, state, and design tokens.

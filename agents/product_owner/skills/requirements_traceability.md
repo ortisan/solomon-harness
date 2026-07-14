@@ -1,3 +1,8 @@
+---
+name: requirements-traceability
+description: Governs maintaining the Requirements Traceability Matrix - the auditable chain from PRD requirement through story and acceptance criterion to test and PR/commit, with stable IDs and computed orphan detection. Use when freezing a PRD, handing criteria to qa, or reconciling coverage gaps.
+---
+
 # Requirements Traceability
 
 Maintain an unbroken, auditable chain from every PRD requirement down to the code and tests that satisfy it, so no requirement ships untested and no code exists without a requirement behind it. The Product Owner owns the forward links (requirement to story to acceptance criterion); QA owns the test links back up the chain (see qa `test_planning_and_traceability`). The shared contract between you is the Requirements Traceability Matrix (RTM), kept as a memory-backed artifact rather than a stale spreadsheet.

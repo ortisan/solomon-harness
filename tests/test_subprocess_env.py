@@ -19,7 +19,11 @@ class TestCleanGitEnv(unittest.TestCase):
         }
         with patch.dict(os.environ, leaked):
             env = clean_git_env()
-        self.assertFalse(any(k.startswith("GIT_") for k in env))
+        # Every inherited GIT_* is stripped. GIT_TERMINAL_PROMPT is the one
+        # exception: it is deliberately (re)set to "0" so a stalled credential
+        # prompt fails fast instead of hanging a git subprocess.
+        self.assertFalse(any(k.startswith("GIT_") for k in env if k != "GIT_TERMINAL_PROMPT"))
+        self.assertEqual(env.get("GIT_TERMINAL_PROMPT"), "0")
 
     def test_preserves_non_git_variables(self):
         with patch.dict(os.environ, {"PATH": os.environ.get("PATH", ""), "SOME_OTHER_VAR": "keep-me"}):

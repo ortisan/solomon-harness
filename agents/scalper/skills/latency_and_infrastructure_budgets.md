@@ -1,3 +1,8 @@
+---
+name: latency-and-infrastructure-budgets
+description: Governs the latency budget of a scalping strategy: how to decompose it, realistic numbers per infrastructure tier, and why every strategy states its latency tolerance on the hypothesis card before code is written. Use when estimating infrastructure needs or checking a signal's timescale against its stated latency tier.
+---
+
 # Latency And Infrastructure Budgets
 
 This skill governs the latency budget of a scalping strategy: how to decompose it, what numbers are realistic per infrastructure tier, and why every strategy must state its latency tolerance on the hypothesis card before any code is written. Latency is not an implementation detail — it decides which signals are tradable at all, and a design that is honest about its tier avoids building a colo strategy on a retail connection.

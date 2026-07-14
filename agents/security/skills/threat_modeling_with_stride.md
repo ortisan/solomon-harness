@@ -1,3 +1,8 @@
+---
+name: threat-modeling-with-stride
+description: Provides a repeatable STRIDE method for finding design-level flaws before code exists — build the data-flow diagram, mark trust boundaries, enumerate Spoofing, Tampering, Repudiation, Information-disclosure, Denial-of-service, and Elevation-of-privilege threats per element, rank them by CVSS, and mitigate or accept each one. Use when a design change crosses a trust boundary, before implementation starts, or when re-opening an existing threat model after a new data store or listener appears.
+---
+
 # Threat Modeling with STRIDE
 
 A repeatable method for finding design-level flaws before code exists: draw the data-flow diagram, mark trust boundaries, enumerate STRIDE threats per element, rank them, and mitigate or formally accept each one. A design change that crosses a trust boundary without a threat model is not ready for implementation.

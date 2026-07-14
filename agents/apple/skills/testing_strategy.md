@@ -1,3 +1,8 @@
+---
+name: testing-strategy
+description: Governs Swift Testing versus XCTest selection, traits and parameterized tests, async and concurrency testing, protocol-based mocking, snapshot testing, and XCUITest end-to-end flows on Apple platforms. Use when writing or reviewing Apple-platform tests, choosing a testing framework, or configuring simulator-based CI test runs and coverage gates.
+---
+
 # Testing Strategy
 
 Default to the Swift Testing framework for new unit and logic tests, keep XCTest only where the platform still requires it (UI automation, performance, and the few APIs Swift Testing does not yet cover), and treat every test as fast, isolated, and deterministic by injecting collaborators behind protocols rather than reaching for the network, the clock, or shared singletons. Build the suite as a pyramid: many Swift Testing unit tests, a thinner band of integration tests, and a small set of XCUITest end-to-end flows, all running headless on simulators in CI with coverage gated.

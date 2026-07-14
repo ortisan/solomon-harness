@@ -1,3 +1,8 @@
+---
+name: swiftdata-and-persistence
+description: Governs SwiftData model design with @Model, ModelContainer and ModelActor concurrency, #Predicate and FetchDescriptor querying, VersionedSchema migration plans, Core Data interop, and CloudKit sync constraints. Use when designing or reviewing local persistence, a schema migration, background data import, or iCloud sync on Apple platforms.
+---
+
 # SwiftData and Persistence
 
 SwiftData is the default local persistence layer for new Apple apps targeting iOS 17 and later, and Core Data is the fallback you reach for only when you need an API SwiftData does not yet expose. Model the schema as code, version it from day one, do all mutation through a `ModelContext` bound to a known actor, and treat the on-device store as the source of truth so the UI works offline and syncs opportunistically.

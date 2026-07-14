@@ -1,3 +1,8 @@
+---
+name: maintainability-and-lifecycle
+description: Governs keeping documentation true after it ships - page ownership and CODEOWNERS routing, review cadence and last_reviewed staleness thresholds, CI-executed examples and link checks, deprecation notices, and deletion. Use when assigning doc ownership, running the staleness sweep, or retiring a page.
+---
+
 # Maintainability and Lifecycle
 
 This skill governs how documentation stays true after it ships: ownership, review cadence, staleness detection, docs tested mechanically in CI, deprecation notices, and deliberate deletion. The stance: documentation decays by default — code changes and prose does not — so correctness over time is an engineered property with owners, dates, and failing builds, not a hope.

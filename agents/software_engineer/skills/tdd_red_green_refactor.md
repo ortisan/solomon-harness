@@ -1,3 +1,8 @@
+---
+name: tdd-red-green-refactor
+description: Governs the strict red-green-refactor cycle — one failing test observed for the right reason before any production code, the least code to reach green, and refactoring only on a passing suite — with rules for test naming, mocking boundaries, and mutation spot checks. Use when starting a new behavior, fixing a bug, or reviewing whether a diff was actually test-first.
+---
+
 # TDD: Red, Green, Refactor
 
 This skill governs how the software engineer writes code: strict test-driven

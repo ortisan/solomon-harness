@@ -715,6 +715,13 @@ class TestMergePrAndClose(unittest.TestCase):
     that succeeds but whose board move fails, it must report the accurate
     partial state (merged, but not fully converged) rather than a blanket ok."""
 
+    def setUp(self):
+        self.claim_patcher = patch("solomon_harness.claim.release_claim")
+        self.mock_release_claim = self.claim_patcher.start()
+
+    def tearDown(self):
+        self.claim_patcher.stop()
+
     def test_successful_merge_completes_the_done_transition(self):
         with (
             patch("solomon_harness.github._gh", return_value={"ok": True}) as gh,
@@ -730,6 +737,9 @@ class TestMergePrAndClose(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["pr"], 42)
         self.assertEqual(res["issue"], 172)
+        # M14: the merge-triggered per-issue claim release must actually run,
+        # not merely be patchable -- confirm it was called for this issue.
+        self.mock_release_claim.assert_called_once_with(unittest.mock.ANY, 172, force=True)
 
     def test_merge_succeeds_but_board_move_fails_reports_partial_state(self):
         """#195 architecture-review finding: a merge that succeeds but whose
@@ -766,6 +776,94 @@ class TestMergePrAndClose(unittest.TestCase):
         record_terminal.assert_not_called()
         self.assertFalse(res["ok"])
         self.assertIn("error", res)
+
+    def test_releases_via_an_injected_fake_claim_store(self):
+        # Proves the seam (issue #238 / review-215-m12): the merge path uses
+        # an injected ClaimStore instead of the default GitClaimStore.
+        released = []
+
+        class FakeClaimStore:
+            def release(self, issue_number, session_id=None, force=False):
+                released.append((issue_number, session_id, force))
+                return True
+
+        with (
+            patch("solomon_harness.github._gh", return_value={"ok": True}),
+            patch(
+                "solomon_harness.github.set_issue_status", return_value={"ok": True}
+            ),
+            patch("solomon_harness.github.record_terminal_status"),
+        ):
+            res = github.merge_pr_and_close(42, 172, claim_store=FakeClaimStore())
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(released, [(172, None, True)])
+        # The default-path patch from setUp must not have been used.
+        self.mock_release_claim.assert_not_called()
+
+
+class TestListOpenIssuesClaimAware(unittest.TestCase):
+    """ADR-0024 item 6: the direct board-scan read path (gh issue list) must
+    exclude actively-claimed issues too, not only MemoryService.get_open_issues."""
+
+    def test_excludes_actively_claimed_issue(self):
+        with (
+            patch(
+                "solomon_harness.github._gh",
+                return_value={
+                    "ok": True,
+                    "data": [
+                        {"number": 1, "title": "claimed by someone else"},
+                        {"number": 2, "title": "unclaimed"},
+                    ],
+                },
+            ),
+            patch(
+                "solomon_harness.claim.filter_unclaimed",
+                return_value=[2],
+            ) as filter_unclaimed,
+        ):
+            res = github.list_open_issues("/tmp/workspace")
+
+        self.assertTrue(res["ok"])
+        numbers = [i["number"] for i in res["issues"]]
+        self.assertNotIn(1, numbers)
+        self.assertIn(2, numbers)
+        filter_unclaimed.assert_called_once_with("/tmp/workspace", [1, 2])
+
+    def test_gh_failure_degrades_to_ok_false(self):
+        with patch(
+            "solomon_harness.github._gh",
+            return_value={"ok": False, "error": "not authenticated"},
+        ):
+            res = github.list_open_issues("/tmp/workspace")
+        self.assertFalse(res["ok"])
+        self.assertIn("error", res)
+
+    def test_excludes_via_an_injected_fake_claim_store(self):
+        # Proves the seam (issue #238 / review-215-m12): an injected
+        # ClaimStore is used instead of the default GitClaimStore, without
+        # patching solomon_harness.claim.*.
+        class FakeClaimStore:
+            def filter_unclaimed(self, issue_numbers, session_id=None):
+                return [n for n in issue_numbers if n != 1]
+
+        with patch(
+            "solomon_harness.github._gh",
+            return_value={
+                "ok": True,
+                "data": [
+                    {"number": 1, "title": "claimed by someone else"},
+                    {"number": 2, "title": "unclaimed"},
+                ],
+            },
+        ):
+            res = github.list_open_issues("/tmp/workspace", claim_store=FakeClaimStore())
+
+        self.assertTrue(res["ok"])
+        numbers = [i["number"] for i in res["issues"]]
+        self.assertNotIn(1, numbers)
+        self.assertIn(2, numbers)
 
 
 class TestGithubCliMerge(unittest.TestCase):

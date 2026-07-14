@@ -1,3 +1,8 @@
+---
+name: product-discovery-and-jtbd
+description: Governs continuous product discovery - dual-track separation from delivery, Jobs-to-be-Done framing, the four forces of progress, the opportunity solution tree, and the Riskiest Assumption Test gating promotion from Ideas to Backlog. Use when framing or validating a new initiative.
+---
+
 # Product Discovery and Jobs-to-be-Done
 
 Run discovery as a continuous activity that decides what is worth building before delivery commits to how it is built. Anchor every initiative to a customer job and a target outcome, map the assumptions the idea depends on, and spend your evidence budget killing the riskiest ones first. Discovery produces validated problems and bets; the_prd_contract_template, user_stories_invest, and acceptance_criteria_given_when_then turn those bets into delivery. Keep the two tracks distinct so an unvalidated assumption never reaches a sprint as a committed requirement.

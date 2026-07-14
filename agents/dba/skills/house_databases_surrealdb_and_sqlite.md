@@ -1,3 +1,8 @@
+---
+name: house-databases-surrealdb-and-sqlite
+description: Documents this project's memory store: a SurrealDB primary with a SQLite fallback in `solomon_harness/tools/database_client.py`, covering backend selection, tenancy, and reconciling divergence between the two. Use when working on the memory layer or debugging a SurrealDB/SQLite discrepancy.
+---
+
 # House Databases: SurrealDB and SQLite
 
 Operating this project's memory store: a SurrealDB primary with a SQLite fallback, implemented in `solomon_harness/tools/database_client.py`. The stance: the shared SurrealDB is the source of truth, the SQLite fallback exists so a backend outage never blocks or loses a write, and every divergence between them is reconciled deliberately, never left to drift. Everything below is grounded in the code; do not invent flags or paths that are not in it.

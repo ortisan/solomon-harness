@@ -1,3 +1,8 @@
+---
+name: accessibility-target-wcag-22-aa
+description: Sets WCAG 2.2 AA as the accessibility conformance floor for every interface, covering SPA-specific obligations such as focus management, page-load announcements, target size, and semantic HTML before ARIA. Use when building or reviewing any React or Angular component, page, or interaction for accessibility compliance.
+---
+
 # Accessibility (Target: WCAG 2.2 AA)
 
 This skill sets WCAG 2.2 AA as the conformance floor for every interface shipped here, with the SPA-specific obligations spelled out: single-page apps defeat the browser behaviors (focus reset, page-load announcement) that static pages get for free, so the app must recreate them deliberately. Semantic HTML first; ARIA only when no native element fits.
