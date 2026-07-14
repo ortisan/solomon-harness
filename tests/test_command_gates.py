@@ -182,3 +182,86 @@ def test_workflow_doc_documents_the_merge_owner():
     doc = _read(os.path.join("docs", "solomon-workflow.md"))
     assert "The merge-to-Done transition" in doc
     assert "ADR-0020" in doc
+
+
+# --- Socratic elicitation gate in /solomon-issue (#222, ADR-0025) -------------
+
+# The criteria as they appear in the gate text itself, pinned with their
+# distinctive continuations so generic words elsewhere in the files (the
+# "Problem statement" template, the user-story persona/outcome lines) cannot
+# satisfy the assertions.
+COMMAND_CRITERIA = (
+    "**Problem** (the pain and why now)",
+    "**Persona** (a real user type",
+    "**Outcome** (the observable change that means success)",
+    "**Boundary** (at least one scope limit or constraint)",
+    "**Single reading**",
+    "**Job behind the solution**",
+)
+
+DOC_CRITERIA = (
+    "**Problem** — the pain or trigger is stated",
+    "**Persona** — who is affected is identifiable",
+    "**Outcome** — the observable change that means success is stated",
+    "**Boundary** — at least one scope limit or constraint is stated",
+    "**Single reading**",
+    "**Job behind the solution**",
+)
+
+
+def test_issue_command_wires_the_elicitation_gate():
+    body = _read(os.path.join(".claude", "commands", "solomon-issue.md"))
+    low = body.lower()
+    assert "elicitation gate" in low
+    for criterion in COMMAND_CRITERIA:
+        assert criterion in body, criterion
+    # Bounds: questioning is bounded and targets only what is missing.
+    assert "at most 3 rounds" in low
+    assert "at most 4 questions" in low
+    assert "only for failed criteria" in low
+    # Trace lines and the decline/headless paths, pinned verbatim.
+    assert "Elicitation: skipped — all 6 readiness criteria met" in body
+    assert "Elicitation: skipped (non-interactive)" in body
+    assert "Assumptions (unelicited)" in body
+    # The gate must not weaken the outward-action gate (#222 R1).
+    assert "confirm before creating" in low
+
+
+def test_workflow_doc_defines_the_elicitation_gate():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    low = doc.lower()
+    assert "elicitation gate" in low
+    for criterion in DOC_CRITERIA:
+        assert criterion in doc, criterion
+    assert "at most 3 rounds" in low
+    assert "at most 4 questions" in low
+
+
+def test_gemini_mirror_carries_the_elicitation_gate():
+    body = _read(os.path.join(".gemini", "commands", "solomon-issue.toml"))
+    low = body.lower()
+    assert "elicitation gate" in low
+    # The mirror embeds the command prompt verbatim: the same criteria,
+    # bounds, and trace lines must survive regeneration untruncated.
+    for criterion in COMMAND_CRITERIA:
+        assert criterion in body, criterion
+    assert "at most 3 rounds" in low
+    assert "at most 4 questions" in low
+    assert "Elicitation: skipped — all 6 readiness criteria met" in body
+    assert "Elicitation: skipped (non-interactive)" in body
+    assert "Assumptions (unelicited)" in body
+
+
+def test_product_owner_has_the_socratic_elicitation_skill():
+    skill = _read(
+        os.path.join("agents", "product_owner", "skills", "socratic_elicitation.md")
+    )
+    low = skill.lower()
+    assert "at most 3 rounds" in low
+    assert "at most 4 questions" in low
+    assert "Assumptions (unelicited)" in skill
+    assert "never re-ask" in low
+    profile = _read(
+        os.path.join("agents", "product_owner", "agents", "product_owner.md")
+    )
+    assert "socratic_elicitation" in profile
