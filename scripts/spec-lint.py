@@ -2,12 +2,19 @@
 """Validate the house spec documents under ``docs/specs`` (#221 S1).
 
 Every spec is ``<N>-<slug>.md`` (a plain issue number, a kebab-case slug) and
-must carry the seven mandated sections: Context, Problem, Requirements,
-Acceptance Criteria, Design Constraints, Out of Scope, and Traceability. A
-section may hold the explicit placeholder ``TBD (refine)`` but never be empty,
-and Traceability must cite the filename's issue number (``#<N>``). The
-template and the README index are ignored. A missing specs directory is valid
-(nothing to lint yet).
+must carry the nine mandated sections: Context, Problem, Requirements,
+Implementation Pointers, Acceptance Criteria, Verification, Design Constraints,
+Out of Scope, and Traceability. A section may hold the explicit placeholder
+``TBD (refine)`` but never be empty, and Traceability must cite the filename's
+issue number (``#<N>``). The template and the README index are ignored. A
+missing specs directory is valid (nothing to lint yet).
+
+Implementation-ready bar (maintainer directive 2026-07-14): once a spec is
+marked ``Status: ready`` or ``Status: implemented``, no section may still hold
+the ``TBD (refine)`` placeholder. Refinement resolves every section — exact
+``file:line`` pointers, the concrete approach, and the verification command —
+so the implementing model never has to guess. A ``draft`` spec may still carry
+placeholders.
 
 Run it from the repository root, point it at a directory, or lint one file:
 
@@ -33,11 +40,23 @@ REQUIRED_SECTIONS = (
     "## Context",
     "## Problem",
     "## Requirements",
+    "## Implementation Pointers",
     "## Acceptance Criteria",
+    "## Verification",
     "## Design Constraints",
     "## Out of Scope",
     "## Traceability",
 )
+# The implementation-ready bar: a spec at these statuses must carry no
+# unresolved placeholder — refinement leaves nothing for the implementer to
+# guess. The placeholder counts only when it stands as its own line (the house
+# convention: an unresolved section's body IS the placeholder), so a section
+# that merely quotes "TBD (refine)" inside a sentence is not flagged. The first
+# "Status:" token in the file is the spec's status; it lives in the header
+# above the first section, so scanning section bodies never trips over it.
+TBD_PLACEHOLDER = "TBD (refine)"
+COMPLETION_GATED_STATUSES = {"ready", "implemented"}
+STATUS_RE = re.compile(r"Status:\s*([A-Za-z]+)")
 
 
 def _sections(text: str) -> tuple[dict[str, str], list[str]]:
@@ -77,7 +96,8 @@ def check_spec(path: Path) -> list[str]:
     if path.stat().st_size > MAX_SPEC_BYTES:
         return [f"{path}: larger than {MAX_SPEC_BYTES} bytes — not a spec"]
     issue_number = match.group(1)
-    sections, duplicates = _sections(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    sections, duplicates = _sections(text)
     for heading in duplicates:
         gaps.append(f"{path}: duplicated section heading '{heading}'")
     for heading in REQUIRED_SECTIONS:
@@ -88,6 +108,16 @@ def check_spec(path: Path) -> list[str]:
                 f"{path}: section '{heading}' is empty — carry content or the "
                 f"explicit placeholder 'TBD (refine)'"
             )
+    status_match = STATUS_RE.search(text)
+    status = status_match.group(1).lower() if status_match else ""
+    if status in COMPLETION_GATED_STATUSES:
+        for heading, body in sections.items():
+            if any(line.strip() == TBD_PLACEHOLDER for line in body.splitlines()):
+                gaps.append(
+                    f"{path}: section '{heading}' still holds "
+                    f"'{TBD_PLACEHOLDER}' but the spec is marked Status: "
+                    f"{status} — resolve every section before Ready"
+                )
     traceability = sections.get("## Traceability", "")
     if "## Traceability" in sections and not re.search(
         rf"#{issue_number}\b", traceability

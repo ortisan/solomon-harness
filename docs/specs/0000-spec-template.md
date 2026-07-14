@@ -18,9 +18,22 @@ solutioning.>
 <What must hold, numbered. Functional and non-functional, with concrete
 numbers where they exist. TBD (refine) if unknown.>
 
+## Implementation Pointers
+
+<Exact file:line targets the change touches, the current behavior versus the
+expected behavior at each, and the concrete approach. A model must be able to
+implement from this without asking anything. TBD (refine) at creation;
+refinement resolves it to real pointers before the issue is Ready.>
+
 ## Acceptance Criteria
 
 <The Gherkin scenarios, mirrored from the issue body.>
+
+## Verification
+
+<The exact command(s) a reviewer or agent runs to prove the change works: the
+test invocation, the manual repro, the check to eyeball. TBD (refine) at
+creation; refinement states a runnable command before the issue is Ready.>
 
 ## Design Constraints
 

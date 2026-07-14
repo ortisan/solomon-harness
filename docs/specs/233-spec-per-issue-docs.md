@@ -27,6 +27,19 @@ reconstruct intent from scattered issue text.
 4. No runtime package code: docs, a standalone validator, and prompt wiring
    only.
 
+## Implementation Pointers
+
+- `docs/specs/0000-spec-template.md` — the house template carrying the mandated
+  sections; new specs copy it.
+- `scripts/spec-lint.py:32` — `REQUIRED_SECTIONS`; the standalone validator
+  that exits 0/1 and names each defect, wired into the CI validators job.
+- `.claude/commands/solomon-issue.md` step 8 (and its `.gemini` mirror) —
+  generates `docs/specs/<N>-<slug>.md` via the Write tool and lints it.
+- `docs/specs/README.md` — the convention (filename rule, sections).
+
+Approach: documentation plus a standalone validator plus prompt wiring, with no
+runtime package code, matching the ADR-0025/#222 content-gate pattern.
+
 ## Acceptance Criteria
 
 ```gherkin
@@ -50,6 +63,13 @@ Scenario: Failure path — spec-lint rejects a malformed spec
   Given a spec file missing the Traceability section or misnamed <N>-<slug>.md
   When scripts/spec-lint.py runs
   Then it exits 1 and names the missing section or the filename defect
+```
+
+## Verification
+
+```bash
+uv run python scripts/spec-lint.py            # lint the whole docs/specs tree
+uv run pytest tests/test_spec_lint.py -q      # the validator's unit tests
 ```
 
 ## Design Constraints

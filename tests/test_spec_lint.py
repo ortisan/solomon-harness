@@ -1,10 +1,13 @@
 """Tests for scripts/spec-lint.py (#221 S1).
 
 The validator enforces the house spec convention: <N>-<slug>.md filenames,
-the seven mandated sections, no empty section (the explicit 'TBD (refine)'
+the nine mandated sections, no empty section (the explicit 'TBD (refine)'
 placeholder is content), and Traceability citing the filename's issue number.
-Driven through a subprocess so the exit codes and messages are exercised
-exactly as CI sees them.
+It also enforces the implementation-ready bar (maintainer directive
+2026-07-14): once a spec is marked Status: ready or implemented, no section may
+still hold the 'TBD (refine)' placeholder, so a refined issue is implementable
+without guessing. Driven through a subprocess so the exit codes and messages
+are exercised exactly as CI sees them.
 """
 
 import subprocess
@@ -29,9 +32,18 @@ Users cannot export reports.
 
 1. Export completes in under 5 s for 10k rows.
 
+## Implementation Pointers
+
+`solomon_harness/report.py:120` — the writer renders HTML only; add an
+`export_csv` path. Approach: stream rows through `csv.writer`.
+
 ## Acceptance Criteria
 
 Scenario: happy path export.
+
+## Verification
+
+`uv run pytest tests/test_report.py -q` passes.
 
 ## Design Constraints
 
@@ -153,3 +165,75 @@ def test_missing_specs_directory_is_valid(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "nothing to lint" in result.stdout
+
+
+def test_missing_implementation_pointers_section_fails(tmp_path):
+    body = VALID_SPEC.replace(
+        "## Implementation Pointers\n\n"
+        "`solomon_harness/report.py:120` — the writer renders HTML only; add an\n"
+        "`export_csv` path. Approach: stream rows through `csv.writer`.\n\n",
+        "",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "missing required section '## Implementation Pointers'" in result.stderr
+
+
+def test_missing_verification_section_fails(tmp_path):
+    body = VALID_SPEC.replace(
+        "## Verification\n\n`uv run pytest tests/test_report.py -q` passes.\n\n",
+        "",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "missing required section '## Verification'" in result.stderr
+
+
+def test_draft_spec_may_carry_tbd_placeholder(tmp_path):
+    # VALID_SPEC is Status: draft and its Design Constraints is TBD (refine).
+    (tmp_path / "42-add-csv-export.md").write_text(VALID_SPEC, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_ready_spec_with_tbd_is_rejected_naming_the_section(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+    assert "Status: ready" in result.stderr
+    assert "TBD (refine)" in result.stderr
+
+
+def test_ready_spec_with_every_section_resolved_passes(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\nHexagonal ports; parameterized queries only.\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_implemented_spec_with_tbd_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: implemented")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "Status: implemented" in result.stderr
+
+
+def test_ready_spec_inline_placeholder_mention_is_not_flagged(tmp_path):
+    # A section that quotes the placeholder inside a sentence has resolved
+    # content; only a standalone 'TBD (refine)' line means unresolved.
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        '## Design Constraints\n\nEach empty section carries "TBD (refine)" until '
+        "refined.\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr

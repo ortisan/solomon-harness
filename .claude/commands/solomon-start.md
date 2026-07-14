@@ -120,6 +120,16 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   commit-msg hook enforces format and bans emojis. Keep the diff inside the PLAN.md target-files
   fence; re-plan if it strays. Then continue to step 6.
 
+- **Discovered-problem protocol** (see the section of that name in `docs/solomon-workflow.md`) —
+  implementation routinely surfaces a *different* problem: an unrelated defect, a better approach,
+  a missing test, a refactor worth doing. File it as a NEW issue (`/solomon-bug` for a defect,
+  `/solomon-issue` for a feature/improvement, a `type:chore` for cleanup) whose body links this one
+  with `Refs #$ARGUMENTS`. Never append the discovery as a comment on issue #$ARGUMENTS, and never
+  silently widen this change beyond the PLAN.md target-files fence. If the discovery blocks #$ARGUMENTS,
+  stop and present the choice to the user as enumerated options (file-and-continue, file-and-switch,
+  Other) — do not rescope unilaterally; a headless run files the `Refs #$ARGUMENTS` issue, records the
+  block in its report, and stops rather than expanding scope.
+
 - **Manual mode** — do NOT write any production or test code and do NOT open a PR. Report, with
   concrete values, the worktree path, the branch `feature/<slug>`, and the PLAN.md path as the
   developer's starting point, plus the ADR decision from step 4. Leave the board card in

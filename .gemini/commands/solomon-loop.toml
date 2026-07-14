@@ -22,5 +22,11 @@ human-gated, and `solomon-harness broker apply` refuses headless runs (exit 3).
 Report any surfaced gap to the user as a candidate next action;
 never attempt the acquisition from the loop.
 
+Discovered problems: each agent follows the discovered-problem protocol (see
+`docs/solomon-workflow.md`). A problem or better solution found while
+implementing an issue becomes a NEW issue linked with `Refs #<parent>` — never
+a comment appended to the in-flight issue, and never a silent widening of that
+issue's diff. Surface the newly filed issues in the run summary.
+
 After the command completes, summarize the success/failure of each issue's autonomous pipeline.
 '''

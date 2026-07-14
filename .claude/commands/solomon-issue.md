@@ -83,13 +83,19 @@ Steps:
    `docs/specs/<N>-<slug>.md` with the Write tool — `<N>` = the created issue
    number with no leading zeros, `<slug>` = the kebab-case title reduced to
    ASCII lowercase `[a-z0-9]` and single hyphens, everything else stripped.
-   Pre-fill from the shaped body: the elicitation trace into the spec's Context, the
+   Leave the header at `Status: draft`. Pre-fill from the shaped body: the
+   elicitation trace into the spec's Context, the
    issue's Context section (the need and why) into the spec's Problem, the scope into Requirements, the Gherkin
    into Acceptance Criteria, the house rules that bound the solution
    (architecture style, security posture, conventions) into
    Design Constraints, the out-of-scope list into Out of Scope, and
-   Traceability citing issue `#<N>` and any related ADR. Any section without content
-   carries the explicit placeholder `TBD (refine)`. Run
+   Traceability citing issue `#<N>` and any related ADR. The two
+   implementation-ready sections — **Implementation Pointers** (exact `file:line`
+   targets, current versus expected behavior, the concrete approach) and
+   **Verification** (the exact command that proves the change works) — carry the
+   explicit placeholder `TBD (refine)` unless the demand already pins them down;
+   `/solomon-refine` resolves them before the issue is Ready. Any other section
+   without content carries the same placeholder. Run
    `uv run python scripts/spec-lint.py docs/specs/<N>-<slug>.md` and fix until
    it exits 0. The spec ships with the issue's first implementation PR —
    never pushed to a protected branch directly.
