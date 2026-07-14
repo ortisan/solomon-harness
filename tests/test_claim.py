@@ -579,6 +579,35 @@ class TestClaimGitOperations(unittest.TestCase):
         self.assertEqual(len(res["issues"]), 1)
         self.assertTrue(any("unfiltered" in m.lower() for m in logs.output))
 
+    @patch("solomon_harness.tools.database_client.DatabaseClient.get_open_issues")
+    def test_memory_service_get_open_issues_filters_via_an_injected_fake_claim_store(
+        self, mock_db_issues
+    ):
+        # Proves the seam (issue #238 / review-215-m12): MemoryService.get_open_issues
+        # defers to whatever ClaimStore it was given, so a caller can swap the
+        # git-backed adapter for a test double without patching solomon_harness.claim.*.
+        from solomon_harness.memory_service import MemoryService
+
+        class FakeClaimStore:
+            def filter_unclaimed(self, issue_numbers, session_id=None):
+                return [n for n in issue_numbers if n != 1]
+
+        mock_db_issues.return_value = [
+            {"github_id": "1", "title": "issue 1"},
+            {"github_id": "2", "title": "issue 2"},
+            {"github_id": "tracking-row", "title": "RAID row"},
+        ]
+
+        service = MemoryService(harness_dir=self.local, claim_store=FakeClaimStore())
+        res = service.get_open_issues()
+        issues = res["issues"]
+
+        self.assertEqual(len(issues), 2)
+        github_ids = [i["github_id"] for i in issues]
+        self.assertNotIn("1", github_ids)
+        self.assertIn("2", github_ids)
+        self.assertIn("tracking-row", github_ids)
+
     @patch("sys.stdout", new_callable=lambda: StringIO())
     @patch("solomon_harness.claim.get_claim")
     def test_cli_claim_status_unclaimed(self, mock_get, mock_stdout):
@@ -667,6 +696,119 @@ class TestClaimGitOperations(unittest.TestCase):
         out = mock_stdout.getvalue()
         self.assertIn("MALFORMED", out)
         self.assertIn("--force", out)
+
+
+class TestGitClaimStoreDelegation(unittest.TestCase):
+    """GitClaimStore delegates each ClaimStore method to the matching
+    module-level function (issue #238, review-215-m12), verified end to end
+    against a real bare origin -- the same fixture TestClaimGitOperations
+    uses -- so its behavior stays byte-identical to calling the module
+    functions directly."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.origin = os.path.join(self.tmp, "origin.git")
+        self.local = os.path.join(self.tmp, "local")
+
+        _git(None, "init", "--bare", "-q", self.origin)
+        _git(None, "clone", "-q", self.origin, self.local)
+        _git(self.local, "config", "user.email", "t@example.com")
+        _git(self.local, "config", "user.name", "Test")
+
+        with open(os.path.join(self.local, "README.md"), "w") as f:
+            f.write("test")
+        _git(self.local, "add", "README.md")
+        _git(self.local, "commit", "-q", "-m", "initial commit")
+        _git(self.local, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+        for target, kwargs in (
+            ("solomon_harness.claim.has_active_pr_or_review", {"return_value": False}),
+            ("solomon_harness.claim._pr_liveness", {"return_value": (False, False)}),
+            ("solomon_harness.github._gh", {"return_value": {"ok": True, "stdout": ""}}),
+        ):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        self.store = claim.GitClaimStore(self.local)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_acquire_get_release_round_trip_through_the_store(self):
+        self.assertTrue(self.store.acquire(99, session_id="sess-a"))
+
+        held = self.store.get(99)
+        self.assertIsNotNone(held)
+        self.assertEqual(held["session_id"], "sess-a")
+
+        self.assertEqual(self.store.fetch_all(), {99: held})
+        self.assertEqual(self.store.filter_unclaimed([99, 100], session_id="sess-b"), [100])
+        self.assertTrue(self.store.refresh(99, "sess-a"))
+        self.assertFalse(self.store.pr_protected(99))
+
+        holder = self.store.holder(99)
+        self.assertIsNotNone(holder)
+        self.assertEqual(holder["session_id"], "sess-a")
+
+        self.assertTrue(self.store.release(99, session_id="sess-a"))
+        self.assertIsNone(self.store.get(99))
+
+    def test_each_method_delegates_to_its_module_level_function(self):
+        # Patching the module-global function must change the store's
+        # behavior -- proves delegation, not a private reimplementation.
+        with patch("solomon_harness.claim.claim_issue", return_value="sentinel-a") as mock_fn:
+            result = self.store.acquire(1, session_id="sess-x")
+        mock_fn.assert_called_once_with(self.local, 1, current_session_id="sess-x")
+        self.assertEqual(result, "sentinel-a")
+
+        with patch("solomon_harness.claim.release_claim", return_value="sentinel-r") as mock_fn:
+            result = self.store.release(1, session_id="sess-x", force=True)
+        mock_fn.assert_called_once_with(self.local, 1, current_session_id="sess-x", force=True)
+        self.assertEqual(result, "sentinel-r")
+
+        with patch("solomon_harness.claim.refresh_claim", return_value="sentinel-h") as mock_fn:
+            result = self.store.refresh(1, "sess-x")
+        mock_fn.assert_called_once_with(self.local, 1, "sess-x")
+        self.assertEqual(result, "sentinel-h")
+
+        with patch("solomon_harness.claim.get_claim", return_value="sentinel-g") as mock_fn:
+            result = self.store.get(1)
+        mock_fn.assert_called_once_with(self.local, 1)
+        self.assertEqual(result, "sentinel-g")
+
+        with patch("solomon_harness.claim.fetch_all_claims", return_value="sentinel-f") as mock_fn:
+            result = self.store.fetch_all()
+        mock_fn.assert_called_once_with(self.local)
+        self.assertEqual(result, "sentinel-f")
+
+        with patch("solomon_harness.claim.filter_unclaimed", return_value="sentinel-u") as mock_fn:
+            result = self.store.filter_unclaimed([1, 2], session_id="sess-x")
+        mock_fn.assert_called_once_with(self.local, [1, 2], current_session_id="sess-x")
+        self.assertEqual(result, "sentinel-u")
+
+        with patch("solomon_harness.claim.get_claim_holder", return_value="sentinel-hd") as mock_fn:
+            result = self.store.holder(1)
+        mock_fn.assert_called_once_with(self.local, 1)
+        self.assertEqual(result, "sentinel-hd")
+
+        with patch("solomon_harness.claim.has_active_pr_or_review", return_value="sentinel-p") as mock_fn:
+            result = self.store.pr_protected(1)
+        mock_fn.assert_called_once_with(self.local, 1)
+        self.assertEqual(result, "sentinel-p")
+
+    def test_release_and_filter_unclaimed_omit_kwargs_when_unset(self):
+        # Matches the exact call shape existing consumers (github.py,
+        # workflows.py) used before this port existed -- some of their tests
+        # assert the literal call signature, so a caller that leaves
+        # session_id/force at their defaults must not grow extra kwargs.
+        with patch("solomon_harness.claim.release_claim", return_value=True) as mock_fn:
+            self.store.release(1)
+        mock_fn.assert_called_once_with(self.local, 1)
+
+        with patch("solomon_harness.claim.filter_unclaimed", return_value=[]) as mock_fn:
+            self.store.filter_unclaimed([1, 2])
+        mock_fn.assert_called_once_with(self.local, [1, 2])
 
 
 class TestMalformedClaimRefRecovery(unittest.TestCase):
@@ -959,6 +1101,34 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
         mock_release.assert_called_once()
         _, kwargs = mock_release.call_args
         self.assertNotIn("force", kwargs)
+
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_run_stage_start_routes_claim_io_through_one_store_instance(
+        self, mock_store_cls
+    ):
+        # issue #238 / review-215-m12: run_stage builds exactly one
+        # GitClaimStore for the claim gate and routes every IO call (get,
+        # pr_protected, acquire) through that same instance, not the
+        # module-level functions directly.
+        from solomon_harness import workflows
+
+        mock_store = mock_store_cls.return_value
+        mock_store.get.return_value = None
+        mock_store.pr_protected.return_value = False
+        mock_store.acquire.return_value = True
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        mock_store_cls.assert_called_once_with(self.local)
+        mock_store.get.assert_called_once_with(99)
+        mock_store.pr_protected.assert_called_once_with(99)
+        mock_store.acquire.assert_called_once_with(99, session_id=unittest.mock.ANY)
+        mock_store.release.assert_not_called()
 
     @patch("solomon_harness.claim.release_claim")
     @patch("solomon_harness.claim.claim_issue", return_value=True)

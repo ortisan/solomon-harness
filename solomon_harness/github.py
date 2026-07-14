@@ -19,7 +19,10 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimStore
 
 # The board columns have one canonical definition in the memory adapter (the
 # lowest-level module); importing it here keeps github.py and cockpit_read.py from
@@ -378,7 +381,9 @@ def set_issue_status(
     return {"ok": True, "issue": issue_number, "status": status}
 
 
-def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
+def merge_pr_and_close(
+    pr_number: int, issue_number: int, claim_store: Optional["ClaimStore"] = None
+) -> Dict[str, Any]:
     """Squash-merge an approved PR, then complete the Done transition (#172, ADR-0020).
 
     This is the single owning call for the merge-to-Done transition: on a
@@ -396,6 +401,9 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     the memory write-through still fires -- only the board column needs a
     retry. The result reports ``ok: False`` with ``merged: True`` so a caller
     can tell that apart from nothing having happened at all.
+
+    ``claim_store`` defaults to a ``GitClaimStore`` over the resolved
+    workspace root; a caller may inject a different ``ClaimStore``.
     """
     res = _gh(["pr", "merge", str(pr_number), "--squash"])
     if not res.get("ok"):
@@ -407,11 +415,14 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     # ref self-heals via the 30-minute TTL, but a genuine release failure
     # should leave a diagnostic trail like every other best-effort path here.
     try:
-        from solomon_harness import claim
         from solomon_harness.skills import get_workspace_root
 
-        workspace_root = get_workspace_root()
-        if not claim.release_claim(workspace_root, issue_number, force=True):
+        store = claim_store
+        if store is None:
+            from solomon_harness.claim import GitClaimStore
+
+            store = GitClaimStore(get_workspace_root())
+        if not store.release(issue_number, force=True):
             logger.warning(
                 "issue #%s: claim release on merge did not confirm; the stale "
                 "ref self-heals via the claim TTL.",
@@ -437,7 +448,9 @@ def merge_pr_and_close(pr_number: int, issue_number: int) -> Dict[str, Any]:
     return {"ok": True, "pr": pr_number, "issue": issue_number}
 
 
-def list_open_issues(workspace_root: str, limit: int = 200) -> Dict[str, Any]:
+def list_open_issues(
+    workspace_root: str, limit: int = 200, claim_store: Optional["ClaimStore"] = None
+) -> Dict[str, Any]:
     """List open issues via gh, excluding those actively claimed by another session (ADR-0027).
 
     The claim-aware read for any scan path that lists open issues directly
@@ -451,6 +464,9 @@ def list_open_issues(workspace_root: str, limit: int = 200) -> Dict[str, Any]:
     error; a claims-fetch failure inside the filter degrades to the
     unfiltered gh result (logged, not silently dropped -- see
     ``claim.filter_unclaimed``).
+
+    ``claim_store`` defaults to a ``GitClaimStore(workspace_root)``; a caller
+    may inject a different ``ClaimStore``.
     """
     res = _gh(
         ["issue", "list", "--state", "open", "--limit", str(limit), "--json", "number,title"],
@@ -466,9 +482,12 @@ def list_open_issues(workspace_root: str, limit: int = 200) -> Dict[str, Any]:
         if isinstance(item, dict) and isinstance(item.get("number"), int)
     ]
 
-    from solomon_harness import claim
+    if claim_store is None:
+        from solomon_harness.claim import GitClaimStore
 
-    unclaimed_numbers = set(claim.filter_unclaimed(workspace_root, numbers))
+        claim_store = GitClaimStore(workspace_root)
+
+    unclaimed_numbers = set(claim_store.filter_unclaimed(numbers))
     issues = [item for item in raw_issues if item.get("number") in unclaimed_numbers]
     return {"ok": True, "issues": issues}
 

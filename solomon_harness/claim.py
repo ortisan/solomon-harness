@@ -23,7 +23,7 @@ import socket
 import datetime
 import subprocess
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from solomon_harness.subprocess_env import clean_git_env
 
@@ -795,3 +795,88 @@ def filter_unclaimed(
             continue
         unclaimed.append(number)
     return unclaimed
+
+
+class ClaimStore(Protocol):
+    """Port for the stateful, IO-bearing claim operations (issue #238 / review-215-m12).
+
+    Pure domain helpers carry no IO and stay outside this port as module-level
+    functions/constants: ``get_current_session_id``, ``parse_claim_commit_message``,
+    ``is_claim_active``, ``CLAIM_HEARTBEAT_INTERVAL_SECONDS``, ``CLAIM_TTL_SECONDS``.
+    Consumers depend on this Protocol rather than importing the module functions
+    directly, so the git-CAS mechanics can be swapped behind a different adapter
+    without touching a caller.
+    """
+
+    def acquire(self, issue_number: int, session_id: Optional[str] = None) -> bool: ...
+
+    def release(
+        self, issue_number: int, session_id: Optional[str] = None, force: bool = False
+    ) -> bool: ...
+
+    def refresh(self, issue_number: int, session_id: str) -> bool: ...
+
+    def get(self, issue_number: int) -> Optional[Dict[str, Any]]: ...
+
+    def fetch_all(self) -> Dict[int, Dict[str, Any]]: ...
+
+    def filter_unclaimed(
+        self, issue_numbers: Iterable[int], session_id: Optional[str] = None
+    ) -> List[int]: ...
+
+    def holder(self, issue_number: int) -> Optional[Dict[str, Any]]: ...
+
+    def pr_protected(self, issue_number: int) -> bool: ...
+
+
+class GitClaimStore:
+    """``ClaimStore`` adapter over this module's git-ref CAS mechanics.
+
+    Each method is a thin delegation to the matching module-level function,
+    passing ``workspace_root`` through unchanged: behavior stays byte-identical
+    to calling the module function directly, and every existing test that
+    patches ``solomon_harness.claim.<fn>`` keeps working, since this adapter
+    calls those same module-global names (not private copies).
+
+    A caller-supplied ``session_id``/``force`` is forwarded only when set, so
+    the resulting call matches exactly what hand-written call sites passed
+    before this port existed (some tests assert the literal call signature).
+    """
+
+    def __init__(self, workspace_root: str) -> None:
+        self.workspace_root = workspace_root
+
+    def acquire(self, issue_number: int, session_id: Optional[str] = None) -> bool:
+        return claim_issue(self.workspace_root, issue_number, current_session_id=session_id)
+
+    def release(
+        self, issue_number: int, session_id: Optional[str] = None, force: bool = False
+    ) -> bool:
+        kwargs: Dict[str, Any] = {}
+        if session_id is not None:
+            kwargs["current_session_id"] = session_id
+        if force:
+            kwargs["force"] = force
+        return release_claim(self.workspace_root, issue_number, **kwargs)
+
+    def refresh(self, issue_number: int, session_id: str) -> bool:
+        return refresh_claim(self.workspace_root, issue_number, session_id)
+
+    def get(self, issue_number: int) -> Optional[Dict[str, Any]]:
+        return get_claim(self.workspace_root, issue_number)
+
+    def fetch_all(self) -> Dict[int, Dict[str, Any]]:
+        return fetch_all_claims(self.workspace_root)
+
+    def filter_unclaimed(
+        self, issue_numbers: Iterable[int], session_id: Optional[str] = None
+    ) -> List[int]:
+        if session_id is None:
+            return filter_unclaimed(self.workspace_root, issue_numbers)
+        return filter_unclaimed(self.workspace_root, issue_numbers, current_session_id=session_id)
+
+    def holder(self, issue_number: int) -> Optional[Dict[str, Any]]:
+        return get_claim_holder(self.workspace_root, issue_number)
+
+    def pr_protected(self, issue_number: int) -> bool:
+        return has_active_pr_or_review(self.workspace_root, issue_number)

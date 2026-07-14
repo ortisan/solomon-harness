@@ -777,6 +777,30 @@ class TestMergePrAndClose(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertIn("error", res)
 
+    def test_releases_via_an_injected_fake_claim_store(self):
+        # Proves the seam (issue #238 / review-215-m12): the merge path uses
+        # an injected ClaimStore instead of the default GitClaimStore.
+        released = []
+
+        class FakeClaimStore:
+            def release(self, issue_number, session_id=None, force=False):
+                released.append((issue_number, session_id, force))
+                return True
+
+        with (
+            patch("solomon_harness.github._gh", return_value={"ok": True}),
+            patch(
+                "solomon_harness.github.set_issue_status", return_value={"ok": True}
+            ),
+            patch("solomon_harness.github.record_terminal_status"),
+        ):
+            res = github.merge_pr_and_close(42, 172, claim_store=FakeClaimStore())
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(released, [(172, None, True)])
+        # The default-path patch from setUp must not have been used.
+        self.mock_release_claim.assert_not_called()
+
 
 class TestListOpenIssuesClaimAware(unittest.TestCase):
     """ADR-0024 item 6: the direct board-scan read path (gh issue list) must
@@ -815,6 +839,31 @@ class TestListOpenIssuesClaimAware(unittest.TestCase):
             res = github.list_open_issues("/tmp/workspace")
         self.assertFalse(res["ok"])
         self.assertIn("error", res)
+
+    def test_excludes_via_an_injected_fake_claim_store(self):
+        # Proves the seam (issue #238 / review-215-m12): an injected
+        # ClaimStore is used instead of the default GitClaimStore, without
+        # patching solomon_harness.claim.*.
+        class FakeClaimStore:
+            def filter_unclaimed(self, issue_numbers, session_id=None):
+                return [n for n in issue_numbers if n != 1]
+
+        with patch(
+            "solomon_harness.github._gh",
+            return_value={
+                "ok": True,
+                "data": [
+                    {"number": 1, "title": "claimed by someone else"},
+                    {"number": 2, "title": "unclaimed"},
+                ],
+            },
+        ):
+            res = github.list_open_issues("/tmp/workspace", claim_store=FakeClaimStore())
+
+        self.assertTrue(res["ok"])
+        numbers = [i["number"] for i in res["issues"]]
+        self.assertNotIn(1, numbers)
+        self.assertIn(2, numbers)
 
 
 class TestGithubCliMerge(unittest.TestCase):

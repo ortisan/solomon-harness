@@ -321,11 +321,20 @@ def run_stage(
     claim_acquired = False
     claimed_issue_number = None
     claim_session_id = None
+    claim_store = None
     if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
         issue_number = _target_issue_from_args(args)
         if issue_number is not None:
             from solomon_harness import claim
             import datetime
+
+            # One GitClaimStore for the whole claim gate below: pure helpers
+            # (get_current_session_id, is_claim_active, the TTL constant, the
+            # malformed-ref recheck via get_claim_ref) stay direct module
+            # calls -- they carry no IO and are not part of the ClaimStore
+            # port -- while every IO operation (get/pr_protected/acquire/
+            # refresh/release) routes through this one store instance.
+            claim_store = claim.GitClaimStore(workspace_root)
 
             def _claim_age(claim_data: dict) -> str:
                 acquired_str = claim_data.get("acquired_at") or "unknown"
@@ -337,8 +346,8 @@ def run_stage(
                     return "unknown"
 
             current_sess = claim.get_current_session_id()
-            active_claim = claim.get_claim(workspace_root, issue_number)
-            has_pr = claim.has_active_pr_or_review(workspace_root, issue_number)
+            active_claim = claim_store.get(issue_number)
+            has_pr = claim_store.pr_protected(issue_number)
             if active_claim and claim.is_claim_active(active_claim, current_sess, has_open_pr=has_pr):
                 print(
                     f"Error: issue #{issue_number} is already claimed by session "
@@ -355,7 +364,7 @@ def run_stage(
             # session's claim now live on the ref) -- otherwise it just means
             # this workspace has no claims remote to push to (no `origin`, no
             # network), which is a no-op environment, not a collision.
-            if claim.claim_issue(workspace_root, issue_number, current_session_id=current_sess):
+            if claim_store.acquire(issue_number, session_id=current_sess):
                 claim_acquired = True
                 claimed_issue_number = issue_number
                 claim_session_id = current_sess
@@ -376,11 +385,12 @@ def run_stage(
                 def _claim_heartbeat_loop(
                     issue: int = issue_number,
                     session: str = current_sess,
+                    store: "claim.ClaimStore" = claim_store,
                     stop: "threading.Event" = heartbeat_stop_event,
                     lost: "threading.Event" = claim_lost_event,
                 ) -> None:
                     while not stop.wait(claim.CLAIM_HEARTBEAT_INTERVAL_SECONDS):
-                        if not claim.refresh_claim(workspace_root, issue, session):
+                        if not store.refresh(issue, session):
                             lost.set()
                             print(
                                 f"CRITICAL: issue #{issue}'s claim was taken over by "
@@ -577,13 +587,11 @@ def run_stage(
             # it). A successful start keeps its claim: the draft PR now
             # protects the issue and the merge path releases it.
             try:
-                from solomon_harness import claim as _claim
+                if claim_store is None:
+                    from solomon_harness import claim as _claim
 
-                _claim.release_claim(
-                    workspace_root,
-                    claimed_issue_number,
-                    current_session_id=claim_session_id,
-                )
+                    claim_store = _claim.GitClaimStore(workspace_root)
+                claim_store.release(claimed_issue_number, session_id=claim_session_id)
             except Exception as exc:  # noqa: BLE001 - best-effort cleanup, never mask the stage result
                 print(
                     f"Warning: could not release the claim on issue "
