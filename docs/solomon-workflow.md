@@ -84,6 +84,37 @@ the lifecycle costs one selection, not a copy-paste. The same holds for every sm
 "proceed / retry / push-or-PR" confirmation. A turn that ends by offering what to do next
 without an enumerated, selectable menu is a defect.
 
+### Elicitation gate (`/solomon-issue`)
+
+Before shaping a feature/story, `/solomon-issue` evaluates the user's demand
+against six readiness criteria — the explicit doubt-detection checklist. A
+demand is ready when all six hold:
+
+1. **Problem** — the pain or trigger is stated (why this matters now).
+2. **Persona** — who is affected is identifiable (a real user type, never
+   "the user").
+3. **Outcome** — the observable change that means success is stated.
+4. **Boundary** — at least one scope limit or constraint is stated.
+5. **Single reading** — the text does not support two conflicting
+   interpretations of comparable plausibility.
+6. **Job behind the solution** — if the demand names a solution, the
+   underlying need is also stated (a request is an untested solution to an
+   unstated job).
+
+When every criterion holds, shaping starts immediately and the issue body
+carries the line `Elicitation: skipped — all 6 readiness criteria met`. When
+any criterion fails, the command enters Socratic mode: questions follow the
+enumerated-options convention above, at most 4 questions per round and one per
+failed criterion — only for failed criteria, never re-asking one already
+satisfied — for at most 3 rounds before shaping proceeds. An empty demand
+starts from the job-to-be-done question. If the user declines to answer,
+elicitation stops immediately and each unanswered criterion is recorded under
+an `Assumptions (unelicited)` heading in the issue body. Non-interactive runs
+never block: they ask nothing, print `Elicitation: skipped (non-interactive)`,
+and record assumptions the same way. The gate changes only how the demand is
+understood before shaping; the confirm-before-create step is untouched. The
+question ladder lives in the product_owner `socratic_elicitation` skill.
+
 ## Implementation mode (automatic or manual)
 
 `/solomon-start` asks, before any code is written, whether the change is implemented
