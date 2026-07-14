@@ -1102,6 +1102,34 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
         _, kwargs = mock_release.call_args
         self.assertNotIn("force", kwargs)
 
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_run_stage_start_routes_claim_io_through_one_store_instance(
+        self, mock_store_cls
+    ):
+        # issue #238 / review-215-m12: run_stage builds exactly one
+        # GitClaimStore for the claim gate and routes every IO call (get,
+        # pr_protected, acquire) through that same instance, not the
+        # module-level functions directly.
+        from solomon_harness import workflows
+
+        mock_store = mock_store_cls.return_value
+        mock_store.get.return_value = None
+        mock_store.pr_protected.return_value = False
+        mock_store.acquire.return_value = True
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        mock_store_cls.assert_called_once_with(self.local)
+        mock_store.get.assert_called_once_with(99)
+        mock_store.pr_protected.assert_called_once_with(99)
+        mock_store.acquire.assert_called_once_with(99, session_id=unittest.mock.ANY)
+        mock_store.release.assert_not_called()
+
     @patch("solomon_harness.claim.release_claim")
     @patch("solomon_harness.claim.claim_issue", return_value=True)
     @patch("solomon_harness.claim.has_active_pr_or_review", return_value=False)
