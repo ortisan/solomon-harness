@@ -18,6 +18,33 @@ Steps:
    any prior contract) only when needed, instead of re-deriving prior context.
    Confirm it is in `Backlog`; if it is already `Ready` or further, stop and report.
 
+1b. **Capability Check** (see "Capability check" in `docs/solomon-workflow.md`):
+    Before starting refinement, verify the project has the capability (agent +
+    skills) this issue needs. The deterministic router core builds the verdict
+    (ADR-0008); you supply the match judgment as data — never build inline
+    Python over issue text.
+    - Write your demand and match judgment to `.solomon/broker/route-<issue_number>.json`
+      with the Write tool (so issue-derived text never touches a shell string):
+      `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`
+    - Run `uv run python -m solomon_harness.cli broker route --file .solomon/broker/route-<issue_number>.json`
+      and read the verdict JSON. The core validates the match against the
+      catalog and fails closed (exit 3) on an empty catalog or a
+      matcher-contract violation.
+    - Route verdict: note the routed agent and continue the refinement.
+    - Gap verdict, interactive session: present the choice via AskUserQuestion:
+      1. Acquire the capability via the broker (recommended) — adapt the named
+         skill into the nearest agent, or create the suggested agent.
+      2. Proceed without acquiring (the gap stays recorded).
+      3. Other.
+      On option 1, write the proposal to `.solomon/broker/proposal-<issue_number>.json`
+      (`{"kind": "adapt_skill", "source_name": "...", "skill_name": "...", "agent_name": "...", "issue": "<issue_number>"}` or
+      `{"kind": "create_agent", "agent_name": "...", "title": "...", "description": "...", "duties": ["..."], "issue": "<issue_number>"}`),
+      then run `uv run python -m solomon_harness.cli broker apply --file .solomon/broker/proposal-<issue_number>.json`.
+      Report the created PR and stop execution (do not proceed to Step 2).
+    - Gap verdict, non-interactive/headless run: acquisition is human-gated and
+      `broker apply` refuses it (exit 3) — do not attempt it. Record the gap
+      verdict in the run report and continue the refinement without acquiring.
+
 2. Strengthen the issue body (product_owner). Rewrite to the feature template in
    the workflow doc: problem statement, user story (`As a … I want … so that …`),
    and acceptance criteria as **Given/When/Then** covering happy, boundary, and

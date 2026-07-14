@@ -1,7 +1,7 @@
 ---
 description: Start development on a Ready issue: branch, PLAN.md, TDD loop, ADR check, draft PR.
 argument-hint: [issue-number]
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, Edit, AskUserQuestion, mcp__solomon-memory__get_issue, mcp__solomon-memory__get_latest_activity, mcp__solomon-memory__log_issue, mcp__solomon-memory__save_decision, mcp__solomon-memory__log_handoff, mcp__solomon-memory__save_session, mcp__solomon-memory__link_session_handoff, mcp__solomon-memory__get_open_issues
 ---
 
 Begin implementation of issue **#$ARGUMENTS**. First read `docs/solomon-workflow.md`
@@ -27,6 +27,30 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   failed headless run, or manually with `solomon-harness claim release $ARGUMENTS`.
 - `mcp__solomon-memory__get_issue("$ARGUMENTS")` for prior context; check the card is in
   `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
+- **Capability Check** (see "Capability check" in `docs/solomon-workflow.md`):
+  Verify the project has the capability (agent + skills) this issue needs.
+  The deterministic router core builds the verdict (ADR-0008); you supply the
+  match judgment as data — never build inline Python over issue text.
+  - Write your demand and match judgment to `.solomon/broker/route-$ARGUMENTS.json`
+    with the Write tool (so issue-derived text never touches a shell string):
+    `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`
+  - Run `uv run python -m solomon_harness.cli broker route --file .solomon/broker/route-$ARGUMENTS.json`
+    and read the verdict JSON. The core validates the match against the catalog
+    and fails closed (exit 3) on an empty catalog or a matcher-contract violation.
+  - Route verdict: note the routed agent and continue the stage.
+  - Gap verdict, interactive session: present the choice via AskUserQuestion:
+    1. Acquire the capability via the broker (recommended) — adapt the named
+       skill into the nearest agent, or create the suggested agent.
+    2. Proceed without acquiring (the gap stays recorded).
+    3. Other.
+    On option 1, write the proposal to `.solomon/broker/proposal-$ARGUMENTS.json`
+    (`{"kind": "adapt_skill", "source_name": "...", "skill_name": "...", "agent_name": "...", "issue": "$ARGUMENTS"}` or
+    `{"kind": "create_agent", "agent_name": "...", "title": "...", "description": "...", "duties": ["..."], "issue": "$ARGUMENTS"}`),
+    then run `uv run python -m solomon_harness.cli broker apply --file .solomon/broker/proposal-$ARGUMENTS.json`.
+    Report the created PR and stop execution (do not proceed to Step 2).
+  - Gap verdict, non-interactive/headless run: acquisition is human-gated and
+    `broker apply` refuses it (exit 3) — do not attempt it. Record the gap
+    verdict in the run report and continue the stage without acquiring.
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`
   (or idea/chore) and `bugfix/` if labeled `type:bug`.
 

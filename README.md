@@ -321,6 +321,7 @@ table.
 | `release plan\|prep [version]\|check\|wiki-page [version]` | Plan, prepare, check, or document a milestone-gated release |
 | `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
+| `broker route \| apply --file <json>` | Capability broker (ADR-0008): build the route/gap verdict, or run a human-approved acquisition |
 | `agents list \| help \| show <name>` | List or show the generated subagents |
 | `github <args>` | GitHub board and PR helpers (ensure-board, set-status, add-issue, merge, pr-create) |
 

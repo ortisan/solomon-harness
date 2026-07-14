@@ -829,6 +829,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--base", type=str, default="main", help="Base ref for a new branch (default: main)"
     )
 
+    broker_parser = subparsers.add_parser(
+        "broker",
+        help="Capability broker (ADR-0008): route a demand or apply an approved acquisition",
+    )
+    broker_parser.add_argument(
+        "broker_action", choices=["route", "apply"],
+        help="route: build the verdict from a demand+match JSON file; apply: run an approved acquisition proposal",
+    )
+    broker_parser.add_argument(
+        "--file", required=True, dest="broker_file",
+        help="Path to the JSON payload (written by the host tool, never inlined in a shell string)",
+    )
+
     skills_parser = subparsers.add_parser("skills", help="Manage agent skills")
     skills_parser.add_argument("skills_args", nargs=argparse.REMAINDER, help="Arguments passed to skills manager")
 
@@ -1026,6 +1039,9 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         except Exception as e:
             print(f"Error: Failed to refresh the wiki: {e}", file=sys.stderr)
             sys.exit(1)
+    elif args.command == "broker":
+        from solomon_harness.broker_cli import run as broker_run
+        sys.exit(broker_run(args.broker_action, args.broker_file, workspace_root))
     elif args.command == "skills":
         from solomon_harness.skills import main as skills_main
         sys.exit(skills_main(args.skills_args, start_dir=workspace_root))
