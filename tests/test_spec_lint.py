@@ -66,6 +66,40 @@ def test_single_file_all_sections_pass(tmp_path):
     assert result.stdout.strip() == "OK"
 
 
+def test_single_file_scrambled_order_fails(tmp_path):
+    # Complete: every canonical heading is present, but Problem and Context
+    # are swapped, so presence-only checking would wrongly pass this.
+    scrambled = list(SECTION_HEADINGS)
+    scrambled[0], scrambled[1] = scrambled[1], scrambled[0]
+
+    spec = tmp_path / "1-a-title.md"
+    lines = ["# Spec: Title\n\n"]
+    for heading in scrambled:
+        lines.append(f"## {heading}\n\nBody text.\n\n")
+    spec.write_text("".join(lines), encoding="utf-8")
+
+    result = _run(str(spec))
+
+    assert result.returncode == 1
+    assert "out of order" in result.stderr
+    assert "Problem" in result.stderr
+
+
+def test_single_file_duplicated_heading_fails(tmp_path):
+    spec = tmp_path / "1-a-title.md"
+    lines = ["# Spec: Title\n\n"]
+    for heading in SECTION_HEADINGS:
+        lines.append(f"## {heading}\n\nBody text.\n\n")
+        if heading == "Problem":
+            lines.append("## Problem\n\nDuplicated body.\n\n")
+    spec.write_text("".join(lines), encoding="utf-8")
+
+    result = _run(str(spec))
+
+    assert result.returncode == 1
+    assert 'duplicate section "Problem"' in result.stderr
+
+
 def test_directory_malformed_filename_fails(tmp_path):
     (tmp_path / "sample-no-number.md").write_text("not a spec\n", encoding="utf-8")
 
