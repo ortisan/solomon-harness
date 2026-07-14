@@ -40,7 +40,12 @@ DEFAULT_CONCURRENCY = 1
 HEADLESS_STAGE_DIRECTIVE = (
     "This is a headless, non-interactive execution: no human is present to answer questions. "
     "Do not call ask_question or AskUserQuestion. Skip all confirmation prompts, do not wait "
-    "for user input, and use default choices or automatic modes where applicable.\n\n"
+    "for user input, and use default choices or automatic modes where applicable. "
+    "IMPORTANT: When executing commands via the run_command tool, you MUST set WaitMsBeforeAsync "
+    "to a very high value (at least 300000 ms / 5 minutes) to ensure that the command runs "
+    "synchronously and does not execute as a background task. Never let a command run as a "
+    "background task or wait for it using timers, as this causes the headless client execution "
+    "to exit prematurely.\n\n"
 )
 
 # Injected only when `loop` is driving the `workflow` prompt headlessly (build_prompt's
@@ -56,11 +61,16 @@ LOOP_AUTONOMOUS_MODE_DIRECTIVE = (
     "form (no AskUserQuestion call, no numbered list awaiting a reply). Proceed "
     "directly to the Autonomous Mode instructions already described under that "
     "section (Option 2): scan the current state, decide the next step via the same "
-    "rules, and — unless the next step is permanently human-gated (release/merge/"
-    "Done) or nothing more can be progressed — execute it headless via "
-    "`solomon-harness dev <stage> [args]`, save the decision, and continue until a "
-    "human-gated boundary is reached or no work remains, then report the final "
-    "status.\n\n"
+    "rules. If the next step is permanently human-gated (release/merge/Done), skip/bypass "
+    "it and evaluate the remaining rules to find the next actionable, non-human-gated "
+    "task. Execute the chosen actionable stage headless via `solomon-harness dev <stage> [args]`, "
+    "save the decision, and continue until no actionable work remains, then report the "
+    "final status. "
+    "IMPORTANT: When executing commands via the run_command tool, you MUST set WaitMsBeforeAsync "
+    "to a very high value (at least 300000 ms / 5 minutes) to ensure that the command runs "
+    "synchronously and does not execute as a background task. Never let a command run as a "
+    "background task or wait for it using timers, as this causes the headless client execution "
+    "to exit prematurely.\n\n"
 )
 
 
@@ -360,7 +370,8 @@ def run_stage(
                 exec_path = os.path.expanduser("~/.local/bin/agy")
                 if not os.path.isfile(exec_path):
                     exec_path = "agy"
-                cmd = [exec_path, "-p", "Execute prompt from stdin", "--dangerously-skip-permissions"]
+                import uuid
+                cmd = [exec_path, "-p", "-", "--conversation", str(uuid.uuid4()), "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
                 if capture_cost:
                     cmd.extend(["-o", "json"])
             else:
