@@ -1,3 +1,8 @@
+---
+name: oauth2-oidc
+description: Governs OAuth 2.0 and OpenID Connect flow selection, token handling, and endpoint hardening, with authorization-code-plus-PKCE as the only flow shipped. Use when designing or reviewing login flows, token exchanges, or any integration with an identity provider.
+---
+
 # OAuth 2.0 and OpenID Connect
 
 Purpose: a concrete, checkable playbook for implementing browser, mobile, and service authentication with OAuth 2.0 and OpenID Connect (OIDC). Scope: Authorization Code with PKCE as the only flow you ship, token validation, scope and audience design, and why implicit and password (ROPC) grants are off the table.

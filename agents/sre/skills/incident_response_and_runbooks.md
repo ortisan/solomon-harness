@@ -1,3 +1,8 @@
+---
+name: incident-response-and-runbooks
+description: Governs incident command roles, severity matrices, operational metrics (MTTD/MTTA/MTTR/MTBF), runbook anatomy, and the blameless postmortem process for reducing time to mitigation. Use when responding to a live incident, writing or exercising a runbook, or scheduling a postmortem for a SEV1/SEV2 event.
+---
+
 # Incident Response and Runbooks
 
 Reduce time-to-mitigation by deciding roles, severities, and runbooks before the incident, not during it.

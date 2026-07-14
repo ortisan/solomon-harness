@@ -1,3 +1,8 @@
+---
+name: test-design-rules
+description: Governs case-level test design: equivalence partitioning, boundary value analysis, decision tables, state-transition testing, pairwise reduction, and property-based testing. Use when designing test cases, judging whether a passing suite is evidence, or picking a technique for combinational logic.
+---
+
 # Test Design Rules
 
 Case-level test design decides whether a green suite actually proves anything. This skill owns the mechanics of turning one behavior into the right set of cases: how to partition an input domain, which boundaries are non-negotiable, how to collapse a combinational explosion to a defensible minimum, and how to assert an invariant instead of a single example. It is the technique layer beneath `test_planning_and_traceability`: that skill scores risk and decides which criteria warrant which depth; this skill generates the concrete cases once that decision is made. At the /solomon-review gate, a reviewer reads tests against these rules to judge whether a passing run is evidence or theatre.

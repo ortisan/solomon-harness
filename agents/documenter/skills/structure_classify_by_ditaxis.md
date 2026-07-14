@@ -1,3 +1,8 @@
+---
+name: structure-classify-by-ditaxis
+description: Governs classifying every page into exactly one Diátaxis quadrant - tutorial, how-to guide, reference, or explanation - before drafting, detecting mixed-page smells in review, and migrating a legacy corpus. Use when starting a page, reviewing for mixed audiences, or planning a restructure.
+---
+
 # Structure: Classify by Diátaxis
 
 Every page is exactly one of the four Diátaxis types — tutorial, how-to guide, reference, or explanation — and is named, located, and written so the type is obvious before the reader clicks. This skill governs how to classify a page before drafting it, how to detect a mixed page in review, and how to migrate a legacy corpus onto the framework. Classification is the first editorial decision, not a label applied afterward: a reader on a deadline must reach the right kind of page in two clicks.

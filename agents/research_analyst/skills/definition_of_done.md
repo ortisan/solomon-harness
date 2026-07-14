@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the completion checklist for a research_analyst deliverable — the asked question answered, every fact cited to a primary source with an ISO 8601:2019 timestamp, fact separated from opinion, valuation assumptions sanity-checked, and quantitative or model claims delegated to quant_trader and ml_engineer. Use when finalizing a research memo or reviewing one before it ships.
+---
+
 # Definition Of Done
 
 A research_analyst deliverable is complete only when the asked question is answered in full, every fact is tied to a primary source with a timestamp, sourced fact is kept distinct from opinion, valuation assumptions are stated and sanity-checked, quantitative and model claims are delegated to their owners, the "not financial advice" stance holds, notable findings are logged to solomon-memory, and no secrets or banned cliches appear in any output.

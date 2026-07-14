@@ -1,3 +1,8 @@
+---
+name: testing-qa-discipline
+description: Mandates strict TDD for quant code with tests asserting exact known-good values for indicators, signals, and accounting, bit-for-bit deterministic backtests, and fully mocked market-data feeds. Use when writing or reviewing tests for trading signals, backtest accounting, or any code touching market data.
+---
+
 # Testing and QA Discipline
 
 Quant code fails silently — a sign flip or an off-by-one bar produces plausible-looking PnL — so this skill mandates strict TDD with tests that assert exact known-good values for indicators, signals, and accounting, bit-for-bit determinism for backtests, and fully mocked market-data feeds so nothing depends on the network or the clock.

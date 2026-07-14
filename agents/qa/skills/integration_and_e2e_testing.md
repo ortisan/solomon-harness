@@ -1,3 +1,8 @@
+---
+name: integration-and-e2e-testing
+description: Governs the upper two layers of the test pyramid: integration tests against real backing services with Testcontainers, and a thin layer of end-to-end tests via Playwright/Cypress and Pact contracts. Use when writing integration or E2E tests, choosing what to mock at a boundary, or gating CI on the integration suite.
+---
+
 # Integration and end-to-end testing
 
 Own the upper two layers of the pyramid: integration tests that exercise real wiring against real backing services, and a thin top of end-to-end tests that prove a critical user journey works through the deployed system. The job here is not coverage breadth (that belongs to units, see `the_test_pyramid_target_distribution`) but confidence in the seams the unit layer cannot see: SQL that the ORM actually emits, the contract a consumer relies on, the redirect a browser actually follows. Keep these tests few, deterministic, and honest about what they prove, because every one is slower and more brittle than a unit test and pays for itself only by catching integration faults no faster test can.

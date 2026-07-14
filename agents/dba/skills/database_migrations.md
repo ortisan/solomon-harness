@@ -1,3 +1,8 @@
+---
+name: database-migrations
+description: Standardizes evolving schemas on live systems without downtime: expand-contract as the default pattern, lock-aware DDL, batched backfills, and disciplined use of migration tools such as Alembic. Use when writing, reviewing, or planning a schema migration on a production or live database.
+---
+
 # Database Migrations
 
 A standard for evolving schemas on live systems without downtime: expand-contract as the default pattern, lock-aware DDL, batched backfills, and disciplined use of migration tools such as Alembic. The stance: a migration is production code executed exactly once under the worst possible conditions, so it is reviewed for locking behavior, rollback, and data volume, not just for correctness of the end state.

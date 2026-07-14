@@ -1,3 +1,8 @@
+---
+name: dependency-and-supply-chain-security
+description: Sets the standard for how project dependencies are resolved, verified, scanned, and updated — uv.lock discipline, pip-audit and osv-scanner coverage, CycloneDX SBOM generation, typosquatting and dependency-confusion defenses, SLSA provenance, and SHA-pinned GitHub Actions hardening. Use when adding or updating a dependency, wiring dependency scanning into CI, or reviewing a workflow file for supply-chain exposure.
+---
+
 # Dependency and Supply-Chain Security
 
 The standard for what this project depends on and how those dependencies are resolved, verified, scanned, and updated — covering lockfile discipline, advisory scanning, SBOMs, name-confusion attacks, SLSA provenance, and GitHub Actions hardening. The stance: every artifact that executes in dev, CI, or production is either pinned and verified or it is an accepted risk with an owner.

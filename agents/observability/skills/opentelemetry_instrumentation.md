@@ -1,3 +1,8 @@
+---
+name: opentelemetry-instrumentation
+description: Covers OpenTelemetry SDK setup in Python, semantic-convention and resource-attribute usage, auto- versus manual instrumentation, OTLP export, Collector pipeline ordering, and sampler configuration as the project's mandatory telemetry layer. Use when wiring OTel into a service, configuring the Collector, or choosing between auto-instrumentation and a manual span.
+---
+
 # OpenTelemetry Instrumentation
 
 OpenTelemetry (OTel) is this project's standard telemetry layer: every service emits traces, metrics, and logs through the OTel SDK to an OpenTelemetry Collector over OTLP, and never talks to a vendor backend directly. This skill covers SDK setup in Python, semantic conventions and resource attributes, auto- versus manual instrumentation, OTLP export, Collector pipelines, and sampling configuration.

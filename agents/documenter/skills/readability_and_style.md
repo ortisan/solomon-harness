@@ -1,3 +1,8 @@
+---
+name: readability-and-style
+description: Governs documentation prose - plain-language readability targets, active-voice and present-tense rules, terminology consistency, and the Vale/markdownlint/lychee linting that enforces all of it in CI. Use when writing prose, choosing a style guide, or configuring the style-linting pipeline.
+---
+
 # Readability and Style
 
 This skill governs the prose itself: plain-language rules with measurable targets, voice and tense, terminology discipline, and the style linters that enforce all of it in CI. The stance: style is not taste — pick one published guide, set numeric thresholds, and let Vale reject violations mechanically so reviewers spend their attention on substance.

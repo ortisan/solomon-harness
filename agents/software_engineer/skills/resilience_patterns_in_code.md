@@ -1,3 +1,8 @@
+---
+name: resilience-patterns-in-code
+description: Governs the in-code resilience stack for outbound calls, covering the composition order of deadline, retry with jittered backoff, circuit breaker, rate limiter, and bulkhead, plus idempotency keys and failure-injection testing, with worked examples in Python, Java, C#, and Node. Use when wiring or reviewing a client call to an HTTP, gRPC, database, queue, or third-party dependency.
+---
+
 # Resilience Patterns in Code
 
 Wrap every outbound call (HTTP, gRPC, DB, queue, third-party SDK) in an explicit resilience stack so a slow or failing dependency degrades one feature instead of exhausting threads and taking down the process. This skill is the how-to-build: real libraries, exact config, and the composition order. For the catalog of patterns and the decision of which dependency needs which pattern, defer to the software_architect `resilience_patterns` skill; for cluster-level timeouts, load-balancer outlier ejection, retry budgets at the mesh, and chaos gamedays, defer to the sre `high_availability` and `load_and_resilience_testing` skills. Here we write the client code.

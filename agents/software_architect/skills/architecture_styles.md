@@ -1,3 +1,8 @@
+---
+name: architecture-styles
+description: Governs choosing between Hexagonal ports and adapters as the project default, Clean Architecture, and functional-core-imperative-shell per bounded context, and enforcing the chosen dependency rule with a fitness function. Use when selecting or reviewing a bounded context's top-level architecture style before or during a design.
+---
+
 # Architecture Styles
 
 Choose and enforce a top-level architecture style per bounded context, and record the choice and its trade-offs as an ADR. The project default is Hexagonal (ports and adapters) unless an ADR says otherwise; the goal of every style here is the same — keep the domain free of framework, transport, and persistence concerns so those can change without touching business rules.

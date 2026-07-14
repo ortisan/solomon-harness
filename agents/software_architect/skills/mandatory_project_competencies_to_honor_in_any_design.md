@@ -1,3 +1,8 @@
+---
+name: mandatory-project-competencies-to-honor-in-any-design
+description: Governs translating testability seams, consumer-driven contract test isolation, a per-container STRIDE table, and ML and quant safety guards such as leakage-free splits, tensor shape checks, and Sharpe, drawdown, and profit-factor thresholds into structural design decisions rather than review-time fixes. Use when designing a boundary that must be unit-testable, security-reviewed, or backed by an ML or quant strategy contract.
+---
+
 # Honoring Project Competencies at Design Time
 
 Translate the project's non-negotiable competencies — testability, test isolation, security, and the ML and quant safety guards — into structural decisions made while designing, so compliance is built into the boundaries instead of bolted on at review.

@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: States the concrete standard every ML or DRL model must satisfy before it is considered done, covering the hypothesis card, cross-validation plus holdout, leakage audit, tensor safety guards, reproducibility, and tests. Use when scoping ML or DRL work, or checking a deliverable against the non-negotiable baseline before it leaves the workstation.
+---
+
 # ML Engineer Best Practices
 
 Purpose: a concrete standard for training, validating, and shipping ML and DRL models in this project without overfitting, data leakage, or numerical faults.

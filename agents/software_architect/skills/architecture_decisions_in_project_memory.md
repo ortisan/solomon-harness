@@ -1,3 +1,8 @@
+---
+name: architecture-decisions-in-project-memory
+description: Governs mirroring an ADR into project memory through save_decision, encoding MADR sections into the title, rationale, and outcome fields, maintaining the adr:NNNN:status index for lookup, and superseding a prior decision without editing it. Use when recording, retrieving, or superseding an architecture decision in the SurrealDB-backed memory store rather than only in the docs/adr file.
+---
+
 # Architecture Decisions in Project Memory
 
 Persist every architecture decision as an MADR-shaped record in the project memory through `save_decision`, retrieve it with `get_decision`, and link it to the issues that drove it and the commit that implements it, so the decision log is queryable state rather than a folder of files nobody re-reads. The canonical ADR text and its MADR sections live in the file the sibling `architectural_decision_records` skill defines; this skill governs how that decision is mirrored into memory, kept findable, superseded, and cross-linked.

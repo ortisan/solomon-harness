@@ -1,3 +1,8 @@
+---
+name: conventional-commits
+description: Governs the commit message format for this repository under Conventional Commits 1.0.0, enforced at write time by the commit-msg hook, which also bans emojis outright. Use when writing a commit message or reviewing one for type, scope, description, or footer compliance.
+---
+
 # Conventional Commits
 
 Governs the commit message format for this repository: Conventional Commits 1.0.0, enforced at write time by the installed `commit-msg` hook, which also bans emojis outright. Treat the spec as the real gate, not a style preference; a malformed subject or any pictograph character aborts the commit.

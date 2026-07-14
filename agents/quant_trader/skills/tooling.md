@@ -1,3 +1,8 @@
+---
+name: tooling
+description: Names the 2026 reference stack for quantitative trading by stage: data handling, vectorized screening, event-driven confirmation, metrics, quant ML, and DRL, plus which once-standard tools to avoid as unmaintained. Use when choosing a library or tool for a quant trading task or reviewing a dependency pin.
+---
+
 # Tooling
 
 The 2026 reference stack for this role, with when-to-use guidance: what to reach for at each stage — data handling, vectorized screening, event-driven confirmation, metrics, quant ML, and DRL — and which once-standard tools to avoid because they are unmaintained. Pin versions in the lockfile; a floating quant stack is a reproducibility bug.

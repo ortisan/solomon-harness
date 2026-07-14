@@ -1,3 +1,8 @@
+---
+name: socratic-elicitation
+description: Governs the elicitation gate that a vague feature demand passes before becoming an issue, evaluating six readiness criteria and asking bounded Socratic questions (at most 3 rounds of 4, as enumerated options) only for the gaps. Use when a feature demand arrives underspecified or when running the /solomon-issue readiness gate.
+---
+
 # Socratic Elicitation
 
 Gate every feature demand through the six readiness criteria, asking bounded Socratic questions only for the gaps. Evaluate first, then question only what is missing — at most 3 rounds of at most 4 questions, presented as enumerated options — and skip questioning entirely when the demand already passes all six. The gate exists to stop guessed intent from becoming an issue; it must never become an interrogation that stalls a well-formed request, and it never replaces the confirm-before-create step.

@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the release gate every documentation deliverable must satisfy before it ships, and the specific ways documentation work gets marked done while still failing that gate. Use when deciding whether a documentation change is ready to merge or a release is ready to ship.
+---
+
 # Documenter Definition of Done
 
 The release gate for every documentation deliverable: the checklist below must hold before a page, guide, or reference ships. The pitfalls first — they are the specific ways documentation work gets marked done while failing that gate, and each one is grounds for sending the deliverable back.

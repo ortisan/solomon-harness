@@ -1,3 +1,8 @@
+---
+name: testing-strategy
+description: Governs the Flutter test pyramid, covering unit tests on domain and application code with mocktail, widget tests with deliberate pumping, a scoped golden-test net, and on-device integration tests via integration_test or patrol. Use when writing tests for a Flutter change, choosing between pump and pumpAndSettle, or deciding what belongs in a golden or integration test.
+---
+
 # Testing Strategy
 
 This skill governs the Flutter test pyramid: unit tests on domain and application code, widget tests on presentation, golden tests as a scoped visual-regression net, and a thin layer of on-device integration tests. The stance: many fast unit tests, fewer widget tests, fewest integration tests; everything external is mocked below integration level; a test that depends on real time, real network, or `pumpAndSettle` luck is a broken test.

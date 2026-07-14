@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the exit checklist for software-architect deliverables — dated version-controlled C4 diagrams, ADRs with two considered options and a stated cost, machine-checkable design contracts, six-part measurable NFR scenarios, and a completed STRIDE pass. Use when deciding whether an architecture deliverable is ready to hand off or close out.
+---
+
 # Software Architect Definition of Done
 
 The exit checklist for software-architect deliverables: C4 diagrams, ADRs, design contracts, NFR scenarios, and boundary reviews. Architecture work counts as done only when every item below holds; the pitfalls list the usual ways the checklist gets ticked without the substance behind it.

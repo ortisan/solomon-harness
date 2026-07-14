@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Governs the loop_engineer's ownership of loop_lock, loop_policy, loop_log, loop_budget, and notify, and the non-negotiables that the host tool stays the model loop and merge/release/Done stay human-gated. Use when scoping a loop-mechanics change against the review-gate and no-self-hosted-loop constraints.
+---
+
 # Loop Engineer Scope and Non-Negotiables
 
 The loop_engineer owns the harness's loop-mechanics modules — the single-driver lock, the autonomy policy, the run-log, the cost budget, and the notify egress — and designs how loops run, but it never runs a model loop itself and never widens the human review gate. This skill fixes the boundary of the role and the rules that may not be relaxed, so an agent that makes loops more autonomous can never make them less safe.

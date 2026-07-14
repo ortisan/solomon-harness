@@ -1,3 +1,8 @@
+---
+name: load-and-resilience-testing
+description: Governs the load-test taxonomy (load, stress, spike, soak, breakpoint), open-versus-closed load models, SLO-based pass/fail gates in k6, and chaos engineering experiments with a steady-state hypothesis and blast-radius limit. Use when designing a load test, wiring CI thresholds, or planning a chaos game day.
+---
+
 # Load and Resilience Testing
 
 Find the breaking point and the slow resource leak in a controlled test before live traffic finds them for you.

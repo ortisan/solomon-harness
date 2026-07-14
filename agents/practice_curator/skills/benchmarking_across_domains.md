@@ -1,3 +1,8 @@
+---
+name: benchmarking-across-domains
+description: Defines dated, versioned yardsticks for software engineering, software architecture, ML/DRL engineering, and quantitative trading — current Python and pytest tooling, C4 and hexagonal architecture with ADRs, vetted DRL algorithms with leakage-free validation, and Sharpe/drawdown-backed backtests. Use when tagging a delivery's competency domain and selecting the current-standard benchmark to audit it against.
+---
+
 # Benchmarking Across Domains
 
 This skill defines the concrete, versioned yardsticks the curator measures a delivery against in each of four competency fields, so that "state of the art" is a named standard with a date rather than a moving opinion. It supplies the benchmarks that `auditing_delivered_work` applies per domain, and every yardstick named here must be confirmed through `sourcing_the_state_of_the_art` before it drives a finding. The four fields are software engineering, software architecture, ML/DRL engineering, and quantitative trading; a single delivery can touch all four, so tag the diff by field and apply the matching section.

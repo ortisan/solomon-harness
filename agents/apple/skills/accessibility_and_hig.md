@@ -1,3 +1,8 @@
+---
+name: accessibility-and-hig
+description: Governs VoiceOver labeling and traits, Dynamic Type scaling, color contrast, Reduce Motion and Reduce Transparency handling, and Human Interface Guidelines conventions across Apple platforms. Use when building or reviewing SwiftUI or UIKit UI for accessibility, or writing an Accessibility Inspector or performAccessibilityAudit test.
+---
+
 # Accessibility and Human Interface Guidelines
 
 Accessibility is a build requirement, not a late pass: every interactive element must carry a correct label, value, and traits, scale with Dynamic Type, meet contrast minimums, and respect the user's motion and transparency settings, with every screen verified in the Accessibility Inspector and a passing XCUITest audit before merge. Treat the accessibility tree as a first-class API surface and Apple's Human Interface Guidelines (HIG) as the contract for layout, hit targets, and platform conventions across iOS 26, iPadOS 26, macOS 26, watchOS 26, and tvOS 26 (Xcode 26, Swift 6.x, SF Symbols 7).

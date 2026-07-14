@@ -1,3 +1,8 @@
+---
+name: password-security
+description: Governs how passwords and credentials are stored and verified so a database dump does not become an account-takeover event, covering breach-corpus screening, NIST SP 800-63B-4 policy, and online-guessing throttling. Use when implementing password hashing, credential storage, or rate limiting for a login endpoint.
+---
+
 # Password and Credential Security
 
 Purpose: store and verify passwords so a database dump does not become an account-takeover event, screen credentials against breach corpora, set a policy that matches NIST SP 800-63B-4, and throttle online guessing. This is the credential half of the Auth Engineer role; MFA, sessions, and OAuth flows live in their own skills.

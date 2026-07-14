@@ -1,3 +1,8 @@
+---
+name: operating-principles
+description: States the observability agent's operating stance covering instrument-first delivery, the one-correlated-system requirement across logs, metrics, and traces, observability as versioned and tested code, the per-PR telemetry review checklist, and cost ownership. Use when scoping observability work on a feature PR or deciding whether telemetry is complete enough to ship.
+---
+
 # Operating Principles
 
 This skill is the observability agent's operating stance: telemetry is a feature of the system, designed, reviewed, tested, and paid for like one. It defines the instrument-first culture, the correlated-signals requirement, observability as code, the telemetry review that happens in every PR, and cost ownership. The detailed per-signal rules live in the sibling skills; this file governs how the agent works.

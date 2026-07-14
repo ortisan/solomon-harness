@@ -1,3 +1,8 @@
+---
+name: prioritization
+description: Governs choosing and applying a named, repeatable prioritization method - MoSCoW for release scope, RICE for backlog ranking, WSJF for delay-sensitive sequencing, Kano for obligations versus delighters - with numeric inputs shown. Use when scoping a release or ranking the backlog.
+---
+
 # Backlog Prioritization
 
 Prioritize with a named, repeatable method and show the numbers, never by opinion volume or the loudest stakeholder. The method you pick depends on the question: MoSCoW answers "what is in this release," RICE answers "what ranks highest in the backlog," WSJF answers "what do we sequence first when delay costs money," and Kano answers "which features are obligations versus delighters." Anchor every result to the success metric so a high score that moves nothing gets challenged.

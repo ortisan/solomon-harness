@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists cross-cutting process failures the Scrum Master must reject across sprint planning, backlog flow, Git Flow, and conventional commits, naming the damage each does to velocity data, release integrity, or the project memory record. Use when reviewing sprint commitments, backlog items, branch usage, or commit history for process defects.
+---
+
 # Scrum Master Common Pitfalls
 
 Cross-cutting process failures the Scrum Master must reject across sprint planning, backlog flow, Git Flow, and conventional commits. Each bullet names the defect and the damage it does to velocity data, release integrity, or the project memory record.

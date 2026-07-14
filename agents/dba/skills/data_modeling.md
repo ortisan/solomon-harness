@@ -1,3 +1,8 @@
+---
+name: data-modeling
+description: Defines the schema-design standard: primary and surrogate key selection, constraints as enforced invariants, normalization versus deliberate denormalization, and type selection, with PostgreSQL as the reference engine. Use when designing a table or schema, or reviewing a key or constraint decision.
+---
+
 # Data Modeling
 
 A concrete standard for schema design: keys, constraints as enforced invariants, normalization versus deliberate denormalization, type selection, and temporal data. The stance: the database is the last line of defense for data integrity, so every business invariant that can be expressed as a constraint must be, and every denormalization is a documented, measured trade, never a habit. PostgreSQL is the reference engine; MySQL differences are noted only where they change the decision.

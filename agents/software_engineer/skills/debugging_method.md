@@ -1,3 +1,8 @@
+---
+name: debugging-method
+description: Governs the systematic reproduce-isolate-hypothesize-bisect-instrument method for finding and killing a bug, including git bisect usage and turning every fix into a permanent regression test. Use when triaging a runtime error, an intermittent test failure, or a regression that needs a root-cause fix rather than a symptom patch.
+---
+
 # Debugging Method
 
 This skill governs how to find and kill a bug systematically rather than by guessing. The stance: debugging is the scientific method applied to code — reproduce, isolate, hypothesize, test one variable, confirm. Every bug ends with a failing test that turns green, which is the proof the bug is dead and the guard against its return.

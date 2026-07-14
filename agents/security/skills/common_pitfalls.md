@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: States recurring security defects a reviewer rejects on sight, spanning shallow authorization, unpinned dependencies, unrotated secrets, suppressed SAST findings, and shape-only input validation, each paired with why it leaves the vulnerability open. Use when reviewing a diff for security regressions or checking a change against the security definition-of-done checklist before merge.
+---
+
 # Security Common Pitfalls
 
 Recurring security defects a reviewer rejects on sight, from shallow authorization to unpinned dependencies and unrotated secrets. Each bullet states the failure mode and why it leaves the vulnerability open.

@@ -1,3 +1,8 @@
+---
+name: state-management
+description: Governs Flutter state modeling and ownership, covering Riverpod 3.x codegen as the project default, Bloc as the deliberate alternative for event-sourced audit trails, setState confined to ephemeral widget-local state, and freezed immutability throughout. Use when choosing a state-management approach, writing a notifier or bloc, or reviewing rebuild scope and state mutation.
+---
+
 # State Management
 
 This skill governs how application state is modeled, owned, and rebuilt in Flutter. The stance: Riverpod 3.x with code generation is the project default; Bloc is the deliberate alternative when an event-sourced audit trail of state transitions earns its keep; `setState` is confined to ephemeral, widget-local state; all state objects are immutable via `freezed`. Pick one primary approach per app, record it in an ADR, and stay consistent — a codebase mixing three state solutions is a review reject.

@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the exit gate for implementation work — TDD-first tests, 90 percent changed-code coverage, mocked external services, strict mypy and ruff, hexagon-clean domain code, and a reviewed pull request on a feature or bugfix branch. Use when deciding whether a change is ready to hand off for code review or to close out an implementation task.
+---
+
 # Software Engineer Definition of Done
 
 The exit gate for implementation work: a change ships only when every item below holds, from the first red test to the reviewed pull request. The pitfalls name the ways this checklist gets ticked without being true; check them before claiming done.

@@ -1,3 +1,8 @@
+---
+name: rebalancing-and-turnover-control
+description: Governs when and how a long-horizon portfolio trades back toward its targets — calendar versus threshold triggers, no-trade bands, annual turnover budgets, and the cost-benefit math that decides whether a trade is worth making. Use when designing a rebalancing policy, setting band widths or a turnover budget on a hypothesis card, or evaluating whether a drifted position is worth the round-trip cost to correct.
+---
+
 # Rebalancing and Turnover Control
 
 This skill governs when and how a long-horizon portfolio trades back toward its targets: calendar versus threshold triggers, no-trade bands, turnover budgets, and the cost arithmetic that decides whether a trade is worth making. The stance: at long horizons, trading is a cost center, not a return source — every rebalance buys tracking accuracy with real money, so the policy must make that purchase explicit, bounded, and cheap.
