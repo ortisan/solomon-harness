@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-07-14
 - Deciders: software_architect, product_owner (maintainer directive 2026-07-14)
-- Issue: maintainer directive 2026-07-14 (tracking issue to be filed)
+- Issue: #280 (maintainer directive 2026-07-14)
 
 ## Context and problem statement
 

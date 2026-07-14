@@ -31,7 +31,7 @@ reconstruct intent from scattered issue text.
 
 - `docs/specs/0000-spec-template.md` — the house template carrying the mandated
   sections; new specs copy it.
-- `scripts/spec-lint.py:32` — `REQUIRED_SECTIONS`; the standalone validator
+- `scripts/spec-lint.py:39` — `REQUIRED_SECTIONS`; the standalone validator
   that exits 0/1 and names each defect, wired into the CI validators job.
 - `.claude/commands/solomon-issue.md` step 8 (and its `.gemini` mirror) —
   generates `docs/specs/<N>-<slug>.md` via the Write tool and lints it.

@@ -40,4 +40,6 @@ uv run python scripts/spec-lint.py docs/specs/42-x.md  # lint one spec
 ```
 
 Decisions live beside specs: architecture records are under `docs/adrs/`
-(ADR-0028 records that home and this convention; #221 S2a).
+(ADR-0028 records that home and this convention; #221 S2a). The
+implementation-ready bar — the `Implementation Pointers` and `Verification`
+sections and the Ready-status placeholder gate — amends it in ADR-0032.

@@ -50,6 +50,7 @@ assignees: []
 - [ ] Reproduction is deterministic
 - [ ] Severity and priority assigned
 - [ ] Suspected area scoped
+- [ ] Suspected location (file:line) and verification command stated
 
 ## Definition of Done
 <!-- Close gate enforced at review and release: red-then-green regression test, fix merged with CI green, no new failures. -->

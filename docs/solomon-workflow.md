@@ -157,7 +157,8 @@ without guessing. It runs in the CI validators job. The spec ships with the
 issue's first implementation PR — never pushed to a protected branch directly.
 The convention's full definition lives in `docs/specs/README.md`; its decision
 record is ADR-0028, shipped with the migration of the decision tree to
-`docs/adrs` (#221 S2a).
+`docs/adrs` (#221 S2a). The implementation-ready bar — the two sections plus the
+Ready-status placeholder gate — amends that convention in ADR-0032.
 
 ## Implementation mode (automatic or manual)
 
@@ -201,7 +202,8 @@ fixed (maintainer directive 2026-07-14):
   stops the current issue rather than expanding it.
 
 This keeps each issue's record clean and every discovered unit of work
-independently trackable, refinable, and claimable.
+independently trackable, refinable, and claimable. The protocol is recorded
+with the implementation-ready bar in ADR-0032.
 
 ## Review staffing
 

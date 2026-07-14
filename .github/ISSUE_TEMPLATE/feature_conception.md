@@ -21,6 +21,7 @@ assignees: []
 <!-- Refinement gate before work starts: INVEST met, acceptance criteria testable, dependencies/assumptions owned, non-functional numbers stated, sized by engineering. -->
 - [ ] INVEST met (independent, negotiable, valuable, estimable, small, testable)
 - [ ] Acceptance criteria are testable
+- [ ] Implementation-ready: spec Implementation Pointers (file:line) and Verification command resolved
 - [ ] Dependencies and assumptions have owners
 - [ ] Non-functional constraints stated with numbers
 - [ ] Sized by engineering

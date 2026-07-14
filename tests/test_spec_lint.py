@@ -237,3 +237,103 @@ def test_ready_spec_inline_placeholder_mention_is_not_flagged(tmp_path):
     (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
     result = _run(tmp_path)
     assert result.returncode == 0, result.stderr
+
+
+def test_bold_status_ready_still_gates_the_placeholder(tmp_path):
+    # The status parse must tolerate markup around the label so the gate does
+    # not silently fail open on a bolded header.
+    body = VALID_SPEC.replace(
+        "- Issue: #42 · Status: draft", "- Issue: #42 · **Status:** ready"
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+    assert "Status: ready" in result.stderr
+
+
+def test_code_span_status_ready_still_gates_the_placeholder(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: `ready`")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "Status: ready" in result.stderr
+
+
+def test_bulleted_placeholder_under_ready_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\n- TBD (refine)\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+
+
+def test_suffixed_placeholder_under_ready_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\nTBD (refine) — blocked on the schema decision.\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+
+
+def test_case_variant_placeholder_under_ready_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\nTBD (Refine)\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+
+
+def test_missing_status_line_is_a_defect(tmp_path):
+    # No parseable Status means the gate cannot decide — fail closed with a
+    # named defect rather than silently passing.
+    body = VALID_SPEC.replace("- Issue: #42 · Status: draft\n", "- Issue: #42\n")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "Status" in result.stderr
+
+
+def test_backtick_wrapped_placeholder_under_ready_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\n`TBD (refine)`\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+
+
+def test_bracket_wrapped_placeholder_under_ready_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\n[TBD (refine)]\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+
+
+def test_decoy_status_line_in_header_does_not_shadow_the_real_status(tmp_path):
+    # An earlier 'Status:' mention in the header (a changelog note, a quoted old
+    # header) must not shadow the real '- Issue: #N · Status: ready' line, or a
+    # ready spec with unresolved placeholders would pass.
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "# Spec 42: add csv export\n",
+        "# Spec 42: add csv export\n\nMigrated from Status: draft to ready.\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
