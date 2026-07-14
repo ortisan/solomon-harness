@@ -1,4 +1,4 @@
-# ADR-0028: ClaimStore port
+# ADR-0029: ClaimStore port
 
 - Status: accepted
 - Date: 2026-07-14
