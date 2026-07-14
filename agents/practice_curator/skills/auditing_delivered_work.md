@@ -1,3 +1,8 @@
+---
+name: auditing-delivered-work
+description: Governs the read-only audit of one merged pull request or diff against current best practice, classifying each observation as gap found, no gap found, or insufficient evidence and recording it with save_decision. Use when a single delivered PR or diff needs to be benchmarked against the state of the art without editing any code.
+---
+
 # Auditing a Delivered Work Item
 
 The audit takes one merged pull request or diff and measures the delivered artifact against the current state of the art, producing a structured, evidence-backed finding set without changing any code. This skill governs the read-only audit pass that is the core of slice 1 of the practice_curator epic: it identifies which competency domains a delivery touches, compares the chosen approach to documented best practice, and classifies every observation into a defined output state. The audit is read-only: it never modifies any other agent's files, never edits the codebase, and never opens a change on its own. Its product is a report and a set of recorded decisions, not a patch.

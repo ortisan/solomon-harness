@@ -1,3 +1,8 @@
+---
+name: security-stride-during-design
+description: Governs turning the six STRIDE threat categories into concrete implementation controls — verified-session identity, parameterized queries, immutable audit logs, encryption and log masking, rate limits, and object-level authorization checks — recorded in PLAN.md. Use when building a feature that touches input, identity, data, or an external boundary and needs its threat mitigations implemented, not just diagrammed.
+---
+
 # Security: STRIDE During Implementation
 
 This skill governs how an implementer turns the six STRIDE threat categories into concrete code and configuration while building a feature, not just while drawing a diagram. The stance: walk Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, and Elevation of privilege against every feature that touches input, identity, data, or an external boundary; record the chosen mitigation in `PLAN.md`; and implement each as a specific, testable control. Security is a build-time activity, secure-by-default, not a review-time afterthought.

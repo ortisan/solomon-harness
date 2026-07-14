@@ -1,3 +1,8 @@
+---
+name: swiftui-state-and-architecture
+description: Governs the Observation framework versus ObservableObject, State/Binding/Bindable/Environment property-wrapper mapping, MVVM unidirectional flow, view identity and diffing, and NavigationStack value-based routing in SwiftUI. Use when structuring SwiftUI view state, choosing a property wrapper, diagnosing a re-render or lost-state bug, or designing navigation routes.
+---
+
 # SwiftUI State and Architecture
 
 Model SwiftUI state with the Observation framework (`@Observable`) as the default, drive the UI through one-way data flow from observable models into views and explicit intents back, and let SwiftUI own view identity so diffing stays correct and cheap. Reach for `ObservableObject`/`@Published` only when a deployment target below iOS 17 forces it; everything new in 2026 (iOS 26, Swift 6.2, Xcode 26) should use `@Observable`, `@State`, `@Bindable`, and `@Environment`.

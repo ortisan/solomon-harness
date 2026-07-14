@@ -1,3 +1,8 @@
+---
+name: the-test-pyramid-target-distribution
+description: Governs the unit/integration/E2E level mix using Cohn's pyramid, the 70/20/10 heuristic, Google's small/medium/large test sizing, and detecting ice-cream-cone or hourglass shapes from data. Use when auditing a suite's shape, sizing a new test's level, or diagnosing a slow or flaky CI pipeline.
+---
+
 # The Test Pyramid Target Distribution
 
 Decide how a suite's mass is split across unit, integration, and end-to-end tests, and detect when that split has gone wrong from data rather than feel. This skill owns the level mix and the diagnosis of a bad shape; it does not design the cases at each level (`test_design_rules` owns that) and does not explain how to write the upper layers (`integration_and_e2e_testing` owns that). The shape gates quality at `/solomon-review` because the mix determines how fast the suite runs on every push, how precisely a failure localizes the defect, and how much flake the gate carries. A suite can hit a high `pytest-cov` number and still be the wrong shape: 600 slow E2E tests give weak failure localization and a 40-minute pipeline, so reviewers stop trusting red and start re-running it.

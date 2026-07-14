@@ -1,3 +1,8 @@
+---
+name: capability-broker
+description: Governs how the practice_curator routes a free-text demand to the best-fit existing agent or reports a structured capability gap (adapt_skill or create_agent), per the verdict contract fixed in ADR-0008 and capability_router.py. Use when resolving an incoming task demand to an agent, or when no agent covers it and a skill adaptation or new-agent scaffold must be proposed.
+---
+
 # Capability Broker
 
 Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-reviewed acquisition (adapt an external skill into an agent, or create a new agent). Routing and gap detection are read-only and deterministic; every acquisition is a draft PR a human approves. This skill fixes the contract; the model is recorded in ADR-0008.

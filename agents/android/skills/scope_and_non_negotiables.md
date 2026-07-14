@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Governs the default Android stack and version pins, SDK-level policy, MVVM/MVI architecture with Hilt, lifecycle-scoped concurrency, TDD requirements, and the boundary between native-Android work and the flutter, software_engineer, auth_engineer, and observability agents. Use when scoping a new Android task, choosing a library or SDK level, or deciding whether work belongs to the android agent or should be handed off.
+---
+
 # Scope and Non-Negotiables
 
 Build native Android apps in Kotlin with Jetpack Compose as the default UI, MVVM/MVI over unidirectional data flow with Hilt for dependency injection, lifecycle-scoped Coroutines/Flow for async work, strict TDD, and R8 shrinking for every release. This skill fixes the working standard so reviewers reject deviations early: it pins the toolchain and versions, sets the minSdk/targetSdk/compileSdk policy, and draws the handoff lines to the flutter, backend, and auth specialists. When a request asks for cross-platform UI, server logic, or auth policy, do not absorb it; cede it to the owning agent.

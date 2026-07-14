@@ -1,3 +1,8 @@
+---
+name: twelve-factor-app
+description: Governs the fifteen-factor structural constraints for a deployable service — one codebase per deploy, declared dependencies, environment-supplied config, attached backing services, build-release-run separation, statelessness, port binding, disposability, dev/prod parity, stdout logging, and API-first contracts. Use when designing a new service's deployment shape or reviewing whether it violates a factor.
+---
+
 # Twelve-Factor App
 
 Treat the Twelve-Factor App as hard structural constraints on every service you design: one versioned codebase builds an immutable artifact that runs as stateless, disposable, share-nothing processes configured entirely from the environment. The canonical source is `12factor.net` (Adam Wiggins, Heroku, 2011); "Beyond the Twelve-Factor App" (Kevin Hoffman, O'Reilly, 2016) refines it and adds API-first, telemetry, and security as first-class concerns, giving the fifteen-factor model used below. Your job here is the design-time decision — what the structure must look like so the service is deployable, scalable, and replaceable. The runtime and operational side (probe tuning, rollout strategy, shutdown drills) belongs to the `sre` agent; reference it rather than re-specifying it.

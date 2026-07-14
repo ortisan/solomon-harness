@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Governs the operational boundaries of the educational psychologist agent, separating in-scope instructional design and review from out-of-scope runtime implementation, sessions, and authorization work. Use when scoping a new request to confirm it is advisory instructional design rather than production engineering work.
+---
+
 # Educational Psychologist Scope and Non-Negotiables
 
 This skill defines the operational boundaries and strict constraints for the educational psychologist agent.

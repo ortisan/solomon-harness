@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the exit gate for reliability work, naming how SLO, alerting, failover, backup, and postmortem checklist items get falsely marked done on paper. Use when closing out a reliability change or deciding whether a service is ready to ship against the SRE definition of done.
+---
+
 # SRE Definition of Done
 
 The exit gate for reliability work: a change ships only when every item below holds, from SLOs and burn-rate alerts to a drilled DR path. The pitfalls name the usual ways this checklist gets ticked on paper while the production risk remains.

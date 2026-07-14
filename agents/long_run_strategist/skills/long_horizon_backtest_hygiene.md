@@ -1,3 +1,8 @@
+---
+name: long-horizon-backtest-hygiene
+description: Governs the data and methodology requirements the long_run_strategist writes into every hypothesis card before quant_trader runs a backtest — survivorship-bias-free universes, point-in-time fundamentals, delistings and corporate actions, regime coverage, and low-frequency walk-forward design. Use when specifying acceptance criteria for a backtest, reviewing a dataset for look-ahead or survivorship defects, or setting the walk-forward and holdout methodology.
+---
+
 # Long-Horizon Backtest Hygiene
 
 This skill governs the data and methodology requirements the long_run_strategist writes into every hypothesis card before quant_trader runs a backtest: survivorship-bias-free universes, point-in-time data, delistings and corporate actions, regime coverage, and low-frequency walk-forward design. The stance: at long horizons the scarce resource is independent observations, and the common killers are quiet data defects rather than exotic statistics — so the strategist specifies the hygiene bar up front, and a backtest that fails the bar is not evidence, no matter what its Sharpe says.

@@ -1,3 +1,8 @@
+---
+name: networking-and-secure-storage
+description: Governs async/await URLSession clients, typed error mapping, bounded retry with backoff, App Transport Security, Keychain accessibility levels and biometric access control, and certificate pinning on Apple platforms. Use when implementing network calls, storing tokens or secrets, or reviewing ATS exceptions and Keychain accessibility choices.
+---
+
 # Networking and Secure Storage
 
 Move every network call onto async/await `URLSession` with `Codable` models, typed error handling and bounded retries, and keep every token, key, or secret in the Keychain with the right access-control flags rather than in `UserDefaults`, files, or `Info.plist`. The stance: the network is hostile and the device may be lost, so transport is encrypted and authenticated by App Transport Security (plus pinning for high-value endpoints), and at-rest secrets are scoped to the tightest `kSecAttrAccessible` level and gated by biometrics when they protect funds or identity.

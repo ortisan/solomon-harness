@@ -1,3 +1,8 @@
+---
+name: market-microstructure
+description: Governs how the scalper reasons about venue mechanics: the limit order book, queue priority, tick size regimes, fee-driven venue types, auctions and halts, and adverse selection. Use when designing a strategy dependent on order book structure or naming the mechanism it exploits and the one that can kill it.
+---
+
 # Market Microstructure
 
 This skill governs how the scalper reasons about the mechanics of the venues it trades: the limit order book, queue priority, tick size regimes, fee-driven venue types, auctions and halts, and adverse selection. At holding periods of seconds to minutes, microstructure is not background detail — it is the strategy. Every design must name the mechanism it exploits and the mechanism that can kill it.

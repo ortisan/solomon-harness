@@ -1,3 +1,8 @@
+---
+name: resilience-patterns
+description: Governs the architect's stability-pattern catalog drawn from Nygard's Release It! — timeouts, retry with jitter and budgets, circuit breakers, bulkheads, rate limiting, load shedding, backpressure, and idempotency — mapped to failure modes with composition order and threshold defaults. Use when deciding which resilience pattern an integration point needs and in what order the patterns should compose.
+---
+
 # Resilience and Stability Patterns
 
 Treat every integration point as a guaranteed future failure and decide which stability pattern guards it before the failure arrives, not after the first outage. This skill is the architect's pattern catalog: which pattern counters which failure mode, the thresholds that make it real, how the patterns compose, and where each one is enforced. It governs the design decision; the in-code wiring belongs to the software_engineer skill `robust_defensive_code`, and platform- and gateway-level enforcement belongs to the sre skills `high_availability` and `load_and_resilience_testing`. The canonical reference is Michael Nygard, *Release It!* (2nd ed., 2018) — its Stability Patterns and Stability Antipatterns are the vocabulary used below.

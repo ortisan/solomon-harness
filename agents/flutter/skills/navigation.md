@@ -1,3 +1,8 @@
+---
+name: navigation
+description: Governs Flutter routing with go_router, covering typed routes over string paths, redirect-based auth guards, deep-link handling, ShellRoute for persistent chrome, state restoration, and typed result contracts for dialogs and routes. Use when adding a route, wiring an auth guard, configuring deep links, or reviewing navigation code for typed-route and back-stack correctness.
+---
+
 # Navigation
 
 This skill governs routing in Flutter apps: go_router as the standard router, typed routes over string paths, redirect-based guards, deep links, ShellRoute for persistent chrome, state restoration, and explicit result contracts for dialogs and routes. The stance: navigation is declarative app state, defined centrally and driven by the application layer — widgets say what happened, the router decides where the user goes.

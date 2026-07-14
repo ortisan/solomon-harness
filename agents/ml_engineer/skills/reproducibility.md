@@ -1,3 +1,8 @@
+---
+name: reproducibility
+description: Governs seeds, environment pinning, data versioning, experiment tracking, and run manifests so that any reported number can be regenerated from a commit hash. Use when setting up a training run, auditing GPU determinism, or reviewing whether a reported result can be reproduced.
+---
+
 # Reproducibility
 
 This skill governs seeds, environment pinning, data versioning, experiment tracking, and run manifests, so that any reported number can be regenerated from a commit hash. A result that cannot be rerun is an anecdote: an untracked run did not happen.

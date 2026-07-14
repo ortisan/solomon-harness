@@ -1,3 +1,8 @@
+---
+name: disaster-recovery
+description: Governs disaster recovery planning for region or full-backup loss, covering RTO/RPO tiering, backup-and-restore through active-active DR topologies, 3-2-1-1-0 backups, and drilled restore cadences. Use when assigning a service's RTO/RPO tier, designing a DR topology, or scheduling a restore or failover game day.
+---
+
 # Disaster Recovery: RTO, RPO, and Tested Restores
 
 Plan for the loss of a region, a database, or an entire backup, and prove the plan by exercising it on a cadence.

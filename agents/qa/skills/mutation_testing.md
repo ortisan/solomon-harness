@@ -1,3 +1,8 @@
+---
+name: mutation-testing
+description: Governs mutation testing as the assertion-quality gate above line and branch coverage, covering mutant outcomes, test strength versus mutation score, per-language tooling, and threshold ratcheting. Use when configuring mutation testing, triaging a survivor, or judging whether coverage reflects assertion strength.
+---
+
 # Mutation Testing
 
 Mutation testing measures whether the test suite actually detects defects, not merely whether it executes lines. The tool injects small faults (mutants) into the code under test, reruns the suite against each one, and reports which mutants the tests killed and which survived; a surviving mutant is a concrete, located defect the suite would have shipped. Use it as the assertion-quality gate that sits above line and branch coverage, which only prove code ran, not that anything was checked.

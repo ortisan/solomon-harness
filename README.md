@@ -126,7 +126,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 | --- | --- | --- |
 | `/solomon-workflow` | run a task end-to-end or continue | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
-| `/solomon-issue` | create a feature/story | product_owner |
+| `/solomon-issue` | create a feature/story; a vague demand first passes the Socratic elicitation gate | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |
 | `/solomon-refine` | ready an issue | product_owner, scrum_master |
 | `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
@@ -143,7 +143,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-seven role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-eight role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed to the host tools as Claude Code
 subagents and Antigravity commands. The count above is the number of `agents/*/agents/*.md`
@@ -170,6 +170,7 @@ from that directory listing.
 | `quant_trader` | strategies, backtests, slippage/cost, Sharpe/drawdown risk |
 | `long_run_strategist` | long-horizon strategies: trend/momentum, factors, allocation, rebalancing |
 | `scalper` | intraday scalping: microstructure, order flow, execution, tick-data backtests |
+| `swing_trader` | daytrade and swing strategies (minutes-to-weeks holds), overnight risk, spec handoff |
 | `data_analyst` | SQL analytics, big data (Spark/ClickHouse), reporting |
 | `dba` | data modeling, performance tuning, migrations, replication |
 | `documenter` | technical and business docs, user guides, design docs |

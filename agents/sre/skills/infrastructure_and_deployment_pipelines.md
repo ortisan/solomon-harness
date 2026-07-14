@@ -1,3 +1,8 @@
+---
+name: infrastructure-and-deployment-pipelines
+description: Governs infrastructure-as-code, GitOps reconciliation, the build-once-promote-many pipeline, policy-as-code guardrails, and backward-compatible database migrations from commit to production. Use when designing or reviewing a deployment pipeline, an IaC change, or a schema migration's rollout safety.
+---
+
 # Infrastructure and Deployment Pipelines
 
 Everything is code, reviewed, versioned, reproducible, and promoted through gates; no console clicks reach production.

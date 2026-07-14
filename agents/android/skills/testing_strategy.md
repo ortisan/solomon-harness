@@ -1,3 +1,8 @@
+---
+name: testing-strategy
+description: Governs the Android test pyramid across JVM unit tests, Compose and Robolectric component tests, and instrumented/screenshot tests, plus coroutine test dispatchers, Turbine, and Kover coverage gates. Use when writing or reviewing Android tests, choosing between unit, Compose, Robolectric, and instrumented coverage, or configuring CI test and coverage gates.
+---
+
 # Android Testing Strategy
 
 Build the test suite as a pyramid: many fast JVM unit tests, a thinner band of Compose and Robolectric component tests, and a small set of instrumented end-to-end and screenshot tests, so most signal comes from tests that run in seconds without an emulator. Push every assertion to the lowest layer that can hold it, make coroutine and Flow code deterministic with test dispatchers, and gate merges on coverage and a green instrumented run on a managed device.

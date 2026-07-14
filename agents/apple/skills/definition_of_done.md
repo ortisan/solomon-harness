@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Governs the merge gate for an Apple-platform change, covering Swift Testing/XCTest/XCUITest results, SwiftLint strict mode, zero Swift 6 concurrency diagnostics, a correct privacy manifest, a reproducible signed archive, an accessibility audit, and secret scanning. Use when deciding whether an Apple pull request is ready to merge or verifying a change meets the project's Definition of Done.
+---
+
 # Apple Definition of Done
 
 An Apple-platform change is done only when every gate below holds on a clean machine and in CI, not when the feature works once on the author's simulator. Treat the Definition of Done as a hard merge gate: tests green (Swift Testing, XCTest, and XCUITest), SwiftLint clean in strict mode, zero concurrency diagnostics under the Swift 6 language mode, a present and correct privacy manifest, a reproducible signed archive, an accessibility pass, no secrets in the tree, and the design decision persisted to project memory. Each gate maps to a concrete command with an exit code, so "it builds" is never the bar.

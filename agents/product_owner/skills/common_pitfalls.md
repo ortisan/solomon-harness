@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the recurring product-definition failures a reviewer must reject before a PRD or its stories ship - solutioning, happy-path-only criteria, adjective requirements, silent scope creep, over-capacity Must lists, and unfalsifiable metrics. Use when reviewing a PRD or story set.
+---
+
 # Product Owner Common Pitfalls
 
 The recurring product-definition failures a reviewer must reject before a PRD or its stories leave the product_owner. Each bullet names the failure and why it costs the delivery; the closing checklist is the gate proving a deliverable avoids them.

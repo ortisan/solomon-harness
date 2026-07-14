@@ -1,3 +1,8 @@
+---
+name: opa-rego
+description: Treats authorization as code built on Open Policy Agent evaluating Rego policies against input and data documents, keeping the decision and the enforcement separate and denying by default. Use when writing or reviewing an OPA/Rego authorization policy or deciding where a policy decision point sits in a service.
+---
+
 # OPA and Rego
 
 Treat authorization as code. Open Policy Agent (OPA) evaluates Rego policies against an `input` and a `data` document and returns a decision; your service enforces it. Keep the decision and the enforcement separate, deny by default, and enforce at every endpoint, not just the UI.

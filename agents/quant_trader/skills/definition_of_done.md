@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: States the evidence bar a trading strategy must clear before deployment, pairing the pitfalls that fake each checklist item with the deployment checklist itself covering the hypothesis card, net-of-cost thresholds, and reproducibility. Use when deciding whether a strategy or backtest is ready to ship or deploy.
+---
+
 # Quant Trader Definition of Done
 
 The evidence bar a strategy must clear before deployment. The pitfalls below are the shortcuts that fake each checklist item; the checklist itself follows.

@@ -1,3 +1,8 @@
+---
+name: indexing-and-crawling
+description: Sets concrete rules for controlling what search engines and AI crawlers fetch, render, and index under RFC 9309 — robots.txt semantics, sitemap and lastmod discipline, canonicalization and redirect hygiene, crawl budget, and the server-versus-client rendering decision. Use when editing robots.txt or sitemap generation, debugging a Search Console index-coverage state, or deciding whether a template needs server-side rendering.
+---
+
 # Indexing and Crawling Control
 
 Concrete rules for controlling what search engines and AI crawlers fetch, render, and index: robots.txt semantics, sitemap discipline, canonicalization, crawl budget, and the SSR/CSR decision. The stance: crawling, rendering, and indexing are three separate pipelines with separate controls. Never use a crawl control to solve an indexing problem, and debug each stage in Search Console before touching the next.

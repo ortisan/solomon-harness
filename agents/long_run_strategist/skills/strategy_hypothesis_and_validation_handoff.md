@@ -1,3 +1,8 @@
+---
+name: strategy-hypothesis-and-validation-handoff
+description: Governs the two documents bounding every piece of the long_run_strategist's work — the hypothesis card that pre-registers a strategy's targets and assumptions before design, and the validation handoff that hands the backtest and verdict to quant_trader. Use when drafting a hypothesis card's required fields, closing out a design phase, or recording a pass/fail verdict and a failed hypothesis in project memory.
+---
+
 # Strategy Hypothesis and Validation Handoff
 
 This skill governs the two documents that bound every piece of this agent's work: the hypothesis card that starts a strategy and the validation handoff that ends the design phase. The stance: per the house rules in agents/AGENTS.md, a model hypothesis must state its targets, constraints, data, and architecture before implementation, and the agent that designed a strategy never grades it — quant_trader owns the backtest and the verdict. A strategy without a card is not started; a strategy without a handoff is not finished.

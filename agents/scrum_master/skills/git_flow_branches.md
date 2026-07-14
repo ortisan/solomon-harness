@@ -1,3 +1,8 @@
+---
+name: git-flow-branches
+description: Governs the trunk-based branch model for this repository, where main is the only long-lived branch, every change lands by a reviewed squash-merged pull request, and branch names carry a slug with no issue number. Use when cutting a branch, naming a branch, or reviewing whether a change followed the trunk-based merge path.
+---
+
 # Trunk-Based Branches
 
 Governs the branch model for this repository: a trunk-based topology where `main` is the only long-lived branch, every change lands by a reviewed, squash-merged pull request cut from `main`, and branch names carry a short slug with no issue number — the issue is linked through commit and PR trailers instead. Adopt this exactly. There is no `develop`, and there are no long-lived `release/*` or `hotfix/*` branches; the develop-plus-release-branches Git Flow model was removed because it let `main` drift from what actually ships and created merge-back debt on every release. The number-in-the-branch form was removed too, because it reads as cluttered and goes stale the moment an issue is renamed or re-scoped.

@@ -1,3 +1,8 @@
+---
+name: tick-data-backtesting
+description: Governs what a backtest must look like before the scalper hands it to quant_trader: tick or order-book data, a queue-position model, conservative fills, simulated latency, exact fees, and sample sizes large enough to be meaningful. Use when building or reviewing a scalping backtest before handoff.
+---
+
 # Tick Data Backtesting
 
 This skill governs what a backtest must look like before the scalper hands it to quant_trader: tick or order-book event data, a queue-position model, conservative fill assumptions, simulated latency, exact fees and rebates, and sample sizes large enough to mean something. At second-to-minute horizons, a bar-level backtest is not a weaker version of the truth — it is a different, fictional strategy, because the entire edge lives inside the bar.

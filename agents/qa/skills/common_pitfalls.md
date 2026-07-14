@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Lists the test-suite failure modes a QA reviewer rejects on sight, including hollow assertions, mocks without autospec, masked flaky tests, and backtests validated at zero cost. Use when reviewing a pull request's test suite or auditing existing tests for QA anti-patterns before sign-off.
+---
+
 # QA Common Pitfalls
 
 The test-suite failure modes a QA reviewer rejects on sight: hollow assertions, drifting mocks, masked flake, and backtests validated at zero cost. The closing checklist is the gate proving a suite carries none of them.

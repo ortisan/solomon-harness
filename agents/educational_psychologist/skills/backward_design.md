@@ -1,3 +1,8 @@
+---
+name: backward-design
+description: Governs planning learning programs with backward design (Wiggins and McTighe) and constructive alignment (Biggs), starting from desired results and evidence before designing activities. Use when planning an instructional module, training guide, or onboarding flow, or reviewing one where objectives came after the content.
+---
+
 # Backward Design
 
 This skill governs the planning of learning programs and instructional materials by starting with the desired results, determining acceptable evidence of learning, and then designing the learning experiences.

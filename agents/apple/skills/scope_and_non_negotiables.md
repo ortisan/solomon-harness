@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Governs the default Apple stack and Swift 6 concurrency mode, @Observable MVVM architecture, UIKit/AppKit interop boundary, minimum-deployment-target policy, strict TDD, and the handoff boundary with the auth_engineer and sre agents. Use when scoping a new Apple-platform task, choosing a deployment target or API availability gate, or deciding whether work belongs to the apple agent or should be handed off.
+---
+
 # Scope and Non-Negotiables
 
 Every Apple-platform feature in this harness ships as Swift + SwiftUI under the Swift 6 language mode with complete data-race checking, an `@Observable` MVVM core with unidirectional flow, and a test written before the code. This skill is the working standard: it fixes the default stack, the concurrency model, the deployment-target floor, what the apple specialist owns versus hands off, and the bar a reviewer rejects against. Treat deviations (a UIKit screen, a lowered minimum target, an untested code path) as exceptions that need an explicit, recorded reason, not as discretionary choices.

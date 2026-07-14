@@ -1,3 +1,8 @@
+---
+name: tooling-scrum-master-script
+description: Governs the use of scripts/scrum-master.sh, the single entry point for creating GitHub milestones and issues and listing the backlog, including its mock-mode degradation when no remote exists. Use when creating a milestone or issue via the script, listing the backlog, or troubleshooting the script's gh CLI wrapping.
+---
+
 # Tooling: scripts/scrum-master.sh
 
 This skill governs the use of `scripts/scrum-master.sh`, the single entry point

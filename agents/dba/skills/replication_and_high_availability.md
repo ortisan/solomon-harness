@@ -1,3 +1,8 @@
+---
+name: replication-and-high-availability
+description: Covers replicating PostgreSQL and surviving node loss: streaming physical replication, logical replication, the sync versus async durability trade-off, and automated failover with Patroni. Use when designing a high-availability topology or reviewing a failover or promotion decision.
+---
+
 # Replication and High Availability
 
 How to replicate PostgreSQL and survive node loss: streaming physical replication, logical replication, the synchronous/asynchronous durability trade, and automated failover with Patroni. The stance: replication settings are an RPO/RTO contract written in configuration; decide the acceptable data loss and downtime first, then derive the topology, and never let an automation and a human fight over who promotes.

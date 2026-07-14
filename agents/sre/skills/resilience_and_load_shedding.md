@@ -1,3 +1,8 @@
+---
+name: resilience-and-load-shedding
+description: Governs platform-level overload protection, covering rate limiting and throttling, circuit breaking and outlier ejection, retry budgets across hops, priority-aware load shedding, and autoscaling on leading signals. Use when configuring gateway or mesh traffic controls or validating shedding under a load test.
+---
+
 # Resilience and Load Shedding
 
 Under overload, protect the most important traffic by enforcing rate limiting, circuit breaking, retry budgets, and load shedding at the API gateway and service mesh, and validate every control with load tests and fault injection before real traffic does. The operating stance is that a saturated service must fail fast and selectively (reject the cheapest, lowest-priority requests in milliseconds) rather than slow down for everyone until timeouts cascade. Tie every shedding decision to the SLO and the error budget: when the budget burns fast, shed load to defend it.

@@ -1,3 +1,8 @@
+---
+name: portfolio-construction-and-allocation
+description: Governs how the long_run_strategist turns signals and asset views into portfolio weights — the limits of mean-variance optimization, when risk parity or hierarchical risk parity is the better tool, the mandatory constraint set, and estimation-error handling via shrinkage. Use when choosing a portfolio construction method, setting position and sector constraints, or checking a design against the 60/40 baseline it must beat after costs.
+---
+
 # Portfolio Construction and Allocation
 
 This skill governs how the long_run_strategist turns signals and asset views into portfolio weights: what mean-variance optimization can and cannot be trusted with, when risk parity and hierarchical risk parity are the better tool, which constraints are mandatory, and how to handle estimation error. The stance: the weakest input in any allocation problem is the expected-return estimate, so prefer constructions that need it least, regularize everything, and force every design to beat a plain 60/40 baseline after costs before it earns its complexity.

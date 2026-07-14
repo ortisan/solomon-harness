@@ -1,5 +1,12 @@
 import os
 import re
+import sys
+
+# The script runs standalone (python scripts/document-skills.py), so the repo
+# root is not on sys.path; add it to reach the shared parser package.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from solomon_harness.frontmatter import split_frontmatter
 
 # Leading list or checkbox markers to drop from a skill's first line, e.g.
 # "- ", "* ", "+ ", "- [ ] ", "- [x] ".
@@ -44,7 +51,10 @@ def extract_metadata(skill_path):
     first_body = ""
     try:
         with open(skill_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            text = f.read()
+        fields, body = split_frontmatter(text)
+        description = fields.get("description", "")
+        lines = body.splitlines()
         body_seen = 0
         for line in lines:
             line_str = line.strip()
@@ -63,7 +73,14 @@ def extract_metadata(skill_path):
             body_seen += 1
             if body_seen >= _PURPOSE_SCAN_LINES:
                 break
-        purpose = _summarize(purpose or first_body)
+        # The frontmatter description is the authored discovery line and is
+        # used verbatim so its "Use when" trigger reaches the profile list
+        # (ADR-0026); a Purpose: line or the first body line is the
+        # summarized fallback.
+        if description:
+            purpose = re.sub(r"\s+", " ", description).strip()
+        else:
+            purpose = _summarize(purpose or first_body)
     except Exception:
         purpose = ""
     return title or os.path.basename(skill_path)[:-3], purpose or "No description provided."

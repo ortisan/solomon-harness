@@ -1,3 +1,8 @@
+---
+name: mobile-security-stride-relevant
+description: Governs client-side Flutter security by STRIDE category, covering secure credential storage, certificate pinning, release-build hardening, platform-channel trust boundaries, root/jailbreak signal handling, and secret management benchmarked against OWASP MASVS/MASTG. Use when storing tokens, adding a platform channel, configuring TLS pinning, or reviewing a release build for leaked secrets.
+---
+
 # Mobile Security (STRIDE-Relevant)
 
 This skill governs client-side security for Flutter apps, organized by the STRIDE categories that matter on a device the attacker owns: credential storage, certificate pinning, binary hardening, platform-channel trust boundaries, root/jailbreak signals, and secret handling. The stance: a shipped Flutter binary is attacker-readable input — `strings` on the release artifact recovers every Dart const — so the client enforces nothing alone; it raises attacker cost while the server stays the authority. Benchmark decisions against OWASP MASVS/MASTG.

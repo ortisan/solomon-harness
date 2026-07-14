@@ -1,3 +1,8 @@
+---
+name: metrics
+description: Sets the standard for metric design, covering instrument choice by query need, RED/USE coverage, numeric cardinality budgets, histogram bucket and percentile correctness, and Prometheus-versus-OTLP collection. Use when adding a metric or label, sizing a cardinality budget, or reviewing latency percentile and SLO computations.
+---
+
 # Metrics
 
 This skill sets the standard for metric design: the right instrument for the question being asked, RED/USE coverage per surface, a hard cardinality budget with numbers, histograms that can answer percentile and SLO questions, and a clear position on Prometheus versus OTLP collection.

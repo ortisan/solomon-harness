@@ -1,3 +1,8 @@
+---
+name: scope-boundaries
+description: Governs drawing and defending PRD scope boundaries - explicit in-scope and out-of-scope lists with reasons, owned assumptions and dependencies, and the scope-change protocol that logs and prices mid-sprint expansion. Use when writing a PRD's scope section or a stakeholder's request.
+---
+
 # Scope Boundaries
 
 Scope control governs what a PRD promises and, just as importantly, what it refuses; the product_owner's job is to draw that line explicitly and defend it so delivery does not slip under silent, unowned expansion. The stance is adversarial toward ambiguity: every requirement is either in scope, out of scope, or a logged change, and nothing is allowed to live in between.

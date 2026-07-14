@@ -79,7 +79,7 @@ Captures early feature ideas or improvements without cluttering the active board
 Creates a detailed, structured user story directly in the backlog.
 * **Arguments:** `<title_or_description>`
 * **Primary Agent:** `product_owner`
-* **Workflows:** Compiles structured acceptance criteria and creates the GitHub issue in `Backlog`.
+* **Workflows:** Runs the elicitation gate first (six readiness criteria; a vague demand gets at most 3 rounds of Socratic questions, a complete one skips straight to shaping), compiles structured acceptance criteria, and creates the GitHub issue in `Backlog`.
 
 ### `/solomon-bug` (Bug Reporter)
 Files a structured bug ticket with detailed reproduction steps.

@@ -1,3 +1,8 @@
+---
+name: api-and-developer-documentation
+description: Governs contract-first API reference (OpenAPI 3.1/AsyncAPI 3.0), examples-first documentation, quickstart time-to-first-success targets, and versioning/deprecation signaling enforced by a docs-as-code CI pipeline. Use when writing or reviewing API reference, a quickstart, or a deprecation notice.
+---
+
 # API and Developer Documentation
 
 API reference is generated from a machine-readable contract; hand-written reference is a defect. This skill governs the OpenAPI discipline, the examples-first reference standard, quickstart quality measured as time-to-first-success, versioning and deprecation documentation, and the docs-as-code pipeline that keeps all of it honest in CI.

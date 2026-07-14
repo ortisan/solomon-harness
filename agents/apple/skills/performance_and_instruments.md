@@ -1,3 +1,8 @@
+---
+name: performance-and-instruments
+description: Governs Instruments-based profiling of CPU, memory, launch time, and scroll hitches, SwiftUI view-body cost, launch-time budgets, retain-cycle diagnosis, and production MetricKit monitoring on Apple platforms. Use when investigating a slow launch, main-thread hang, scroll jank, or memory leak, or when validating a performance claim before merge.
+---
+
 # Performance and Instruments
 
 Profile against measured budgets, not intuition: every claim about CPU, memory, launch time, or scrolling smoothness must come from an Instruments trace or a MetricKit field payload, not a guess. The targets are concrete — sub-400 ms time to first frame, a hitch time ratio under 5 ms/s, zero abandoned memory in Cycles & Roots, and a main thread that never blocks past 250 ms — and this skill governs how to reach and hold them on Xcode 26 / Swift 6.2 against iOS/iPadOS 26 and macOS 26.

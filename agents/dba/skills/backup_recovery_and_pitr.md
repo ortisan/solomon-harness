@@ -1,3 +1,8 @@
+---
+name: backup-recovery-and-pitr
+description: Sets the PostgreSQL backup standard: logical dumps versus physical base backups, continuous WAL archiving, point-in-time recovery, and the restore drills that make RPO/RTO numbers real. Use when designing a backup strategy, planning a recovery, or reviewing whether RPO/RTO is rehearsed.
+---
+
 # Backup, Recovery, and PITR
 
 The standard for PostgreSQL backups: logical dumps versus physical base backups, continuous WAL archiving, point-in-time recovery, and the drills that make RPO/RTO numbers real. The stance: a backup that has not been restored recently is a hope, not a backup; the deliverable of this skill is a measured, rehearsed recovery, and the backup is merely its input.

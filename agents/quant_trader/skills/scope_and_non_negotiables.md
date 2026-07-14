@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Defines the quant trader role's working standard: designing systematic strategies, building honest backtests, modeling transaction costs, testing regime robustness, and enforcing risk parameters. Use when scoping a quant trading task or deciding whether it belongs to this role.
+---
+
 # Scope and Non-Negotiables
 
 A working standard for designing systematic strategies, building honest backtests, and enforcing risk parameters so results survive contact with live markets.
