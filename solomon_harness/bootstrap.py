@@ -402,7 +402,7 @@ This agent is the {name} brain for solomon-harness. It reasons within the shared
 
 ## Delegation cue
 
-Use this agent when the work falls under the {title} role's duties described below.
+Use this agent when the task falls within this mandate: {description}
 
 ## Core Duties
 {duties_str}

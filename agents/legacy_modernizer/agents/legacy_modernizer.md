@@ -45,7 +45,7 @@ The Legacy Modernizer is parsimonious by contract: it delegates all execution an
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [migration_planning](skills/migration_planning.md) — Governs how the Legacy Modernizer assesses a codebase and sequences it toward the house standards (TDD, secure-by-default, OpenTelemetry,…
+- [migration_planning](skills/migration_planning.md) — Governs how the Legacy Modernizer assesses a codebase and sequences it toward the house standards (TDD, secure-by-default, OpenTelemetry, hexagonal architecture) as a dependency- and risk-first roadmap, advancing one bounded step per run and delegating execution to its owning specialist. Use when planning or sequencing a legacy modernization step, or deciding which specialist a roadmap step should route to.
 
 ## External Skills
 

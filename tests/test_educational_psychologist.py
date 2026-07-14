@@ -125,7 +125,7 @@ class TestEducationalPsychologist(unittest.TestCase):
             self.assertTrue(os.path.isfile(path), f"{name} is missing")
             with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
-            # Skip the discovery frontmatter block (ADR-0024); the summary is
+            # Skip the discovery frontmatter block (ADR-0026); the summary is
             # the first body paragraph.
             if text.startswith("---\n"):
                 end = text.find("\n---\n", 3)

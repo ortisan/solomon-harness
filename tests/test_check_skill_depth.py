@@ -221,6 +221,24 @@ class TestCheckSkillFormat(unittest.TestCase):
         finally:
             self.mod.REPO_ROOT = original
 
+    def test_scope_and_mandate_is_depth_exempt(self):
+        # A freshly scaffolded agent ships a short scope_and_mandate.md; the
+        # depth bar must not fail it (it stays format-gated like every file).
+        deep = "# Skill\n\nA sharp summary sentence.\n\n" + ("word " * 600) + SECTIONS
+        self._skill(self.dir, "alpha", "core_skill.md", _frontmatter("core_skill") + deep)
+        self._skill(
+            self.dir,
+            "newborn",
+            "scope_and_mandate.md",
+            _frontmatter("scope_and_mandate") + self.BODY,
+        )
+        original = self.mod.REPO_ROOT
+        try:
+            self.mod.REPO_ROOT = self.dir
+            self.assertEqual(self.mod.main([]), 0)
+        finally:
+            self.mod.REPO_ROOT = original
+
     def test_main_default_scan_flags_shallow_skill_in_any_agent(self):
         # The depth bar applies to the whole roster by default: a shallow
         # role-core skill in an arbitrary agent fails main([]).

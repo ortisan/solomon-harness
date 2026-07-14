@@ -1,6 +1,6 @@
 ---
 name: mfa-passkeys
-description: Governs the second-factor and passwordless layer, making the strongest available authenticator the default and weaker factors migration-path fallbacks, with every enrollment and recovery step replay-safe and rate-limited. Use when adding or reviewing MFA, WebAuthn/passkeys, TOTP, or SMS-based authentication.
+description: Governs the second-factor and passwordless layer, making the strongest available authenticator the default and weaker factors fallbacks with a migration path, with every enrollment and recovery step replay-safe and rate-limited. Use when adding or reviewing MFA, WebAuthn/passkeys, TOTP, or SMS-based authentication.
 ---
 
 # MFA and Passkeys

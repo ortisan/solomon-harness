@@ -1,6 +1,6 @@
 ---
 name: oauth2-oidc
-description: Governs OAuth 2.0 and OpenID Connect flow selection, token handling, and endpoint hardening, with authorization-code-plus-PKCE as the default. Use when designing or reviewing login flows, token exchanges, or any integration with an identity provider.
+description: Governs OAuth 2.0 and OpenID Connect flow selection, token handling, and endpoint hardening, with authorization-code-plus-PKCE as the only flow shipped. Use when designing or reviewing login flows, token exchanges, or any integration with an identity provider.
 ---
 
 # OAuth 2.0 and OpenID Connect

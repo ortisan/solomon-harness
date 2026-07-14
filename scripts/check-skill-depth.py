@@ -23,9 +23,16 @@ Exits 0 when every checked skill meets the bar, 1 otherwise (listing each gap).
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
+
+# The script runs standalone (python scripts/check-skill-depth.py), so the
+# repo root is not on sys.path; add it to reach the shared parser package.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from solomon_harness.frontmatter import split_frontmatter
 
 MIN_WORDS = 600
 MAX_DESCRIPTION_CHARS = 1024
@@ -33,6 +40,9 @@ SHARED_EXEMPT = {
     "definition_of_done.md",
     "common_pitfalls.md",
     "scope_and_non_negotiables.md",
+    # The scaffold's starter skill: format-gated like everything else, but a
+    # freshly scaffolded agent must not fail CI before its skills are written.
+    "scope_and_mandate.md",
 }
 REQUIRED_SECTIONS = ("## Common pitfalls", "## Definition of done")
 # An agent name maps to a directory under agents/; constrain it so a stray `..`
@@ -53,23 +63,9 @@ def default_agents() -> list[str]:
     return sorted(path.parent.name for path in agents_root.glob("*/skills") if path.is_dir())
 
 
-def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Split a leading frontmatter block into (fields, body).
-
-    Minimal single-line `key: value` parsing is all the skill contract needs;
-    a missing or unterminated block returns ({}, text) unchanged.
-    """
-    if not text.startswith("---\n"):
-        return {}, text
-    end = text.find("\n---\n", 3)
-    if end == -1:
-        return {}, text
-    fields: dict[str, str] = {}
-    for line in text[4:end].splitlines():
-        if ":" in line:
-            key, value = line.split(":", 1)
-            fields[key.strip()] = value.strip()
-    return fields, text[end + 5 :]
+# The gate and the profile generator must never disagree about what counts as
+# frontmatter, so the parser lives in the package (ADR-0026).
+parse_frontmatter = split_frontmatter
 
 
 def word_count(text: str) -> int:

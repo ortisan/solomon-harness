@@ -74,7 +74,10 @@ class TestDocumentSkills(unittest.TestCase):
         _, purpose = self.mod.extract_metadata(path)
         self.assertEqual(purpose, "No description provided.")
 
-    def test_prefers_frontmatter_description(self):
+    def test_prefers_frontmatter_description_verbatim(self):
+        # The authored description is used whole — the "Use when" trigger must
+        # survive into the profile's Active Skills list (ADR-0026), so no
+        # first-sentence capping applies on this path.
         path = self._write(
             "---\n"
             "name: oauth\n"
@@ -83,7 +86,9 @@ class TestDocumentSkills(unittest.TestCase):
             "# OAuth\n\nThe body says something else entirely.\n"
         )
         _, purpose = self.mod.extract_metadata(path)
-        self.assertEqual(purpose, "Implements OAuth flows end to end.")
+        self.assertEqual(
+            purpose, "Implements OAuth flows end to end. Use when wiring login."
+        )
 
     def test_frontmatter_block_is_not_mistaken_for_body(self):
         # A frontmatter block without a description must be skipped, never

@@ -12,10 +12,17 @@ class TestScaffoldAgent(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.agents_dir = os.path.join(self.tmp_dir, "agents")
         os.makedirs(self.agents_dir, exist_ok=True)
-        # Copy scripts directory so we can run them hermetically
+        # Copy scripts directory so we can run them hermetically, plus the
+        # solomon_harness package the scripts import (shared frontmatter
+        # parser, ADR-0026).
         shutil.copytree(
             os.path.join(self.real_root, "scripts"),
             os.path.join(self.tmp_dir, "scripts")
+        )
+        shutil.copytree(
+            os.path.join(self.real_root, "solomon_harness"),
+            os.path.join(self.tmp_dir, "solomon_harness"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
         # Create an AGENTS.md file mock
         with open(os.path.join(self.agents_dir, "AGENTS.md"), "w", encoding="utf-8") as f:
@@ -88,6 +95,8 @@ class TestScaffoldAgent(unittest.TestCase):
             content = f.read()
         self.assertIn("## Delegation cue", content)
         self.assertIn("Use this agent when", content)
+        # The cue names the actual mandate, not a circular "duties below".
+        self.assertIn("this mandate: Cue description", content)
 
     def test_scaffold_copies_harness_templates(self):
         scaffold_new_agent(self.tmp_dir, "test_template_agent", "Another description")
@@ -127,12 +136,8 @@ class TestScaffoldAgent(unittest.TestCase):
         self.assertEqual(content.count("- `alpha_agent`"), 1)
 
     def test_scaffold_compiles_agent(self):
-        # We need templates directory in self.tmp_dir for compile step
-        shutil.copytree(
-            os.path.join(self.real_root, "solomon_harness", "templates"),
-            os.path.join(self.tmp_dir, "solomon_harness", "templates")
-        )
-
+        # setUp already copied solomon_harness/ (templates included) into
+        # self.tmp_dir, which the compile step needs.
         scaffold_new_agent(self.tmp_dir, "test_compiled_agent", "To compile test")
 
         # 1. Check skill is documented in the agent's profile file
@@ -150,7 +155,10 @@ class TestScaffoldAgent(unittest.TestCase):
         self.assertTrue(os.path.isfile(compiled_path))
         with open(compiled_path, "r", encoding="utf-8") as f:
             compiled_content = f.read()
-        self.assertIn("description: To compile test", compiled_content)
+        # The description is a quoted YAML scalar carrying the role line plus
+        # the scaffolded delegation cue.
+        self.assertIn('description: "To compile test', compiled_content)
+        self.assertIn("Use this agent when", compiled_content)
 
     def test_scaffold_cli_command(self):
         from unittest.mock import patch

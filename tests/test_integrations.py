@@ -140,13 +140,25 @@ class TestGeneratedSubagents(unittest.TestCase):
         self.assertEqual(description, "The Widget Maker builds widgets.")
 
     def test_every_generated_subagent_carries_a_delegation_trigger(self):
-        # Every profile has a Delegation cue, so every generated subagent
-        # description must contain the "Use this agent when" trigger phrase.
+        # Every generated subagent frontmatter must parse as strict YAML (the
+        # description is a quoted scalar, so colons in prose cannot break it)
+        # and its description must carry the "Use this agent when" trigger.
+        import yaml
+
         for name in _agent_names():
             body = _read(os.path.join(".claude", "agents", f"{name}.md"))
+            parts = body.split("---\n")
+            self.assertGreaterEqual(
+                len(parts), 3, f"subagent {name} has no frontmatter block"
+            )
+            data = yaml.safe_load(parts[1])
+            self.assertIsInstance(
+                data, dict, f"subagent {name} frontmatter is not a YAML mapping"
+            )
+            self.assertEqual(data.get("name"), name)
             self.assertIn(
                 "Use this agent when",
-                body.split("---")[1],
+                data.get("description", ""),
                 f"subagent {name} lacks a delegation trigger in its description",
             )
 

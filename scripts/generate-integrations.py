@@ -52,11 +52,20 @@ def role_description(role_path: str, agent_name: str) -> str:
     return one_liner or f"The {agent_name} specialist for solomon-harness."
 
 
+def yaml_quote(value: str) -> str:
+    """Render a single-line string as a double-quoted YAML scalar.
+
+    Descriptions are natural-language sentences, so unquoted colons or hashes
+    would break the generated frontmatter for any strict YAML consumer.
+    """
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def subagent_markdown(agent_name: str, description: str) -> str:
     return (
         f"---\n"
         f"name: {agent_name}\n"
-        f"description: {description}\n"
+        f"description: {yaml_quote(description)}\n"
         f"---\n\n"
         f"You are the {agent_name} specialist agent for solomon-harness.\n\n"
         f"Your role is defined in agents/{agent_name}/agents/{agent_name}.md and your "

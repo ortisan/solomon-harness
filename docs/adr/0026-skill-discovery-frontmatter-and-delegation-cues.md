@@ -1,4 +1,4 @@
-# ADR-0024: Skill discovery frontmatter and profile delegation cues
+# ADR-0026: Skill discovery frontmatter and profile delegation cues
 
 - Status: accepted
 - Date: 2026-07-14

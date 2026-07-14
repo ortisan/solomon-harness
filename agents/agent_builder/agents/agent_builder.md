@@ -29,7 +29,7 @@ Use this agent when a new specialist agent needs to be scaffolded end to end —
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents — the mandated agents/<name>/ directory layout,…
+- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents — the mandated agents/<name>/ directory layout, path-traversal and snake_case-name confinement checks, and the registry updates to agents/AGENTS.md, README.md, and the compiled host-tool integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
 
 ## External Skills
 

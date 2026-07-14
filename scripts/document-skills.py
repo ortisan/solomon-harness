@@ -1,5 +1,12 @@
 import os
 import re
+import sys
+
+# The script runs standalone (python scripts/document-skills.py), so the repo
+# root is not on sys.path; add it to reach the shared parser package.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from solomon_harness.frontmatter import split_frontmatter
 
 # Leading list or checkbox markers to drop from a skill's first line, e.g.
 # "- ", "* ", "+ ", "- [ ] ", "- [x] ".
@@ -38,34 +45,16 @@ def _summarize(text):
     return cut + "…"
 
 
-def _split_frontmatter(lines):
-    """Split leading frontmatter lines from the body lines.
-
-    Returns (fields, body_lines). Values are single-line strings; a missing or
-    unterminated block returns ({}, lines) unchanged.
-    """
-    if not lines or lines[0].strip() != "---":
-        return {}, lines
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            fields = {}
-            for raw in lines[1:index]:
-                if ":" in raw:
-                    key, value = raw.split(":", 1)
-                    fields[key.strip()] = value.strip()
-            return fields, lines[index + 1 :]
-    return {}, lines
-
-
 def extract_metadata(skill_path):
     title = ""
     purpose = ""
     first_body = ""
     try:
         with open(skill_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        fields, lines = _split_frontmatter(lines)
+            text = f.read()
+        fields, body = split_frontmatter(text)
         description = fields.get("description", "")
+        lines = body.splitlines()
         body_seen = 0
         for line in lines:
             line_str = line.strip()
@@ -84,9 +73,14 @@ def extract_metadata(skill_path):
             body_seen += 1
             if body_seen >= _PURPOSE_SCAN_LINES:
                 break
-        # The frontmatter description is the authored one-liner; an explicit
-        # Purpose: line or the first body line only backs it up.
-        purpose = _summarize(description or purpose or first_body)
+        # The frontmatter description is the authored discovery line and is
+        # used verbatim so its "Use when" trigger reaches the profile list
+        # (ADR-0026); a Purpose: line or the first body line is the
+        # summarized fallback.
+        if description:
+            purpose = re.sub(r"\s+", " ", description).strip()
+        else:
+            purpose = _summarize(purpose or first_body)
     except Exception:
         purpose = ""
     return title or os.path.basename(skill_path)[:-3], purpose or "No description provided."
