@@ -42,7 +42,7 @@ Derive options from the project context (memory, open issues, the codebase) so e
 
 ## Folding answers into the story
 
-Every elicited answer lands in a template field, never in a side note: Problem feeds the problem statement; Persona and Outcome feed the user story ("As a <persona>, I want <capability> so that <outcome>"); Boundary feeds Scope and Out of scope; Single-reading resolutions rewrite the demand sentence itself; the Job reframes a solution-shaped demand per product_discovery_and_jtbd. The elicitation line (skipped or ran, and which criteria failed) stays in the body so refine can see what was asked versus assumed.
+Every elicited answer lands in a template field, never in a side note: Problem feeds the Context section; Persona and Outcome feed the user story ("As a <persona>, I want <capability> so that <outcome>"); Boundary feeds Scope and Out of scope; Single-reading resolutions rewrite the demand sentence itself; the Job reframes a solution-shaped demand per product_discovery_and_jtbd. The elicitation line (skipped or ran, and which criteria failed) stays in the body so refine can see what was asked versus assumed.
 
 ## Common pitfalls
 
@@ -63,5 +63,5 @@ Every elicited answer lands in a template field, never in a side note: Problem f
 - [ ] The issue body carries the elicitation trace: the skip line, or the ran line naming the failed criteria.
 - [ ] Declined or unreachable answers are recorded under `Assumptions (unelicited)` in the issue body.
 - [ ] Non-interactive runs asked nothing and printed `Elicitation: skipped (non-interactive)`.
-- [ ] Every elicited answer is folded into a template field (problem statement, user story, scope), not left as an aside.
+- [ ] Every elicited answer is folded into a template field (Context, user story, scope), not left as an aside.
 - [ ] The confirm-before-create step ran unchanged after the gate.

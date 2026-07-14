@@ -80,8 +80,8 @@ Steps:
    `docs/specs/<N>-<slug>.md` with the Write tool — `<N>` = the created issue
    number with no leading zeros, `<slug>` = the kebab-case title reduced to
    ASCII lowercase `[a-z0-9]` and single hyphens, everything else stripped.
-   Pre-fill from the shaped body: the elicitation trace into Context, the
-   Context section (the need and why) into Problem, the scope into Requirements, the Gherkin
+   Pre-fill from the shaped body: the elicitation trace into the spec's Context, the
+   issue's Context section (the need and why) into the spec's Problem, the scope into Requirements, the Gherkin
    into Acceptance Criteria, the house rules that bound the solution
    (architecture style, security posture, conventions) into
    Design Constraints, the out-of-scope list into Out of Scope, and
