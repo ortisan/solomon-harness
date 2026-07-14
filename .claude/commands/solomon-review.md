@@ -6,7 +6,7 @@ allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, Write, AskUs
 
 You are running the Review stage of the solomon lifecycle for PR #$ARGUMENTS.
 
-First, read `docs/solomon-workflow.md` and `docs/adr/README.md` so the board
+First, read `docs/solomon-workflow.md` and `docs/adrs/README.md` so the board
 columns, labels, the ADR trigger, and the memory handoff contract are exact. This
 stage is driven by three mandatory gate agents — qa, security, and
 software_architect — plus up to two domain lenses selected from the changed

@@ -58,7 +58,7 @@ No runtime package code: the convention is docs + a standalone validator +
 prompt wiring, pinned by content gates (the ADR-0025/#222 enforcement
 pattern). Issue-derived text reaches the spec only through the Write tool —
 never a shell string (the elicitation gate's discipline). The convention's
-decision record lands with S2a (#234), which owns the docs/adr → docs/adrs
+decision record lands with S2a (#234), which owns the docs/adrs → docs/adrs
 rename; S3 (#236) is gated on that record landing first.
 
 ## Out of Scope

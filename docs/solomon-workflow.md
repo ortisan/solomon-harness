@@ -146,7 +146,7 @@ present and non-empty, Traceability citing the issue) and runs in the CI
 validators job. The spec ships with the issue's first implementation PR —
 never pushed to a protected branch directly. The convention's full definition
 lives in `docs/specs/README.md`; its decision record lands with the
-`docs/adr` → `docs/adrs` migration (#221 S2a).
+`docs/adrs` → `docs/adrs` migration (#221 S2a).
 
 ## Implementation mode (automatic or manual)
 
@@ -206,7 +206,7 @@ Its own role is milestone-level: once a milestone's issues are already `Done`,
 it drives the version tag through CI, plus a board-hygiene backstop for any
 card GitHub auto-closed outside the CLI `Done` path. The full, canonical
 standard is `docs/release-policy.md` (decision recorded in
-`docs/adr/0004-milestone-gated-releases.md`); this section is the operational
+`docs/adrs/0004-milestone-gated-releases.md`); this section is the operational
 summary the workflow follows.
 
 **Release criterion — milestone-gated, never per-PR.** A tag is cut only when a
@@ -340,7 +340,7 @@ Contract template:
 <2-5 lines>
 
 ## Artifacts (open only if needed)
-- PLAN.md · docs/specs/<N>-*.md · docs/adr/NNNN-*.md · PR #<M> · test plan · ...
+- PLAN.md · docs/specs/<N>-*.md · docs/adrs/NNNN-*.md · PR #<M> · test plan · ...
 
 ## Acceptance criteria status
 <which acceptance criteria are met; what remains>
@@ -506,8 +506,8 @@ live in the agents' `architecture_scan_loop` / `duplication_scan_loop` skills.
 `/solomon-start` and `/solomon-release` must evaluate whether the change is
 architecturally significant using the checklist in
 `agents/software_architect/skills/architecture_decisions_in_project_memory.md` and
-`docs/adr/README.md`. If significant, the software_architect agent writes
-`docs/adr/NNNN-<slug>.md` from `docs/adr/0000-adr-template.md`, records it with
+`docs/adrs/README.md`. If significant, the software_architect agent writes
+`docs/adrs/NNNN-<slug>.md` from `docs/adrs/0000-adr-template.md`, records it with
 `save_decision`, and links it in the PR. If not significant, state that explicitly
 in the PR so the decision to skip an ADR is also visible.
 

@@ -1,6 +1,6 @@
 ---
 name: architectural-decision-records
-description: Governs when a decision earns an ADR, the MADR format with Status, Context, Considered Options, and Consequences, the Proposed-Accepted-Deprecated-Superseded status lifecycle, and the docs/adr/NNNN-kebab-title.md numbering and storage convention. Use when a structural, costly-to-reverse decision needs a recorded rationale, or when reviewing whether an existing ADR should be superseded.
+description: Governs when a decision earns an ADR, the MADR format with Status, Context, Considered Options, and Consequences, the Proposed-Accepted-Deprecated-Superseded status lifecycle, and the docs/adrs/NNNN-kebab-title.md numbering and storage convention. Use when a structural, costly-to-reverse decision needs a recorded rationale, or when reviewing whether an existing ADR should be superseded.
 ---
 
 # Architectural Decision Records
@@ -41,7 +41,7 @@ To change an accepted decision you never edit its substance; you write a new ADR
 
 ## Storage and numbering
 
-Store ADRs as `docs/adr/NNNN-kebab-title.md`, numbered monotonically from 0001, one decision per file. They live in the repo and change in the same pull request as the code they govern, so the decision is reviewed alongside the diff. Keep an index (`docs/adr/README.md`, or the memory `adr-index` from the sibling skill) so a reader finds the live status without opening every file.
+Store ADRs as `docs/adrs/NNNN-kebab-title.md`, numbered monotonically from 0001, one decision per file. They live in the repo and change in the same pull request as the code they govern, so the decision is reviewed alongside the diff. Keep an index (`docs/adrs/README.md`, or the memory `adr-index` from the sibling skill) so a reader finds the live status without opening every file.
 
 ## Worked ADR skeleton (MADR)
 
@@ -96,7 +96,7 @@ The decision does not stop at the file. Mirror it into project memory and link i
 
 - [ ] The decision is architecturally significant per the triage test; trivial or reversible choices are not given ADRs.
 - [ ] The record uses the MADR shape with Status, Context-as-forces, at least two Considered Options with rejection reasons, and Consequences naming at least one cost.
-- [ ] Stored as `docs/adr/NNNN-kebab-title.md`, numbered monotonically, one decision per file, in the same PR as the change.
+- [ ] Stored as `docs/adrs/NNNN-kebab-title.md`, numbered monotonically, one decision per file, in the same PR as the change.
 - [ ] Status reflects the lifecycle; superseding writes a new ADR and links both directions, never editing accepted substance.
 - [ ] An index lets a reader find current status without opening every file.
 - [ ] The decision is mirrored to project memory and linked to its issue and commit per `architecture_decisions_in_project_memory`.

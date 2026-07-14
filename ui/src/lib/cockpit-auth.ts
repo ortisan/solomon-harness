@@ -1,5 +1,5 @@
 // Shared-secret auth guard for the cockpit's mutating write routes
-// (start-task, reconcile). docs/adr/0005 makes the cockpit read-only by
+// (start-task, reconcile). docs/adrs/0005 makes the cockpit read-only by
 // contract; these two routes are documented exceptions that mutate state, so
 // they must not be reachable without a credential. There is no broader
 // auth/authorization layer in ui/src, so this guard fails closed: if the

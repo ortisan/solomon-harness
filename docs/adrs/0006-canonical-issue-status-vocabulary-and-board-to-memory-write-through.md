@@ -171,7 +171,7 @@ not the raw 61-vs-37 count.
 ## More information
 
 - ADR-0002 (cross-tenant read topology for the delivery cockpit,
-  `docs/adr/0002-cockpit-cross-tenant-read-topology.md`): the cockpit read port
+  `docs/adrs/0002-cockpit-cross-tenant-read-topology.md`): the cockpit read port
   consumes `get_open_issues`/`list_issues`. ADR-0006 changes the status snapshot's
   vocabulary (canonical tokens) and the open-set semantics (non-terminal predicate)
   that ADR-0002 relies on. The snapshot-only, no-transition-history model of ADR-0002
@@ -179,7 +179,7 @@ not the raw 61-vs-37 count.
   "open"; it adds no `closed_at`/transition history and keeps status a current
   snapshot, so ADR-0002's metric-source and history follow-ups stand as written.
 - ADR-0002 (memory resilience model — reconnect-then-fallback and a write-through
-  mirror, `docs/adr/0002-memory-resilience-model.md`): the precedent for best-effort
+  mirror, `docs/adrs/0002-memory-resilience-model.md`): the precedent for best-effort
   write-through paired with an idempotent reconcile that heals SurrealDB/SQLite
   divergence. ADR-0006 extends that pattern from the memory mirror seam to the GitHub
   board state -> memory seam, reusing the same `log_issue` UPSERT-on-`github_id`

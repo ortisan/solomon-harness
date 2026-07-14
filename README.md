@@ -226,8 +226,8 @@ avoid clashing with whatever already holds the preferred port. See *Shared memor
 ### Architecture Decision Records
 
 The `start` and `release` workflows evaluate whether a change is architecturally
-significant (the checklist in `docs/adr/README.md`) and, if so, write a MADR record
-to `docs/adr/NNNN-*.md` and persist it with `save_decision`.
+significant (the checklist in `docs/adrs/README.md`) and, if so, write a MADR record
+to `docs/adrs/NNNN-*.md` and persist it with `save_decision`.
 
 ### Stack-based agent selection
 

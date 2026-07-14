@@ -87,7 +87,7 @@ class TestSelectLenses(unittest.TestCase):
             )
 
     def test_docs_select_documenter(self):
-        for path in ("docs/solomon-workflow.md", "docs/adr/0017-review.md"):
+        for path in ("docs/solomon-workflow.md", "docs/adrs/0017-review.md"):
             self.assertEqual(
                 review_roster.select_lenses([path]), ["documenter"], path
             )
