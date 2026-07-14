@@ -188,7 +188,7 @@ def test_workflow_doc_documents_the_merge_owner():
 
 # The criteria as they appear in the gate text itself, pinned with their
 # distinctive continuations so generic words elsewhere in the files (the
-# "Problem statement" template, the user-story persona/outcome lines) cannot
+# "Context" template section, the user-story persona/outcome lines) cannot
 # satisfy the assertions.
 COMMAND_CRITERIA = (
     "**Problem** (the pain and why now)",

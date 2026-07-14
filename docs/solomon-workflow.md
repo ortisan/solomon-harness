@@ -299,7 +299,7 @@ The CLI surface for this stage is `solomon-harness release plan | prep | check |
 
 ## Issue body templates
 
-- Feature/story: problem statement, user story (`As a … I want … so that …`),
+- Feature/story: context, user story (`As a … I want … so that …`),
   acceptance criteria as Given/When/Then, scope and out-of-scope, definition of ready.
 - Bug: summary, steps to reproduce, expected vs actual, environment, severity, and
   a note that a regression test is required before the fix is closed.
