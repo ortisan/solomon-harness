@@ -13,6 +13,11 @@ shell string) and hand its path to these subcommands:
   human-driven session — acquisition is permanently human-gated (issue #50
   AC2; the loop may surface a gap, never act on it).
 
+Free-text fields (title, description, duties) are constrained to single lines
+without backticks: they end up spliced into ``agents/AGENTS.md`` and the new
+agent's persona/role files, which every future session reads as trusted
+instructions, so structural characters are rejected at this boundary.
+
 Exit codes: 0 success, 2 bad input (malformed file or failed validation),
 3 refused (fail-closed routing error or the human gate).
 """
@@ -20,8 +25,8 @@ Exit codes: 0 success, 2 bad input (malformed file or failed validation),
 import json
 import os
 import re
-from dataclasses import asdict
-from typing import Any, Dict, List, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, Optional, Tuple
 
 from solomon_harness.capability_router import (
     CatalogError,
@@ -32,8 +37,10 @@ from solomon_harness.capability_router import (
 
 SNAKE_CASE = re.compile(r"^[a-z0-9_]+$")
 ISSUE_ID = re.compile(r"^[0-9]+$")
+MAX_NAME = 64
 MAX_TITLE = 200
 MAX_DESCRIPTION = 2000
+MAX_DUTY = 300
 MAX_DUTIES = 12
 
 EXIT_OK = 0
@@ -79,6 +86,13 @@ def acquisition_gate(
     return None
 
 
+def _optional_str(raw: Dict[str, Any], key: str) -> Optional[str]:
+    value = raw.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"'match.{key}' must be a string or null")
+    return value
+
+
 def _match_from_payload(payload: Dict[str, Any]) -> Match:
     raw = payload.get("match")
     if not isinstance(raw, dict):
@@ -89,11 +103,11 @@ def _match_from_payload(payload: Dict[str, Any]) -> Match:
     ):
         raise ValueError("'match.alternatives' must be a list of agent names")
     return Match(
-        agent=raw.get("agent"),
+        agent=_optional_str(raw, "agent"),
         rationale=str(raw.get("rationale") or ""),
         alternatives=list(alternatives),
-        missing_capability=raw.get("missing_capability"),
-        nearest_agent=raw.get("nearest_agent"),
+        missing_capability=_optional_str(raw, "missing_capability"),
+        nearest_agent=_optional_str(raw, "nearest_agent"),
     )
 
 
@@ -118,17 +132,84 @@ def route_from_file(path: str, workspace_root: Optional[str] = None) -> int:
     return EXIT_OK
 
 
-def _validated_duties(raw: Any) -> List[str]:
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("'duties' must be a non-empty list of strings")
-    if len(raw) > MAX_DUTIES:
-        raise ValueError(f"'duties' holds more than {MAX_DUTIES} entries")
-    duties = []
-    for item in raw:
-        if not isinstance(item, str) or not item.strip():
-            raise ValueError("every duty must be a non-empty string")
-        duties.append(item.strip())
-    return duties
+def _single_line(payload: Dict[str, Any], key: str, max_len: int) -> str:
+    """A bounded, single-line free-text field with no structural characters.
+
+    Newlines and backticks are rejected (not stripped) because these values
+    are spliced into agents/AGENTS.md and the persona/role files that future
+    sessions read as trusted instructions — a multi-line value could inject
+    new instruction sections into the trust root.
+    """
+    value = payload.get(key)
+    if not isinstance(value, str) or not 0 < len(value) <= max_len:
+        raise ValueError(f"'{key}' must be a string of 1..{max_len} characters")
+    if any(ch in value for ch in ("\n", "\r", "`")):
+        raise ValueError(f"'{key}' must be a single line without backticks")
+    return " ".join(value.split())
+
+
+def _snake_name(payload: Dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if (
+        not isinstance(value, str)
+        or len(value) > MAX_NAME
+        or not SNAKE_CASE.fullmatch(value)
+    ):
+        raise ValueError(f"'{key}' must be snake_case, at most {MAX_NAME} characters")
+    return value
+
+
+@dataclass(frozen=True)
+class _ApplyAction:
+    """A fully validated acquisition: every field typed and bounded."""
+
+    kind: str
+    agent_name: str
+    issue_id: Optional[str]
+    source_name: str = ""
+    skill_name: str = ""
+    title: str = ""
+    description: str = ""
+    duties: Tuple[str, ...] = field(default_factory=tuple)
+
+
+def _validated_action(payload: Dict[str, Any]) -> _ApplyAction:
+    issue = payload.get("issue")
+    if issue is not None and not ISSUE_ID.fullmatch(str(issue)):
+        raise ValueError("'issue' must be a plain issue number")
+    issue_id = str(issue) if issue is not None else None
+    agent_name = _snake_name(payload, "agent_name")
+    kind = payload.get("kind")
+    if kind == "adapt_skill":
+        source_name = _single_line(payload, "source_name", MAX_NAME)
+        raw_skill = payload.get("skill_name")
+        if not isinstance(raw_skill, str):
+            raise ValueError("'skill_name' must be a string")
+        skill_name = raw_skill.removesuffix(".md")
+        if len(skill_name) > MAX_NAME or not SNAKE_CASE.fullmatch(skill_name):
+            raise ValueError(
+                f"'skill_name' must be snake_case, at most {MAX_NAME} characters"
+            )
+        return _ApplyAction(
+            kind, agent_name, issue_id,
+            source_name=source_name, skill_name=skill_name,
+        )
+    if kind == "create_agent":
+        title = _single_line(payload, "title", MAX_TITLE)
+        description = _single_line(payload, "description", MAX_DESCRIPTION)
+        raw_duties = payload.get("duties")
+        if not isinstance(raw_duties, list) or not raw_duties:
+            raise ValueError("'duties' must be a non-empty list of strings")
+        if len(raw_duties) > MAX_DUTIES:
+            raise ValueError(f"'duties' holds more than {MAX_DUTIES} entries")
+        duties = tuple(
+            _single_line({"duty": duty}, "duty", MAX_DUTY) for duty in raw_duties
+        )
+        return _ApplyAction(
+            kind, agent_name, issue_id,
+            title=title, description=description, duties=duties,
+        )
+    raise ValueError("'kind' must be 'adapt_skill' or 'create_agent'")
 
 
 def apply_from_file(
@@ -143,52 +224,24 @@ def apply_from_file(
         print(json.dumps({"error": refusal, "refused": True}))
         return EXIT_REFUSED
     try:
-        payload = _load_json(path)
-        kind = payload.get("kind")
-        issue = payload.get("issue")
-        if issue is not None and not ISSUE_ID.fullmatch(str(issue)):
-            raise ValueError("'issue' must be a plain issue number")
-        agent_name = payload.get("agent_name")
-        if not isinstance(agent_name, str) or not SNAKE_CASE.fullmatch(agent_name):
-            raise ValueError("'agent_name' must be snake_case")
-        if kind == "adapt_skill":
-            source_name = payload.get("source_name")
-            skill_name = payload.get("skill_name")
-            if not isinstance(source_name, str) or not source_name.strip():
-                raise ValueError("'source_name' must be a non-empty string")
-            if not isinstance(skill_name, str) or not SNAKE_CASE.fullmatch(
-                str(skill_name).removesuffix(".md")
-            ):
-                raise ValueError("'skill_name' must be snake_case")
-        elif kind == "create_agent":
-            title = payload.get("title")
-            description = payload.get("description")
-            if not isinstance(title, str) or not 0 < len(title) <= MAX_TITLE:
-                raise ValueError(f"'title' must be 1..{MAX_TITLE} characters")
-            if (
-                not isinstance(description, str)
-                or not 0 < len(description) <= MAX_DESCRIPTION
-            ):
-                raise ValueError(f"'description' must be 1..{MAX_DESCRIPTION} characters")
-            duties = _validated_duties(payload.get("duties"))
-        else:
-            raise ValueError("'kind' must be 'adapt_skill' or 'create_agent'")
+        action = _validated_action(_load_json(path))
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}))
         return EXIT_BAD_INPUT
 
     from solomon_harness import curator
 
-    issue_id = str(issue) if issue is not None else None
-    if kind == "adapt_skill":
+    if action.kind == "adapt_skill":
         pr_url = curator.broker_skill(
-            root, source_name, skill_name, agent_name, issue_id=issue_id
+            root, action.source_name, action.skill_name, action.agent_name,
+            issue_id=action.issue_id,
         )
     else:
         pr_url = curator.broker_agent(
-            root, agent_name, title, description, duties, issue_id=issue_id
+            root, action.agent_name, action.title, action.description,
+            list(action.duties), issue_id=action.issue_id,
         )
-    print(json.dumps({"pr_url": pr_url, "kind": kind, "agent": agent_name}))
+    print(json.dumps({"pr_url": pr_url, "kind": action.kind, "agent": action.agent_name}))
     return EXIT_OK
 
 

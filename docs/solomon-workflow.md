@@ -115,6 +115,24 @@ and record assumptions the same way. The gate changes only how the demand is
 understood before shaping; the confirm-before-create step is untouched. The
 question ladder lives in the product_owner `socratic_elicitation` skill.
 
+### Capability check (`/solomon-refine`, `/solomon-start`)
+
+Before refining or starting an issue, the workflow verifies the project has
+the capability (agent + skills) the issue needs. The division of labor is
+ADR-0008's: the host LLM supplies the match judgment as data, and the
+deterministic router core (`capability_router.route`) owns the verdict —
+matcher-contract validation, alternatives, the suggested action, and
+fail-closed behavior on an empty catalog. The prompts never build inline
+Python over issue text: they write a JSON file with the Write tool and run
+`solomon-harness broker route --file <path>`; on a gap verdict they present
+the enumerated choice (acquire via the broker, recommended; proceed without
+acquiring; Other). Acquisition runs only through
+`solomon-harness broker apply --file <path>`, which validates every field
+(snake_case names, a numeric issue, single-line bounded free text) and is
+permanently human-gated: a headless stage subprocess, an automation autonomy
+level, or an engaged kill-switch is refused (exit 3) before any change — the
+loop surfaces gaps, a human applies them.
+
 ## Implementation mode (automatic or manual)
 
 `/solomon-start` asks, before any code is written, whether the change is implemented

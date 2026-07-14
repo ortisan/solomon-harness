@@ -18,10 +18,11 @@ Steps:
    any prior contract) only when needed, instead of re-deriving prior context.
    Confirm it is in `Backlog`; if it is already `Ready` or further, stop and report.
 
-1b. **Capability Check**: Before starting refinement, verify the project has
-    the capability (agent + skills) this issue needs. The deterministic router
-    core builds the verdict (ADR-0008); you supply the match judgment as data —
-    never build inline Python over issue text.
+1b. **Capability Check** (see "Capability check" in `docs/solomon-workflow.md`):
+    Before starting refinement, verify the project has the capability (agent +
+    skills) this issue needs. The deterministic router core builds the verdict
+    (ADR-0008); you supply the match judgment as data — never build inline
+    Python over issue text.
     - Write your demand and match judgment to `.solomon/broker/route-<issue_number>.json`
       with the Write tool (so issue-derived text never touches a shell string):
       `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`

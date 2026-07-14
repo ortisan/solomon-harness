@@ -472,7 +472,11 @@ This skill covers the {name} role's duties.
                     in_list = False
                     other_lines.append(line)
 
-            formatted_desc = description
+            # The roster is one line per agent, and AGENTS.md is the trust
+            # root every session reads as instructions: collapse the
+            # description to a single line so embedded newlines can never
+            # splice new sections into it.
+            formatted_desc = " ".join(str(description).split())
             if formatted_desc:
                 formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
 

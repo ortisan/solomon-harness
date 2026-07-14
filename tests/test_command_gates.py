@@ -300,6 +300,16 @@ def test_gemini_mirrors_carry_the_broker_wiring():
         assert 'python -c "from solomon_harness' not in body, name
 
 
+def test_workflow_doc_defines_the_capability_check():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    low = doc.lower()
+    assert "capability check" in low
+    assert "broker route --file" in doc
+    assert "broker apply --file" in doc
+    assert "human-gated" in low
+    assert "ADR-0008" in doc
+
+
 def test_loop_documents_gap_surfacing_as_human_gated():
     body = _read(os.path.join(".claude", "commands", "solomon-loop.md"))
     low = body.lower()

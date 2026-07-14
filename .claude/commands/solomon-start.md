@@ -20,10 +20,10 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - `gh issue view $ARGUMENTS` to read the title, body, acceptance criteria, and labels.
 - `mcp__solomon-memory__get_issue("$ARGUMENTS")` for prior context; check the card is in
   `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
-- **Capability Check**: Verify the project has the capability (agent + skills)
-  this issue needs. The deterministic router core builds the verdict (ADR-0008);
-  you supply the match judgment as data — never build inline Python over issue
-  text.
+- **Capability Check** (see "Capability check" in `docs/solomon-workflow.md`):
+  Verify the project has the capability (agent + skills) this issue needs.
+  The deterministic router core builds the verdict (ADR-0008); you supply the
+  match judgment as data — never build inline Python over issue text.
   - Write your demand and match judgment to `.solomon/broker/route-$ARGUMENTS.json`
     with the Write tool (so issue-derived text never touches a shell string):
     `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`
