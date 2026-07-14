@@ -11,11 +11,11 @@ so it reacts after a spend, not before; pair it with a per-cycle cap upstream fo
 a hard stop. The ledger is the record; enforcement reads it.
 """
 
-import datetime
 import json
 import os
 from typing import List, Optional
 
+from solomon_harness.dates import today_iso
 from solomon_harness.loop_lock import resolve_common_file
 
 
@@ -23,14 +23,10 @@ def ledger_path(workspace_root: str) -> str:
     return resolve_common_file(workspace_root, "solomon-loop-budget.jsonl", "loop-budget.jsonl")
 
 
-def _today() -> str:
-    return datetime.date.today().isoformat()
-
-
 def record(workspace_root: str, cost_usd: float, stage: str = "", day: Optional[str] = None) -> None:
     """Append one cost entry to the budget ledger (best-effort)."""
     path = ledger_path(workspace_root)
-    entry = {"day": day or _today(), "cost_usd": float(cost_usd), "stage": stage}
+    entry = {"day": day or today_iso(), "cost_usd": float(cost_usd), "stage": stage}
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
@@ -48,16 +44,21 @@ def _entries(workspace_root: str) -> List[dict]:
                 line = line.strip()
                 if line:
                     try:
-                        out.append(json.loads(line))
+                        entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    # Pre-rename ledgers recorded the autonomous stage as
+                    # "loop-auto"; normalize on read so old state reads the same.
+                    if entry.get("stage") == "loop-auto":
+                        entry["stage"] = "loop"
+                    out.append(entry)
     except FileNotFoundError:
         return []
     return out
 
 
 def daily_spend(workspace_root: str, day: Optional[str] = None) -> float:
-    day = day or _today()
+    day = day or today_iso()
     return round(sum(e.get("cost_usd", 0.0) for e in _entries(workspace_root) if e.get("day") == day), 6)
 
 

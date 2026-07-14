@@ -209,8 +209,7 @@ class TestMultiModelUnit(unittest.TestCase):
         client = self._surreal_mock_client(result=[{"id": "blocks:1"}])
         client.block_issue("1", "2")
         query, params = client._run_surreal.call_args[0]
-        self.assertIn("RELATE $rel_from->blocks->$rel_to", query)
-        self.assertNotIn("SET", query)
+        self.assertIn("RELATE $rel_from->blocks->$rel_to SET record_id = $record_id;", query)
         # The binary key is bracket-free; str() wraps numeric-looking ids in
         # angle-bracket delimiters, so assert on the RecordID components instead.
         self.assertEqual((params["rel_from"].table_name, params["rel_from"].id), ("issues", "1"))
@@ -220,7 +219,7 @@ class TestMultiModelUnit(unittest.TestCase):
         client = self._surreal_mock_client(result=[{"id": "blocks:1"}])
         client.block_issue("1", "2", reason="dependency")
         query, params = client._run_surreal.call_args[0]
-        self.assertIn("RELATE $rel_from->blocks->$rel_to SET reason = $reason", query)
+        self.assertIn("RELATE $rel_from->blocks->$rel_to SET record_id = $record_id, reason = $reason;", query)
         self.assertEqual(params["reason"], "dependency")
 
     def test_relate_rejects_unsafe_edge_name(self):

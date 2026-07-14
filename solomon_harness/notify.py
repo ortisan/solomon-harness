@@ -88,3 +88,38 @@ def send(workspace_root: str, event: str, message: str, env: Optional[Dict[str, 
         return True
     except Exception:
         return False
+
+
+def get_agent_prefix() -> str:
+    """Resolve the current session ID to a deterministic Agent1-9 identifier."""
+    session_id = os.environ.get("SOLOMON_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID")
+    if not session_id:
+        session_id = str(os.getpid())
+    import hashlib
+    h = hashlib.md5(session_id.encode("utf-8")).hexdigest()
+    idx = (int(h, 16) % 9) + 1
+    return f"Agent{idx}"
+
+
+def log_progress(message: str) -> None:
+    """Write progress/informational messages so they are visible to the user.
+
+    It always writes to stderr (so it doesn't pollute stdout for parseable commands).
+    If sys.stderr is not a TTY (meaning it is redirected or captured), it additionally writes
+    directly to the controlling terminal (/dev/tty) so that the user still sees it.
+    """
+    prefix = get_agent_prefix()
+    formatted = f"{prefix}: {message}"
+    sys.stderr.write(formatted + "\r\n")
+    sys.stderr.flush()
+    if not sys.stderr.isatty() and not os.environ.get("SOLOMON_SUBPROCESS"):
+        # Standard error is redirected/captured. Try to write directly to TTY.
+        try:
+            with open("/dev/tty", "w", encoding="utf-8") as tty:
+                tty.write(formatted + "\r\n")
+                tty.flush()
+        except OSError:
+            pass
+
+
+

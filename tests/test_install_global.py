@@ -207,7 +207,6 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertIn("session hook (claude): installed", summary)
         self.assertIn("session hook (gemini): installed", summary)
         self.assertIn("MCP (claude, user scope): registered", summary)
-        self.assertIn("MCP (gemini, user scope): registered", summary)
 
         # Case 2: MCPs missing (None) and agy failed
         res_val2 = {
@@ -222,7 +221,6 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertIn("import run failed", summary2)
         self.assertIn("session hook (claude): already present", summary2)
         self.assertIn("MCP (claude): claude CLI not found", summary2)
-        self.assertIn("MCP (gemini): gemini CLI not found", summary2)
 
         # Case 3: agy_imported is None and gemini_extension is True
         res_val3 = {

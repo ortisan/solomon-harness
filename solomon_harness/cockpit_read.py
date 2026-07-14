@@ -12,9 +12,11 @@ import argparse
 import json
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -280,6 +282,254 @@ def filter_portfolio(payload: Dict[str, Any], person_key: str) -> Dict[str, Any]
     }
 
 
+# ---------------------------------------------------------------------------
+# Per-user velocity (issue #55, slice 3a; ADR-0002 amendment).
+#
+# Velocity reads board_history, the real board transitions captured by
+# github.record_transition, not the created_at approximation. Each issue's Done
+# transition (the entry whose column maps to the Done display column) carries a
+# naive local-time ISO entered_at; a delivery counts when that timestamp falls
+# inside the selected window. Counts are keyed on the stored canonical person key
+# (ADR-0012) and never re-derived. compose_velocity sums the per-person counts
+# across tenants (compose-never-join): a tenant's rows never meet another's.
+# ---------------------------------------------------------------------------
+
+# The delivery-board Done display column. A board_history entry or an issue
+# status counts as delivered only when it maps to this column.
+DONE_COLUMN = "Done"
+
+# The memory-key prefix github.record_transition writes the per-card timeline
+# under: board_history:<github_id> -> JSON list of {column, entered_at}.
+BOARD_HISTORY_PREFIX = "board_history:"
+
+
+def _is_done(value: Optional[str]) -> bool:
+    """Report whether a stored status or transition column maps to Done.
+
+    Routes the value through the shared status vocabulary (ADR-0006) so every
+    spelling of delivered (closed, done, Done) resolves to the one Done display
+    column. A null value is never delivered.
+    """
+    if value is None:
+        return False
+    normalized = normalize_status(value)
+    if normalized is None:
+        return False
+    return STATUS_DISPLAY_COLUMNS.get(normalized) == DONE_COLUMN
+
+
+def _parse_naive(entered_at: Any) -> Optional[datetime]:
+    """Parse a board_history entered_at into a naive datetime, or None.
+
+    entered_at is a naive local-time ISO string (no offset; see
+    record_transition), so it parses onto the same clock basis the window bounds
+    use. A non-string or unparseable value yields None so a malformed entry is
+    skipped, never crashing the read. A timezone-tagged value (not the contract,
+    but defended against) is coerced to naive so the comparison stays single-basis.
+    """
+    if not isinstance(entered_at, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(entered_at)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+
+
+def _in_window(entered: datetime, now: datetime, days: int) -> bool:
+    """Report whether entered falls inside the [now - days, now] window.
+
+    Both bounds and entered are naive datetimes compared on one clock basis. The
+    lower bound is inclusive, so a Done exactly at now - days counts.
+    """
+    return now - timedelta(days=days) <= entered <= now
+
+
+def _parse_board_history(raw: Optional[str]) -> List[Dict[str, Any]]:
+    """Parse one issue's board_history JSON string, defensively.
+
+    Returns an empty list for a missing value or one that is not a JSON list,
+    so a thin or malformed history degrades to "no tracked transitions" rather
+    than raising.
+    """
+    if not raw:
+        return []
+    try:
+        history = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return history if isinstance(history, list) else []
+
+
+def _load_transition_histories(
+    client: Any, github_ids: Sequence[str]
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Read the first-class transitions rows, adapted to the history-entry shape.
+
+    Each transitions row becomes ``{column: to_status, entered_at}`` so every
+    downstream consumer (``_latest_done_entered_at``, ``_is_done``) works
+    unchanged on either source. Best-effort: a read failure degrades to an
+    empty dict so the caller falls back to the legacy board_history keys — the
+    cockpit renders a partial figure rather than failing the read (ADR-0002).
+    """
+    try:
+        grouped = client.get_status_transitions(github_ids)
+    except Exception:
+        return {}
+    return {
+        gid: [
+            {"column": row.get("to_status"), "entered_at": row.get("entered_at")}
+            for row in rows
+        ]
+        for gid, rows in grouped.items()
+        if rows
+    }
+
+
+def _load_board_histories(
+    client: Any, github_ids: Iterable[Optional[str]]
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Bulk-read each issue's board timeline in one round trip per source.
+
+    Prefers the first-class transitions table (ADR-0016) per issue; only the
+    ids it does not cover are read from the legacy ``board_history:<github_id>``
+    keys through a single ``get_memory_bulk`` call (no N+1), so old cards keep
+    their history while new moves come from the indexed table. Returns a dict
+    keyed by github_id; an id with no timeline in either source is simply
+    absent, so a caller's ``.get(id, [])`` degrades exactly like before.
+    """
+    ids = sorted({gid for gid in github_ids if gid})
+    if not ids:
+        return {}
+    histories: Dict[str, List[Dict[str, Any]]] = _load_transition_histories(client, ids)
+    legacy_ids = [gid for gid in ids if gid not in histories]
+    if not legacy_ids:
+        return histories
+    raw_by_key = client.get_memory_bulk(
+        [f"{BOARD_HISTORY_PREFIX}{gid}" for gid in legacy_ids]
+    )
+    for gid in legacy_ids:
+        history = _parse_board_history(raw_by_key.get(f"{BOARD_HISTORY_PREFIX}{gid}"))
+        if history:
+            histories[gid] = history
+    return histories
+
+
+def _latest_done_entered_at(history: List[Dict[str, Any]]) -> Optional[datetime]:
+    """Return the latest Done-transition timestamp in a board_history, or None.
+
+    Takes the max entered_at across the entries whose column maps to Done, so a
+    card delivered, reopened, and re-delivered keys on its latest delivery. None
+    when the card has no parseable Done transition at all.
+    """
+    done_times = [
+        parsed
+        for entry in history
+        if isinstance(entry, dict) and _is_done(entry.get("column"))
+        for parsed in (_parse_naive(entry.get("entered_at")),)
+        if parsed is not None
+    ]
+    return max(done_times) if done_times else None
+
+
+def count_tenant_velocity(
+    client: Any,
+    project: str,
+    now: datetime,
+    days: int,
+    cancel_event: Optional[threading.Event] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Count one tenant's in-window deliveries per canonical person key (read-only).
+
+    Reads every issue's ``board_history`` through one ``get_memory_bulk`` call
+    (``_load_board_histories``) rather than one read per issue, so the tenant's
+    history read costs a single round trip regardless of issue count (no N+1).
+    For each issue, resolves the subject through ``person_key_or_unassigned``
+    over the stored assignee (ADR-0012; a null assignee buckets under
+    ``unassigned``). An issue whose latest Done transition entered the
+    ``[now - days, now]`` window adds one to that person's ``count`` and its
+    timestamp to ``doneAt`` (the per-person in-window set slice 3b buckets per
+    day). An issue currently in the Done column with no tracked Done transition is
+    surfaced under ``excluded`` (the coverage affordance) and never counted, so
+    the number is auditable rather than silently low. Every assignee is a present
+    subject, so a zero-throughput person still has a row. The return is keyed by
+    person; ``compose_velocity`` is handed these counts, never rows.
+
+    ``cancel_event``, when given, is checked between issues so a caller that has
+    already given up on this read (its bounding timeout elapsed) gets an
+    abandoned worker that actually stops instead of running the whole tenant to
+    completion after its SLA was already reported (see ``_classify_tenant_read``).
+    """
+    counts: Dict[str, Dict[str, Any]] = {}
+    issues = client.list_issues()
+    histories = _load_board_histories(client, (issue.get("github_id") for issue in issues))
+    for issue in issues:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        person = person_key_or_unassigned(issue.get("assignee"))
+        bucket = counts.setdefault(person, {"count": 0, "excluded": 0, "doneAt": []})
+        done_at = _latest_done_entered_at(histories.get(issue.get("github_id") or "", []))
+        if done_at is not None and _in_window(done_at, now, days):
+            bucket["count"] += 1
+            bucket["doneAt"].append(done_at.isoformat(timespec="seconds"))
+        elif done_at is None and _is_done(issue.get("status")):
+            bucket["excluded"] += 1
+    return counts
+
+
+def compose_velocity(tenant_results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compose per-tenant velocity counts into one per-person payload (pure).
+
+    Sums each person's count across the OK tenants — compose-never-join: it is
+    handed per-person counts tagged with their tenant, never issue rows, so a
+    tenant's rows never meet another's and isolation holds by construction. One
+    row per person carries the summed count, the per-tenant breakdown (only the
+    tenants where the person delivered), the summed ``excluded`` coverage gap, and
+    the aggregated in-window ``doneAt`` set (slice 3b). A degraded (non-OK) tenant
+    carries no counts and moves no figure, but because it could have held
+    deliveries for any person, every row is flagged ``partial`` with the degraded
+    tenant name(s) and ``aggregateStatus`` becomes 207: the figure is the
+    reachable subtotal, never presented as complete. Rows are sorted by person key
+    for a deterministic render.
+    """
+    degraded = [result["project"] for result in tenant_results if result["status"] != STATUS_OK]
+    ok_results = [result for result in tenant_results if result["status"] == STATUS_OK]
+    people = sorted({person for result in ok_results for person in result["velocity"]})
+
+    rows: List[Dict[str, Any]] = []
+    for person in people:
+        per_tenant: Dict[str, int] = {}
+        count = 0
+        excluded = 0
+        done_at: List[str] = []
+        for result in ok_results:
+            figures = result["velocity"].get(person)
+            if figures is None:
+                continue
+            if figures["count"]:
+                per_tenant[result["project"]] = figures["count"]
+            count += figures["count"]
+            excluded += figures["excluded"]
+            done_at.extend(figures["doneAt"])
+        rows.append(
+            {
+                "personKey": person,
+                "count": count,
+                "perTenant": per_tenant,
+                "excluded": excluded,
+                "doneAt": sorted(done_at),
+                "partial": bool(degraded),
+                "partialTenants": list(degraded),
+            }
+        )
+
+    return {
+        "rows": rows,
+        "aggregateStatus": AGGREGATE_OK if not degraded else AGGREGATE_MULTI_STATUS,
+        "degraded": degraded,
+    }
+
+
 def _is_permission_failure(error: Exception) -> bool:
     """Report whether a read failure reads as an access denial (FORBIDDEN)."""
     message = str(error).lower()
@@ -307,6 +557,47 @@ def _read_tenant_board(
         client.close()
 
 
+def _classify_tenant_read(
+    worker: Callable[[threading.Event], Any], timeout: float
+) -> Tuple[str, Any]:
+    """Run one per-tenant read worker bounded by ``timeout`` and classify it.
+
+    Returns ``(status, value)``: ``(OK, value)`` on a clean read; ``(FORBIDDEN,
+    None)`` on a ``PermissionError`` or a permission-pattern failure (at connect
+    or read); ``(UNREACHABLE, None)`` on a read past ``timeout`` or any other
+    failure. The worker owns and closes its own client, so a timed-out worker is
+    abandoned (not joined) and the outer path never closes a client mid-read.
+    Shared by every per-tenant read (board, velocity) so the bounding,
+    classification, and close discipline live in one place.
+
+    ``worker`` receives a ``threading.Event`` that this function sets in its
+    ``finally`` block, the instant it stops waiting on the worker (whether that
+    is a timeout, a raised error, or a clean return). ``pool.shutdown(wait=False)``
+    alone does not stop a still-running worker thread -- it keeps executing past
+    its own reported SLA and, across many tenants, those abandoned workers can
+    pile up. A worker with a checkpointed loop (e.g. ``count_tenant_velocity``
+    iterating issues) that checks this event stops at its next checkpoint
+    instead. This is cooperative, not preemptive: a worker blocked in an
+    uninterruptible call only stops once that call returns, but any per-item
+    loop stops promptly.
+    """
+    cancel_event = threading.Event()
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        value = pool.submit(worker, cancel_event).result(timeout=timeout)
+    except PermissionError:
+        return STATUS_FORBIDDEN, None
+    except FuturesTimeoutError:
+        return STATUS_UNREACHABLE, None
+    except Exception as error:
+        return (STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE), None
+    else:
+        return STATUS_OK, value
+    finally:
+        cancel_event.set()
+        pool.shutdown(wait=False)
+
+
 def read_tenant_swimlane(
     project: str,
     client_factory: Callable[[], Any],
@@ -326,21 +617,60 @@ def read_tenant_swimlane(
     when its read returns; the outer path never closes a client mid-read. The
     result is the ``compose_portfolio`` input element.
     """
-    pool = ThreadPoolExecutor(max_workers=1)
+    status, board = _classify_tenant_read(
+        lambda cancel_event: _read_tenant_board(client_factory, project), timeout
+    )
+    return {"project": project, "status": status, "board": board}
+
+
+def _read_tenant_velocity_counts(
+    client_factory: Callable[[], Any],
+    project: str,
+    now: datetime,
+    days: int,
+    cancel_event: threading.Event,
+) -> Dict[str, Dict[str, Any]]:
+    """Own one tenant's whole velocity read inside the timed worker.
+
+    Mirrors ``_read_tenant_board``: create the client, bind the tenant, count its
+    in-window deliveries, and close in a ``finally``, so a connect-phase failure
+    or hang is bounded by the per-project timeout and the worker always closes its
+    own client. ``cancel_event`` is threaded through to ``count_tenant_velocity``
+    so an abandoned worker's per-issue loop stops at its next checkpoint instead
+    of running to completion after ``_classify_tenant_read`` has already
+    reported the timeout.
+    """
+    client = client_factory()
     try:
-        future = pool.submit(_read_tenant_board, client_factory, project)
-        board = future.result(timeout=timeout)
-    except PermissionError:
-        return {"project": project, "status": STATUS_FORBIDDEN, "board": None}
-    except FuturesTimeoutError:
-        return {"project": project, "status": STATUS_UNREACHABLE, "board": None}
-    except Exception as error:
-        status = STATUS_FORBIDDEN if _is_permission_failure(error) else STATUS_UNREACHABLE
-        return {"project": project, "status": status, "board": None}
-    else:
-        return {"project": project, "status": STATUS_OK, "board": board}
+        client.use_tenant(project)
+        return count_tenant_velocity(client, project, now, days, cancel_event)
     finally:
-        pool.shutdown(wait=False)
+        client.close()
+
+
+def read_tenant_velocity(
+    project: str,
+    client_factory: Callable[[], Any],
+    now: datetime,
+    days: int,
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Read one tenant's velocity counts and classify the outcome.
+
+    Mirrors ``read_tenant_swimlane``: the entire per-tenant lifecycle runs inside
+    a single bounded worker, so per-tenant isolation (ADR-0002) holds by
+    construction. A clean read returns ``OK`` with the per-person counts; a
+    permission failure returns ``FORBIDDEN``; a timeout or any other failure
+    returns ``UNREACHABLE``. A degraded result carries no counts (``velocity``
+    is ``None``). The result is the ``compose_velocity`` input element.
+    """
+    status, velocity = _classify_tenant_read(
+        lambda cancel_event: _read_tenant_velocity_counts(
+            client_factory, project, now, days, cancel_event
+        ),
+        timeout,
+    )
+    return {"project": project, "status": status, "velocity": velocity}
 
 
 def discover_projects(list_databases: Callable[[], List[str]]) -> List[str]:
@@ -415,24 +745,22 @@ def _overflow_notice(count: int) -> Optional[str]:
 
 def _fan_out(
     projects: Sequence[str],
-    client_factory: Callable[[], Any],
+    read_one: Callable[[str], Dict[str, Any]],
     max_workers: int,
-    timeout: float,
 ) -> List[Dict[str, Any]]:
     """Read the projects in parallel under a bounded pool, preserving their order.
 
-    Each project is read by ``read_tenant_swimlane`` with its own fresh client, so
-    no connection is shared across workers. The results are returned in the input
-    (sorted) order regardless of completion order, so the render is deterministic.
+    Each project is read by ``read_one`` (the board or velocity per-tenant read),
+    which opens its own fresh client, so no connection is shared across workers.
+    The results are returned in the input (sorted) order regardless of completion
+    order, so the render is deterministic. This owns only the bounded parallelism;
+    which per-tenant read runs is the caller's choice.
     """
     if not projects:
         return []
     results: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(read_tenant_swimlane, project, client_factory, timeout): project
-            for project in projects
-        }
+        futures = {pool.submit(read_one, project): project for project in projects}
         for future, project in futures.items():
             results[project] = future.result()
     return [results[project] for project in projects]
@@ -469,7 +797,11 @@ def portfolio_payload(
         shown = list(available[:max_projects])
         overflow_count = len(available) - len(shown)
 
-        results = _fan_out(shown, factory, max_workers, timeout)
+        results = _fan_out(
+            shown,
+            lambda project: read_tenant_swimlane(project, factory, timeout),
+            max_workers,
+        )
         payload = compose_portfolio(results)
         payload["overflow"] = overflow_count
         payload["notice"] = _overflow_notice(overflow_count)
@@ -489,13 +821,67 @@ def portfolio_payload(
         return payload
 
 
+def velocity_payload(
+    window: int,
+    now: Optional[datetime] = None,
+    harness_dir: Optional[str] = None,
+    client_factory: Optional[Callable[[], Any]] = None,
+    max_projects: int = MAX_PROJECTS,
+    max_workers: int = MAX_FANOUT_WORKERS,
+    timeout: float = PER_PROJECT_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Build the cross-tenant per-user velocity payload by fanning out (read-only).
+
+    Discovers the sorted tenant set, caps it at ``max_projects``, fans the capped
+    set out under a bounded pool with a per-project read timeout, and composes the
+    per-tenant per-person counts into one payload through ``compose_velocity``.
+    Each tenant is read by its own fresh client bound via ``use_tenant``, so
+    isolation (ADR-0002) holds by construction and the compose sums counts, never
+    rows (compose-never-join). ``window`` is the selected day span (the route
+    enforces the {7, 14, 30} set); ``now`` is injected so the window compute is
+    deterministic in tests and defaults to the wall clock in production. The read
+    is wrapped in a ``cockpit.velocity`` span for the audit trace. Read-only:
+    every tenant is read through the read port and nothing is joined or written.
+
+    ``client_factory`` lets a test inject fakes; by default each call opens a
+    fresh ``DatabaseClient`` for the harness directory.
+    """
+    factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
+    # Naive UTC, matching the UTC entered_at the transition writers stamp
+    # (ADR-0016): both sides of the window comparison share one clock basis.
+    # Entries written by the pre-UTC local-clock writer skew by at most the
+    # host offset at the window edge, decaying as that data ages out.
+    current = (
+        now if now is not None else datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    with _tracer.start_as_current_span("cockpit.velocity") as span:
+        available = _discover_with(factory)
+        shown = list(available[:max_projects])
+
+        results = _fan_out(
+            shown,
+            lambda project: read_tenant_velocity(project, factory, current, window, timeout),
+            max_workers,
+        )
+        payload = compose_velocity(results)
+        payload["window"] = window
+
+        span.set_attribute("cockpit.project_count", len(available))
+        span.set_attribute("cockpit.shown_count", len(shown))
+        span.set_attribute("cockpit.window_days", window)
+        span.set_attribute("cockpit.aggregate_status", payload["aggregateStatus"])
+        span.set_attribute("cockpit.degraded", list(payload["degraded"]))
+        return payload
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """JSON CLI for the Node-to-Python read bridge.
 
     ``projects`` prints the discovered tenants; ``board --project <p>`` prints the
     board for one tenant; ``portfolio`` prints the cross-tenant aggregate board,
-    narrowed to one person key when ``--user <key>`` is given. Output is JSON on
-    stdout so the Next route can parse it.
+    narrowed to one person key when ``--user <key>`` is given; ``velocity --window
+    <days>`` prints the cross-tenant per-user velocity over the window. Output is
+    JSON on stdout so the Next route can parse it.
     """
     if "traceparent" in os.environ:
         from opentelemetry import trace
@@ -523,6 +909,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     portfolio_parser.add_argument(
         "--user", default=None, help="narrow the portfolio to one person key"
     )
+    velocity_parser = sub.add_parser(
+        "velocity", help="render the cross-tenant per-user velocity"
+    )
+    velocity_parser.add_argument(
+        "--window", type=int, required=True, help="the velocity window in days"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -538,6 +930,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             json.dumps(
                 portfolio_payload(harness_dir=args.harness_dir, person=args.user)
             )
+        )
+    elif args.command == "velocity":
+        print(
+            json.dumps(velocity_payload(args.window, harness_dir=args.harness_dir))
         )
     return 0
 

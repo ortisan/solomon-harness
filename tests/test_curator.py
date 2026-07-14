@@ -875,12 +875,12 @@ class TestBrokerAgent(TestBrokerAcquisition):
         self.assertTrue(os.path.isdir(agent_dir))
         self.assertTrue(os.path.isfile(os.path.join(agent_dir, "agents", "expert_coder.md")))
         self.assertTrue(os.path.isfile(os.path.join(agent_dir, "persona.md")))
-        self.assertTrue(os.path.isfile(os.path.join(agent_dir, "skills", "operating_principles.md")))
+        self.assertTrue(os.path.isfile(os.path.join(agent_dir, "skills", "scope_and_mandate.md")))
 
         # Verify AGENTS.md registration
         with open(agents_md_path, "r", encoding="utf-8") as f:
             agents_md = f.read()
-        self.assertIn("- `expert_coder` — Scaffolds code with ultimate precision.", agents_md)
+        self.assertIn("- `expert_coder` — scaffolds code with ultimate precision.", agents_md)
         # Check alphabetical order
         expected_order = [
             "expert_coder",

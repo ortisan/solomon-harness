@@ -24,7 +24,7 @@ class TestGhWrapper(unittest.TestCase):
 
     def test_gh_nonzero_returns_error(self):
         with patch("subprocess.run", return_value=_Proc(1, "", "boom")):
-            res = github._gh(["repo", "view"])
+            res = github._gh(["auth", "status"])
         self.assertFalse(res["ok"])
         self.assertEqual(res["error"], "boom")
 
@@ -485,7 +485,8 @@ class TestBoardTitleAndLink(unittest.TestCase):
             self.assertEqual(github.board_title(), "widget")
 
     def test_board_title_falls_back_when_repo_unknown(self):
-        with patch("subprocess.run", return_value=_Proc(1, "", "no repo")):
+        with patch("subprocess.run", return_value=_Proc(1, "", "no repo")), \
+             patch("solomon_harness.github._mock_gh_response", return_value=None):
             self.assertEqual(github.board_title(), "solomon")
 
     def test_create_links_board_to_repo(self):

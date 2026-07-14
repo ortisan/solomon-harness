@@ -1,4 +1,5 @@
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
@@ -207,9 +208,19 @@ def apply_proposal(
         elif os.environ.get("MOCK_GH") == "1":
             pr_url = f"https://github.com/ortisan/solomon-harness/pull/mock-{proposal.decision_id}"
         else:
-            # Clean environment for gh command
+            # Resolve gh from PATH instead of hardcoding one; a fixed
+            # "/opt/homebrew/bin:/usr/bin:/bin" breaks Intel Mac Homebrew
+            # (/usr/local/bin), most non-Debian Linux, and macOS GitHub Actions
+            # runners, where gh lives elsewhere. Fail with a clear, actionable
+            # error rather than letting subprocess raise a bare FileNotFoundError.
+            gh_path = shutil.which("gh")
+            if not gh_path:
+                raise RuntimeError(
+                    "gh CLI not found on PATH; install and authenticate the "
+                    "GitHub CLI (https://cli.github.com) before applying a proposal."
+                )
+            gh_cmd[0] = gh_path
             gh_env = os.environ.copy()
-            gh_env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
             gh_env["PYTHONPATH"] = root
             try:
                 res = subprocess.run(gh_cmd, cwd=root, capture_output=True, text=True, env=gh_env, check=True)
@@ -472,123 +483,27 @@ def broker_agent(
     """
     import os
     import re
-    from solomon_harness.bootstrap import scaffold_agents
+    from solomon_harness.bootstrap import scaffold_new_agent
 
-    # Reject a name that could escape the agents directory
-    if os.path.isabs(agent_name) or os.sep in agent_name or "/" in agent_name or ".." in agent_name:
-        raise ValueError("invalid agent name")
+    # Validate agent name strictly to prevent path traversal/confinement escape
+    if not re.match(r"^[a-z0-9_]+$", agent_name):
+        raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
 
     def edit_callback(agent_dir: str) -> None:
-        role_dir = os.path.join(agent_dir, "agents")
-        skills_dir = os.path.join(agent_dir, "skills")
-        role_path = os.path.join(role_dir, f"{agent_name}.md")
-        persona_path = os.path.join(agent_dir, "persona.md")
-        skill_path = os.path.join(skills_dir, "operating_principles.md")
-
         # Confinement check
         target_realpath = os.path.realpath(agent_dir)
         agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
         if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
             raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
 
-        os.makedirs(role_dir, exist_ok=True)
-        os.makedirs(skills_dir, exist_ok=True)
-
-        # Write role file
-        duties_str = "\n".join(f"- {d}" for d in duties)
-        role_content = f"""# {title} Profile
-
-{description}
-
-## Core Duties
-{duties_str}
-
-## Active Skills
-
-No local skills configured.
-
-## External Skills
-
-Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
-```bash
-solomon-harness skills add <source> <skill> --agent {agent_name}
-```
-"""
-        with open(role_path, "w", encoding="utf-8") as f:
-            f.write(role_content)
-
-        # Write persona file
-        persona_content = f"""# {title} Persona
-
-{description}
-
-This agent is the {agent_name} brain for solomon-harness. It reasons within the shared rules in agents/AGENTS.md and its contract in agents/{agent_name}/agents/{agent_name}.md, applies the skills in agents/{agent_name}/skills/, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
-"""
-        with open(persona_path, "w", encoding="utf-8") as f:
-            f.write(persona_content)
-
-        # Write default skill
-        skill_content = f"""# Operating Principles
-
-Operating principles and common pitfalls for the {agent_name} specialist.
-
-## Common pitfalls
-- Stray configuration and redundant abstractions.
-
-## Definition of done
-- [ ] The skill conforms to the house style.
-"""
-        with open(skill_path, "w", encoding="utf-8") as f:
-            f.write(skill_content)
-
-        # Register in agents/AGENTS.md
-        agents_md_path = os.path.join(workspace_root, "agents", "AGENTS.md")
-        if os.path.isfile(agents_md_path):
-            with open(agents_md_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            pattern = r"(## The specialist agents\n\n)([\s\S]*)"
-            match = re.search(pattern, content)
-            if match:
-                heading = match.group(1)
-                list_content = match.group(2)
-                
-                lines = list_content.splitlines()
-                agent_lines = []
-                other_lines = []
-                in_list = True
-                for line in lines:
-                    if in_list and line.strip().startswith("- `"):
-                        agent_lines.append(line)
-                    else:
-                        in_list = False
-                        other_lines.append(line)
-                
-                new_line = f"- `{agent_name}` — {description}"
-                agent_lines.append(new_line)
-                
-                def extract_name(l):
-                    m = re.search(r"- `([^`]+)`", l)
-                    return m.group(1) if m else l
-                
-                seen = set()
-                unique_agent_lines = []
-                for line in sorted(agent_lines, key=extract_name):
-                    name = extract_name(line)
-                    if name not in seen:
-                        seen.add(name)
-                        unique_agent_lines.append(line)
-                
-                new_list_content = "\n".join(unique_agent_lines)
-                if other_lines:
-                    new_list_content += "\n" + "\n".join(other_lines)
-                
-                new_content = content[:match.start()] + heading + new_list_content + "\n"
-                with open(agents_md_path, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-
-        # Apply harness scaffolding for missing main.py and config.json
-        scaffold_agents(workspace_root)
+        # Delegate directly to scaffold_new_agent
+        scaffold_new_agent(
+            workspace_root,
+            agent_name,
+            description,
+            title=title,
+            duties=duties,
+        )
 
     proposal = Proposal(
         agent=agent_name,

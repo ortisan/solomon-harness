@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Sequence,
     Union,
     runtime_checkable,
 )
@@ -91,8 +92,14 @@ class HashingEmbedder:
 # ---------------------------------------------------------------------------
 
 # Lowercased board display name / alias -> canonical token. A status not listed
-# here (Ideas, Backlog, Ready, the legacy literal open) passes through unchanged.
+# here passes through unchanged. The display columns and the legacy literal
+# open carry casing aliases (ADR-0016) so the store never holds two rows
+# differing only by case for the same logical status.
 _STATUS_ALIASES = {
+    "ideas": "Ideas",
+    "backlog": "Backlog",
+    "ready": "Ready",
+    "open": "open",
     "in progress": "in_progress",
     "in_progress": "in_progress",
     "code review": "code_review",
@@ -160,6 +167,153 @@ def is_github_issue(github_id: Optional[str]) -> bool:
     """
     s = str(github_id)
     return s.isdigit() and s.isascii()
+
+
+def recover_parent(github_id: Optional[str], title: Optional[str]) -> Optional[str]:
+    """Recover a tracking row's parent GitHub number from its slug id, else title.
+
+    Tracking rows carry a composite slug id (``68-R-01``, ``45-M2``) and a human
+    title (``RAID R-01 (#68)``). The parent number is read id-first -- the run of
+    digits before the slug's first hyphen -- because the id is the structural key;
+    failing that, the first ``#<digits>`` reference in the title is used, which
+    subsumes the ``PR #45`` spelling. Returns the number as a string, or None when
+    neither yields one. Pure and total (#127): it never raises and never invents a
+    number, so a row with no recoverable parent is left open rather than guessed.
+    """
+    id_match = re.match(r"(\d+)-", str(github_id))
+    if id_match:
+        return id_match.group(1)
+    title_match = re.search(r"#(\d+)", str(title))
+    if title_match:
+        return title_match.group(1)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Canonical status vocabularies for the other stateful kinds (ADR-0016).
+#
+# The same normalize-on-write rule ADR-0006 established for issues, applied to
+# loop runs (and, with ADR-0016, to handoffs, sessions and milestones): one
+# canonical token per logical state, normalized here below every consumer, so
+# a writer and an aggregator can never drift apart on spelling again (#165:
+# the writer stored "failed" while the failure rate counted "failure", so
+# every failed run was invisible). Reads stay tolerant of legacy tokens;
+# unknown tokens pass through lowercased so normalization never invents a
+# state -- the store-side ASSERT is what rejects genuine garbage.
+# ---------------------------------------------------------------------------
+
+# The canonical loop-run outcomes. workflows.py writes exactly these.
+LOOP_RUN_STATUSES = ("ok", "failed")
+
+# Lowercased legacy/alias token -> canonical loop-run token.
+_LOOP_RUN_ALIASES = {
+    "success": "ok",
+    "passed": "ok",
+    "failure": "failed",
+    "error": "failed",
+}
+
+
+def _normalize_token(value: Optional[str], aliases: Dict[str, str]) -> Optional[str]:
+    """Trim, lowercase, and alias-map one status token; None passes through."""
+    if value is None:
+        return None
+    token = str(value).strip().lower()
+    return aliases.get(token, token)
+
+
+def normalize_loop_run_status(status: Optional[str]) -> Optional[str]:
+    """Map a loop-run status to its canonical token (ok or failed).
+
+    Legacy spellings collapse (success/passed -> ok, failure/error -> failed);
+    an unknown token passes through lowercased; None passes through so an
+    unset status is never invented.
+    """
+    return _normalize_token(status, _LOOP_RUN_ALIASES)
+
+
+# The canonical handoff lifecycle: logged open, accepted by the recipient,
+# done when the receiving stage completes.
+HANDOFF_STATUSES = ("open", "accepted", "done")
+
+_HANDOFF_ALIASES = {
+    "ready": "open",
+    "pending": "open",
+    "approved": "accepted",
+    "completed": "done",
+    "closed": "done",
+}
+
+# The canonical session lifecycle: active while in flight, done when wrapped up.
+SESSION_STATUSES = ("active", "done")
+
+_SESSION_ALIASES = {
+    "completed": "done",
+    "closed": "done",
+    "finished": "done",
+}
+
+# The canonical milestone lifecycle, matching GitHub's own open/closed states.
+MILESTONE_STATES = ("open", "closed")
+
+_MILESTONE_ALIASES = {
+    "active": "open",
+    "pending": "open",
+    "complete": "closed",
+    "completed": "closed",
+    "done": "closed",
+}
+
+
+def normalize_handoff_status(status: Optional[str]) -> Optional[str]:
+    """Map a handoff status to its canonical token (open, accepted, or done)."""
+    return _normalize_token(status, _HANDOFF_ALIASES)
+
+
+def normalize_session_status(status: Optional[str]) -> Optional[str]:
+    """Map a session status to its canonical token (active or done)."""
+    return _normalize_token(status, _SESSION_ALIASES)
+
+
+def normalize_milestone_state(state: Optional[str]) -> Optional[str]:
+    """Map a milestone state to its canonical token (open or closed)."""
+    return _normalize_token(state, _MILESTONE_ALIASES)
+
+
+# The memory categories that are operational blobs, not semantic notes: the
+# code index (bootstrap writes categories codebase_index and index) and the
+# per-card board history. Embedding them pollutes the HNSW vector index, so
+# semantic_search returns file contents instead of meaning (ADR-0016, F6).
+# A DENYLIST, deliberately: an unknown category keeps its embedding and stays
+# searchable without a code change, whereas an allowlist would silently drop
+# new categories from the index -- the failure mode being fixed, inverted.
+NON_SEMANTIC_MEMORY_CATEGORIES = ("codebase_index", "index", "board_history")
+
+
+def is_semantic_category(category: Optional[str]) -> bool:
+    """Whether a memory category belongs in the semantic vector index.
+
+    Total: None or empty (no category) counts as semantic, preserving the
+    pre-gate behavior for every category not on the denylist.
+    """
+    return str(category or "").strip().lower() not in NON_SEMANTIC_MEMORY_CATEGORIES
+
+
+# The status literals a harness write can legitimately store on an issue row:
+# the canonical display/board tokens (ADR-0006) plus the legacy literals that
+# replays and reads stay tolerant of. This is the SurrealDB ASSERT set for
+# issues.status; the other kinds assert their canonical vocabulary directly.
+ISSUE_STATUS_LITERALS = tuple(STATUS_DISPLAY_COLUMNS) + ("open",) + TERMINAL_STATUSES
+
+
+def _surreal_literal_array(values: Sequence[str]) -> str:
+    """Render internal status constants as a SurrealQL string array literal.
+
+    Only ever fed the module's own vocabulary tuples (never caller input), and
+    deduplicated preserving order so overlapping legacy sets stay tidy.
+    """
+    seen = dict.fromkeys(values)
+    return "[" + ", ".join("'" + v + "'" for v in seen) + "]"
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +534,81 @@ class DatabaseClient:
     busy_timeout_seconds: float
     harness_dir: str
 
+    # SurrealDB is used as a true multi-model store: relational tables with
+    # indexes, graph RELATION edges, a timeseries metrics table, and an HNSW
+    # vector index for semantic memory. Every DEFINE is IF NOT EXISTS
+    # (idempotent) and SCHEMALESS, so it never rejects the existing
+    # string-typed writes. Kept as ONE STATEMENT PER LIST ENTRY (not one
+    # concatenated multi-statement string): the surrealdb SDK's ``.query()``
+    # only surfaces the FIRST statement's result of whatever string it is
+    # given, so a single call with everything concatenated would silently
+    # accept a failure in any later DEFINE (an index, a RELATION table, the
+    # HNSW vector index). Executing one statement per call makes every
+    # statement the "first" (and only) result of its own call, so a failing
+    # statement is never swallowed.
+    _SURREAL_SCHEMA_STATEMENTS: List[str] = [
+        "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS;",
+        "DEFINE TABLE IF NOT EXISTS metrics SCHEMALESS;",
+        # Graph: typed RELATION edge tables.
+        "DEFINE TABLE IF NOT EXISTS blocks TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS supersedes TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION;",
+        "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION;",
+        # Episodic work graph (ADR-0018): sessions and loop_runs link to the
+        # issues they advance, so resume is a graph query, not a prose regex.
+        "DEFINE TABLE IF NOT EXISTS worked_on TYPE RELATION;",
+        # Relational: indexes for the hot lookups. github_id is the record
+        # key, so it is unique by construction.
+        "DEFINE INDEX IF NOT EXISTS issues_github_id "
+        "ON issues FIELDS github_id UNIQUE;",
+        "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
+        "DEFINE INDEX IF NOT EXISTS decisions_created_at "
+        "ON decisions FIELDS created_at;",
+        # Timeseries: composite index on (name, time) for metrics.
+        "DEFINE INDEX IF NOT EXISTS metrics_name_time "
+        "ON metrics FIELDS name, time;",
+        # Vector: HNSW index over the 256-dim memory embedding.
+        "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+        f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
+        "DIST COSINE TYPE F32;",
+        # Typed states (ADR-0016): one targeted ASSERT per stateful field. The
+        # tables stay SCHEMALESS elsewhere. Harness code normalizes on write
+        # (normalize_status and friends, below every consumer), so these can
+        # never fire for harness writes; they exist to reject garbage from
+        # foreign writers. NONE stays allowed so a row that never carried the
+        # field remains writable. Each is its own list entry -- one statement
+        # per query() call -- so a failing DEFINE is never swallowed.
+        "DEFINE FIELD IF NOT EXISTS status ON issues "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(ISSUE_STATUS_LITERALS)};",
+        "DEFINE FIELD IF NOT EXISTS status ON handoffs "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(HANDOFF_STATUSES)};",
+        "DEFINE FIELD IF NOT EXISTS status ON sessions "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(SESSION_STATUSES)};",
+        "DEFINE FIELD IF NOT EXISTS status ON loop_runs "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(LOOP_RUN_STATUSES)};",
+        "DEFINE FIELD IF NOT EXISTS state ON milestones "
+        f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(MILESTONE_STATES)};",
+        # First-class issue status transitions (ADR-0016, F4): one row per board
+        # move, typed where it matters (the issue link and the timestamp) while
+        # the table stays SCHEMALESS elsewhere. The composite index makes the
+        # per-issue timeline (and cycle time) one indexed query instead of a
+        # JSON parse per issue.
+        "DEFINE TABLE IF NOT EXISTS transitions SCHEMALESS;",
+        "DEFINE FIELD IF NOT EXISTS issue ON transitions TYPE record<issues>;",
+        "DEFINE FIELD IF NOT EXISTS entered_at ON transitions TYPE datetime;",
+        "DEFINE INDEX IF NOT EXISTS transitions_issue_entered "
+        "ON transitions FIELDS issue, entered_at;",
+    ]
+
     def __init__(
         self,
         db_path: Optional[str] = None,
@@ -401,13 +630,30 @@ class DatabaseClient:
                 semantic search. Defaults to :class:`HashingEmbedder`, a dependency-free
                 lexical embedder; pass a model-backed embedder for true semantic search.
         """
+        self._init_embedder(embedder)
+        self._init_connection_state(db_path)
+        self._resolve_roots(harness_dir)
+
+        # Root for the write-through Markdown mirror (issue #35). Resolved once, up
+        # front, so every write funnels to the same gitignored local store.
+        self._mirror_root = self._resolve_mirror_root(mirror_root)
+
+        db_config = self._load_config()
+        self._init_backend(db_config)
+
+    def _init_embedder(self, embedder: Optional[Embedder]) -> None:
+        """Choose the embedder that vectorizes memory for the vector index."""
         # The embedder that vectorizes memory for the HNSW vector index. The default
         # is lexical (token overlap), swappable for a real semantic model.
         self._embedder: Embedder = embedder or HashingEmbedder()
 
+    def _init_connection_state(self, db_path: Optional[str]) -> None:
+        """Set the backend defaults and the rebuildable SurrealDB params."""
         self.backend = "sqlite"
         self.db = None
-        self.spectron = None
+        # Typed Any: assigned a Spectron or SpectronFallbackClient by
+        # _init_spectron when configured, else stays None.
+        self.spectron: Any = None
         self.db_path = db_path
         # The explicit db_path argument (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
@@ -423,6 +669,15 @@ class DatabaseClient:
         self._surreal_database: Optional[str] = None
         self._connect_deadline: float = 5.0
 
+        # Why the client is on SQLite although a SurrealDB primary was intended.
+        # None while SurrealDB serves, and None when SQLite is a deliberate
+        # choice (explicit db_path, or no surrealdb provider configured). Every
+        # fallback path records its reason here so backend_status() can report
+        # the degradation honestly instead of looking like a clean SQLite setup.
+        self._fallback_reason: Optional[str] = None
+
+    def _resolve_roots(self, harness_dir: Optional[str]) -> None:
+        """Resolve the owning harness directory and the repository root."""
         # The shared client no longer lives inside the agent directory, so the caller
         # passes the owning harness directory explicitly; fall back to this file's
         # package location for standalone or test use.
@@ -450,19 +705,18 @@ class DatabaseClient:
             project_root = harness_dir
 
         # Retained so the mid-session SQLite fallback can resolve the same store
-        # path the constructor would have used (issue #37).
+        # path the constructor would have used (issue #37), and for read-only
+        # tenant discovery (list_databases).
         self._project_root = project_root
 
-        # Root for the write-through Markdown mirror (issue #35). Resolved once, up
-        # front, so every write funnels to the same gitignored local store.
-        self._mirror_root = self._resolve_mirror_root(mirror_root)
-
+    def _load_config(self) -> Dict[str, Any]:
+        """Read .agent/config.json and capture the database block's fields."""
         # Load configuration. Prefer the harness-local .agent/config.json, which carries
         # the per-agent `database` block, and fall back to the project-root config.
         config: Dict[str, Any] = {}
         candidate_config_paths = [
-            os.path.join(harness_dir, ".agent", "config.json"),
-            os.path.join(project_root, ".agent", "config.json"),
+            os.path.join(self.harness_dir, ".agent", "config.json"),
+            os.path.join(self._project_root, ".agent", "config.json"),
         ]
         for candidate in candidate_config_paths:
             if os.path.isfile(candidate):
@@ -474,18 +728,20 @@ class DatabaseClient:
                     logging.error(f"Failed to read configuration at {candidate}: {exc}")
 
         db_config = config.get("database", {})
-        provider = db_config.get("provider")
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
         # Retained for read-only tenant discovery (list_databases). On the SQLite
         # fallback the resolvable tenant is derived from these, not from the store.
-        self._project_root = project_root
         self._configured_database = db_config.get("database")
         # The SurrealDB namespace that holds every tenant database. Stored so the
         # read-only use_tenant() accessor can rebind the connection scope to the
         # selected tenant with the same parameterized SDK bind the constructor uses.
         self._namespace = db_config.get("namespace", "solomon")
+        return db_config
 
+    def _init_backend(self, db_config: Dict[str, Any]) -> None:
+        """Bring up SurrealDB when configured and reachable, else SQLite."""
+        provider = db_config.get("provider")
         # An explicit db_path forces the SQLite backend (used for test isolation and
         # eval sandboxes), regardless of the configured provider.
         if provider == "surrealdb" and self.db_path is None:
@@ -515,7 +771,9 @@ class DatabaseClient:
 
             if has_surrealdb and Surreal is not None and creds_ok:
                 namespace = self._namespace
-                database = _resolve_database(db_config.get("database"), project_root)
+                database = _resolve_database(
+                    db_config.get("database"), self._project_root
+                )
 
                 # Capture the params so _connect_surreal can rebuild the handle
                 # after a mid-session drop, not only here at construction (#37).
@@ -533,77 +791,14 @@ class DatabaseClient:
                     try:
                         # Initialize SurrealDB tables. IF NOT EXISTS makes this
                         # idempotent: SurrealDB v2+ errors on re-DEFINE otherwise.
-                        # SurrealDB is used as a true multi-model store: relational
-                        # tables with indexes, graph RELATION edges, a timeseries
-                        # metrics table, and an HNSW vector index for semantic memory.
-                        # Every DEFINE is IF NOT EXISTS (idempotent) and SCHEMALESS, so
-                        # it never rejects the existing string-typed writes.
-                        init_query = (
-                            "DEFINE TABLE IF NOT EXISTS decisions SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS memory SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS milestones SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS issues SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS backtest_runs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS handoffs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS releases SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS loop_runs SCHEMALESS; "
-                            "DEFINE TABLE IF NOT EXISTS metrics SCHEMALESS; "
-                            # Graph: typed RELATION edge tables.
-                            "DEFINE TABLE IF NOT EXISTS blocks TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS supersedes TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS contains TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION; "
-                            "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION; "
-                            # Relational: indexes for the hot lookups. github_id is the
-                            # record key, so it is unique by construction.
-                            "DEFINE INDEX IF NOT EXISTS issues_github_id "
-                            "ON issues FIELDS github_id UNIQUE; "
-                            "DEFINE INDEX IF NOT EXISTS issues_status "
-                            "ON issues FIELDS status; "
-                            "DEFINE INDEX IF NOT EXISTS decisions_created_at "
-                            "ON decisions FIELDS created_at; "
-                            # Timeseries: composite index on (name, time) for metrics.
-                            "DEFINE INDEX IF NOT EXISTS metrics_name_time "
-                            "ON metrics FIELDS name, time; "
-                            # Vector: HNSW index over the 256-dim memory embedding.
-                            "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
-                            f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
-                            "DIST COSINE TYPE F32;"
-                        )
-                        self.db.query(init_query)
+                        # Executed statement-by-statement (not as one concatenated
+                        # multi-statement string): see _SURREAL_SCHEMA_STATEMENTS for
+                        # why, and _bootstrap_surreal_schema for the raise-on-any-
+                        # failure contract. The backend is marked ready only after
+                        # every statement has actually succeeded.
+                        self._bootstrap_surreal_schema()
                         self.backend = "surrealdb"
-
-                        # Initialize Spectron if URL and API Key are configured
-                        spectron_url = os.environ.get(
-                            "SPECTRON_URL", db_config.get("spectron_url")
-                        )
-                        spectron_api_key = os.environ.get(
-                            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-                        )
-                        spectron_context = os.environ.get(
-                            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-                        )
-                        if spectron_url and spectron_api_key:
-                            try:
-                                try:
-                                    # Spectron ships only in newer surrealdb builds;
-                                    # the except below handles its absence at runtime.
-                                    from surrealdb import Spectron  # type: ignore[attr-defined]
-                                    self.spectron = Spectron(
-                                        context=spectron_context,
-                                        endpoint=spectron_url,
-                                        api_key=spectron_api_key
-                                    )
-                                except (ImportError, AttributeError):
-                                    self.spectron = SpectronFallbackClient(
-                                        context=spectron_context,
-                                        endpoint=spectron_url,
-                                        api_key=spectron_api_key
-                                    )
-                            except Exception as e:
-                                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                                self.spectron = None
+                        self._init_spectron(db_config)
                     except Exception as e:
                         sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
                         sys.stderr.write(
@@ -616,22 +811,28 @@ class DatabaseClient:
                                 pass
                             self.db = None
                         self.backend = "sqlite"
+                        self._fallback_reason = f"SurrealDB initialization failed: {e}"
                 else:
                     sys.stderr.write("Warning: Connection to SurrealDB failed.\n")
                     sys.stderr.write(
                         "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
                     )
                     self.backend = "sqlite"
+                    self._fallback_reason = "connection to SurrealDB failed"
             else:
                 if not creds_ok:
                     sys.stderr.write(
                         "SurrealDB credentials are not set for a non-local URL; set "
                         "SURREAL_USER/SURREAL_PASS. Falling back to SQLite backend.\n"
                     )
+                    self._fallback_reason = (
+                        "SurrealDB credentials are not set for a non-local URL"
+                    )
                 else:
                     sys.stderr.write(
                         "SurrealDB library or server unavailable. Falling back to SQLite backend.\n"
                     )
+                    self._fallback_reason = "surrealdb library unavailable"
                 self.backend = "sqlite"
 
         # Initialize SQLite if backend is sqlite
@@ -639,6 +840,57 @@ class DatabaseClient:
             if self.db_path is None:
                 self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
+
+    def _init_spectron(self, db_config: Dict[str, Any]) -> None:
+        """Connect the optional Spectron client when URL and API key are set."""
+        # Initialize Spectron if URL and API Key are configured
+        spectron_url = os.environ.get(
+            "SPECTRON_URL", db_config.get("spectron_url")
+        )
+        spectron_api_key = os.environ.get(
+            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
+        )
+        spectron_context = os.environ.get(
+            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
+        )
+        if spectron_url and spectron_api_key:
+            try:
+                try:
+                    # Spectron ships only in newer surrealdb builds;
+                    # the except below handles its absence at runtime.
+                    from surrealdb import Spectron  # type: ignore[attr-defined]
+                    self.spectron = Spectron(
+                        context=spectron_context,
+                        endpoint=spectron_url,
+                        api_key=spectron_api_key
+                    )
+                except (ImportError, AttributeError):
+                    self.spectron = SpectronFallbackClient(
+                        context=spectron_context,
+                        endpoint=spectron_url,
+                        api_key=spectron_api_key
+                    )
+            except Exception as e:
+                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
+                self.spectron = None
+
+    def backend_status(self) -> Dict[str, Any]:
+        """Report which backend serves this client, publicly (issue #163).
+
+        Returns ``{"backend", "degraded", "fallback_reason"}``. ``degraded`` is
+        True only when a SurrealDB primary was intended but the SQLite fallback
+        is serving; a deliberate SQLite client (explicit ``db_path``, or no
+        surrealdb provider configured) is not degraded and carries no reason.
+        The session-start digest already renders this state; this accessor
+        gives sessions and workflows the same answer without reaching into
+        private attributes.
+        """
+        degraded = self.backend != "surrealdb" and self._fallback_reason is not None
+        return {
+            "backend": self.backend,
+            "degraded": degraded,
+            "fallback_reason": self._fallback_reason if degraded else None,
+        }
 
     @contextmanager
     def _sqlite_conn(self) -> Generator[sqlite3.Connection, None, None]:
@@ -651,6 +903,14 @@ class DatabaseClient:
         # concurrently instead of failing with "database is locked".
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_seconds * 1000)}")
+        # SQLite does not enforce a declared FOREIGN KEY unless this pragma is set
+        # on the connection (it defaults OFF). The harness schema no longer
+        # declares one (ADR-0016 dropped issues.milestone_id -> milestones.id,
+        # which rejected the minted milestone record ids), but the pragma stays
+        # ON so any store that still carries the legacy constraint keeps its
+        # original enforcement until its rebuild migration runs. Must be set
+        # before any transaction begins, so it runs here, before ``with conn:``.
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             with conn:
                 yield conn
@@ -663,6 +923,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS decisions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 title TEXT NOT NULL,
                 rationale TEXT,
                 outcome TEXT,
@@ -683,6 +944,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS milestones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 title TEXT NOT NULL,
                 description TEXT,
                 due_date TEXT,
@@ -690,21 +952,25 @@ class DatabaseClient:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
+            # No FOREIGN KEY on milestone_id (ADR-0016): the reference now
+            # carries the minted milestone record id, which the old FK
+            # (targeting the integer rowid) rejected; the SurrealDB primary
+            # never enforced one, and the linkage is soft by design.
             """
             CREATE TABLE IF NOT EXISTS issues (
                 github_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 type_ TEXT,
                 status TEXT,
-                milestone_id INTEGER,
+                milestone_id TEXT,
                 assignee TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (milestone_id) REFERENCES milestones (id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
             """
             CREATE TABLE IF NOT EXISTS backtest_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 strategy_name TEXT NOT NULL,
                 sharpe_ratio REAL,
                 max_drawdown REAL,
@@ -721,23 +987,27 @@ class DatabaseClient:
                 agent_name TEXT,
                 task TEXT,
                 messages TEXT,
+                status TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
             """
             CREATE TABLE IF NOT EXISTS handoffs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 sender TEXT,
                 recipient TEXT,
                 contract_type TEXT,
                 contract_path TEXT,
                 status TEXT,
+                summary TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
             """
             CREATE TABLE IF NOT EXISTS releases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 version TEXT NOT NULL,
                 tag TEXT,
                 notes TEXT,
@@ -750,11 +1020,13 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS loop_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 stage TEXT,
                 target TEXT,
                 decision TEXT,
                 status TEXT,
                 session_id TEXT,
+                target_issue INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
@@ -764,6 +1036,7 @@ class DatabaseClient:
             """
             CREATE TABLE IF NOT EXISTS metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
                 name TEXT NOT NULL,
                 value REAL,
                 tags TEXT,
@@ -771,6 +1044,45 @@ class DatabaseClient:
             );
             """,
             "CREATE INDEX IF NOT EXISTS metrics_name_time ON metrics (name, time);",
+            # Issue status transitions, mirrored on the SQLite fallback so board
+            # moves are recorded even degraded (ADR-0016). ``github_id`` stands in
+            # for the SurrealDB record link; ``entered_at`` is a UTC ISO string;
+            # ``record_id`` is the client-minted id (backend-invariant, F7).
+            """
+            CREATE TABLE IF NOT EXISTS transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
+                github_id TEXT NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                entered_at TIMESTAMP,
+                actor TEXT
+            );
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS transitions_record_id "
+            "ON transitions (record_id);",
+            "CREATE INDEX IF NOT EXISTS transitions_issue_entered "
+            "ON transitions (github_id, entered_at);",
+            # worked_on parity link table (ADR-0018). On SurrealDB the edge is
+            # a RELATE through the mirrored funnel; whenever a link write does
+            # not land on the primary (pure-SQLite or degraded fallback) this
+            # table keeps graph-based resume working. ``source_table`` is
+            # 'sessions' or 'loop_runs'; ``source_id`` the session_id or the
+            # minted loop_run record id. The unique index makes a re-save of
+            # the same session idempotent (INSERT OR IGNORE).
+            """
+            CREATE TABLE IF NOT EXISTS worked_on (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT,
+                source_table TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                github_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS worked_on_link "
+            "ON worked_on (source_table, source_id, github_id);",
+            "CREATE INDEX IF NOT EXISTS worked_on_issue ON worked_on (github_id);",
         ]
 
         try:
@@ -779,10 +1091,180 @@ class DatabaseClient:
                 for query in queries:
                     cursor.execute(query)
                 self._ensure_issue_assignee_column(conn)
+                self._ensure_issue_milestone_id_is_text(conn)
+                self._ensure_issue_milestone_fk_dropped(conn)
+                self._ensure_column(conn, "sessions", "status", "TEXT")
+                self._ensure_column(conn, "handoffs", "summary", "TEXT")
+                self._ensure_column(conn, "loop_runs", "target_issue", "INTEGER")
+                self._ensure_record_id_columns(conn)
                 conn.commit()
         except sqlite3.Error as e:
             logging.error(f"SQLite database initialization failed: {e}")
             raise RuntimeError(f"SQLite database initialization failed: {e}")
+
+    @staticmethod
+    def _ensure_issue_milestone_id_is_text(conn: sqlite3.Connection) -> None:
+        """Migrate a pre-migration issues.milestone_id from INTEGER to TEXT.
+
+        releases.milestone_id has always been TEXT (save_release str()-casts it),
+        while issues.milestone_id was declared INTEGER, forcing a string-cast at
+        every relational read that compares the two. A fresh store's CREATE TABLE
+        already declares TEXT, so this is a no-op there; a pre-migration store is
+        migrated in place.
+
+        SQLite has no ALTER COLUMN to change a declared type, so the migration
+        rebuilds the table: rename the old one aside, recreate ``issues`` with the
+        current column set (assignee only if the #118 migration already ran) and
+        milestone_id TEXT, copy every row across with milestone_id cast to TEXT
+        (a value is never otherwise changed), then drop the renamed original.
+
+        Concurrency-safe like :meth:`_ensure_issue_assignee_column`: two
+        simultaneous first-opens can both pass the PRAGMA guard before either
+        renames, so the losing RENAME raises ``OperationalError: table ... already
+        exists``, which means a concurrent open already started the same rebuild;
+        that is treated as already-migrated. Any other OperationalError is a real
+        failure and propagates.
+        """
+        columns = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(issues)")}
+        milestone_type = columns.get("milestone_id")
+        if milestone_type is None or milestone_type.upper() == "TEXT":
+            return  # already TEXT, or the table does not exist yet
+        has_assignee = "assignee" in columns
+        try:
+            conn.execute("ALTER TABLE issues RENAME TO issues_pre_text_milestone")
+        except sqlite3.OperationalError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
+            return
+        assignee_column = ", assignee TEXT" if has_assignee else ""
+        assignee_select = ", assignee" if has_assignee else ""
+        # The rebuilt table carries no FOREIGN KEY (ADR-0016; see
+        # _ensure_issue_milestone_fk_dropped for the rationale).
+        conn.execute(
+            "CREATE TABLE issues ("
+            "github_id TEXT PRIMARY KEY, "
+            "title TEXT NOT NULL, "
+            "type_ TEXT, "
+            "status TEXT, "
+            "milestone_id TEXT" + assignee_column + ", "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO issues "
+            "(github_id, title, type_, status, milestone_id" + assignee_select + ", created_at) "
+            "SELECT github_id, title, type_, status, CAST(milestone_id AS TEXT)"
+            + assignee_select
+            + ", created_at FROM issues_pre_text_milestone"
+        )
+        conn.execute("DROP TABLE issues_pre_text_milestone")
+
+    @staticmethod
+    def _ensure_issue_milestone_fk_dropped(conn: sqlite3.Connection) -> None:
+        """Rebuild a pre-ADR-0016 issues table to drop the milestone FOREIGN KEY.
+
+        The FK targeted ``milestones (id)``, the integer rowid, but with
+        backend-invariant record ids (F7) an issue's milestone_id carries the
+        minted milestone record id, which that FK rejects on every write. The
+        SurrealDB primary never enforced the constraint, so parity and the F7
+        contract both call for dropping it; the milestone linkage is soft by
+        design (the graph ``contains`` edge is the authoritative link).
+
+        SQLite cannot drop a constraint in place, so the migration rebuilds the
+        table exactly like :meth:`_ensure_issue_milestone_id_is_text`: rename
+        aside, recreate without the FK (preserving the current column set),
+        copy every row unchanged, drop the renamed original. A fresh store's
+        CREATE TABLE already omits the FK, so this is a no-op there.
+        Concurrency-safe via the same losing-RENAME guard.
+        """
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'issues'"
+        ).fetchone()
+        if row is None or "FOREIGN KEY" not in str(row["sql"]).upper():
+            return  # no table yet, or the FK is already gone
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(issues)")}
+        has_assignee = "assignee" in columns
+        try:
+            conn.execute("ALTER TABLE issues RENAME TO issues_pre_fk_drop")
+        except sqlite3.OperationalError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
+            return
+        assignee_column = ", assignee TEXT" if has_assignee else ""
+        assignee_select = ", assignee" if has_assignee else ""
+        conn.execute(
+            "CREATE TABLE issues ("
+            "github_id TEXT PRIMARY KEY, "
+            "title TEXT NOT NULL, "
+            "type_ TEXT, "
+            "status TEXT, "
+            "milestone_id TEXT" + assignee_column + ", "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO issues "
+            "(github_id, title, type_, status, milestone_id" + assignee_select + ", created_at) "
+            "SELECT github_id, title, type_, status, milestone_id"
+            + assignee_select
+            + ", created_at FROM issues_pre_fk_drop"
+        )
+        conn.execute("DROP TABLE issues_pre_fk_drop")
+
+    # The minted-id tables on the SQLite fallback: each stores the client-minted
+    # id in record_id, so an id means the same thing on both backends (F7).
+    # memory, issues, and sessions are natural-keyed and need no minted column.
+    _RECORD_ID_TABLES = (
+        "decisions",
+        "milestones",
+        "backtest_runs",
+        "handoffs",
+        "releases",
+        "loop_runs",
+        "metrics",
+        "transitions",
+    )
+
+    @classmethod
+    def _ensure_record_id_columns(cls, conn: sqlite3.Connection) -> None:
+        """Add record_id + its unique index to pre-migration tables (ADR-0016).
+
+        Expand/contract like :meth:`_ensure_issue_assignee_column`: legacy rows
+        keep a NULL record_id (the unique index tolerates NULLs), new writes
+        stamp the minted id. SQLite's ALTER cannot add a UNIQUE column, so the
+        column is plain and the uniqueness lives in a separate index. Table
+        names come from the class constant, never caller input.
+        """
+        for table in cls._RECORD_ID_TABLES:
+            cls._ensure_column(conn, table, "record_id", "TEXT")
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {table}_record_id "
+                f"ON {table} (record_id)"
+            )
+
+    @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection, table: str, column: str, decl: str
+    ) -> None:
+        """Add a nullable column to a pre-migration table (expand/contract).
+
+        The generic form of :meth:`_ensure_issue_assignee_column` (#118), used
+        by the ADR-0016 additive columns (sessions.status, handoffs.summary,
+        record_id). Idempotent via the PRAGMA guard, and concurrency-safe on
+        the shared store: the losing ALTER of two simultaneous first-opens
+        raises ``duplicate column name``, which means a concurrent open already
+        migrated, so it is swallowed; any other OperationalError propagates.
+        ``table``, ``column`` and ``decl`` are internal constants, never caller
+        input.
+        """
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing or column in existing:
+            return
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     @staticmethod
     def _ensure_issue_assignee_column(conn: sqlite3.Connection) -> None:
@@ -872,6 +1354,22 @@ class DatabaseClient:
         self.db = db
         return True
 
+    def _bootstrap_surreal_schema(self) -> None:
+        """Execute every schema DDL statement, raising if any one fails.
+
+        The surrealdb SDK's ``.query()`` only surfaces the FIRST statement's
+        result of whatever string it is given (it checks ``response["result"][0]``
+        only), so a single call with every DEFINE concatenated would silently
+        accept a failure in a later statement (an index, a RELATION table, the
+        HNSW vector index). Calling ``.query()`` once per statement makes each
+        statement the first (and only) result of its own call, so a failing
+        statement raises here and the constructor's caller can abort the
+        SurrealDB bootstrap and fall back to SQLite instead of marking a
+        partially-applied schema "ready".
+        """
+        for statement in self._SURREAL_SCHEMA_STATEMENTS:
+            self.db.query(statement)
+
     @staticmethod
     def _is_connection_error(exc: Exception) -> bool:
         """True only for a transport/connection fault, never a query or data error.
@@ -948,6 +1446,9 @@ class DatabaseClient:
                 pass
             self.db = None
         self.backend = "sqlite"
+        self._fallback_reason = (
+            "SurrealDB connection lost mid-session; reconnect failed"
+        )
         if self.db_path is None:
             self.db_path = self._resolve_sqlite_path()
         self._init_sqlite_db()
@@ -1059,6 +1560,7 @@ class DatabaseClient:
         "backtest": "backtest_runs",
         "session": "sessions",
         "handoff": "handoffs",
+        "loop_run": "loop_runs",
     }
     _KIND_TIMEFIELD = {
         "decision": "created_at",
@@ -1069,6 +1571,19 @@ class DatabaseClient:
         "backtest": "created_at",
         "session": "timestamp",
         "handoff": "timestamp",
+        "loop_run": "created_at",
+    }
+    # Per-kind (field, normalizer) applied when a mirror record is replayed, so
+    # a legacy pending mirror carrying a pre-vocabulary token (pending, failure,
+    # active) is normalized like any other write and can never trip the typed-
+    # state ASSERTs (ADR-0016). Functions held inside a dict are plain values,
+    # not descriptors, so they never bind as methods.
+    _KIND_STATUS_NORMALIZER: Dict[str, tuple] = {
+        "issue": ("status", normalize_status),
+        "handoff": ("status", normalize_handoff_status),
+        "session": ("status", normalize_session_status),
+        "loop_run": ("status", normalize_loop_run_status),
+        "milestone": ("state", normalize_milestone_state),
     }
 
     def _resolve_mirror_root(self, override: Optional[str]) -> str:
@@ -1255,8 +1770,10 @@ class DatabaseClient:
         return out
 
     def _replay(self, meta: Dict[str, Any], payload: Dict[str, Any]) -> None:
-        """Idempotently UPSERT a mirrored record into the SurrealDB primary.
+        """Idempotently replay a mirrored record into the SurrealDB primary.
 
+        A regular record is UPSERTed; a deletion tombstone (payload marked
+        ``deleted``) is replayed as a DELETE so a removed record never comes back.
         The UPSERT is keyed by the record's stored id, so replaying a record that
         is already present updates it in place rather than duplicating it. The
         original mirror ``created_at`` is preserved as the record's time field so a
@@ -1264,9 +1781,50 @@ class DatabaseClient:
         transport fault so :meth:`reconcile` can stop and leave the rest pending.
         """
         kind = meta["kind"]
+        if kind == "edge":
+            # An edge replays as an idempotent RELATE: the minted id is stamped
+            # on the edge as record_id, so the check-before-create can tell an
+            # already-replayed edge from a missing one (RELATE itself has no
+            # client-keyed UPSERT form) (ADR-0016, F5).
+            edge = self._safe_ident(payload["edge"], "edge name")
+            rid = payload.get("record_id") or meta["id"]
+            existing = self._run_surreal(
+                f"SELECT record_id FROM {edge} WHERE record_id = $record_id LIMIT 1;",
+                {"record_id": rid},
+            )
+            if self._extract_record(existing) is None:
+                query, params = self._relate_statement(payload, rid)
+                self._run_surreal(query, params)
+            return
+        if kind == "metric":
+            # A metric replays keyed by its minted id, carrying its ORIGINAL
+            # time coerced to a native datetime -- the metrics time field is
+            # what time::group buckets on, so it must never become a string.
+            content = dict(payload)
+            content["time"] = self._coerce_dt(payload.get("time") or meta.get("created_at"))
+            self._run_surreal(
+                "UPSERT $id CONTENT $content;",
+                {"id": self._rid("metrics", meta["id"]), "content": content},
+            )
+            return
         table = self._KIND_TABLE[kind]
+        if payload.get("deleted"):
+            # A deletion tombstone (a mutation like delete_memory that ran while
+            # the primary was down) replays as a DELETE keyed by the stored id --
+            # never an UPSERT, which would resurrect the deleted record. Deleting
+            # an absent record is a no-op, so the replay stays idempotent.
+            self._run_surreal("DELETE $id;", {"id": self._rid(table, meta["id"])})
+            return
         content = dict(payload)
         content[self._KIND_TIMEFIELD.get(kind, "created_at")] = meta.get("created_at")
+        # Replay is a write seam like any other: normalize the kind's status
+        # field so a legacy pending mirror cannot trip the typed-state ASSERTs
+        # (ADR-0016).
+        normalizer_entry = self._KIND_STATUS_NORMALIZER.get(kind)
+        if normalizer_entry is not None:
+            field, normalizer = normalizer_entry
+            if field in content:
+                content[field] = normalizer(content[field])
         self._run_surreal(
             "UPSERT $id CONTENT $content;",
             {"id": self._rid(table, meta["id"]), "content": content},
@@ -1295,6 +1853,7 @@ class DatabaseClient:
         if self.backend != "surrealdb" or self.db is None:
             if self._connect_surreal():
                 self.backend = "surrealdb"
+                self._fallback_reason = None
             else:
                 return {"synced": 0, "remaining": len(pending)}
 
@@ -1384,15 +1943,16 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to log decision in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO decisions (title, rationale, outcome, author, branch, commit_sha)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO decisions
+                (record_id, title, rationale, outcome, author, branch, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["title"],
                             fields["rationale"],
                             fields["outcome"],
@@ -1402,7 +1962,8 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    # The minted id, never lastrowid: backend-invariant (F7).
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to log decision: {e}")
                 raise RuntimeError(f"Failed to log decision: {e}")
@@ -1438,23 +1999,29 @@ class DatabaseClient:
             # here (not stored in the durability mirror) so the vector index stays
             # additive: existing get_memory reads and the mirror format are
             # unchanged, and a record without an embedding is simply not indexed.
-            embedding = self._embedder.embed(f"{key} {value}")
-            query = """
-            UPSERT $id CONTENT {
-                key: $key,
-                value: $value,
-                category: $category,
-                embedding: $embedding,
-                updated_at: time::now()
-            };
-            """
+            # Non-semantic categories (the code index, the board history) skip
+            # the embedding entirely -- the field is omitted, so the HNSW index
+            # never sees the row (ADR-0016, F6). A re-save that changes category
+            # replaces the whole CONTENT, so a stale embedding falls out then.
             params = {
                 "id": self._rid("memory", record_id),
                 "key": key,
                 "value": value,
                 "category": category,
-                "embedding": embedding,
             }
+            if is_semantic_category(category):
+                embedding_field = "embedding: $embedding,\n                "
+                params["embedding"] = self._embedder.embed(f"{key} {value}")
+            else:
+                embedding_field = ""
+            query = f"""
+            UPSERT $id CONTENT {{
+                key: $key,
+                value: $value,
+                category: $category,
+                {embedding_field}updated_at: time::now()
+            }};
+            """
             try:
                 self._run_surreal(query, params)
             except _ConnectionLost:
@@ -1479,9 +2046,23 @@ class DatabaseClient:
                 logging.error(f"Failed to save memory: {e}")
                 raise RuntimeError(f"Failed to save memory: {e}")
 
-    @_resilient
     def delete_memory(self, key: str) -> None:
-        """Deletes a memory entry by key (no-op if it does not exist)."""
+        """Deletes a memory entry by key (no-op if it does not exist).
+
+        The deletion goes through the same write-through funnel as every other
+        mutation: the key's mirror file is overwritten with a deletion tombstone
+        (same key-derived filename, so it replaces any pending save for the key)
+        before the DB delete runs. A reconcile after an outage therefore replays
+        the DELETE instead of resurrecting the row from a stale pending save.
+        """
+        self._write_through(
+            "memory", key, {"key": key, "deleted": True}, self._db_delete_memory
+        )
+
+    @_resilient
+    def _db_delete_memory(self, record_id: str, fields: Dict[str, Any]) -> None:
+        """Delete a memory entry; a connection loss falls back like every write."""
+        key = fields["key"]
         if self.backend == "surrealdb":
             try:
                 self._run_surreal("DELETE memory WHERE key = $key;", {"key": key})
@@ -1537,6 +2118,46 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve memory: {e}")
                 raise RuntimeError(f"Failed to retrieve memory: {e}")
 
+    @_resilient
+    def get_memory_bulk(self, keys: Sequence[str]) -> Dict[str, str]:
+        """Retrieves several memory values in one round trip, keyed by key.
+
+        Exists so a caller that needs N memory entries (e.g. one board_history
+        per issue) issues exactly one query instead of N (the N+1 pattern).
+        Returns a dict containing only the keys that resolved to a value; a key
+        with no stored entry is simply absent, the same "miss" a single
+        ``get_memory`` call reports as None. An empty ``keys`` sequence is a
+        no-op that skips the query entirely.
+        """
+        keys = list(keys)
+        if not keys:
+            return {}
+        if self.backend == "surrealdb":
+            query = "SELECT key, `value` FROM memory WHERE key IN $keys"
+            try:
+                res = self._run_surreal(query, {"keys": keys})
+                return {
+                    row["key"]: row["value"]
+                    for row in self._extract_list(res)
+                    if "key" in row
+                }
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to bulk retrieve memory from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to bulk retrieve memory from SurrealDB: {e}")
+        else:
+            placeholders = ",".join("?" for _ in keys)
+            query = f"SELECT key, value FROM memory WHERE key IN ({placeholders})"
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, keys)
+                    return {row["key"]: row["value"] for row in cursor.fetchall()}
+            except sqlite3.Error as e:
+                logging.error(f"Failed to bulk retrieve memory: {e}")
+                raise RuntimeError(f"Failed to bulk retrieve memory: {e}")
+
     def create_milestone(
         self, title: str, description: str, due_date: str, state: str
     ) -> Union[str, int, None]:
@@ -1546,7 +2167,9 @@ class DatabaseClient:
             title: Milestone title.
             description: Detailed objective list.
             due_date: Target completion date.
-            state: Active state (e.g., active, complete, pending).
+            state: Lifecycle state, normalized to the canonical vocabulary
+                (open or closed) at this write seam (ADR-0016); legacy
+                spellings (active, complete, pending) collapse to it.
 
         Returns:
             The primary key ID or record ID of the created milestone.
@@ -1555,7 +2178,7 @@ class DatabaseClient:
             "title": title,
             "description": description,
             "due_date": due_date,
-            "state": state,
+            "state": normalize_milestone_state(state),
         }
         return self._write_through(
             "milestone", self._mint_id("milestone"), fields, self._db_create_milestone
@@ -1587,15 +2210,15 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to create milestone in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO milestones (title, description, due_date, state)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO milestones (record_id, title, description, due_date, state)
+            VALUES (?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["title"],
                             fields["description"],
                             fields["due_date"],
@@ -1603,7 +2226,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to create milestone: {e}")
                 raise RuntimeError(f"Failed to create milestone: {e}")
@@ -1696,15 +2319,15 @@ class DatabaseClient:
         else:
             query = """
             INSERT INTO releases
-                (version, tag, notes, issue_github_id, milestone_id, commit_sha)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (record_id, version, tag, notes, issue_github_id, milestone_id, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["version"],
                             fields["tag"],
                             fields["notes"],
@@ -1714,7 +2337,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to save release: {e}")
                 raise RuntimeError(f"Failed to save release: {e}")
@@ -1737,7 +2360,10 @@ class DatabaseClient:
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT * FROM releases WHERE id = ?", (release_id,))
+                    cursor.execute(
+                        "SELECT * FROM releases WHERE id = ? OR record_id = ?",
+                        self._sqlite_id_lookup(release_id),
+                    )
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -1750,7 +2376,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self._run_surreal(
-                    f"SELECT * FROM releases ORDER BY released_at DESC LIMIT {int(limit)}"
+                    "SELECT * FROM releases ORDER BY released_at DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except _ConnectionLost:
@@ -1932,15 +2559,17 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to save backtest run in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO backtest_runs (strategy_name, sharpe_ratio, max_drawdown, profit_factor, parameters, dataset, commit_sha)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO backtest_runs
+                (record_id, strategy_name, sharpe_ratio, max_drawdown,
+                 profit_factor, parameters, dataset, commit_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["strategy_name"],
                             fields["sharpe_ratio"],
                             fields["max_drawdown"],
@@ -1951,7 +2580,7 @@ class DatabaseClient:
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to save backtest run: {e}")
                 raise RuntimeError(f"Failed to save backtest run: {e}")
@@ -1962,6 +2591,8 @@ class DatabaseClient:
         agent_name: str,
         task: str,
         messages: Union[List[Dict[str, Any]], str],
+        status: str = "active",
+        issues: Optional[Sequence[Union[int, str]]] = None,
     ) -> None:
         """Upserts a short-term session state.
 
@@ -1970,15 +2601,32 @@ class DatabaseClient:
             agent_name: Name of the agent.
             task: Task description.
             messages: List of message dictionaries representing conversation history.
+            status: Lifecycle status, normalized to the canonical vocabulary
+                (active or done) at this write seam (ADR-0016). Additive
+                parameter defaulting to active, so every existing caller is
+                unchanged and get_latest_activity reads the stored value
+                instead of hardcoding it.
+            issues: Optional GitHub issue numbers this session worked on. Each
+                becomes a ``worked_on`` edge (session -> issue, ADR-0018) after
+                the session row lands, so resume is a graph query instead of a
+                regex over the free-text task string. Validated numeric before
+                any write; a missing issue row is created minimally via the
+                log_issue path so an edge never dangles.
         """
+        # Validate before the session write so a bad number fails the whole
+        # call fast instead of leaving a session row with half its links.
+        issue_numbers = [self._canonical_issue_number(n) for n in (issues or [])]
         fields = {
             "session_id": session_id,
             "agent_name": agent_name,
             "task": task,
             "messages": messages,
+            "status": normalize_session_status(status),
         }
         # session_id is already a stable id, reused for the RecordID and filename.
         self._write_through("session", session_id, fields, self._db_save_session)
+        for gid in issue_numbers:
+            self._record_worked_on("sessions", session_id, gid)
 
     @_resilient
     def _db_save_session(self, record_id: str, fields: Dict[str, Any]) -> None:
@@ -1990,6 +2638,7 @@ class DatabaseClient:
                 agent_name: $agent_name,
                 task: $task,
                 messages: $messages,
+                status: $status,
                 timestamp: time::now()
             };
             """
@@ -1999,6 +2648,7 @@ class DatabaseClient:
                 "agent_name": fields["agent_name"],
                 "task": fields["task"],
                 "messages": fields["messages"],
+                "status": fields.get("status") or "active",
             }
             try:
                 self._run_surreal(query, params)
@@ -2013,12 +2663,13 @@ class DatabaseClient:
                 json.dumps(messages) if not isinstance(messages, str) else messages
             )
             query = """
-            INSERT INTO sessions (session_id, agent_name, task, messages, timestamp)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO sessions (session_id, agent_name, task, messages, status, timestamp)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(session_id) DO UPDATE SET
                 agent_name=excluded.agent_name,
                 task=excluded.task,
                 messages=excluded.messages,
+                status=excluded.status,
                 timestamp=CURRENT_TIMESTAMP
             """
             try:
@@ -2030,6 +2681,7 @@ class DatabaseClient:
                             fields["agent_name"],
                             fields["task"],
                             serialized_messages,
+                            fields.get("status") or "active",
                         ),
                     )
                     conn.commit()
@@ -2076,6 +2728,7 @@ class DatabaseClient:
         contract_type: str,
         contract_path: str,
         status: str,
+        summary: str = "",
     ) -> Union[str, int, None]:
         """Creates a handoff log entry.
 
@@ -2084,7 +2737,12 @@ class DatabaseClient:
             recipient: The recipient agent name.
             contract_type: Type of contract (e.g. plan, code).
             contract_path: File path to contract documentation.
-            status: Initial status (e.g. pending, approved).
+            status: Lifecycle status, normalized to the canonical vocabulary
+                (open, accepted, done) at this write seam (ADR-0016).
+            summary: Short "what this stage did" text persisted on the row, so a
+                resume survives worktree teardown even when the contract file at
+                ``contract_path`` is gone. Additive parameter defaulting to ""
+                so every existing 5-arg caller is unchanged.
 
         Returns:
             The primary key ID or record ID of the created handoff.
@@ -2094,7 +2752,8 @@ class DatabaseClient:
             "recipient": recipient,
             "contract_type": contract_type,
             "contract_path": contract_path,
-            "status": status,
+            "status": normalize_handoff_status(status),
+            "summary": summary,
         }
         return self._write_through(
             "handoff", self._mint_id("handoff"), fields, self._db_log_handoff
@@ -2113,6 +2772,7 @@ class DatabaseClient:
                 contract_type: $contract_type,
                 contract_path: $contract_path,
                 status: $status,
+                summary: $summary,
                 timestamp: time::now()
             };
             """
@@ -2127,27 +2787,261 @@ class DatabaseClient:
                 raise RuntimeError(f"Failed to log handoff in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO handoffs (sender, recipient, contract_type, contract_path, status)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO handoffs
+                (record_id, sender, recipient, contract_type, contract_path, status, summary)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    conn.execute(
                         query,
                         (
+                            record_id,
                             fields["sender"],
                             fields["recipient"],
                             fields["contract_type"],
                             fields["contract_path"],
                             fields["status"],
+                            fields["summary"],
                         ),
                     )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to log handoff: {e}")
                 raise RuntimeError(f"Failed to log handoff: {e}")
+
+    def update_handoff_status(
+        self, handoff_id: Union[str, int], status: str
+    ) -> Union[str, int, None]:
+        """Move a handoff along its lifecycle (open -> accepted -> done).
+
+        Read-modify-write through the durability funnel: the mirror is
+        re-written with the full merged row (not a partial patch), so a replay
+        after an outage reconstructs the record instead of clobbering it. The
+        status is normalized to the canonical vocabulary at this seam
+        (ADR-0016). Returns the record id, or None when the handoff does not
+        exist (never invents a row).
+        """
+        row = self.get_handoff(handoff_id)
+        if row is None:
+            return None
+        fields = {
+            "sender": row.get("sender"),
+            "recipient": row.get("recipient"),
+            "contract_type": row.get("contract_type"),
+            "contract_path": row.get("contract_path"),
+            "summary": row.get("summary") or "",
+            "status": normalize_handoff_status(status),
+        }
+        record_key = self._record_key(row.get("id"), handoff_id)
+        return self._write_through("handoff", record_key, fields, self._db_update_handoff)
+
+    @staticmethod
+    def _record_key(row_id: Any, fallback: Any) -> str:
+        """The bare record key of a fetched row, for re-keying a funnel write.
+
+        Strips the SurrealDB ``table:`` prefix and the v3.x display delimiters
+        (angle brackets or backticks) from a stringified record id, so the
+        funnel's mirror filename and UPSERT RecordID match the stored record.
+        A SQLite integer id stringifies as-is; a missing id falls back to the
+        id the caller passed.
+        """
+        value = row_id if row_id is not None else fallback
+        s = str(value)
+        if ":" in s:
+            _, _, key = s.partition(":")
+            key = key.strip()
+            if len(key) >= 2 and key[0] == "⟨" and key[-1] == "⟩":
+                key = key[1:-1]
+            elif len(key) >= 2 and key[0] == "`" and key[-1] == "`":
+                key = key[1:-1]
+            return key
+        return s
+
+    def _sqlite_id_lookup(self, value: Any) -> tuple:
+        """The parameter pair for a ``WHERE id = ? OR record_id = ?`` lookup.
+
+        Accepts a legacy integer rowid, a minted record id, or the SurrealDB
+        ``table:key`` spelling (stripped via :meth:`_record_key`), so a caller
+        holding an id from either backend resolves the same row (F7).
+        """
+        return (value, self._record_key(value, value))
+
+    @_resilient
+    def _db_update_handoff(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a handoff status change: targeted UPDATE, never a re-insert.
+
+        SurrealDB gets ``UPDATE $id SET status = $status`` so the original
+        timestamp and the rest of the row are preserved; SQLite updates by
+        primary key. The full merged row lives in the mirror (written by the
+        funnel), which is what a replay uses.
+        """
+        if self.backend == "surrealdb":
+            query = "UPDATE $id SET status = $status;"
+            params = {"id": self._rid("handoffs", record_id), "status": fields["status"]}
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_id(res) or record_id
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to update handoff in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to update handoff in SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    conn.execute(
+                        "UPDATE handoffs SET status = ? WHERE id = ? OR record_id = ?",
+                        (fields["status"], *self._sqlite_id_lookup(record_id)),
+                    )
+                    conn.commit()
+                    return record_id
+            except sqlite3.Error as e:
+                logging.error(f"Failed to update handoff: {e}")
+                raise RuntimeError(f"Failed to update handoff: {e}")
+
+    def record_status_transition(
+        self,
+        github_id: Union[str, int],
+        from_status: Optional[str],
+        to_status: Optional[str],
+        actor: Optional[str] = None,
+    ) -> Union[str, int, None]:
+        """Append one issue status transition to the first-class timeline.
+
+        The row is ``{issue, github_id, from_status, to_status, entered_at,
+        actor}`` (ADR-0016, F4): ``issue`` links the issues record on SurrealDB
+        and ``entered_at`` is stamped server-side with ``time::now()``; on the
+        SQLite fallback ``github_id`` stands in for the link and the stamp is
+        UTC. Statuses are normalized through the canonical vocabulary
+        (ADR-0006) at this write seam. Returns the client-minted record id on
+        both backends. Not mirrored: durability is covered by the parallel
+        legacy board_history write for this release (see the ADR).
+        """
+        fields = {
+            "github_id": str(github_id),
+            "from_status": normalize_status(from_status),
+            "to_status": normalize_status(to_status),
+            "actor": actor,
+        }
+        # Minted here, outside the resilient retry, so a reconnect/fallback
+        # re-run never re-mints the id.
+        return self._db_record_status_transition(self._mint_id("transition"), fields)
+
+    @_resilient
+    def _db_record_status_transition(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a transition: minted id, idempotent UPSERT on SurrealDB."""
+        if self.backend == "surrealdb":
+            query = """
+            UPSERT $id CONTENT {
+                issue: $issue,
+                github_id: $github_id,
+                from_status: $from_status,
+                to_status: $to_status,
+                actor: $actor,
+                entered_at: time::now()
+            };
+            """
+            params = {
+                "id": self._rid("transitions", record_id),
+                "issue": self._rid("issues", fields["github_id"]),
+                **fields,
+            }
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_id(res) or record_id
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to record transition in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to record transition in SurrealDB: {e}")
+        else:
+            query = """
+            INSERT INTO transitions
+                (record_id, github_id, from_status, to_status, entered_at, actor)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    conn.execute(
+                        query,
+                        (
+                            record_id,
+                            fields["github_id"],
+                            fields["from_status"],
+                            fields["to_status"],
+                            self._utc_iso(),
+                            fields["actor"],
+                        ),
+                    )
+                    conn.commit()
+                    return record_id
+            except sqlite3.Error as e:
+                logging.error(f"Failed to record transition: {e}")
+                raise RuntimeError(f"Failed to record transition: {e}")
+
+    @_resilient
+    def get_status_transitions(
+        self, github_ids: Sequence[Union[str, int]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Bulk-read the recorded transitions for the given issues, one round trip.
+
+        Returns a dict keyed by github_id; each value is the issue's transitions
+        ascending by ``entered_at`` as ``{from_status, to_status, entered_at,
+        actor}`` with ``entered_at`` coerced to an ISO-8601 string on both
+        backends. An issue with no rows is absent, so a caller's ``.get(id, [])``
+        degrades cleanly (the cockpit falls back to the legacy board_history).
+        """
+        ids = sorted({str(gid) for gid in github_ids if gid})
+        if not ids:
+            return {}
+        if self.backend == "surrealdb":
+            query = (
+                "SELECT github_id, from_status, to_status, entered_at, actor "
+                "FROM transitions WHERE github_id IN $ids ORDER BY entered_at;"
+            )
+            try:
+                res = self._run_surreal(query, {"ids": ids})
+                rows = self._extract_list(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to read transitions from SurrealDB: {e}")
+                raise RuntimeError(f"Failed to read transitions from SurrealDB: {e}")
+        else:
+            placeholders = ", ".join("?" for _ in ids)
+            query = (
+                "SELECT github_id, from_status, to_status, entered_at, actor "
+                f"FROM transitions WHERE github_id IN ({placeholders}) "
+                "ORDER BY entered_at, id"
+            )
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, ids)
+                    rows = [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                logging.error(f"Failed to read transitions: {e}")
+                raise RuntimeError(f"Failed to read transitions: {e}")
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            entered_at = row.get("entered_at")
+            if isinstance(entered_at, datetime.datetime):
+                entered_at = entered_at.isoformat()
+            grouped.setdefault(str(row.get("github_id")), []).append(
+                {
+                    "from_status": row.get("from_status"),
+                    "to_status": row.get("to_status"),
+                    "entered_at": entered_at,
+                    "actor": row.get("actor"),
+                }
+            )
+        return grouped
 
     @_resilient
     def get_handoff(self, handoff_id: Union[str, int]) -> Optional[Dict[str, Any]]:
@@ -2172,11 +3066,11 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve handoff from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve handoff from SurrealDB: {e}")
         else:
-            query = "SELECT * FROM handoffs WHERE id = ?"
+            query = "SELECT * FROM handoffs WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (handoff_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(handoff_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2206,11 +3100,11 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve decision from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve decision from SurrealDB: {e}")
         else:
-            query = "SELECT * FROM decisions WHERE id = ?"
+            query = "SELECT * FROM decisions WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (decision_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(decision_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2240,11 +3134,11 @@ class DatabaseClient:
                 logging.error(f"Failed to retrieve milestone from SurrealDB: {e}")
                 raise RuntimeError(f"Failed to retrieve milestone from SurrealDB: {e}")
         else:
-            query = "SELECT * FROM milestones WHERE id = ?"
+            query = "SELECT * FROM milestones WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (milestone_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(milestone_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2308,11 +3202,11 @@ class DatabaseClient:
                     f"Failed to retrieve backtest run from SurrealDB: {e}"
                 )
         else:
-            query = "SELECT * FROM backtest_runs WHERE id = ?"
+            query = "SELECT * FROM backtest_runs WHERE id = ? OR record_id = ?"
             try:
                 with self._sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(query, (backtest_id,))
+                    cursor.execute(query, self._sqlite_id_lookup(backtest_id))
                     row = cursor.fetchone()
                     return dict(row) if row else None
             except sqlite3.Error as e:
@@ -2450,10 +3344,19 @@ class DatabaseClient:
         loss propagates as ``_ConnectionLost`` so the resilient decorator reconnects
         or falls back, and a genuinely empty store still returns None (issue #37).
 
+        The winning row (session or handoff, whichever has the later timestamp)
+        shapes the 'type', 'agent', 'task', and 'status' fields. Every /solomon-*
+        command logs a handoff immediately followed by a session save, so the
+        session row routinely wins by timestamp; regardless of which row wins,
+        'contract_path' is populated from the latest handoff if one exists, so
+        the handoff contract (docs/solomon-workflow.md, "Handoff contracts") is
+        never silently dropped.
+
         Returns:
             A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
-            (and 'contract_path' for handoffs, pointing to the handoff contract
-            artifact), or None if no activity exists.
+            (and 'contract_path', pointing to the latest handoff contract
+            artifact if any handoff has been logged), or None if no activity
+            exists.
         """
         latest_session = None
         if self.backend == "surrealdb":
@@ -2526,13 +3429,30 @@ class DatabaseClient:
 
         if t_session >= t_handoff:
             assert latest_session is not None
-            return {
+            result: Dict[str, Any] = {
                 "type": "session",
                 "agent": latest_session.get("agent_name"),
                 "task": latest_session.get("task"),
-                "status": "active",
+                # The stored lifecycle status (ADR-0016); legacy rows written
+                # before the status column existed read back as active, which
+                # was the previously hardcoded value.
+                "status": latest_session.get("status") or "active",
                 "timestamp": latest_session.get("timestamp"),
             }
+            # Every /solomon-* command logs a handoff immediately followed by a
+            # session save, so the session row routinely wins this comparison.
+            # Surface the latest handoff's contract_path regardless, so the
+            # bounded-context handoff mechanism (docs/solomon-workflow.md,
+            # "Handoff contracts") is never silently dropped by that ordering.
+            if latest_handoff is not None:
+                result["contract_path"] = latest_handoff.get("contract_path")
+            # The linked issue numbers from the session's worked_on edges
+            # (ADR-0018), added only when edges exist so consumers pinned on
+            # the exact legacy shape are untouched by pre-edge rows.
+            linked = self._session_issue_numbers(latest_session.get("session_id"))
+            if linked:
+                result["issues"] = linked
+            return result
         else:
             assert latest_handoff is not None
             return {
@@ -2541,8 +3461,186 @@ class DatabaseClient:
                 "task": latest_handoff.get("contract_type"),
                 "status": latest_handoff.get("status"),
                 "contract_path": latest_handoff.get("contract_path"),
+                # The persisted "what this stage did" text (ADR-0016), so a
+                # resume works even when the contract file is gone with its
+                # worktree.
+                "summary": latest_handoff.get("summary"),
                 "timestamp": latest_handoff.get("timestamp"),
             }
+
+    def _session_issue_numbers(self, session_id: Any) -> List[int]:
+        """GitHub issue numbers linked from a session by worked_on edges.
+
+        Best-effort by design (ADR-0018): a graph read failure reports no
+        links, because the resume shape must never break when the graph is
+        unreachable -- the session row itself was already fetched.
+        """
+        if not session_id:
+            return []
+        try:
+            if self.backend == "surrealdb":
+                res = self._run_surreal(
+                    "SELECT array::distinct(->worked_on->issues.github_id) "
+                    "AS gids FROM $node;",
+                    {"node": self._rid("sessions", str(session_id))},
+                )
+                gids = self._extract_field(res, "gids") or []
+            else:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT DISTINCT github_id FROM worked_on "
+                        "WHERE source_table = 'sessions' AND source_id = ?",
+                        (str(session_id),),
+                    )
+                    gids = [row["github_id"] for row in cursor.fetchall()]
+            return sorted(
+                int(g) for g in gids if str(g).isdigit() and str(g).isascii()
+            )
+        except Exception:
+            return []
+
+    @staticmethod
+    def _activity_epoch(ts: Any) -> float:
+        """Best-effort epoch seconds for an activity timestamp (0.0 unknown).
+
+        Accepts the native datetime SurrealDB returns and the ISO/space-
+        separated strings SQLite stores, mirroring get_latest_activity's
+        tolerant parsing so the two orderings can never disagree.
+        """
+        if isinstance(ts, datetime.datetime):
+            return ts.timestamp()
+        if not ts:
+            return 0.0
+        clean = str(ts).replace(" ", "T").rstrip("Z")
+        if "+" in clean:
+            clean = clean.split("+")[0]
+        try:
+            return datetime.datetime.fromisoformat(clean).timestamp()
+        except ValueError:
+            return 0.0
+
+    @_resilient
+    def latest_activity_per_issue(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """The most recent linked activity per non-terminal issue (ADR-0018).
+
+        For each issue that has worked_on edges and is not terminal, returns
+        the most recent linked session or loop run. One graph query on
+        SurrealDB (issues projecting ``<-worked_on<-sessions`` and
+        ``<-worked_on<-loop_runs``); a join over the parity link table on the
+        SQLite fallback. The terminal filter runs in Python through the shared
+        :func:`is_terminal` predicate, so the status vocabulary lives in one
+        place.
+
+        Returns rows shaped ``{github_id, title, issue_status, type, agent,
+        task, status, timestamp}`` -- ``type`` is ``session`` or ``loop_run``;
+        for a loop run ``agent`` is the stage and ``task`` the decision text.
+        Most recent first, capped at ``limit``.
+        """
+        candidates: List[Dict[str, Any]] = []
+        order = 0
+        if self.backend == "surrealdb":
+            query = (
+                "SELECT github_id, title, status AS issue_status, "
+                "<-worked_on<-sessions.* AS sessions, "
+                "<-worked_on<-loop_runs.* AS loop_runs "
+                "FROM issues WHERE count(<-worked_on) > 0;"
+            )
+            try:
+                res = self._run_surreal(query)
+                issues = self._extract_list(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to query per-issue activity: {e}")
+                raise RuntimeError(f"Failed to query per-issue activity: {e}")
+            for issue in issues:
+                for s in issue.get("sessions") or []:
+                    order += 1
+                    candidates.append({
+                        "github_id": issue.get("github_id"),
+                        "title": issue.get("title"),
+                        "issue_status": issue.get("issue_status"),
+                        "type": "session",
+                        "agent": s.get("agent_name"),
+                        "task": s.get("task"),
+                        "status": s.get("status"),
+                        "timestamp": s.get("timestamp"),
+                        "_order": order,
+                    })
+                for r in issue.get("loop_runs") or []:
+                    order += 1
+                    candidates.append({
+                        "github_id": issue.get("github_id"),
+                        "title": issue.get("title"),
+                        "issue_status": issue.get("issue_status"),
+                        "type": "loop_run",
+                        "agent": r.get("stage"),
+                        "task": r.get("decision"),
+                        "status": r.get("status"),
+                        "timestamp": r.get("created_at"),
+                        "_order": order,
+                    })
+        else:
+            session_query = """
+            SELECT w.github_id AS github_id, i.title AS title,
+                   i.status AS issue_status, s.agent_name AS agent,
+                   s.task AS task, s.status AS status,
+                   s.timestamp AS timestamp, w.id AS link_order
+            FROM worked_on w
+            JOIN sessions s
+                ON w.source_table = 'sessions' AND w.source_id = s.session_id
+            LEFT JOIN issues i ON i.github_id = w.github_id
+            """
+            loop_query = """
+            SELECT w.github_id AS github_id, i.title AS title,
+                   i.status AS issue_status, r.stage AS agent,
+                   r.decision AS task, r.status AS status,
+                   r.created_at AS timestamp, w.id AS link_order
+            FROM worked_on w
+            JOIN loop_runs r
+                ON w.source_table = 'loop_runs' AND w.source_id = r.record_id
+            LEFT JOIN issues i ON i.github_id = w.github_id
+            """
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    for kind, query in (
+                        ("session", session_query),
+                        ("loop_run", loop_query),
+                    ):
+                        cursor.execute(query)
+                        for row in cursor.fetchall():
+                            entry = dict(row)
+                            entry["type"] = kind
+                            # The link-row id is a global insertion sequence:
+                            # it breaks CURRENT_TIMESTAMP's one-second ties
+                            # deterministically.
+                            entry["_order"] = entry.pop("link_order")
+                            candidates.append(entry)
+            except sqlite3.Error as e:
+                logging.error(f"Failed to query per-issue activity: {e}")
+                raise RuntimeError(f"Failed to query per-issue activity: {e}")
+
+        best: Dict[str, Dict[str, Any]] = {}
+        for entry in candidates:
+            if is_terminal(entry.get("issue_status")):
+                continue
+            gid = str(entry.get("github_id"))
+            key = (self._activity_epoch(entry.get("timestamp")), entry["_order"])
+            current = best.get(gid)
+            if current is None or key > (
+                self._activity_epoch(current.get("timestamp")), current["_order"]
+            ):
+                best[gid] = entry
+        rows = sorted(
+            best.values(),
+            key=lambda e: (self._activity_epoch(e.get("timestamp")), e["_order"]),
+            reverse=True,
+        )[: int(limit)]
+        for entry in rows:
+            entry.pop("_order", None)
+        return rows
 
     def save_loop_run(
         self,
@@ -2551,6 +3649,7 @@ class DatabaseClient:
         decision: str,
         status: str,
         session_id: str,
+        target_issue: Optional[int] = None,
     ) -> Union[str, int, None]:
         """Append one loop-run entry to the auditable ledger.
 
@@ -2559,42 +3658,86 @@ class DatabaseClient:
         the lockfile, not this ledger, because under the SQLite fallback each
         worktree gets a separate database and a cross-worktree count would be
         invisible.
+
+        ``status`` is normalized to the canonical loop-run vocabulary (ok or
+        failed) at this write seam, so the aggregators can count one token
+        (#165, ADR-0016).
+
+        ``target_issue`` is the GitHub issue number this run advanced, when the
+        stage carries one. It is stored on the row and also written as a
+        ``worked_on`` edge (loop_run -> issue, ADR-0018), the same edge table
+        sessions use, so per-issue resume sees loop runs too.
         """
+        gid = (
+            self._canonical_issue_number(target_issue)
+            if target_issue is not None
+            else None
+        )
+        fields = {
+            "stage": stage,
+            "target": target,
+            "decision": decision,
+            "status": normalize_loop_run_status(status),
+            "session_id": session_id,
+            "target_issue": int(gid) if gid is not None else None,
+        }
+        record_id = self._mint_id("loop_run")
+        result = self._write_through(
+            "loop_run", record_id, fields, self._db_save_loop_run
+        )
+        if gid is not None:
+            self._record_worked_on("loop_runs", record_id, gid)
+        return result
+
+    @_resilient
+    def _db_save_loop_run(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a loop-run entry: client-minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
             query = """
-            INSERT INTO loop_runs {
+            UPSERT $id CONTENT {
                 stage: $stage,
                 target: $target,
                 decision: $decision,
                 status: $status,
                 session_id: $session_id,
+                target_issue: $target_issue,
                 created_at: time::now()
-            }
+            };
             """
-            params = {
-                "stage": stage,
-                "target": target,
-                "decision": decision,
-                "status": status,
-                "session_id": session_id,
-            }
+            params = {"id": self._rid("loop_runs", record_id), **fields}
+            params.setdefault("target_issue", None)
             try:
-                res = self.db.query(query, params)
+                res = self._run_surreal(query, params)
                 return self._extract_id(res)
+            except _ConnectionLost:
+                raise
             except Exception as e:
                 logging.error(f"Failed to save loop run in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to save loop run in SurrealDB: {e}")
         else:
             query = """
-            INSERT INTO loop_runs (stage, target, decision, status, session_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO loop_runs
+                (record_id, stage, target, decision, status, session_id, target_issue)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(query, (stage, target, decision, status, session_id))
+                    conn.execute(
+                        query,
+                        (
+                            record_id,
+                            fields["stage"],
+                            fields["target"],
+                            fields["decision"],
+                            fields["status"],
+                            fields["session_id"],
+                            fields.get("target_issue"),
+                        ),
+                    )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to save loop run: {e}")
                 raise RuntimeError(f"Failed to save loop run: {e}")
@@ -2604,7 +3747,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    f"SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT {int(limit)}"
+                    "SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except Exception as e:
@@ -2627,7 +3771,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    f"SELECT * FROM decisions ORDER BY created_at DESC LIMIT {int(limit)}"
+                    "SELECT * FROM decisions ORDER BY created_at DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except Exception as e:
@@ -2650,7 +3795,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    f"SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT {int(limit)}"
+                    "SELECT * FROM handoffs ORDER BY timestamp DESC LIMIT $limit",
+                    {"limit": int(limit)},
                 )
                 return self._extract_list(res)
             except Exception as e:
@@ -2682,7 +3828,9 @@ class DatabaseClient:
 
     # The graph RELATION edge tables DEFINEd in the init block. The generic
     # ``relate`` accepts any safe identifier, but only these are pre-defined.
-    _RELATION_EDGES = ("blocks", "supersedes", "contains", "produced", "addresses")
+    _RELATION_EDGES = (
+        "blocks", "supersedes", "contains", "produced", "addresses", "worked_on",
+    )
     _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
     # Time buckets accepted by SurrealDB's ``time::group`` that floor cleanly.
     # ``week`` is excluded: it returns a null bucket on v3.x.
@@ -2752,28 +3900,78 @@ class DatabaseClient:
 
     # --- Graph ---------------------------------------------------------------
 
-    @_resilient
+    # Parameter names the RELATE statement itself owns; an edge field with one
+    # of these names would silently overwrite the endpoint or identity binding.
+    _RESERVED_EDGE_PARAMS = frozenset({"rel_from", "rel_to", "record_id", "id"})
+
     def relate(self, edge: str, from_id: Any, to_id: Any, **fields: Any) -> Optional[str]:
         """Create a graph edge ``from_id -[edge]-> to_id`` and return its record id.
 
         ``from_id``/``to_id`` are RecordIDs or ``table:key`` strings (the typed
-        helpers below build them from natural keys). Extra keyword fields are stored
-        on the edge record. SurrealDB-only.
+        helpers below build them from natural keys). Extra keyword fields are
+        stored on the edge record.
+
+        Routed through the durability funnel (kind ``edge``, ADR-0016 F5): the
+        minted edge id is stamped on the edge as ``record_id``, and during an
+        outage of the configured primary the pending mirror carries the edge to
+        :meth:`reconcile`, which replays it as an idempotent RELATE
+        (check-before-create on that stamp). The graph model has no SQLite
+        representation, so with no SurrealDB primary configured at all this
+        still raises the graph guard -- there would be nothing to replay into.
         """
-        self._require_surreal("graph relations")
+        if self.backend != "surrealdb" and self._surreal_class is None:
+            self._require_surreal("graph relations")
         edge = self._safe_ident(edge, "edge name")
-        params: Dict[str, Any] = {"rel_from": self._parse_rid(from_id), "rel_to": self._parse_rid(to_id)}
-        if fields:
-            assignments = []
-            for key, val in fields.items():
-                self._safe_ident(key, "edge field")
-                assignments.append(f"{key} = ${key}")
-                params[key] = val
-            query = f"RELATE $rel_from->{edge}->$rel_to SET {', '.join(assignments)};"
-        else:
-            query = f"RELATE $rel_from->{edge}->$rel_to;"
-        res = self._run_surreal(query, params)
-        return self._extract_id(res)
+        for key in fields:
+            self._safe_ident(key, "edge field")
+            if key in self._RESERVED_EDGE_PARAMS:
+                raise ValueError(f"reserved edge field name: {key!r}")
+        record_id = self._mint_id("edge")
+        payload = {
+            "edge": edge,
+            "from_id": str(from_id),
+            "to_id": str(to_id),
+            "fields": dict(fields),
+            "record_id": record_id,
+        }
+        result = self._write_through("edge", record_id, payload, self._db_relate)
+        return result if result is not None else record_id
+
+    @_resilient
+    def _db_relate(self, record_id: str, payload: Dict[str, Any]) -> Optional[str]:
+        """Persist an edge: RELATE with the minted id stamped as record_id.
+
+        On the degraded fallback (the configured primary is down and the
+        resilient wrapper switched to SQLite) this is a no-op: the pending
+        mirror is the durable copy and reconcile replays it.
+        """
+        if self.backend != "surrealdb":
+            return None
+        query, params = self._relate_statement(payload, record_id)
+        try:
+            res = self._run_surreal(query, params)
+            return self._extract_id(res)
+        except _ConnectionLost:
+            raise
+        except Exception as e:
+            logging.error(f"Failed to relate in SurrealDB: {e}")
+            raise RuntimeError(f"Failed to relate in SurrealDB: {e}")
+
+    def _relate_statement(self, payload: Dict[str, Any], record_id: str) -> tuple:
+        """Build the RELATE query and params for a live write or a replay."""
+        edge = self._safe_ident(payload["edge"], "edge name")
+        params: Dict[str, Any] = {
+            "rel_from": self._parse_rid(payload["from_id"]),
+            "rel_to": self._parse_rid(payload["to_id"]),
+            "record_id": record_id,
+        }
+        assignments = ["record_id = $record_id"]
+        for key, val in (payload.get("fields") or {}).items():
+            self._safe_ident(key, "edge field")
+            assignments.append(f"{key} = ${key}")
+            params[key] = val
+        query = f"RELATE $rel_from->{edge}->$rel_to SET {', '.join(assignments)};"
+        return query, params
 
     def _traverse(self, rid: Any, path: str) -> List[Dict[str, Any]]:
         """Return the distinct target records of a one-hop traversal from ``rid``.
@@ -2808,6 +4006,81 @@ class DatabaseClient:
     def link_session_handoff(self, session_id: Any, handoff_id: Any) -> Optional[str]:
         """Record that a session produced a handoff (session -[produced]-> handoff)."""
         return self.relate("produced", self._as_rid("sessions", session_id), self._as_rid("handoffs", handoff_id))
+
+    @staticmethod
+    def _canonical_issue_number(value: Any) -> str:
+        """Validate and canonicalize a GitHub issue number to its digit string.
+
+        Same digits-only, ASCII-only rule as :func:`is_github_issue`; leading
+        zeros are dropped. Raises ``ValueError`` on anything else, so a bad
+        number can never reach a query or the graph.
+        """
+        s = str(value)
+        if not (s.isdigit() and s.isascii()):
+            raise ValueError(f"invalid GitHub issue number: {value!r}")
+        return str(int(s))
+
+    def _record_worked_on(self, source_table: str, source_key: str, gid: str) -> None:
+        """Link one episodic row (session or loop run) to the issue it advanced.
+
+        The worked_on edge (ADR-0018): ``<source_table>:<source_key> ->
+        worked_on -> issues:<gid>``. A missing issue row is first created
+        minimally through the log_issue path so the edge never dangles. On
+        SurrealDB the edge rides the wave-1 mirrored relate funnel (ADR-0016
+        F5), with a check-before-relate so re-saving a session does not
+        duplicate the edge. Whenever the write cannot land on the primary
+        (pure-SQLite, or the degraded fallback -- where relate still mirrors
+        the edge as pending for replay) a parity row in the SQLite worked_on
+        link table keeps graph-based resume working.
+        """
+        if self.get_issue(gid) is None:
+            self.log_issue(gid, f"GitHub issue #{gid}", "issue", "open", None)
+        if self.backend == "surrealdb" or self._surreal_class is not None:
+            if not (
+                self.backend == "surrealdb"
+                and gid in self._worked_on_targets(source_table, source_key)
+            ):
+                self.relate(
+                    "worked_on",
+                    self._rid(source_table, source_key),
+                    self._rid("issues", gid),
+                )
+        if self.backend != "surrealdb":
+            self._sqlite_link_worked_on(source_table, source_key, gid)
+
+    def _worked_on_targets(self, source_table: str, source_key: str) -> List[str]:
+        """github_ids already linked from a source row (live-SurrealDB only).
+
+        Best-effort: any read failure reports no targets, so the caller
+        proceeds to relate (the resilient write path handles the fault).
+        """
+        try:
+            res = self._run_surreal(
+                "SELECT array::distinct(->worked_on->issues.github_id) AS gids "
+                "FROM $node;",
+                {"node": self._rid(source_table, source_key)},
+            )
+            return [str(g) for g in (self._extract_field(res, "gids") or [])]
+        except Exception:
+            return []
+
+    def _sqlite_link_worked_on(
+        self, source_table: str, source_id: str, github_id: str
+    ) -> None:
+        """Write one worked_on parity row; idempotent via the unique link index."""
+        query = (
+            "INSERT OR IGNORE INTO worked_on "
+            "(record_id, source_table, source_id, github_id) VALUES (?, ?, ?, ?)"
+        )
+        try:
+            with self._sqlite_conn() as conn:
+                conn.execute(
+                    query, (self._mint_id("edge"), source_table, source_id, github_id)
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            logging.error(f"Failed to link worked_on: {e}")
+            raise RuntimeError(f"Failed to link worked_on: {e}")
 
     def decision_addresses_issue(self, decision_id: Any, github_id: Any) -> Optional[str]:
         """Record that a decision addresses an issue (decision -[addresses]-> issue)."""
@@ -2852,43 +4125,72 @@ class DatabaseClient:
 
     # --- Timeseries ----------------------------------------------------------
 
-    @_resilient
     def record_metric(self, name: str, value: float, tags: Optional[Dict[str, Any]] = None, at: Any = None) -> Union[str, int, None]:
         """Append one timeseries metric point (name, value, tags, time).
 
-        Works on BOTH backends so statistics survive a SQLite fallback. ``at`` is an
-        optional datetime or ISO-8601 string; it defaults to the current time.
+        Works on BOTH backends so statistics survive a SQLite fallback, and is
+        routed through the durability funnel (kind ``metric``, ADR-0016 F5):
+        during an outage the point lands in the fallback metrics table AND a
+        pending mirror, which reconcile replays to the primary with its
+        ORIGINAL time. ``at`` is an optional datetime or ISO-8601 string; it
+        defaults to the write time, stamped client-side in UTC so the mirror,
+        the fallback row, and the replay all carry the same instant. Returns
+        the client-minted record id on both backends (F7).
         """
-        tags = tags or {}
+        fields = {
+            "name": name,
+            "value": float(value),
+            "tags": tags or {},
+            "time": self._coerce_dt_iso(at) or self._utc_iso(),
+        }
+        return self._write_through(
+            "metric", self._mint_id("metric"), fields, self._db_record_metric
+        )
+
+    @_resilient
+    def _db_record_metric(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Persist a metric point: minted id, idempotent UPSERT on SurrealDB."""
         if self.backend == "surrealdb":
-            if at is None:
-                query = "CREATE metrics CONTENT {name: $name, value: $value, tags: $tags, time: time::now()};"
-                params: Dict[str, Any] = {"name": name, "value": float(value), "tags": tags}
-            else:
-                query = "CREATE metrics CONTENT {name: $name, value: $value, tags: $tags, time: $time};"
-                params = {"name": name, "value": float(value), "tags": tags, "time": self._coerce_dt(at)}
+            query = (
+                "UPSERT $id CONTENT "
+                "{name: $name, value: $value, tags: $tags, time: $time};"
+            )
+            params = {
+                "id": self._rid("metrics", record_id),
+                "name": fields["name"],
+                "value": fields["value"],
+                "tags": fields["tags"],
+                "time": self._coerce_dt(fields["time"]),
+            }
             try:
                 res = self._run_surreal(query, params)
-                return self._extract_id(res)
+                return self._extract_id(res) or record_id
             except _ConnectionLost:
                 raise
             except Exception as e:
                 logging.error(f"Failed to record metric in SurrealDB: {e}")
                 raise RuntimeError(f"Failed to record metric in SurrealDB: {e}")
         else:
-            ts = self._coerce_dt_iso(at)
-            if ts is None:
-                query = "INSERT INTO metrics (name, value, tags) VALUES (?, ?, ?)"
-                args: tuple = (name, float(value), json.dumps(tags))
-            else:
-                query = "INSERT INTO metrics (name, value, tags, time) VALUES (?, ?, ?, ?)"
-                args = (name, float(value), json.dumps(tags), ts)
+            query = (
+                "INSERT INTO metrics (record_id, name, value, tags, time) "
+                "VALUES (?, ?, ?, ?, ?)"
+            )
             try:
                 with self._sqlite_conn() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(query, args)
+                    conn.execute(
+                        query,
+                        (
+                            record_id,
+                            fields["name"],
+                            fields["value"],
+                            json.dumps(fields["tags"]),
+                            fields["time"],
+                        ),
+                    )
                     conn.commit()
-                    return cursor.lastrowid
+                    return record_id
             except sqlite3.Error as e:
                 logging.error(f"Failed to record metric: {e}")
                 raise RuntimeError(f"Failed to record metric: {e}")
@@ -2910,7 +4212,8 @@ class DatabaseClient:
                 clauses.append("time <= $until")
                 params["until"] = self._coerce_dt(until)
             where = " AND ".join(clauses)
-            query = f"SELECT * FROM metrics WHERE {where} ORDER BY time DESC LIMIT {int(limit)};"
+            params["limit"] = int(limit)
+            query = f"SELECT * FROM metrics WHERE {where} ORDER BY time DESC LIMIT $limit;"
             try:
                 res = self._run_surreal(query, params)
                 return self._extract_list(res)
@@ -3001,7 +4304,9 @@ class DatabaseClient:
 
         Returns ``{"total", "failures", "failure_rate"}`` where ``failure_rate`` is
         ``failures / total`` (0.0 when there are no runs). A run counts as a failure
-        when its ``status`` is ``failure``.
+        when its ``status`` is the canonical ``failed`` OR the legacy ``failure``
+        token: rows recorded before the vocabulary fix must not vanish from the
+        metric (#165, ADR-0016).
         """
         self._require_surreal("loop-run aggregation")
         params: Dict[str, Any] = {}
@@ -3010,7 +4315,7 @@ class DatabaseClient:
             where = "WHERE created_at >= $since "
             params["since"] = self._coerce_dt(since)
         query = (
-            f"SELECT count() AS total, count(status = 'failure') AS failures "
+            f"SELECT count() AS total, count(status IN ['failed', 'failure']) AS failures "
             f"FROM loop_runs {where}GROUP ALL;"
         )
         res = self._run_surreal(query, params)
@@ -3030,15 +4335,21 @@ class DatabaseClient:
         and SurrealDB's ``<|k, EF|>`` KNN operator (``ef`` is the search breadth).
         With the default :class:`HashingEmbedder` this is LEXICAL nearness (shared
         tokens), not semantic; swap in a model-backed embedder for true meaning.
-        Results are ``[{"key", "value", "category", "distance"}, ...]`` nearest first.
+        By default the non-semantic categories (the code index, the board
+        history) are excluded so results carry meaning, not file blobs; an
+        explicit ``category`` argument is honored verbatim, including one of the
+        excluded categories (ADR-0016, F6). Results are
+        ``[{"key", "value", "category", "distance"}, ...]`` nearest first.
         """
         self._require_surreal("semantic search")
         q_vec = self._embedder.embed(query)
         params: Dict[str, Any] = {"q": q_vec}
-        cat_clause = ""
         if category is not None:
             cat_clause = "category = $category AND "
             params["category"] = category
+        else:
+            cat_clause = "category NOT IN $excluded AND "
+            params["excluded"] = list(NON_SEMANTIC_MEMORY_CATEGORIES)
         knn = f"<|{int(k)},{int(ef)}|>"
         sql = (
             f"SELECT key, value, category, vector::distance::knn() AS distance "

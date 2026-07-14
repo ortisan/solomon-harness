@@ -179,7 +179,7 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertIsNotNone(handoff)
         self.assertEqual(handoff["sender"], "product_owner")
         self.assertEqual(handoff["recipient"], "scrum_master")
-        self.assertEqual(handoff["status"], "pending")
+        self.assertEqual(handoff["status"], "open")
 
         client.close()
 

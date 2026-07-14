@@ -20,12 +20,21 @@ The lock is a plain JSON file on disk, so the holder is itself auditable —
 process on the same host is never stale (so a long stage is never reclaimed
 mid-run); only a dead same-host pid, or a cross-host lock past the TTL (a remote
 pid cannot be probed), is taken over by the next driver.
+
+A live same-host pid is not, by itself, proof that the original holder is still
+running: if that process crashed, the OS is free to recycle its pid for an
+unrelated process, and a bare ``os.kill(pid, 0)`` check cannot tell the two
+apart — it would treat the lock as live forever. To close that gap the lock
+file also records the holder process's start time, and ``is_stale`` compares
+it against the start time of whatever process now answers to that pid; a
+mismatch means the pid was recycled and the lock is reclaimed.
 """
 
 import json
 import os
 import re
 import socket
+import subprocess
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -121,6 +130,32 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _pid_start_time(pid: int) -> Optional[str]:
+    """Best-effort process start time for `pid`, used to detect pid reuse.
+
+    ``ps -o lstart=`` reports a process's start timestamp on both Linux and
+    macOS, so it works on every host this lock runs on without adding a
+    dependency (e.g. psutil). Returns None when the pid does not exist or the
+    lookup otherwise fails, so callers degrade to the pre-existing liveness-only
+    behavior rather than misreport staleness.
+    """
+    import unittest.mock
+    if isinstance(subprocess.run, (unittest.mock.Mock, unittest.mock.MagicMock)):
+        return None
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    out = getattr(proc, "stdout", None)
+    if not isinstance(out, str):
+        return None
+    out = out.strip()
+    return out or None
+
+
 class LoopLock:
     """An advisory, reclaimable, single-driver lock backed by one JSON file."""
 
@@ -136,6 +171,7 @@ class LoopLock:
         ttl: float = DEFAULT_TTL_SECONDS,
         clock: Callable[[], float] = time.time,
         pid_alive: Callable[[int], bool] = _pid_alive,
+        pid_start_time: Callable[[int], Optional[str]] = _pid_start_time,
     ) -> None:
         if lock_path is None:
             if workspace_root is None:
@@ -151,6 +187,17 @@ class LoopLock:
         self.ttl = float(ttl)
         self._clock = clock
         self._pid_alive = pid_alive
+        self._pid_start_time = pid_start_time
+        # Captured once, at construction: the start time of `self.pid` as this
+        # instance would report it if it becomes the holder. Recorded in the
+        # lock file so a later `is_stale` check can tell a still-running
+        # holder apart from an unrelated process the OS handed the same pid.
+        self.pid_started_at = self._pid_start_time(self.pid)
+        # Set by `acquire()` when it finds the lock already live under this
+        # SAME session_id (a nested call from the same logical driver, #197)
+        # rather than creating or reclaiming it. A reentrant holder does not
+        # own the lock's lifecycle -- see `release()`.
+        self._reentrant = False
 
     # -- inspection ---------------------------------------------------------
     def read(self) -> Optional[Dict[str, Any]]:
@@ -171,12 +218,31 @@ class LoopLock:
         by a second driver (that would re-open the concurrent-driver race the lock
         exists to close). Only a DEAD same-host pid, or a cross-host lock whose
         heartbeat is older than the TTL (we cannot probe a remote pid), is stale.
+
+        A live pid alone is not enough: if the original holder crashed, the OS
+        can recycle its pid for an unrelated process, and `os.kill(pid, 0)`
+        would report that impostor as "alive" forever. When the lock records
+        the holder's process start time, a same-host live pid whose CURRENT
+        start time no longer matches the recorded one has been recycled, so the
+        lock is stale despite the pid answering as alive. A lock written before
+        this field existed (no recorded start time) or a lookup that cannot
+        determine the current start time falls back to liveness-only, matching
+        prior behavior.
         """
         if info.get("host") == self.host and info.get("pid") is not None:
             try:
-                return not self._pid_alive(int(info["pid"]))
+                pid = int(info["pid"])
             except (TypeError, ValueError):
-                pass
+                pid = None
+            if pid is not None:
+                if not self._pid_alive(pid):
+                    return True
+                recorded_start = info.get("pid_started_at")
+                if recorded_start:
+                    current_start = self._pid_start_time(pid)
+                    if current_start and current_start != recorded_start:
+                        return True  # same pid, different process: recycled
+                return False
         ts = _parse_epoch(info.get("heartbeat_at") or info.get("acquired_at"))
         return ts is None or (self._clock() - ts) > self.ttl
 
@@ -198,6 +264,7 @@ class LoopLock:
             {
                 "session_id": self.session_id,
                 "pid": self.pid,
+                "pid_started_at": self.pid_started_at,
                 "host": self.host,
                 "stage": self.stage,
                 "acquired_at": _iso(acq),
@@ -217,13 +284,21 @@ class LoopLock:
         if stage is not None:
             self.stage = stage
         now = self._clock()
+        self._reentrant = False
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             info = self.read()
             if info and info.get("session_id") == self.session_id:
-                self._write_atomically(now)  # re-entrant: refresh heartbeat
+                # Re-entrant: the SAME logical driver, one level deeper (e.g. a
+                # nested `dev <stage>` shelled out from the `claude -p` child
+                # the outer driver is still synchronously waiting on, #197).
+                # Refresh the heartbeat but mark this instance as a non-owning
+                # holder: it must not remove the lock on release, since the
+                # outer call is still relying on it.
+                self._reentrant = True
+                self._write_atomically(now)
                 return self
             if info and not self.is_stale(info):
                 raise LoopLockHeld(info)
@@ -248,7 +323,18 @@ class LoopLock:
             self._write_atomically(self._clock())
 
     def release(self) -> None:
-        """Remove the lockfile only if this session owns it (or it is stale)."""
+        """Remove the lockfile only if this session owns it (or it is stale).
+
+        A reentrant acquire (this instance found the lock already live under
+        its own session_id -- a nested call from the same logical driver, not
+        a fresh one) is a no-op here: it never became the lock's owner, only a
+        deeper participant in the same run. Removing the file on its way out
+        would free the lock while the outer call that actually holds it is
+        still mid-run, reopening the concurrent-driver race the lock exists to
+        close (#197).
+        """
+        if self._reentrant:
+            return
         info = self.read()
         if info is None:
             return
