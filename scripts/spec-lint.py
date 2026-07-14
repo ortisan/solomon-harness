@@ -9,10 +9,13 @@ each appearing at most once. It exits non-zero and prints one stderr line per
 missing, duplicated, or out-of-order heading. On success it prints ``OK`` and
 exits zero.
 
-Run it against a single file or a directory:
+Run it against a single file or a directory (the path defaults to
+``docs/specs``, mirroring ``scripts/check-adr-unique.py``'s zero-arg
+convention):
 
     python scripts/spec-lint.py docs/specs/12-add-widget.md
     python scripts/spec-lint.py docs/specs
+    python scripts/spec-lint.py
 """
 
 from __future__ import annotations
@@ -106,10 +109,14 @@ def check_directory(spec_dir: Path) -> list[str]:
 
     A malformed filename (no leading issue-number prefix) is reported and its
     section check is skipped, mirroring check-adr-unique.py's `continue` after
-    a filename miss (no redundant double-report for the same file).
+    a filename miss (no redundant double-report for the same file). A symlink
+    is skipped outright (not read, not reported) so the scan can never be
+    tricked into following a link out of docs/specs.
     """
     errors: list[str] = []
     for path in sorted(spec_dir.glob("*.md")):
+        if path.is_symlink():
+            continue
         if path.name in EXCLUDED:
             continue
         if not FILENAME_RE.match(path.name):
@@ -123,7 +130,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check spec document(s) carry every canonical section heading."
     )
-    parser.add_argument("path", help="A spec markdown file or a docs/specs-shaped directory.")
+    default_dir = Path(__file__).resolve().parent.parent / "docs" / "specs"
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=str(default_dir),
+        help="A spec markdown file or a docs/specs-shaped directory (default: docs/specs).",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.path)

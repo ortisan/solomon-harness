@@ -144,6 +144,31 @@ def test_nonexistent_path_fails_cleanly(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+def test_no_path_argument_defaults_to_docs_specs():
+    # Mirrors check-adr-unique.py's zero-arg convention, so the CI call
+    # (`scripts/spec-lint.py docs/specs`) is not the only way to invoke it.
+    result = _run()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
+
+
+def test_directory_scan_skips_symlinks(tmp_path):
+    # A symlink inside docs/specs pointing at a malformed file outside it
+    # must not be followed by the scan: it is skipped outright rather than
+    # reported as a bad spec, so the scan cannot be tricked into reading
+    # arbitrary files reachable via a link.
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-target.md"
+    outside.write_text("not a spec, no headings at all\n", encoding="utf-8")
+    link = tmp_path / "1-linked.md"
+    link.symlink_to(outside)
+
+    result = _run(str(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
+
+
 # --- House template and convention doc --------------------------------------
 
 
