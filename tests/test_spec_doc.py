@@ -95,3 +95,86 @@ def test_parse_issue_sections_ignores_leading_preamble():
 def test_section_headings_match_spec_lint():
     spec_lint = _load_spec_lint()
     assert spec_lint.SECTION_HEADINGS == spec_doc.SECTION_HEADINGS
+
+
+# --- render_spec ---------------------------------------------------------------
+
+FULL_ISSUE_BODY = """\
+Parent: #221 · Milestone: spec-driven-docs · Estimate: 8 (L)
+
+## Problem statement
+
+An issue's intent lives only in its GitHub description today.
+
+## User story
+
+As a software_engineer picking up a Ready issue, I want a structured spec
+document generated at creation time.
+
+## Acceptance criteria
+
+```gherkin
+Scenario: A new issue generates a spec-driven document
+  Given a harness-installed project
+  When an author runs /solomon-issue
+  Then a file exists at docs/specs/<N>-<slug>.md
+```
+
+## Scope
+
+In scope:
+- Author the house spec template.
+- Wire /solomon-issue's step 5 to generate it.
+
+Out of scope (and why):
+- Backfilling historical issues — forward-looking only.
+- Publishing specs to the wiki — separate follow-up.
+
+## Definition of Ready
+
+- INVEST met as a single vertical slice.
+- Non-functional constraint: spec generation adds < 2s.
+"""
+
+
+def _rendered_sections(markdown: str) -> dict[str, str]:
+    return spec_doc.parse_issue_sections(markdown)
+
+
+def test_render_spec_maps_full_body_onto_all_seven_sections():
+    rendered = spec_doc.render_spec(226, "Spec doc per issue", FULL_ISSUE_BODY)
+    sections = _rendered_sections(rendered)
+
+    assert sections["context"] == (
+        "As a software_engineer picking up a Ready issue, I want a structured spec\n"
+        "document generated at creation time."
+    )
+    assert sections["problem"] == "An issue's intent lives only in its GitHub description today."
+    assert "Scenario: A new issue generates a spec-driven document" in sections["acceptance criteria"]
+    assert sections["requirements"] == (
+        "- Author the house spec template.\n- Wire /solomon-issue's step 5 to generate it."
+    )
+    assert sections["out of scope"] == (
+        "- Backfilling historical issues — forward-looking only.\n"
+        "- Publishing specs to the wiki — separate follow-up."
+    )
+    assert sections["design constraints"] == (
+        "- INVEST met as a single vertical slice.\n"
+        "- Non-functional constraint: spec generation adds < 2s."
+    )
+
+
+def test_render_spec_traceability_with_adr_ref():
+    rendered = spec_doc.render_spec(
+        226, "Spec doc per issue", FULL_ISSUE_BODY, adr_ref="ADR-0024: Spec-driven docs"
+    )
+    sections = _rendered_sections(rendered)
+
+    assert sections["traceability"] == "Issue: #226\nADR-0024: Spec-driven docs"
+
+
+def test_render_spec_traceability_without_adr_ref():
+    rendered = spec_doc.render_spec(226, "Spec doc per issue", FULL_ISSUE_BODY, adr_ref=None)
+    sections = _rendered_sections(rendered)
+
+    assert sections["traceability"] == "Issue: #226\nNo related ADR"
