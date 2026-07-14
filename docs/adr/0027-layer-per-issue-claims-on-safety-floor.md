@@ -20,6 +20,7 @@ In a concurrent development environment where multiple sessions (both headless c
 
 - **Option 1: Replace the repo-wide lock with per-issue claims.** Completely discard the repo-wide lock in favor of per-issue lease files/records.
 - **Option 2: Layer per-issue claims on top of the repo-wide lock.** Keep the repo-wide lock to serialize headless cadence runs (preventing git/workspace/hook races) and add per-issue claims to isolate issues across all runs (including interactive developers or different worktrees).
+- **Rejected: SurrealDB compare-and-set as the mutual-exclusion authority.** Raised during the #51 refinement; rejected because ADR-0010 already ruled out database-backed guards for exactly this arbitration job: under the SQLite fallback each worktree has its own database file, so no database write can arbitrate cross-worktree exclusion. The memory layer keeps a best-effort mirror for queryability only.
 
 ## Decision outcome
 
@@ -30,7 +31,7 @@ Chosen option: **Option 2 (Layer)**, because it preserves the repository-level s
 - Positive: Enables safe parallel sessions by preventing double-picking at the issue level. An issue is leased to a session id; concurrent sessions attempting to start or loop-scan it will skip or reject it.
 - Negative: Additional complexity of managing two distinct locking/leasing mechanisms (repo-wide single-driver lock vs per-issue claim/lease).
 - Follow-ups:
-  - Implement claim acquisition in `solomon-start`, filter in `solomon-loop`, claim cleanup on merge/release, stale reclaim via a 30-minute heartbeat TTL, and CLI commands `claim status` / `claim release`.
+  - Implement claim acquisition in `solomon-start`, filter in `solomon-loop`, claim cleanup on merge/release, stale reclaim via a 30-minute heartbeat TTL, and CLI commands `claim status` / `claim release` (shipped).
   - Heartbeat writer (shipped): a `start` stage that runs longer than the claim TTL before a PR exists must not become reclaimable mid-implementation. `workflows.run_stage` spawns a daemon thread after a successful claim that periodically calls `claim.refresh_claim` (default every 600 seconds, overridable via `SOLOMON_CLAIM_HEARTBEAT_INTERVAL_SECONDS`), and stops it in a `finally` block regardless of how the stage ends.
   - Fail-closed reclaim (shipped): a reclaim decision that cannot confirm the issue's PR/review liveness (a `gh` failure, not merely "no PR found") must never steal an existing claim. `claim_issue` treats a liveness check that could not be determined as if the existing claim were still active; only a verifiably unclaimed issue, or the same session re-entering its own claim, proceeds regardless of liveness uncertainty.
   - A `ClaimStore` port/hexagonal extraction (separating the git-CAS mechanics behind an interface) is tracked separately and intentionally deferred; this ADR's implementation keeps the claim logic as a single `solomon_harness/claim.py` module.

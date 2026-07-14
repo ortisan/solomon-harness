@@ -87,6 +87,7 @@ auditable record are guaranteed.
 | Piece | Where |
 | --- | --- |
 | Single-driver lock (git-common-dir anchor, O_EXCL, heartbeat TTL, reclaim) | `solomon_harness/loop_lock.py` |
+| Per-issue claim/lease (git-ref CAS, TTL + heartbeat, fail-closed reclaim) | `solomon_harness/claim.py` |
 | Portable gate for mutating stages | `run_stage` in `solomon_harness/workflows.py` |
 | PreToolUse guard (Claude-only, fail-open) | `loop-guard` + `.claude/settings.json` |
 | Lock inspection / recovery | `solomon-harness loop-lock status` / `release` |

@@ -190,12 +190,22 @@ def is_claim_active(
         # active" here too, never crash the `start` gate.
         return False
 
-def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str, Dict[str, Any]]]:
-    """Fetch the claim ref from origin and return (sha, parsed_metadata) or None."""
+def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str, Optional[Dict[str, Any]]]]:
+    """Fetch the claim ref from origin and return its state.
+
+    Returns ``None`` when no claim ref exists or it cannot be fetched,
+    ``(sha, claim_dict)`` for a well-formed claim, and ``(sha, None)`` when
+    the ref EXISTS but its content is malformed. The malformed case must stay
+    distinguishable from "no ref": collapsing the two made a poisoned ref
+    permanently unclaimable (the CAS then used the ref-must-not-exist lease
+    and always lost) while ``claim release`` reported success without ever
+    deleting the real ref. Callers treat a malformed ref as recoverable --
+    reclaimable and deletable via CAS against its sha.
+    """
     ref = f"refs/claims/issue-{issue_number}"
     remote_ref = f"refs/remotes/origin/claims/issue-{issue_number}"
     env = clean_git_env(workspace_root)
-    
+
     res = _run_git(["git", "fetch", "-q", "origin", f"+{ref}:{remote_ref}"], workspace_root, env)
     if res.returncode != 0:
         return None
@@ -205,18 +215,27 @@ def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str,
         return None
     sha_stdout = getattr(sha_res, "stdout", "") or ""
     sha = sha_stdout.strip()
-    
+
     msg_res = _run_git(["git", "log", "-1", "--format=%B", remote_ref], workspace_root, env)
     if msg_res.returncode != 0:
         return None
-        
+
     msg_stdout = getattr(msg_res, "stdout", "") or ""
     claim_dict = parse_claim_commit_message(msg_stdout.strip())
-    if claim_dict:
-        return sha, claim_dict
-    return None
+    if claim_dict is None:
+        logger.warning(
+            "issue #%s: claim ref exists but its content is malformed; "
+            "treating it as a recoverable (reclaimable, deletable) claim.",
+            issue_number,
+        )
+        return sha, None
+    return sha, claim_dict
 
-def _pr_liveness(workspace_root: str, issue_number: int) -> Tuple[bool, bool]:
+def _pr_liveness(
+    workspace_root: str,
+    issue_number: int,
+    board_items: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[bool, bool]:
     """Determine whether the issue is PR/review-protected against reclaim.
 
     Returns ``(protected, uncertain)``:
@@ -228,11 +247,15 @@ def _pr_liveness(workspace_root: str, issue_number: int) -> Tuple[bool, bool]:
       question itself failed (``ok: False`` or an unexpected error) --
       distinct from a call that succeeded and simply found nothing (a closed
       issue, no board, no matching card). A gh failure must never be
-      silently read as "not protected": ``claim_issue``'s reclaim path fails
-      closed on ``uncertain`` (B5b) so a transient gh outage can never let a
-      live claim be stolen.
+      silently read as "not protected": ``claim_issue``'s reclaim path and
+      ``release_claim``'s non-force path fail closed on ``uncertain`` (B5b)
+      so a transient gh outage can never let a live claim be stolen or
+      casually released.
+
+    ``board_items`` lets a caller that checks many issues fetch the board
+    once via ``fetch_board_items`` and share it; ``None`` fetches here.
     """
-    from solomon_harness.github import repo_owner, board_title, find_project, _gh
+    from solomon_harness.github import _gh
 
     issue_res = _gh(["issue", "view", str(issue_number), "--json", "state"], parse_json=True)
     if not issue_res.get("ok"):
@@ -247,56 +270,71 @@ def _pr_liveness(workspace_root: str, issue_number: int) -> Tuple[bool, bool]:
     if data and data.get("state") == "CLOSED":
         return False, False
 
+    if board_items is None:
+        board_items = fetch_board_items(workspace_root)
+    if board_items is None:
+        return False, True
+    for item in board_items:
+        content = item.get("content", {})
+        if content.get("number") == issue_number:
+            status = item.get("status")
+            if status in ("Code Review", "QA"):
+                return True, False
+    return False, False
+
+
+def fetch_board_items(workspace_root: str) -> Optional[List[Dict[str, Any]]]:
+    """Fetch the project board item list once, for reuse across liveness checks.
+
+    Returns the item list ([] when there is verifiably no board to consult),
+    or ``None`` when a ``gh`` call needed to answer failed -- the uncertain
+    state, which safety callers treat fail-closed. Exists so a scan over N
+    claimed issues costs one board fetch, not N (the board list was
+    re-fetched per issue before, an N+1 on the session-start hot path).
+    """
+    from solomon_harness.github import repo_owner, board_title, find_project, _gh
+
     try:
         owner = repo_owner()
         title = board_title()
         if not owner or not title:
-            return False, False
+            return []
         project = find_project(owner, title)
         if not project:
-            return False, False
+            return []
         board_res = _gh(
             ["project", "item-list", str(project.get("number")), "--owner", owner, "--format", "json"],
             parse_json=True,
         )
         if not board_res.get("ok"):
             logger.warning(
-                "issue #%s: could not list board items (%s); PR/review "
-                "liveness is uncertain.",
-                issue_number,
+                "could not list board items (%s); PR/review liveness is uncertain.",
                 board_res.get("error"),
             )
-            return False, True
-        items = (board_res.get("data") or {}).get("items", [])
-        for item in items:
-            content = item.get("content", {})
-            if content.get("number") == issue_number:
-                status = item.get("status")
-                if status in ("Code Review", "QA"):
-                    return True, False
+            return None
+        return (board_res.get("data") or {}).get("items", [])
     except Exception as exc:  # noqa: BLE001 - degrade, but never silently
-        logger.warning(
-            "issue #%s: PR/review liveness check degraded (%s); treating as "
-            "uncertain.",
-            issue_number,
-            exc,
-        )
-        return False, True
-    return False, False
+        logger.warning("board fetch for liveness degraded (%s); treating as uncertain.", exc)
+        return None
 
 
-def has_active_pr_or_review(workspace_root: str, issue_number: int) -> bool:
+def has_active_pr_or_review(
+    workspace_root: str,
+    issue_number: int,
+    board_items: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
     """Check if the issue is closed or has active review status on the project board.
 
     Returns True only when confirmed protected. A ``gh`` failure degrades to
     False here -- the pre-existing, advisory-only contract this bool has
     always had for its read-only callers (the claim-gate status message in
-    ``run_stage``, MemoryService's best-effort issue filter). The RECLAIM
-    decision inside ``claim_issue`` does not rely on this bool alone: see
-    ``_pr_liveness``, which it calls directly to get the ``uncertain`` flag
-    too.
+    ``run_stage``, the best-effort issue filters). The RECLAIM and non-force
+    RELEASE decisions do not rely on this bool alone: see ``_pr_liveness``,
+    which they call directly to get the ``uncertain`` flag too.
+    ``board_items`` lets a caller checking many issues fetch the board once
+    via ``fetch_board_items`` and share it.
     """
-    protected, _uncertain = _pr_liveness(workspace_root, issue_number)
+    protected, _uncertain = _pr_liveness(workspace_root, issue_number, board_items=board_items)
     return protected
 
 def get_claim(workspace_root: str, issue_number: int) -> Optional[Dict[str, Any]]:
@@ -318,6 +356,39 @@ def _mktree_commit(workspace_root: str, claim_data: Dict[str, Any], env: Dict[st
     if commit_res.returncode != 0:
         return None
     return (getattr(commit_res, "stdout", "") or "").strip()
+
+
+def _audit_claim_event(workspace_root: str, issue_number: int, event: str, session_id: str, detail: str = "") -> None:
+    """Durable, best-effort audit of a claim lifecycle event.
+
+    The mirror key is last-write-wins state; this appends one row per event
+    (granted, reclaimed, denied, released, force-released, denied-release,
+    heartbeat-lost, malformed-recovered) so a takeover or refusal can be
+    reconstructed after the fact -- the forensic trail the concurrent-driver
+    incidents needed. Also emitted at INFO level so the process log carries
+    the same trail. Never raises and never gates a claim decision.
+    """
+    logger.info("claim %s: issue #%s session %s %s", event, issue_number, session_id, detail)
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            db.save_memory(
+                key=f"claim-event:issue-{issue_number}:{stamp}",
+                value=json.dumps(
+                    {
+                        "issue": issue_number,
+                        "event": event,
+                        "session_id": session_id,
+                        "detail": detail,
+                        "at": stamp,
+                    }
+                ),
+                category="claim_event",
+            )
+    except Exception as exc:  # noqa: BLE001 - audit is best-effort, never gates a claim
+        logger.warning("issue #%s: claim audit write failed (%s).", issue_number, exc)
 
 
 def _mirror_claim(workspace_root: str, issue_number: int, claim_data: Dict[str, Any]) -> None:
@@ -402,25 +473,41 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
     ref_info = get_claim_ref(workspace_root, issue_number)
 
     existing_sha = None
+    reclaiming_malformed = False
     if ref_info:
         existing_sha = ref_info[0]
         active_claim = ref_info[1]
-        protected, uncertain = _pr_liveness(workspace_root, issue_number)
-        if uncertain and active_claim.get("session_id") != current_session_id:
-            # Fail closed (B5b): a transient gh error must never let a live
-            # claim be reclaimed. Only an EXISTING claim is protected this
-            # way -- a fresh claim on a verifiably-unclaimed issue (ref_info
-            # is None) never reaches this branch and still proceeds, and
-            # same-session re-entry is unaffected (it never needed liveness).
-            logger.warning(
-                "issue #%s: PR/review liveness could not be determined; "
-                "refusing to reclaim the existing claim held by session %s.",
-                issue_number,
-                active_claim.get("session_id"),
-            )
-            return False
-        if is_claim_active(active_claim, current_session_id, has_open_pr=protected):
-            return False
+        if active_claim is None:
+            # A malformed ref carries no owner to respect and no heartbeat to
+            # honor: reclaim it via CAS against its sha (the lease still makes
+            # exactly one concurrent reclaimer win). Leaving it in place made
+            # the issue permanently unclaimable.
+            reclaiming_malformed = True
+        else:
+            protected, uncertain = _pr_liveness(workspace_root, issue_number)
+            if uncertain and active_claim.get("session_id") != current_session_id:
+                # Fail closed (B5b): a transient gh error must never let a live
+                # claim be reclaimed. Only an EXISTING claim is protected this
+                # way -- a fresh claim on a verifiably-unclaimed issue (ref_info
+                # is None) never reaches this branch and still proceeds, and
+                # same-session re-entry is unaffected (it never needed liveness).
+                logger.warning(
+                    "issue #%s: PR/review liveness could not be determined; "
+                    "refusing to reclaim the existing claim held by session %s.",
+                    issue_number,
+                    active_claim.get("session_id"),
+                )
+                _audit_claim_event(
+                    workspace_root, issue_number, "denied", current_session_id,
+                    detail=f"liveness uncertain; holder {active_claim.get('session_id')}",
+                )
+                return False
+            if is_claim_active(active_claim, current_session_id, has_open_pr=protected):
+                _audit_claim_event(
+                    workspace_root, issue_number, "denied", current_session_id,
+                    detail=f"active claim held by {active_claim.get('session_id')}",
+                )
+                return False
 
     now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
     claim_data = {
@@ -445,6 +532,13 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
         return False
 
     _mirror_claim(workspace_root, issue_number, claim_data)
+    if reclaiming_malformed:
+        event, detail = "malformed-recovered", "reclaimed over a malformed claim ref"
+    elif existing_sha:
+        event, detail = "reclaimed", "took over a stale claim"
+    else:
+        event, detail = "granted", ""
+    _audit_claim_event(workspace_root, issue_number, event, current_session_id, detail=detail)
 
     # Assign issue to harness user on GitHub
     from solomon_harness.github import _gh
@@ -466,9 +560,37 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
         return True
 
     sha, claim_data = ref_info
-    has_pr = has_active_pr_or_review(workspace_root, issue_number)
-    if not force and claim_data.get("session_id") != current_session_id and is_claim_active(claim_data, current_session_id, has_open_pr=has_pr):
-        return False
+    if claim_data is None:
+        # Malformed ref: there is no owner to protect, but the release must
+        # actually DELETE the ref -- reporting success while the poisoned ref
+        # survives was the false-recovery bug. force is irrelevant here.
+        pass
+    elif not force and claim_data.get("session_id") != current_session_id:
+        protected, uncertain = _pr_liveness(workspace_root, issue_number)
+        if uncertain:
+            # Fail closed, mirroring claim_issue's reclaim path: when the
+            # PR/review liveness of a foreign claim cannot be determined, a
+            # non-force release must refuse rather than assume unprotected --
+            # otherwise a transient gh outage lets the release door defeat the
+            # same invariant the reclaim door guards (B5b).
+            logger.warning(
+                "issue #%s: PR/review liveness could not be determined; "
+                "refusing to release the claim held by session %s without "
+                "--force.",
+                issue_number,
+                claim_data.get("session_id"),
+            )
+            _audit_claim_event(
+                workspace_root, issue_number, "denied-release", current_session_id,
+                detail=f"liveness uncertain; holder {claim_data.get('session_id')}",
+            )
+            return False
+        if is_claim_active(claim_data, current_session_id, has_open_pr=protected):
+            _audit_claim_event(
+                workspace_root, issue_number, "denied-release", current_session_id,
+                detail=f"active claim held by {claim_data.get('session_id')}",
+            )
+            return False
 
     ref = f"refs/claims/issue-{issue_number}"
     env = clean_git_env(workspace_root)
@@ -477,6 +599,12 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
         return False
 
     _clear_claim_mirror(workspace_root, issue_number)
+    _audit_claim_event(
+        workspace_root, issue_number,
+        "force-released" if force else "released",
+        current_session_id,
+        detail="malformed ref deleted" if claim_data is None else "",
+    )
 
     from solomon_harness.github import _gh
     _gh(["issue", "edit", str(issue_number), "--remove-assignee", "@me"])
@@ -517,6 +645,18 @@ def refresh_claim(workspace_root: str, issue_number: int, session_id: str) -> bo
         )
         return True
     sha, claim_data = ref_info
+    if claim_data is None:
+        # The ref now carries malformed content: whatever happened, it is no
+        # longer provably this session's claim -- a confirmed loss, not a
+        # transient blip.
+        logger.warning(
+            "issue #%s: claim ref content is no longer parseable while "
+            "refreshing for session %s; stopping the heartbeat.",
+            issue_number,
+            session_id,
+        )
+        _audit_claim_event(workspace_root, issue_number, "heartbeat-lost", session_id, detail="ref content malformed")
+        return False
     if claim_data.get("session_id") != session_id:
         logger.warning(
             "issue #%s: claim is now held by session %s, not %s; stopping "
@@ -524,6 +664,10 @@ def refresh_claim(workspace_root: str, issue_number: int, session_id: str) -> bo
             issue_number,
             claim_data.get("session_id"),
             session_id,
+        )
+        _audit_claim_event(
+            workspace_root, issue_number, "heartbeat-lost", session_id,
+            detail=f"claim now held by {claim_data.get('session_id')}",
         )
         return False
 
@@ -625,13 +769,21 @@ def filter_unclaimed(
         )
         return list(issue_numbers)
 
+    # One board fetch shared across every liveness check in this scan; the
+    # per-issue re-fetch was an N+1 on the session-start hot path.
+    board_items: Optional[List[Dict[str, Any]]] = None
+    board_fetched = False
+
     unclaimed: List[int] = []
     for number in issue_numbers:
         claim_data = claims.get(number)
         if claim_data is None:
             unclaimed.append(number)
             continue
-        has_pr = has_active_pr_or_review(workspace_root, number)
+        if not board_fetched:
+            board_items = fetch_board_items(workspace_root)
+            board_fetched = True
+        has_pr = has_active_pr_or_review(workspace_root, number, board_items=board_items)
         if is_claim_active(claim_data, current_session_id, has_open_pr=has_pr):
             continue
         unclaimed.append(number)

@@ -18,6 +18,13 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   and open the artifacts it points to (the refined issue, acceptance criteria) only when you need them,
   instead of re-deriving prior context.
 - `gh issue view $ARGUMENTS` to read the title, body, acceptance criteria, and labels.
+- Acquire the per-issue claim BEFORE creating any branch, PLAN, or worktree (ADR-0027 —
+  interactive sessions get the same mutual exclusion as headless runs):
+  `uv run solomon-harness claim acquire $ARGUMENTS`. A non-zero exit means another live
+  session holds the issue (the error names the holder and claim age) or its liveness
+  could not be confirmed — STOP and report that to the user; do not proceed, do not
+  release the other session's claim. The claim is released automatically on merge, by a
+  failed headless run, or manually with `solomon-harness claim release $ARGUMENTS`.
 - `mcp__solomon-memory__get_issue("$ARGUMENTS")` for prior context; check the card is in
   `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
 - Derive a kebab `<slug>` from the issue title. Choose `feature/` if labeled `type:feature`

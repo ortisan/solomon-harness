@@ -485,22 +485,45 @@ class TestClaimGitOperations(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     @patch("solomon_harness.claim.claim_issue")
+    @patch("solomon_harness.claim.get_claim_ref")
     @patch("solomon_harness.claim.is_claim_active")
     @patch("solomon_harness.claim.get_claim")
     @patch("solomon_harness.workflows._read_command_file")
     def test_run_stage_start_refuses_when_claim_issue_refuses_with_ref_present(
-        self, mock_read, mock_get, mock_active, mock_claim_issue
+        self, mock_read, mock_get, mock_active, mock_get_ref, mock_claim_issue
     ):
         # BLOCKER regression: when claim_issue fails closed (an active claim, or
         # PR/review liveness it could not confirm), run_stage must refuse -- not
         # fall through to "proceeding without one" because a weaker TTL-only
         # recheck reads the stale claim as inactive. Any ref still present after
-        # a refusal means: do not start.
+        # a refusal means: do not start. The recheck reads the REF (not the
+        # parsed claim), so a malformed ref also refuses.
         from solomon_harness import workflows
         mock_read.return_value = "---\nallowed-tools: Bash\n---\nbody"
         mock_active.return_value = False  # pre-check must not block; we reach claim_issue
         mock_get.return_value = {"session_id": "other-session", "acquired_at": "2026-07-06T00:00:00Z"}
+        mock_get_ref.return_value = ("sha1", {"session_id": "other-session", "acquired_at": "2026-07-06T00:00:00Z"})
         mock_claim_issue.return_value = False  # claim_issue fails closed
+        rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+        self.assertEqual(rc, 1)
+
+    @patch("solomon_harness.claim.claim_issue")
+    @patch("solomon_harness.claim.get_claim_ref")
+    @patch("solomon_harness.claim.is_claim_active")
+    @patch("solomon_harness.claim.get_claim")
+    @patch("solomon_harness.workflows._read_command_file")
+    def test_run_stage_start_refuses_on_malformed_ref_after_refusal(
+        self, mock_read, mock_get, mock_active, mock_get_ref, mock_claim_issue
+    ):
+        # A ref whose content is malformed still means "a ref is present":
+        # after a claim_issue refusal the stage must refuse, never proceed
+        # claimless past a poisoned ref.
+        from solomon_harness import workflows
+        mock_read.return_value = "---\nallowed-tools: Bash\n---\nbody"
+        mock_active.return_value = False
+        mock_get.return_value = None
+        mock_get_ref.return_value = ("sha1", None)
+        mock_claim_issue.return_value = False
         rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
         self.assertEqual(rc, 1)
 
@@ -572,8 +595,363 @@ class TestClaimGitOperations(unittest.TestCase):
         mock_release.return_value = True
         
         main(harness_dir=self.local, argv=["claim", "release", "99"])
-        mock_release.assert_called_once_with(self.local, 99, current_session_id=unittest.mock.ANY)
+        mock_release.assert_called_once_with(
+            self.local, 99, current_session_id=unittest.mock.ANY, force=False
+        )
         self.assertIn("Released claim on issue #99.", mock_stdout.getvalue())
+
+    @patch("sys.stdout", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.release_claim")
+    def test_cli_claim_release_force_flag_passes_through(self, mock_release, mock_stdout):
+        from solomon_harness.cli import main
+        mock_release.return_value = True
+
+        main(harness_dir=self.local, argv=["claim", "release", "99", "--force"])
+        mock_release.assert_called_once_with(
+            self.local, 99, current_session_id=unittest.mock.ANY, force=True
+        )
+
+    @patch("sys.stdout", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.claim_issue")
+    def test_cli_claim_acquire_success(self, mock_claim, mock_stdout):
+        from solomon_harness.cli import main
+        mock_claim.return_value = True
+
+        main(harness_dir=self.local, argv=["claim", "acquire", "99"])
+        mock_claim.assert_called_once()
+        self.assertIn("Claimed issue #99", mock_stdout.getvalue())
+
+    @patch("sys.stderr", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.get_claim")
+    @patch("solomon_harness.claim.claim_issue")
+    def test_cli_claim_acquire_refused_names_holder_and_exits_1(
+        self, mock_claim, mock_get, mock_stderr
+    ):
+        from solomon_harness.cli import main
+        mock_claim.return_value = False
+        mock_get.return_value = {
+            "session_id": "other-session",
+            "acquired_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+
+        with self.assertRaises(SystemExit) as ctx:
+            main(harness_dir=self.local, argv=["claim", "acquire", "99"])
+        self.assertEqual(ctx.exception.code, 1)
+        err = mock_stderr.getvalue()
+        self.assertIn("other-session", err)
+        self.assertIn("age:", err)
+
+
+class TestMalformedClaimRefRecovery(unittest.TestCase):
+    """A poisoned refs/claims/issue-N blob must be recoverable, not a
+    permanent, silently-lying denial of service (review finding 215-m1,
+    reproduced live against a bare origin)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.origin = os.path.join(self.tmp, "origin.git")
+        self.local = os.path.join(self.tmp, "local")
+        _git(None, "init", "--bare", "-q", self.origin)
+        _git(None, "clone", "-q", self.origin, self.local)
+        _git(self.local, "config", "user.email", "t@example.com")
+        _git(self.local, "config", "user.name", "Test")
+        with open(os.path.join(self.local, "README.md"), "w") as f:
+            f.write("test")
+        _git(self.local, "add", "README.md")
+        _git(self.local, "commit", "-q", "-m", "initial commit")
+        _git(self.local, "push", "-q", "origin", "HEAD:refs/heads/main")
+        for target, kwargs in (
+            ("solomon_harness.claim.has_active_pr_or_review", {"return_value": False}),
+            ("solomon_harness.github._gh", {"return_value": {"ok": True, "stdout": ""}}),
+        ):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _push_garbage_claim(self, issue: int) -> None:
+        tree_sha = _git(self.local, "write-tree").stdout.strip()
+        commit_sha = _git(
+            self.local, "commit-tree", "-m", "not json at all, garbage claim blob", tree_sha
+        ).stdout.strip()
+        _git(self.local, "push", "-q", "origin", f"{commit_sha}:refs/claims/issue-{issue}")
+
+    def _ref_on_origin(self, issue: int) -> bool:
+        res = _git(self.local, "ls-remote", "origin", f"refs/claims/issue-{issue}")
+        return f"refs/claims/issue-{issue}" in (res.stdout or "")
+
+    def test_get_claim_ref_distinguishes_malformed_from_absent(self):
+        self.assertIsNone(claim.get_claim_ref(self.local, 777))
+        self._push_garbage_claim(777)
+        ref_info = claim.get_claim_ref(self.local, 777)
+        self.assertIsNotNone(ref_info)
+        sha, claim_dict = ref_info
+        self.assertTrue(sha)
+        self.assertIsNone(claim_dict)
+
+    def test_malformed_ref_is_reclaimable(self):
+        self._push_garbage_claim(777)
+        self.assertTrue(claim.claim_issue(self.local, 777, current_session_id="sess-b"))
+        c = claim.get_claim(self.local, 777)
+        self.assertIsNotNone(c)
+        self.assertEqual(c["session_id"], "sess-b")
+
+    def test_release_actually_deletes_a_malformed_ref(self):
+        # The false-recovery regression: release must delete the poisoned ref,
+        # not report success while it survives on origin.
+        self._push_garbage_claim(777)
+        self.assertTrue(claim.release_claim(self.local, 777, current_session_id="sess-b"))
+        self.assertFalse(self._ref_on_origin(777))
+
+
+class TestReleaseFailClosed(unittest.TestCase):
+    """release_claim must guard the same PR/review invariant claim_issue's
+    reclaim path guards (review finding 215-m2): fail closed on liveness
+    uncertainty, refuse a foreign ACTIVE claim without --force."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.origin = os.path.join(self.tmp, "origin.git")
+        self.local = os.path.join(self.tmp, "local")
+        _git(None, "init", "--bare", "-q", self.origin)
+        _git(None, "clone", "-q", self.origin, self.local)
+        _git(self.local, "config", "user.email", "t@example.com")
+        _git(self.local, "config", "user.name", "Test")
+        with open(os.path.join(self.local, "README.md"), "w") as f:
+            f.write("test")
+        _git(self.local, "add", "README.md")
+        _git(self.local, "commit", "-q", "-m", "initial commit")
+        _git(self.local, "push", "-q", "origin", "HEAD:refs/heads/main")
+        gh_patcher = patch(
+            "solomon_harness.github._gh", return_value={"ok": True, "stdout": ""}
+        )
+        gh_patcher.start()
+        self.addCleanup(gh_patcher.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _ref_on_origin(self, issue: int) -> bool:
+        res = _git(self.local, "ls-remote", "origin", f"refs/claims/issue-{issue}")
+        return f"refs/claims/issue-{issue}" in (res.stdout or "")
+
+    def test_release_refuses_foreign_active_claim_without_force(self):
+        self.assertTrue(claim.claim_issue(self.local, 88, current_session_id="sess-a"))
+        with patch("solomon_harness.claim._pr_liveness", return_value=(False, False)):
+            self.assertFalse(claim.release_claim(self.local, 88, current_session_id="sess-b"))
+        self.assertTrue(self._ref_on_origin(88))
+
+    def test_release_fails_closed_when_liveness_uncertain(self):
+        # Even a TTL-stale foreign claim must not be releasable while its
+        # PR/review protection cannot be confirmed.
+        past = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=40)
+        ).isoformat()
+        stale = {"session_id": "sess-a", "acquired_at": past, "heartbeat_at": past}
+        tree_sha = _git(self.local, "write-tree").stdout.strip()
+        commit_sha = _git(self.local, "commit-tree", "-m", json.dumps(stale), tree_sha).stdout.strip()
+        _git(self.local, "push", "-q", "origin", f"{commit_sha}:refs/claims/issue-88")
+
+        with patch("solomon_harness.claim._pr_liveness", return_value=(False, True)):
+            self.assertFalse(claim.release_claim(self.local, 88, current_session_id="sess-b"))
+        self.assertTrue(self._ref_on_origin(88))
+
+    def test_force_release_clears_foreign_active_claim(self):
+        self.assertTrue(claim.claim_issue(self.local, 88, current_session_id="sess-a"))
+        self.assertTrue(
+            claim.release_claim(self.local, 88, current_session_id="sess-b", force=True)
+        )
+        self.assertFalse(self._ref_on_origin(88))
+
+
+class TestPrLivenessBoardPaths(unittest.TestCase):
+    """The confirmed-protected and degrade paths of _pr_liveness (review
+    finding 215-b4: these lines had zero coverage), plus the shared board
+    fetch that removes the per-issue N+1 (215-m6)."""
+
+    def test_confirmed_protected_when_board_card_in_code_review(self):
+        board = [{"content": {"number": 99}, "status": "Code Review"}]
+        with patch(
+            "solomon_harness.github._gh",
+            return_value={"ok": True, "data": {"state": "OPEN"}},
+        ):
+            protected, uncertain = claim._pr_liveness("/tmp", 99, board_items=board)
+        self.assertTrue(protected)
+        self.assertFalse(uncertain)
+
+    def test_uncertain_when_board_fetch_fails(self):
+        with (
+            patch(
+                "solomon_harness.github._gh",
+                return_value={"ok": True, "data": {"state": "OPEN"}},
+            ),
+            patch("solomon_harness.claim.fetch_board_items", return_value=None),
+        ):
+            protected, uncertain = claim._pr_liveness("/tmp", 99)
+        self.assertFalse(protected)
+        self.assertTrue(uncertain)
+
+    def test_fetch_board_items_degrades_to_none_on_exception(self):
+        with patch("solomon_harness.github.repo_owner", side_effect=RuntimeError("boom")):
+            self.assertIsNone(claim.fetch_board_items("/tmp"))
+
+    def test_protected_claim_blocks_reclaim(self):
+        # A TTL-stale claim whose board card sits in Code Review must not be
+        # reclaimable: the protected path, end to end through claim_issue.
+        past = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=40)
+        ).isoformat()
+        stale = {"session_id": "sess-a", "acquired_at": past, "heartbeat_at": past}
+        with (
+            patch("solomon_harness.claim.get_claim_ref", return_value=("sha1", stale)),
+            patch("solomon_harness.claim._pr_liveness", return_value=(True, False)),
+        ):
+            self.assertFalse(claim.claim_issue("/tmp", 99, current_session_id="sess-b"))
+
+    def test_filter_unclaimed_keeps_stale_and_own_claims(self):
+        past = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=40)
+        ).isoformat()
+        stale_foreign = {"session_id": "sess-a", "acquired_at": past, "heartbeat_at": past}
+        fresh = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        own = {"session_id": "me", "acquired_at": fresh, "heartbeat_at": fresh}
+        with (
+            patch(
+                "solomon_harness.claim.fetch_all_claims",
+                return_value={5: stale_foreign, 6: own},
+            ),
+            patch("solomon_harness.claim.fetch_board_items", return_value=[]),
+        ):
+            result = claim.filter_unclaimed("/tmp", [5, 6, 7], current_session_id="me")
+        self.assertEqual(result, [5, 6, 7])
+
+    def test_filter_unclaimed_fetches_the_board_once_for_many_claims(self):
+        fresh = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        claims = {
+            n: {"session_id": f"sess-{n}", "acquired_at": fresh, "heartbeat_at": fresh}
+            for n in (1, 2, 3)
+        }
+        with (
+            patch("solomon_harness.claim.fetch_all_claims", return_value=claims),
+            patch(
+                "solomon_harness.claim.fetch_board_items", return_value=[]
+            ) as mock_board,
+        ):
+            claim.filter_unclaimed("/tmp", [1, 2, 3], current_session_id="me")
+        mock_board.assert_called_once()
+
+
+class TestRunStageClaimLifecycle(unittest.TestCase):
+    """run_stage's heartbeat-loss abort and failed-run claim release (review
+    findings 215-b3 residue and the loop_engineer majors)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.local = os.path.join(self.tmp, "local")
+        os.makedirs(self.local)
+        _git(None, "init", "-q", self.local)
+        read_patcher = patch(
+            "solomon_harness.workflows._read_command_file",
+            return_value="---\nallowed-tools: Bash\n---\nbody",
+        )
+        read_patcher.start()
+        self.addCleanup(read_patcher.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    @patch("solomon_harness.claim.release_claim")
+    @patch("solomon_harness.claim.refresh_claim", return_value=False)
+    @patch("solomon_harness.claim.claim_issue", return_value=True)
+    @patch("solomon_harness.claim.has_active_pr_or_review", return_value=False)
+    @patch("solomon_harness.claim.get_claim", return_value=None)
+    def test_confirmed_heartbeat_loss_fails_the_stage(
+        self, mock_get, mock_pr, mock_claim, mock_refresh, mock_release
+    ):
+        # The engine exits 0, but the claim was confirmed taken over mid-run:
+        # the stage must be marked failed, and the (no longer ours) claim must
+        # NOT be released by the finally.
+        import time
+        from solomon_harness import workflows
+
+        class _Proc:
+            returncode = 0
+
+        def _slow_engine(*args, **kwargs):
+            time.sleep(0.4)
+            return _Proc()
+
+        with (
+            patch.object(claim, "CLAIM_HEARTBEAT_INTERVAL_SECONDS", 0.05),
+            patch("subprocess.run", side_effect=_slow_engine),
+        ):
+            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 1)
+        mock_refresh.assert_called()
+        mock_release.assert_not_called()
+
+    @patch("solomon_harness.claim.release_claim")
+    @patch("solomon_harness.claim.claim_issue", return_value=True)
+    @patch("solomon_harness.claim.has_active_pr_or_review", return_value=False)
+    @patch("solomon_harness.claim.get_claim", return_value=None)
+    def test_failed_run_releases_its_own_claim(
+        self, mock_get, mock_pr, mock_claim, mock_release
+    ):
+        from solomon_harness import workflows
+
+        class _Proc:
+            returncode = 2
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 2)
+        mock_release.assert_called_once()
+        _, kwargs = mock_release.call_args
+        self.assertNotIn("force", kwargs)
+
+    @patch("solomon_harness.claim.release_claim")
+    @patch("solomon_harness.claim.claim_issue", return_value=True)
+    @patch("solomon_harness.claim.has_active_pr_or_review", return_value=False)
+    @patch("solomon_harness.claim.get_claim", return_value=None)
+    def test_successful_run_keeps_its_claim(
+        self, mock_get, mock_pr, mock_claim, mock_release
+    ):
+        from solomon_harness import workflows
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()):
+            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        mock_release.assert_not_called()
+
+    @patch("sys.stderr", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.is_claim_active", return_value=True)
+    @patch("solomon_harness.claim.has_active_pr_or_review", return_value=False)
+    @patch("solomon_harness.claim.get_claim")
+    def test_blocked_start_names_holder_and_age(
+        self, mock_get, mock_pr, mock_active, mock_stderr
+    ):
+        # Acceptance criterion #2 of issue #51: the refusal names the holder
+        # and the claim age, so the second session knows who and how long.
+        from solomon_harness import workflows
+
+        mock_get.return_value = {
+            "session_id": "other-session",
+            "acquired_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+        self.assertEqual(rc, 1)
+        err = mock_stderr.getvalue()
+        self.assertIn("other-session", err)
+        self.assertIn("claim age", err)
+
 
 if __name__ == '__main__':
     from io import StringIO
