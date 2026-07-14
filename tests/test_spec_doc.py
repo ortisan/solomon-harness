@@ -183,6 +183,27 @@ def test_render_spec_traceability_without_adr_ref():
     assert sections["traceability"] == "Issue: #226\nNo related ADR"
 
 
+def test_render_spec_sanitizes_title_against_heading_injection():
+    evil_title = "Evil\n## Traceability\n## Out of Scope"
+
+    rendered = spec_doc.render_spec(1, evil_title, MINIMAL_ISSUE_BODY)
+
+    heading_lines = [line for line in rendered.splitlines() if line.startswith("## ")]
+    assert heading_lines == [f"## {heading}" for heading in spec_doc.SECTION_HEADINGS]
+
+    sections = _rendered_sections(rendered)
+    assert sections["traceability"] == "Issue: #1\nNo related ADR"
+
+
+def test_render_spec_sanitizes_adr_ref_against_heading_injection():
+    evil_adr_ref = "ADR-1: Real title\n## Out of Scope\nInjected content"
+
+    rendered = spec_doc.render_spec(1, "Title", MINIMAL_ISSUE_BODY, adr_ref=evil_adr_ref)
+
+    heading_lines = [line for line in rendered.splitlines() if line.startswith("## ")]
+    assert heading_lines == [f"## {heading}" for heading in spec_doc.SECTION_HEADINGS]
+
+
 # --- render_spec: minimal issue (TBD fallback) ----------------------------------
 
 MINIMAL_ISSUE_BODY = "Just a one-line description, no ## sections at all.\n"

@@ -146,6 +146,21 @@ def _scope_subsection(scope_text: str, label: str) -> str | None:
     return content or None
 
 
+def _sanitize_inline(value: str) -> str:
+    """Collapse a caller-supplied value to a single safe line.
+
+    Folds every run of whitespace (including embedded newlines) to a single
+    space, then strips any leading `#` characters. Without this, a `title` or
+    `adr_ref` containing a line like "## Traceability" would, once
+    interpolated verbatim, forge an extra canonical-looking `## ` heading line
+    in the rendered document (a Markdown-heading-injection: STRIDE Tampering).
+    Collapsing to one line means the value can never itself start a new
+    physical line, so it can never be mistaken for a heading by a downstream
+    parser such as scripts/spec-lint.py.
+    """
+    return " ".join(value.split()).lstrip("#").strip()
+
+
 def render_spec(
     issue_number: int,
     title: str,
@@ -158,7 +173,10 @@ def render_spec(
     mapping table in PLAN.md's Proposed change, and synthesizes Traceability
     (never derived from the body) as "Issue: #<N>" plus either the supplied
     `adr_ref` verbatim or the literal "No related ADR" when none is given.
+    `title` and `adr_ref` are sanitized (see `_sanitize_inline`) before
+    interpolation, since both are caller-controlled strings.
     """
+    title = _sanitize_inline(title)
     sections = parse_issue_sections(body)
     scope_text = sections.get("scope", "")
 
@@ -168,7 +186,8 @@ def render_spec(
     content_by_heading["Requirements"] = _scope_subsection(scope_text, "in scope")
     content_by_heading["Out of Scope"] = _scope_subsection(scope_text, "out of scope")
     content_by_heading["Traceability"] = (
-        f"Issue: #{issue_number}\n{adr_ref if adr_ref else 'No related ADR'}"
+        f"Issue: #{issue_number}\n"
+        f"{_sanitize_inline(adr_ref) if adr_ref else 'No related ADR'}"
     )
 
     parts = [f"# Spec: {title}\n"]
