@@ -13,8 +13,11 @@ CLI:
 
 from __future__ import annotations
 
+import argparse
 import re
+import sys
 import unicodedata
+from pathlib import Path
 
 # The seven canonical headings, in the order they must appear. Kept in sync
 # with scripts/spec-lint.py's SECTION_HEADINGS by a cross-check test (that
@@ -50,6 +53,11 @@ _DIRECT_SECTION_MAP = {
     "Acceptance Criteria": "acceptance criteria",
     "Design Constraints": "definition of ready",
 }
+
+# Placeholder for a section the issue body did not supply derivable content
+# for (the Boundary scenario: a minimal issue still yields a complete spec).
+# Traceability never falls back to this: it is always synthesized.
+TBD_PLACEHOLDER = "TBD (refine)"
 
 
 def slugify(title: str) -> str:
@@ -165,6 +173,65 @@ def render_spec(
 
     parts = [f"# Spec: {title}\n"]
     for heading in SECTION_HEADINGS:
-        content = content_by_heading.get(heading)
+        content = content_by_heading.get(heading) or TBD_PLACEHOLDER
         parts.append(f"## {heading}\n\n{content}\n")
     return "\n".join(parts) + "\n"
+
+
+def write_spec(
+    root: Path,
+    issue_number: int,
+    title: str,
+    body: str,
+    adr_ref: str | None = None,
+) -> Path:
+    """Render and write docs/specs/<issue_number>-<slug(title)>.md under root.
+
+    Creates docs/specs/ if it does not already exist. Write-only: performs no
+    git operation (the caller, /solomon-issue, stays git-free by design).
+    """
+    docs_specs = root / "docs" / "specs"
+    docs_specs.mkdir(parents=True, exist_ok=True)
+    path = docs_specs / spec_filename(issue_number, title)
+    path.write_text(render_spec(issue_number, title, body, adr_ref=adr_ref), encoding="utf-8")
+    return path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate a spec document per issue.")
+    sub = parser.add_subparsers(dest="command")
+
+    p_generate = sub.add_parser(
+        "generate", help="Generate docs/specs/<N>-<slug>.md from an issue body"
+    )
+    p_generate.add_argument("--issue", type=int, required=True)
+    p_generate.add_argument("--title", required=True)
+    p_generate.add_argument("--body-file", required=True)
+    p_generate.add_argument("--adr", default=None, help="ADR reference by number/title.")
+    p_generate.add_argument(
+        "--root",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="Repository root (default: the repository containing this module).",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.command != "generate":
+        parser.print_help()
+        return 1
+
+    body = Path(args.body_file).read_text(encoding="utf-8")
+    root = Path(args.root)
+    path = write_spec(root, args.issue, args.title, body, adr_ref=args.adr)
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        rel = path
+    # Write-only by design: /solomon-issue stays git-free (main is protected),
+    # so this never commits or pushes the file it just wrote.
+    print(f"Created {rel} (uncommitted).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

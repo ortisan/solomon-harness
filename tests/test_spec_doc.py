@@ -178,3 +178,106 @@ def test_render_spec_traceability_without_adr_ref():
     sections = _rendered_sections(rendered)
 
     assert sections["traceability"] == "Issue: #226\nNo related ADR"
+
+
+# --- render_spec: minimal issue (TBD fallback) ----------------------------------
+
+MINIMAL_ISSUE_BODY = "Just a one-line description, no ## sections at all.\n"
+
+
+def test_render_spec_minimal_issue_fills_tbd_placeholder():
+    rendered = spec_doc.render_spec(99, "Minimal issue", MINIMAL_ISSUE_BODY)
+    sections = _rendered_sections(rendered)
+
+    for heading in ("context", "problem", "requirements", "acceptance criteria",
+                     "design constraints", "out of scope"):
+        assert sections[heading] == "TBD (refine)", heading
+    # Traceability is always synthesized, never a placeholder.
+    assert sections["traceability"] == "Issue: #99\nNo related ADR"
+
+
+# --- write_spec ------------------------------------------------------------------
+
+
+def _seed_fake_repo(tmp_path: Path) -> Path:
+    """Seed a tmp_path fake repo root with the real house template."""
+    docs_specs = tmp_path / "docs" / "specs"
+    docs_specs.mkdir(parents=True)
+    template = REPO_ROOT / "docs" / "specs" / "0000-spec-template.md"
+    (docs_specs / "0000-spec-template.md").write_text(
+        template.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def _spec_lint(path: Path):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, str(SPEC_LINT_SCRIPT), str(path)],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_write_spec_writes_a_lint_clean_file(tmp_path):
+    root = _seed_fake_repo(tmp_path)
+
+    path = spec_doc.write_spec(root, 226, "Spec doc per issue", FULL_ISSUE_BODY, adr_ref=None)
+
+    assert path == root / "docs" / "specs" / "226-spec-doc-per-issue.md"
+    assert path.is_file()
+
+    result = _spec_lint(path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
+
+
+def test_write_spec_creates_docs_specs_if_missing(tmp_path):
+    # No docs/specs directory pre-seeded at all this time.
+    path = spec_doc.write_spec(tmp_path, 5, "Another one", MINIMAL_ISSUE_BODY)
+
+    assert path.is_file()
+    result = _spec_lint(path)
+    assert result.returncode == 0, result.stderr
+
+
+# --- generate CLI ----------------------------------------------------------------
+
+
+def test_generate_cli_writes_spec_and_prints_uncommitted_note(tmp_path):
+    import subprocess
+    import sys
+
+    body_file = tmp_path / "body.md"
+    body_file.write_text(FULL_ISSUE_BODY, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "solomon_harness.spec_doc",
+            "generate",
+            "--issue",
+            "226",
+            "--title",
+            "Spec doc per issue",
+            "--body-file",
+            str(body_file),
+            "--root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode == 0, result.stderr
+    written = tmp_path / "docs" / "specs" / "226-spec-doc-per-issue.md"
+    assert written.is_file()
+    # Write-only: the CLI must never mention committing or pushing the spec.
+    low = result.stdout.lower()
+    assert "uncommitted" in low
+    assert "commit" not in low.replace("uncommitted", "")
+    assert "push" not in low
