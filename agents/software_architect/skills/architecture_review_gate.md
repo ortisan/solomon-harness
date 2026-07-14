@@ -1,3 +1,8 @@
+---
+name: architecture-review-gate
+description: Governs the five-dimension architecture review checklist — NFRs, design contracts, SOLID, STRIDE, and fitness functions — its blocker, major, and minor severity rubric, and the go, conditional-go, or no-go verdict recorded with save_decision. Use when admitting a proposed design before execution or a delivered change at code review against the architecture's binding constraints.
+---
+
 # Architecture Review Gate
 
 The architecture review gate is the explicit checkpoint where a design or a delivered change is judged against the architecture's binding constraints and either passes or is sent back, with the verdict recorded so the decision is auditable and not re-litigated. Treat it as a gate, not a conversation: a fixed checklist, a severity rubric, and a single go/no-go outcome persisted with `save_decision`. The same checklist runs at two points in the lifecycle — before Execution to admit a proposed design, and at Code Review (step 5) to admit a delivered change against that design.

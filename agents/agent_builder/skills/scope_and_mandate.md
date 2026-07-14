@@ -1,3 +1,8 @@
+---
+name: scope-and-mandate
+description: Governs the creation, scaffolding, and registration of new specialist agents — the mandated agents/<name>/ directory layout, path-traversal and snake_case-name confinement checks, and the registry updates to agents/AGENTS.md, README.md, and the compiled host-tool integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+---
+
 # Agent Builder Scope and Mandate
 
 The Agent Builder specialist agent governs the creation, scaffolding, and registration of new specialist agents within the Solomon Harness ecosystem. By centralizing the scaffolding logic into a dedicated meta-agent, we preserve structural consistency, enforce formatting gates, and ensure clean separation of concerns between routing/brokerage (managed by the practice curator) and file-system code generation.
@@ -25,6 +30,17 @@ Once the agent files are successfully scaffolded on disk, the Agent Builder is r
 1. `agents/AGENTS.md`: Add the new agent to the index list in alphabetical order, with a clear one-sentence summary of its primary focus.
 2. `README.md`: Update the spelt-out count of role-specific agents and add the new agent to the markdown table detailing all specialist roles.
 3. Integration Compilation: Invoke the harness compilation process (`solomon-harness compile` or the equivalent programmatic script) to regenerate the host-tool integrations, such as `.claude/agents/<name>.md` profiles, ensuring that the new agent is immediately discoverable.
+
+## Verifying the Integration Sync Points
+
+A newly scaffolded agent is not complete until every downstream reference to it is consistent; the Agent Builder treats each sync point as a checklist item to verify, not merely as a file to write once and forget.
+
+- `agents/AGENTS.md` roster entry: after inserting the new agent into the "The specialist agents" list in alphabetical order with a one-sentence summary, read the file back and confirm the new line appears exactly once, sits between its correct alphabetical neighbors, and that no adjacent agent's line was accidentally altered, duplicated, or dropped in the edit.
+- `README.md` agent count and table: the README states a spelt-out count of role-specific agents and lists every agent in a markdown table with a folder link and a one-line description. After editing, recompute the count from the number of `agents/*/agents/*.md` files on disk, confirm the spelt-out number in the README prose matches that count exactly, and confirm the new row was appended to the table with a working relative link and a description consistent with the profile.
+- `scripts/validate-agents.py` `REQUIRED_KEYWORDS` registration: this dictionary maps each profile filename to the literal keywords CI checks for inside that profile's body. A new agent needs its own entry in the dictionary — the agent's title-case name plus three to six domain keywords drawn directly from its Core Duties — or the profile will compile cleanly but fail the keyword gate on the next CI run. Add this entry in the same commit that adds the profile, never as a follow-up, so the keyword gate is never red between commits.
+- Regenerating `.claude/agents/` via `compile`: the host-tool integration files under `.claude/agents/` and `.gemini/commands/` are generated artifacts, never hand-edited. Run `uv run python -m solomon_harness.cli compile` after every scaffold, then confirm `.claude/agents/<name>.md` exists, is non-empty, and reflects the persona and duties just written, so the new agent is discoverable in the same session instead of after a separate manual step.
+
+Treat a scaffold as done only once all four sync points have been independently re-read and confirmed, not assumed from the fact that the scaffolding command or the compile step exited without error; a clean exit code proves the writer did not crash, not that the roster, the README, the keyword gate, and the compiled profile all agree with one another.
 
 ## Common pitfalls
 

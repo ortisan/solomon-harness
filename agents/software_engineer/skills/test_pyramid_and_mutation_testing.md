@@ -1,3 +1,8 @@
+---
+name: test-pyramid-and-mutation-testing
+description: Governs the 70/20/10 unit-integration-e2e test-pyramid distribution, when to use a fake versus a Testcontainers-backed dependency versus a mock, and gating pull requests on an 80 percent mutation score for changed code using mutmut, Stryker, or PITest. Use when structuring a new test suite, choosing a test's layer, or setting up a mutation-testing gate.
+---
+
 # Test Pyramid and Mutation Testing
 
 Build a test suite shaped like a pyramid from inside the TDD loop: a wide base of fast, isolated, deterministic unit tests, a thinner middle of integration tests against real dependencies or well-chosen fakes, a small top of end-to-end tests, and mutation testing on top of all three to prove the suite actually kills defects instead of merely executing lines. This is the developer how-to for distribution, layer boundaries, and the mutation-score gate; for the broader QA-side strategy cross-reference the qa agent's `the_test_pyramid_target_distribution`, `integration_and_e2e_testing`, and `mutation_testing`, and `tdd_red_green_refactor` for driving each test from a red state.

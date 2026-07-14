@@ -1,3 +1,8 @@
+---
+name: structured-data
+description: Governs JSON-LD structured data as the page's machine-readable entity layer — which schema.org types still earn rich results in 2026, server-rendered delivery, stable @id entity-graph discipline, and Rich Results Test and Schema Markup Validator gating. Use when adding or changing JSON-LD on a template, choosing which schema type to ship, or diagnosing why a structured-data feature is not appearing in results.
+---
+
 # Structured Data
 
 JSON-LD structured data is the page's machine-readable entity layer: it earns rich results, feeds the Knowledge Graph, and is now a primary input for LLM crawlers and answer engines. The stance: ship server-rendered JSON-LD for the types that still pay, keep the entity graph stable across pages, and treat eligibility rules as version-dated facts, not folklore.

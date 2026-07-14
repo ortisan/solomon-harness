@@ -1,3 +1,8 @@
+---
+name: data-and-persistence
+description: Governs Room entities, DAOs, and migrations, DataStore preferences, WorkManager deferrable jobs, Retrofit/OkHttp networking, and the offline-first repository pattern that makes the local database the single source of truth. Use when implementing or reviewing local storage, network sync, background work, or an offline-first data layer on Android.
+---
+
 # Data and Persistence
 
 Persist app data so the database is the single source of truth, the UI observes it reactively through Flow, and the network is treated as a fallible writer that fills the cache rather than a thing the UI talks to directly. Make Room the local store of record, DataStore the place for small key-value and typed settings, WorkManager the executor for deferrable durable work, and Retrofit/OkHttp the typed network edge, and wire them into an offline-first repository that survives process death and airplane mode.

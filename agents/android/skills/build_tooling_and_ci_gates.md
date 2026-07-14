@@ -1,3 +1,8 @@
+---
+name: build-tooling-and-ci-gates
+description: Governs Gradle version catalogs, convention plugins, KSP, R8 keep rules, ktlint/detekt static analysis, dependency verification, and branch-specific CI gates for Android builds. Use when configuring Gradle build logic, adding a dependency, wiring CI checks, or reviewing a release build's shrinking and signing setup.
+---
+
 # Build Tooling and CI Gates
 
 Make the build reproducible, the dependency graph declarative, and the release path gated so that no unverified, un-shrunk, or unlinted artifact reaches a protected branch. Treat the Gradle build logic as production code: a single version catalog as the source of truth, convention plugins instead of copy-pasted module config, R8 full mode for every release, and a CI pipeline whose required checks differ by branch type.

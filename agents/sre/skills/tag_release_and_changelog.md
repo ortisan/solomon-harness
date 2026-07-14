@@ -1,3 +1,8 @@
+---
+name: tag-release-and-changelog
+description: Governs releasing solomon-harness as an immutable git tag and GitHub Release computed from Conventional Commits, milestone-gated cutting, the ephemeral chore/release-* prep branch, and the fail-closed release check invariant. Use when cutting a release or computing a SemVer bump.
+---
+
 # Tag-Release and Changelog Mechanics
 
 Ship solomon-harness as an immutable git tag plus a published GitHub Release of the source tree, never to PyPI. This is the release mechanics for a source-distributed library: `pyproject.toml` carries `[tool.uv] package = false`, so consumers checkout the tag or download the Release archive rather than `pip install`ing it. The version is computed from Conventional Commits (never hand-picked), the cut is gated on a GitHub milestone reaching zero open issues with CI green, the model is trunk-only with one ephemeral prep branch, and CI is the single owner of the tag and the publish. The canonical, authoritative statement of this policy is `docs/release-policy.md`; this skill is the operating procedure that implements it. Where the two ever diverge, `docs/release-policy.md` wins.

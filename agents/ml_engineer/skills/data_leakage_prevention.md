@@ -1,3 +1,8 @@
+---
+name: data-leakage-prevention
+description: Governs how features, preprocessing, and splits are audited against the leakage taxonomy (target, temporal, contamination, group, duplicate, look-ahead, survivorship). Use when auditing features, designing a split, or reviewing a model's inputs for information unavailable at prediction time.
+---
+
 # Data Leakage Prevention
 
 This skill governs how features, preprocessing, and splits are audited so no information unavailable at prediction time reaches the model. Leakage is a defect, not a caveat: a leaked metric predicts nothing about production, and the audit that proves its absence is part of the deliverable, not optional hygiene.

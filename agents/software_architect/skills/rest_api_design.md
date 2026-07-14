@@ -1,3 +1,8 @@
+---
+name: rest-api-design
+description: Governs REST API design choices — the Richardson Maturity Model level, resource and URI modeling, method safety and idempotency contracts, RFC 9457 error bodies, versioning strategy, cursor pagination, caching, and a contract-first OpenAPI 3.1 document. Use when designing a new HTTP API's resource model, status codes, versioning, or contract before implementation begins.
+---
+
 # REST API Design
 
 Design an HTTP API as a contract over resources, not a transport for remote procedure calls, and decide its maturity level deliberately using the Richardson Maturity Model rather than drifting into it. This skill governs the architectural choices an HTTP API embodies: resource and URI modeling, method semantics, status-code selection, versioning, error format, caching, and the OpenAPI contract that precedes the code. It does not cover how the handlers are written or framework wiring; cross-reference the `software_engineer` skill for implementation, validation, and serialization mechanics.

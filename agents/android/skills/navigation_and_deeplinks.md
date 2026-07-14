@@ -1,3 +1,8 @@
+---
+name: navigation-and-deeplinks
+description: Governs type-safe Navigation Compose routing, nested graphs and back-stack control, single-activity architecture, and verified Android App Links backed by assetlinks.json. Use when implementing or reviewing screen navigation, deep-link handling, or App Link domain verification on Android.
+---
+
 # Navigation and Deep Links
 
 Drive every screen transition through a single NavController and a type-safe Navigation Compose graph, and expose external entry points only through verified Android App Links, never spoofable custom schemes. Routes are `@Serializable` Kotlin types so the compiler, not string keys, guarantees argument correctness; back-stack manipulation is explicit and intentional; and any `https` link that opens the app must be backed by a `.well-known/assetlinks.json` domain-verification record.

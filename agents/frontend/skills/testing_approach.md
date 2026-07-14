@@ -1,3 +1,8 @@
+---
+name: testing-approach
+description: Governs how frontend code is tested: Vitest and Testing Library for components, Playwright for end-to-end journeys, MSW at the network seam, always asserting observable behavior over implementation details. Use when writing or reviewing a frontend test or starting the TDD red step for UI code.
+---
+
 # Testing Approach
 
 This skill governs how frontend code is tested: Vitest plus Testing Library for components, Playwright for end-to-end journeys, and MSW at the network seam — always asserting observable behavior, never implementation details. The stack matches `ui/`: Vitest 3, `@testing-library/react` 16 with `@testing-library/jest-dom` 6, jsdom 25. TDD applies: the failing test comes first.

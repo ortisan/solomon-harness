@@ -1,3 +1,8 @@
+---
+name: rest-api-implementation
+description: Governs implementing a FastAPI and Pydantic REST layer, covering status-code selection, idempotency keys, ETag conditional requests, cursor pagination, RFC 9457 problem+json errors, boundary validation, and OpenAPI 3.1 generation and diffing in CI. Use when implementing or reviewing an HTTP endpoint's status codes, error bodies, pagination, caching headers, or generated schema.
+---
+
 # REST API Implementation
 
 Make the HTTP layer carry the contract: the status code states the outcome, the method's safety and idempotency promises are actually enforced, and every error body, page, and validation rule is generated from the same code that enforces it rather than hand-written prose that drifts. This skill is implementation in code; the architectural framing (resources, hypermedia, the Richardson Maturity Model levels) belongs to the `software_architect` `rest_api_design` skill, and request-boundary validation extends the `robust_defensive_code` skill. Examples target this project's stack: FastAPI 0.115+ on Starlette with Pydantic 2.x (2.11+), which emits OpenAPI 3.1 directly.

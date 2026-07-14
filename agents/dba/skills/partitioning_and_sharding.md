@@ -1,3 +1,8 @@
+---
+name: partitioning-and-sharding
+description: Covers when and how to split large tables: PostgreSQL declarative partitioning, partition pruning, retention by partition dropping, and sharding across nodes, treated as an architecture commitment of last resort. Use when a table's size or retention policy raises partitioning or sharding.
+---
+
 # Partitioning and Sharding
 
 When and how to split large tables: PostgreSQL declarative partitioning, partition pruning, retention by partition dropping, and the far more consequential decision of sharding across nodes. The stance: partitioning is a maintenance and lifecycle tool first and a query optimization second; sharding is an architecture commitment taken only after vertical scaling, replicas, and partitioning are demonstrably exhausted, because its complexity is permanent.

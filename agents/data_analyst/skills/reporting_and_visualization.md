@@ -1,3 +1,8 @@
+---
+name: reporting-and-visualization
+description: Governs chart-type selection, deceptive-visualization rules such as zero-baseline axes, no dual y-axes, and colorblind-safe palettes, dashboard design, and answer-first narrative structure for stakeholder reports. Use when building a chart, dashboard, or stakeholder report, or reviewing one for misleading encodings or a buried headline.
+---
+
 # Reporting and Visualization
 
 Charts and reports that let a stakeholder make a decision in seconds without being misled: the right chart form for the question, hard rules against deceptive encodings, dashboards built around one question each, and a narrative that leads with the answer. The stance: a visualization is an argument, and the same integrity rules apply as to a number in a financial statement. Statistical inference behind a claim (significance, confidence intervals, causal language) is validated with the `ml_engineer` agent before it ships.

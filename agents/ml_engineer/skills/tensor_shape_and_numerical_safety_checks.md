@@ -1,3 +1,8 @@
+---
+name: tensor-shape-and-numerical-safety-checks
+description: Governs shape assertions, dtype discipline, and numerical guards around matmuls, reshapes, broadcasts, loss, and reward computations. Use when writing or reviewing tensor operations, loss functions, or reward computations for silent broadcasting bugs or non-finite values.
+---
+
 # Tensor-Shape and Numerical-Safety Checks
 
 This skill governs shape assertions, dtype discipline, and numerical guards around every matmul, reshape, broadcast, loss, and reward computation. Silent broadcasting and non-finite values are the two ways a model trains to convergence on garbage; both are cheap to catch at the boundary and expensive to catch in production.

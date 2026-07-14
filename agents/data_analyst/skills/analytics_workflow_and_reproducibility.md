@@ -1,3 +1,8 @@
+---
+name: analytics-workflow-and-reproducibility
+description: Governs reproducible analytics workflow: notebook discipline (restart-and-run-all, jupytext pairing), parameterized reports with papermill and Quarto, versioned queries pinned to data snapshots, and peer review before a number ships. Use when building or reviewing a recurring report or notebook analysis.
+---
+
 # Analytics Workflow and Reproducibility
 
 Running analysis like software: notebooks that execute top-to-bottom from a clean kernel, reports parameterized instead of copy-pasted, every query versioned in git with the data snapshot it ran against, and a peer-review step before a number reaches a stakeholder. The stance: if a colleague cannot regenerate your headline number from the repository in one command, the analysis is an anecdote. Reproducibility is what makes an analysis reviewable, and review is what makes it trustworthy.

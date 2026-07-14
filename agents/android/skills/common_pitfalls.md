@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Governs the review checklist for Android-specific defects that compile but fail at runtime, covering unscoped coroutines, retained Context leaks, unstable Compose parameters, main-thread blocking, missing Room migrations, over-exported components, and hardcoded secrets. Use when reviewing Kotlin or Compose code changes for memory leaks, jank, data-loss risk, or exposed attack surface.
+---
+
 # Android Common Pitfalls
 
 Reject the Android-specific defects that compile cleanly but leak memory, drop frames, corrupt user data, or expose the app: unscoped coroutines, retained `Context`, unstable Compose inputs, main-thread I/O, missing Room migrations, over-exported components, and hardcoded secrets. This skill is the review checklist for native Kotlin/Compose code; each rule names the failure mode and the platform reason a reviewer must cite when blocking it. Versions below are the mid-2026 baseline (Kotlin 2.2.x, Compose BOM 2026.x with runtime 1.9, Room 2.8, Coroutines 1.10, Lifecycle 2.9, AGP 8.x, target SDK 36 / Android 16).

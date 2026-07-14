@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the acceptance gate for observability deliverables covering structured logging, RED/USE metrics, tracing coverage, tail sampling, dashboards, SLIs and alerts, and TDD, plus the ways work gets falsely marked complete. Use when deciding whether instrumentation, alerting, or dashboard work is ready to ship.
+---
+
 # Observability Definition of Done
 
 The acceptance gate for observability deliverables: every item below must hold before instrumentation, alerting, or dashboards ship. The pitfalls list the ways telemetry work gets falsely marked complete against this checklist.

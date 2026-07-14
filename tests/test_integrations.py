@@ -98,6 +98,58 @@ class TestGeneratedSubagents(unittest.TestCase):
         discovered = module.discover_agents(os.path.join(WORKSPACE, "agents"))
         self.assertEqual(sorted(discovered), sorted(_agent_names()))
 
+    def _load_generator(self):
+        path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
+        spec = importlib.util.spec_from_file_location("gen_integrations", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_role_description_appends_delegation_cue(self):
+        # A profile with a Delegation cue section yields a description that
+        # carries both the role one-liner and the when-to-delegate trigger.
+        import tempfile
+
+        gen = self._load_generator()
+        with tempfile.TemporaryDirectory() as tmp:
+            role = os.path.join(tmp, "role.md")
+            with open(role, "w", encoding="utf-8") as f:
+                f.write(
+                    "# Widget Maker Profile\n\n"
+                    "The Widget Maker builds widgets.\n\n"
+                    "## Delegation cue\n\n"
+                    "Use this agent when a task involves designing or repairing widgets.\n\n"
+                    "## Core Duties\n\n- Build widgets.\n"
+                )
+            description = gen.role_description(role, "widget_maker")
+        self.assertEqual(
+            description,
+            "The Widget Maker builds widgets. "
+            "Use this agent when a task involves designing or repairing widgets.",
+        )
+
+    def test_role_description_without_cue_keeps_one_liner(self):
+        import tempfile
+
+        gen = self._load_generator()
+        with tempfile.TemporaryDirectory() as tmp:
+            role = os.path.join(tmp, "role.md")
+            with open(role, "w", encoding="utf-8") as f:
+                f.write("# Widget Maker Profile\n\nThe Widget Maker builds widgets.\n")
+            description = gen.role_description(role, "widget_maker")
+        self.assertEqual(description, "The Widget Maker builds widgets.")
+
+    def test_every_generated_subagent_carries_a_delegation_trigger(self):
+        # Every profile has a Delegation cue, so every generated subagent
+        # description must contain the "Use this agent when" trigger phrase.
+        for name in _agent_names():
+            body = _read(os.path.join(".claude", "agents", f"{name}.md"))
+            self.assertIn(
+                "Use this agent when",
+                body.split("---")[1],
+                f"subagent {name} lacks a delegation trigger in its description",
+            )
+
 
 class TestGeminiCommands(unittest.TestCase):
     def test_every_slash_command_has_a_gemini_mirror(self):

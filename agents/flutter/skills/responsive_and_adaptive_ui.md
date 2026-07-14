@@ -1,3 +1,8 @@
+---
+name: responsive-and-adaptive-ui
+description: Governs Flutter layout responsiveness, covering Material window-size breakpoints, LayoutBuilder-versus-MediaQuery discipline, platform-adaptive widgets, 200 percent text scaling, safe areas, and foldable hinge handling. Use when building a screen that must adapt across device sizes, platforms, text scale, or foldable states, or reviewing layout code for hardcoded breakpoints.
+---
+
 # Responsive and Adaptive UI
 
 This skill governs how Flutter layouts respond to size, platform, and user settings: breakpoint policy, `LayoutBuilder`/`MediaQuery` discipline, platform-adaptive widgets, text scaling, safe areas, and foldables. The stance: layout derives from constraints and user preferences at runtime — a hardcoded pixel constant or a locked text scale is a defect, and "looks fine on my phone" is not a verification.

@@ -1,3 +1,8 @@
+---
+name: dora-metrics-and-change-management
+description: Governs instrumenting the four DORA metrics (deployment frequency, lead time, change failure rate, time to restore) from delivery and incident events, and gating change on error-budget-based deploy freezes. Use when wiring DORA measurement or deciding whether a deploy is blocked by an exhausted error budget.
+---
+
 # DORA Metrics and Change Management
 
 Instrument the four DORA metrics from real delivery and incident events, read throughput and stability together rather than as a tradeoff, and gate production change on the error budget so that an exhausted budget triggers an enforced, time-bounded deploy freeze. The metrics exist to drive a decision (ship faster, or stop and stabilize); a dashboard that no policy reacts to is decoration. This skill covers measurement and change governance; the SLO, error-budget, and burn-rate definitions it leans on live in `reliability_targets_sli_slo_sla_error_budgets`, and the pipeline that enforces the gates lives in `infrastructure_and_deployment_pipelines`.

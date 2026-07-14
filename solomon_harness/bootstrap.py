@@ -400,6 +400,10 @@ This agent is the {name} brain for solomon-harness. It reasons within the shared
 
 {description}
 
+## Delegation cue
+
+Use this agent when the work falls under the {title} role's duties described below.
+
 ## Core Duties
 {duties_str}
 
@@ -418,13 +422,26 @@ solomon-harness skills add <source> <skill> --agent {name}
         f.write(role_content)
 
     # Write scope_and_mandate.md skill
-    skill_content = f"""# {title} Best Practices
+    skill_content = f"""---
+name: scope-and-mandate
+description: Defines what the {name} specialist owns and what it hands off. Use when clarifying whether a task belongs to this agent.
+---
+
+# {title} Best Practices
 
 Reference standard for the {name} specialist.
 
 ## Scope and mandate
 
 This skill covers the {name} role's duties.
+
+## Common pitfalls
+
+- Acting outside the {name} mandate instead of handing the work to the owning specialist.
+
+## Definition of done
+
+- [ ] The work stayed within this agent's mandate or was handed off explicitly.
 """
     with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
         f.write(skill_content)

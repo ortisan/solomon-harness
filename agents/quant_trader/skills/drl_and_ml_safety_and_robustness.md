@@ -1,3 +1,8 @@
+---
+name: drl-and-ml-safety-and-robustness
+description: Sets the numerical and behavioral safety guards for DRL and ML trading models: tensor-shape validation at boundaries, finite denominators and exponents, reward-hacking checks, bounded action spaces, and seed control. Use when designing, training, or reviewing a DRL or ML trading model.
+---
+
 # DRL and ML Safety and Robustness
 
 Trading models fail numerically (shapes, NaNs, overflow) and behaviorally (reward hacking, leaked features, cherry-picked seeds), and this skill sets the guards for both: validate tensors at boundaries, keep every denominator and exponent finite, prove the reward measures the real objective, bound the action space inside the environment, control seeds, and evaluate on held-out regimes.

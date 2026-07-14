@@ -63,6 +63,32 @@ class TestScaffoldAgent(unittest.TestCase):
             content = f.read()
         self.assertIn("Test Scaffolded Agent Best Practices", content)
 
+    def test_scaffolded_skill_meets_the_format_gate(self):
+        # New agents are born on the mandated skill format: discovery
+        # frontmatter plus both required closing sections.
+        scaffold_new_agent(self.tmp_dir, "format_gate_agent", "Gate description")
+        skill_path = os.path.join(
+            self.agents_dir, "format_gate_agent", "skills", "scope_and_mandate.md"
+        )
+        with open(skill_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertTrue(content.startswith("---\n"))
+        self.assertIn("name: scope-and-mandate", content)
+        self.assertIn("description:", content)
+        self.assertIn("Use when", content)
+        self.assertIn("## Common pitfalls", content)
+        self.assertIn("## Definition of done", content)
+
+    def test_scaffolded_profile_has_a_delegation_cue(self):
+        scaffold_new_agent(self.tmp_dir, "cue_agent", "Cue description")
+        role_path = os.path.join(
+            self.agents_dir, "cue_agent", "agents", "cue_agent.md"
+        )
+        with open(role_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("## Delegation cue", content)
+        self.assertIn("Use this agent when", content)
+
     def test_scaffold_copies_harness_templates(self):
         scaffold_new_agent(self.tmp_dir, "test_template_agent", "Another description")
         agent_dir = os.path.join(self.agents_dir, "test_template_agent")

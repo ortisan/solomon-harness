@@ -1,3 +1,8 @@
+---
+name: duplication-scan-loop
+description: Governs the standing /solomon-scan-dedup maintenance loop that scans the repository for duplicated abstractions and either unifies the single highest-confidence finding behind a regression-tested draft PR or files it as an issue, one action per run. Use when running the scheduled duplication scan loop or deciding whether a repeated code pattern warrants unification now or a filed issue.
+---
+
 # Duplication Scan Loop
 
 This skill governs the standing duplicate-abstraction maintenance loop: a

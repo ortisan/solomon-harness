@@ -1,3 +1,8 @@
+---
+name: defect-triage-and-lifecycle
+description: Governs the defect lifecycle state machine from report to closure, including the severity-versus-priority axes, response SLAs, root-cause analysis, and the regression-test closure gate. Use when triaging a new defect, reclassifying severity or priority, or deciding whether a bug can be closed.
+---
+
 # Defect Triage and Lifecycle
 
 Run every defect through a deterministic state machine from report to closure, where severity and priority are classified on separate axes, root cause is found before a fix is accepted, and no defect closes without a regression test that failed on the bug and passes on the fix. Treat the project memory as the system of record: defects live as `log_issue` entries, the triage queue is `get_open_issues`, and `get_issue` is the single read before any state transition.

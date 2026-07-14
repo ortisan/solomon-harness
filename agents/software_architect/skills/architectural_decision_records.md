@@ -1,3 +1,8 @@
+---
+name: architectural-decision-records
+description: Governs when a decision earns an ADR, the MADR format with Status, Context, Considered Options, and Consequences, the Proposed-Accepted-Deprecated-Superseded status lifecycle, and the docs/adr/NNNN-kebab-title.md numbering and storage convention. Use when a structural, costly-to-reverse decision needs a recorded rationale, or when reviewing whether an existing ADR should be superseded.
+---
+
 # Architectural Decision Records
 
 Capture one architecturally significant decision per ADR as an immutable, numbered, version-controlled record, so the reasoning behind a structural choice — and the options it rejected — survives the people who made it.

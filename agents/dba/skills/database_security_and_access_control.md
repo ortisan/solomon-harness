@@ -1,3 +1,8 @@
+---
+name: database-security-and-access-control
+description: Sets the database-side security standard: least-privilege role design, row-level security for tenant isolation, authentication and TLS, auditing, and the non-negotiable of parameterized queries. Use when designing database roles and grants, or auditing a database for overprivileged access.
+---
+
 # Database Security and Access Control
 
 The database-side security standard: least-privilege role design, row-level security for tenant isolation, authentication and TLS, auditing, and the non-negotiable of parameterized queries. The stance: secure-by-default per the house STRIDE baseline; the database enforces isolation itself rather than trusting every application bug not to happen, and no secret or overprivileged role ships because it was expedient.

@@ -1,3 +1,8 @@
+---
+name: distributed-practice
+description: Governs scheduling learning sessions and practice tasks with spacing (Cepeda et al.; Ebbinghaus) and interleaving (Rohrer and Taylor), including the 1/7/30-day review cadence and the three-topic interleaving minimum. Use when designing a multi-day learning or onboarding schedule, or reviewing one for cramming or single-topic blocking.
+---
+
 # Distributed Practice
 
 This skill governs the scheduling of learning sessions and practice tasks using spacing and interleaving to optimize long-term memory retention and enhance skill transfer.

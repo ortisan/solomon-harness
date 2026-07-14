@@ -38,6 +38,25 @@ def _summarize(text):
     return cut + "…"
 
 
+def _split_frontmatter(lines):
+    """Split leading frontmatter lines from the body lines.
+
+    Returns (fields, body_lines). Values are single-line strings; a missing or
+    unterminated block returns ({}, lines) unchanged.
+    """
+    if not lines or lines[0].strip() != "---":
+        return {}, lines
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            fields = {}
+            for raw in lines[1:index]:
+                if ":" in raw:
+                    key, value = raw.split(":", 1)
+                    fields[key.strip()] = value.strip()
+            return fields, lines[index + 1 :]
+    return {}, lines
+
+
 def extract_metadata(skill_path):
     title = ""
     purpose = ""
@@ -45,6 +64,8 @@ def extract_metadata(skill_path):
     try:
         with open(skill_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
+        fields, lines = _split_frontmatter(lines)
+        description = fields.get("description", "")
         body_seen = 0
         for line in lines:
             line_str = line.strip()
@@ -63,7 +84,9 @@ def extract_metadata(skill_path):
             body_seen += 1
             if body_seen >= _PURPOSE_SCAN_LINES:
                 break
-        purpose = _summarize(purpose or first_body)
+        # The frontmatter description is the authored one-liner; an explicit
+        # Purpose: line or the first body line only backs it up.
+        purpose = _summarize(description or purpose or first_body)
     except Exception:
         purpose = ""
     return title or os.path.basename(skill_path)[:-3], purpose or "No description provided."

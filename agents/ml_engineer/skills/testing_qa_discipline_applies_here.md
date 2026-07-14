@@ -1,3 +1,8 @@
+---
+name: testing-qa-discipline-applies-here
+description: Governs how ML code is tested, requiring red-green-refactor coverage on pipelines, transforms, metrics, and training loops plus the overfit-a-tiny-batch smoke test for silently wrong models. Use when writing tests for an ML pipeline, transform, or training loop, or reviewing test coverage on a model deliverable.
+---
+
 # Testing: QA Discipline Applies Here
 
 This skill governs how ML code is tested. Pipelines, transforms, metrics, and training loops are code and get the full red-green-refactor treatment — plus ML-specific tests for the failure mode ordinary software does not have: the model that runs cleanly, converges, and is silently wrong.

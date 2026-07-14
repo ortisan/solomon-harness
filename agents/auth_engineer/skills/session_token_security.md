@@ -1,3 +1,8 @@
+---
+name: session-token-security
+description: Governs choosing, issuing, validating, and revoking session and bearer credentials: JWT versus opaque tokens, refresh-token rotation with reuse detection, hardened cookies, and CSRF defense. Use when minting a credential a client will present back, setting an auth cookie, or accepting one at an endpoint.
+---
+
 # Session and Token Security
 
 Purpose: a concrete standard for choosing, issuing, validating, and revoking session and bearer credentials. It covers JWT vs opaque tokens, JWT validation, refresh-token rotation with reuse detection, hardened cookies, and CSRF defense. Use it whenever you mint a credential a client will present back, set an authentication cookie, or accept one at an endpoint.

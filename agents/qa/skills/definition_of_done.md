@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the exit gate for a QA verification cycle, naming the pitfalls that falsely mark a suite done and the checklist that must hold before a change is signed off. Use when closing out a verification cycle or deciding whether a pull request is ready for the /solomon-review QA gate.
+---
+
 # QA Definition of Done
 
 The exit gate for a QA verification cycle: what must hold before a change is signed off. The pitfalls below are the ways a suite gets falsely called done against this checklist; the checklist itself follows.

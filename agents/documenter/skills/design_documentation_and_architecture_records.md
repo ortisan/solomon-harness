@@ -1,3 +1,8 @@
+---
+name: design-documentation-and-architecture-records
+description: Governs recording architectural decisions and system designs - MADR-style ADRs with named constraints and per-option rejection reasoning, C4 diagrams drawn only at the level that earns its keep, and design docs stating non-goals. Use when writing or reviewing an ADR, a C4 diagram, or a design doc.
+---
+
 # Design Documentation and Architecture Records
 
 This skill governs how architectural decisions and system designs are recorded: Architecture Decision Records (ADRs) in MADR style, C4 diagrams drawn only at the levels that earn their keep, and design docs that state non-goals and rejected options. The stance: a decision that is not recorded with its context and consequences will be re-litigated, and a diagram that disagrees with the code is worse than no diagram.

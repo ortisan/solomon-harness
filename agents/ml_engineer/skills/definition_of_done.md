@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the acceptance gate for an ML or DRL deliverable, listing the pitfalls that falsely mark a hypothesis card, cross-validation, holdout, leakage audit, or reproducibility claim as complete. Use when checking whether a trained model or analysis is ready to ship, or reviewing a completed Definition of Done checklist.
+---
+
 # ML Engineer Definition of Done
 
 The acceptance gate for an ML or DRL deliverable: every item below must hold before a model is called done. The pitfalls list the ways work gets falsely marked complete against this checklist; each one voids the corresponding checkbox.

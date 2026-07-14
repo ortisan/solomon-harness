@@ -1,3 +1,8 @@
+---
+name: evolutionary-architecture-fitness-functions
+description: Governs encoding layering, dependency-direction, cyclic-dependency, coupling, and performance and security budgets as automated, CI-blocking fitness functions using import-linter, ArchUnit, tach, dependency-cruiser, Lighthouse CI, or k6. Use when adding a structural rule to CI, reviewing whether an architectural characteristic has an executable guard, or scoping a time-boxed exception.
+---
+
 # Architecture Fitness Functions
 
 Encode every structural rule you care about as an automated fitness function that runs in CI and fails the build, so architecture erosion is rejected at the pull request instead of discovered months later in review. A fitness function is any objective check that a candidate change still satisfies an architectural characteristic; the design contracts and NFRs you author (`design_contracts_as_component_boundaries`, `non_functional_requirements`) are only real if something executable enforces them on every commit.

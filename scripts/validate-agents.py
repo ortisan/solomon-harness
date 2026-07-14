@@ -266,6 +266,17 @@ REQUIRED_KEYWORDS = {
         "backtest",
         "quant_trader",
     ],
+    "swing_trader.md": [
+        "Swing Trader",
+        "daytrade",
+        "swing",
+        "hypothesis card",
+        "backtest",
+        "quant_trader",
+        "ml_engineer",
+        "software_engineer",
+        "research_analyst",
+    ],
 }
 
 

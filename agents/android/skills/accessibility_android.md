@@ -1,3 +1,8 @@
+---
+name: accessibility-android
+description: Governs accessibility semantics, touch-target sizing, Dynamic Type font scaling, color contrast, and reading order for Jetpack Compose screens against WCAG 2.2 AA and Android platform guidance. Use when building, reviewing, or testing Compose UI for TalkBack, Switch Access, font-scale, or contrast compliance.
+---
+
 # Accessibility on Android
 
 Make every Compose screen usable by TalkBack, Switch Access, and font/zoom users by treating semantics, touch targets, contrast, and reading order as part of the component contract, not a post-launch cleanup. The target is WCAG 2.2 AA plus Android platform guidance, verified by automated checks in CI and by manual TalkBack passes, because the Accessibility Test Framework catches structural defects but only a human catches a confusing announcement order.

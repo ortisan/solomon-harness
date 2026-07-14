@@ -1,3 +1,8 @@
+---
+name: slippage-and-transaction-costs
+description: Sets the minimum transaction-cost model of half-spread plus square-root market impact plus explicit fees, conservative defaults by asset class and trading frequency, and the mandatory cost-sensitivity analysis. Use when modeling fills, estimating costs, or reviewing a backtest for a zero-cost or fixed-cents assumption.
+---
+
 # Slippage and Transaction Costs
 
 Transaction costs decide whether a paper edge is a real one, and this skill sets the minimum cost model (half-spread plus square-root impact plus explicit fees), the conservative defaults per asset class and trading frequency, and the mandatory sensitivity analysis. Zero-cost or fixed-cents assumptions are the single most common way a backtest lies.

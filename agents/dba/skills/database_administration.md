@@ -1,3 +1,8 @@
+---
+name: database-administration
+description: Covers day-two PostgreSQL operations: role and privilege design, vacuum and autovacuum tuning, routine maintenance, and version upgrades, all expressed as declarative, reviewable configuration rather than ad-hoc superuser sessions. Use when designing roles, tuning autovacuum, or planning an upgrade.
+---
+
 # Database Administration
 
 Day-two operations for PostgreSQL: role and privilege design, vacuum and autovacuum, routine maintenance, and minor/major version upgrades. The stance: administration is done through declarative, reviewable configuration and scheduled jobs, not ad-hoc superuser sessions; anything typed into `psql` in production should be re-expressible as code afterwards.

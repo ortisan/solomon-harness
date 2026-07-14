@@ -1,3 +1,8 @@
+---
+name: wiki-design-and-presentation-standards
+description: Establishes the project wiki's structural patterns and formatting rules - the docs/wiki/-as-source-of-truth sync model, page naming and _Sidebar.md navigation, the standard page set, and release-notes conventions. Use when creating, restructuring, or reviewing a wiki page, or syncing release notes.
+---
+
 # Wiki Design and Presentation Standards
 
 This skill establishes the structural patterns, naming conventions, and visual formatting rules for the project wiki: the sync model that makes `docs/wiki/` the source of truth, page naming and navigation, the standard page set, release-notes conventions, and the layout rules that keep pages credible and scannable.

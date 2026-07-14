@@ -1,3 +1,8 @@
+---
+name: page-level-standards
+description: Governs the anatomy of a single documentation page - the title-to-next-steps skeleton, the one-purpose rule, front-matter requirements, scannability thresholds, code-block discipline, and link hygiene. Use when drafting or reviewing an individual page's structure, headings, code blocks, or links.
+---
+
 # Page-Level Standards
 
 This skill governs the anatomy of a single documentation page: the title-to-next-steps skeleton, the one-purpose rule, scannability thresholds, code-block discipline, and link hygiene. The stance: readers do not read pages, they scan them under time pressure; a page is well-formed when a scanner finds the answer without reading and a reader who does read is never surprised by a missing prerequisite.

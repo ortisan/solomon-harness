@@ -1,3 +1,8 @@
+---
+name: handoff-and-memory-orchestration
+description: Governs driving a feature through the product_owner, software_architect, software_engineer, qa, and sre lifecycle as an auditable state machine, recorded via log_handoff, save_session, and save_decision. Use when a feature crosses a lifecycle stage boundary, resuming after a context loss, or reviewing a handoff trail for completeness.
+---
+
 # Handoff and Memory Orchestration
 
 Drive a feature through the lifecycle as an explicit, auditable state machine in project memory, so that `product_owner -> software_architect -> software_engineer -> qa -> sre` is a chain of recorded handoffs and not tribal knowledge. Every stage boundary is one `log_handoff` entry pointing at a committed contract artifact, every work session is checkpointed with `save_session`, every resume begins with `get_latest_activity`, and every ceremony verdict is an immutable `save_decision`. You are the orchestrator: you do not do the engineering, you make sure each stage hands the next exactly what it needs and that the trail survives a context loss.
