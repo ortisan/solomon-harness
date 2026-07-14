@@ -137,16 +137,28 @@ loop surfaces gaps, a human applies them.
 
 Every feature/story issue gets a durable spec document: after creation,
 `/solomon-issue` copies `docs/specs/0000-spec-template.md` to
-`docs/specs/<N>-<slug>.md` via the Write tool and pre-fills the seven mandated
-sections (Context, Problem, Requirements, Acceptance Criteria, Design
-Constraints, Out of Scope, Traceability) from the shaped issue body, with the
-explicit placeholder `TBD (refine)` wherever content is unknown.
-`scripts/spec-lint.py` enforces the convention (filename rule, sections
-present and non-empty, Traceability citing the issue) and runs in the CI
-validators job. The spec ships with the issue's first implementation PR —
-never pushed to a protected branch directly. The convention's full definition
-lives in `docs/specs/README.md`; its decision record is ADR-0028, shipped
-with the migration of the decision tree to `docs/adrs` (#221 S2a).
+`docs/specs/<N>-<slug>.md` via the Write tool and pre-fills the nine mandated
+sections (Context, Problem, Requirements, Implementation Pointers, Acceptance
+Criteria, Verification, Design Constraints, Out of Scope, Traceability) from
+the shaped issue body, with the explicit placeholder `TBD (refine)` wherever
+content is unknown at creation. The spec is the artifact the implementing model
+reads, so it must be **implementation-ready** before work starts (maintainer
+directive 2026-07-14): `Implementation Pointers` gives the exact `file:line`
+targets, the current versus expected behavior, and the concrete approach;
+`Verification` gives the exact command(s) that prove the change works. A model
+should be able to implement from the spec without asking anything.
+
+`/solomon-refine` resolves every placeholder and flips the spec to
+`Status: ready`. `scripts/spec-lint.py` enforces the convention (filename rule,
+sections present and non-empty, Traceability citing the issue) and, once a spec
+is `Status: ready` or `implemented`, that no section still holds a
+`TBD (refine)` line — the mechanical gate that a refined issue is implementable
+without guessing. It runs in the CI validators job. The spec ships with the
+issue's first implementation PR — never pushed to a protected branch directly.
+The convention's full definition lives in `docs/specs/README.md`; its decision
+record is ADR-0028, shipped with the migration of the decision tree to
+`docs/adrs` (#221 S2a). The implementation-ready bar — the two sections plus the
+Ready-status placeholder gate — amends that convention in ADR-0032.
 
 ## Implementation mode (automatic or manual)
 
@@ -166,6 +178,32 @@ enumerated-options style above (Automatic, recommended and first; Manual; Other)
 - Headless (`solomon-harness dev start`): with no one to answer, the stage does not block on
   the prompt — it defaults to Automatic and prints
   `Implementation mode: Automatic (non-interactive default)`, so CI never hangs on stdin.
+
+## Discovered-problem protocol (`/solomon-start`, `/solomon-loop`)
+
+Implementing one issue routinely surfaces a *different* problem — an unrelated
+defect, a better approach, a missing test, a refactor worth doing. The rule is
+fixed (maintainer directive 2026-07-14):
+
+- **File it as a new issue; do not comment it onto the in-flight issue.** A
+  discovery becomes a fresh issue — `/solomon-bug` for a defect, `/solomon-issue`
+  for a feature or improvement, a `type:chore` for cleanup — whose body links
+  the parent with a `Refs #<parent>` line. Appending it as a comment on the
+  issue being worked pollutes that thread and loses tracking. (The single status
+  comment `/solomon-start` posts — the branch back-link — is not a discovery and
+  stays.)
+- **Do not silently widen the current change.** The diff stays inside the
+  PLAN.md target-files fence. A discovery outside that fence is out of scope for
+  the current PR; it goes to its own issue and its own branch.
+- **If the discovery blocks the current issue,** stop and surface it to the
+  human as an enumerated choice (file-and-continue, file-and-switch, or Other) —
+  never decide unilaterally to abandon or rescope in-flight work. A headless run
+  files the `Refs #<parent>` issue, records the block in its run report, and
+  stops the current issue rather than expanding it.
+
+This keeps each issue's record clean and every discovered unit of work
+independently trackable, refinable, and claimable. The protocol is recorded
+with the implementation-ready bar in ADR-0032.
 
 ## Review staffing
 
@@ -301,8 +339,12 @@ The CLI surface for this stage is `solomon-harness release plan | prep | check |
 
 - Feature/story: context, user story (`As a … I want … so that …`),
   acceptance criteria as Given/When/Then, scope and out-of-scope, definition of ready.
-- Bug: summary, steps to reproduce, expected vs actual, environment, severity, and
-  a note that a regression test is required before the fix is closed.
+  The implementation-ready detail (exact `file:line` pointers, current versus
+  expected behavior, the concrete approach, and the verification command) lives
+  in the issue's spec doc under `docs/specs/` — see "Spec generation".
+- Bug: summary, steps to reproduce, expected vs actual, environment, severity, the
+  suspected location as `file:line`, the verification command that proves the fix,
+  and a note that a regression test is required before the fix is closed.
 - Idea: the job-to-be-done, the opportunity, the riskiest assumption to validate,
   and what evidence would justify promoting it to the backlog.
 

@@ -10,18 +10,28 @@ scattered issue text.
 - Filename: `<N>-<slug>.md`, where `<N>` is the plain GitHub issue number (no
   leading zeros — the lint rejects them) and `<slug>` is the kebab-case issue
   title (ASCII lowercase `[a-z0-9]` and single hyphens only).
-- Content: copy `0000-spec-template.md` and fill the seven sections — Context,
-  Problem, Requirements, Acceptance Criteria, Design Constraints, Out of
-  Scope, Traceability. A section with nothing to say carries the explicit
-  placeholder `TBD (refine)`; it is never left empty and never deleted.
+- Content: copy `0000-spec-template.md` and fill the nine sections — Context,
+  Problem, Requirements, Implementation Pointers, Acceptance Criteria,
+  Verification, Design Constraints, Out of Scope, Traceability. A section with
+  nothing to say yet carries the explicit placeholder `TBD (refine)` on its own
+  line; it is never left empty and never deleted.
+- Implementation-ready bar: `Implementation Pointers` states the exact
+  `file:line` targets, the current behavior versus the expected behavior, and
+  the concrete approach; `Verification` states the exact command(s) that prove
+  the change works. Together they let the implementing model act without
+  guessing.
 - Traceability must cite the issue (`#<N>`) and the related ADR once one
   exists.
-- The spec is written at issue-creation time and ships with the issue's first
-  implementation PR; it is never pushed to a protected branch directly.
+- The spec is written at issue-creation time (`Status: draft`, placeholders
+  allowed) and refined to `Status: ready` before implementation starts. At
+  `ready` — and at `implemented` — no section may still hold a `TBD (refine)`
+  line; refinement resolves every placeholder. The spec ships with the issue's
+  first implementation PR; it is never pushed to a protected branch directly.
 
 ## Validation
 
-`scripts/spec-lint.py` enforces the filename rule and the seven sections, and
+`scripts/spec-lint.py` enforces the filename rule, the nine sections, and the
+implementation-ready bar (no `TBD (refine)` line once `Status: ready`), and
 runs in CI beside the other validators:
 
 ```bash
@@ -30,4 +40,6 @@ uv run python scripts/spec-lint.py docs/specs/42-x.md  # lint one spec
 ```
 
 Decisions live beside specs: architecture records are under `docs/adrs/`
-(ADR-0028 records that home and this convention; #221 S2a).
+(ADR-0028 records that home and this convention; #221 S2a). The
+implementation-ready bar — the `Implementation Pointers` and `Verification`
+sections and the Ready-status placeholder gate — amends it in ADR-0032.
