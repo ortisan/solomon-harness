@@ -310,6 +310,7 @@ table.
 | `healthcheck` | Report runtime readiness and pending init items (Docker, memory, board, global install) |
 | `git-repair` | Repair local git config by unsetting stray `core.worktree` and setting `core.bare` to false |
 | `loop-lock [status\|release]` | Inspect or clear the single-driver loop lock (crash recovery) |
+| `claim status\|release <issue>` | Inspect or release an issue claim/lease |
 | `log [--last N]` | Show the read-only loop activity feed (loop runs, decisions, handoffs) |
 | `loop-guard` | PreToolUse hook: block push/merge while another driver holds the loop lock |
 | `loop-stop [--clear]` | Kill-switch: halt all autonomous loop stages immediately (or clear it) |

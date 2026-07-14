@@ -386,6 +386,45 @@ Human approval before any merge or release is unchanged: the lock bounds *who*
 may drive, not *whether* a human approves. See `docs/loop-engineering.md` for the
 full adaptation roadmap.
 
+### Per-issue claims (second concurrency layer)
+
+The single-driver lock above governs who may drive one checkout; it says
+nothing about two checkouts, or two host tools, picking the same issue.
+ADR-0027 layers a second mechanism on top of it, never a replacement: the
+repo-wide lock (ADR-0010) serializes headless drivers per checkout; the
+per-issue claim serializes sessions per issue across every checkout and host.
+
+- **Authoritative substrate.** The sole source of truth is the git ref
+  `refs/claims/issue-N`, compare-and-swapped via `git push --force-with-lease`
+  — no database needed, so it works unchanged under the SQLite memory
+  fallback, where every worktree otherwise has its own isolated database.
+  Implementation: `solomon_harness/claim.py`.
+- **Claim fields and TTL.** A claim's commit message is a JSON object with
+  `session_id`, `acquired_at`, and `heartbeat_at`, active for 1800 seconds
+  since the last heartbeat. A headless `dev start` spawns a daemon thread
+  that re-touches `heartbeat_at` every
+  `SOLOMON_CLAIM_HEARTBEAT_INTERVAL_SECONDS` (default 600 seconds), so a
+  stage outliving the TTL before a PR exists never becomes reclaimable
+  mid-implementation.
+- **Stale-claim reclaim.** Past the TTL, another session may reclaim the
+  issue unless its board card sits in `Code Review` or `QA`; when that
+  liveness check cannot be determined (a `gh` failure, not "no PR found"),
+  `claim_issue` fails closed rather than risk a double-pick on a transient
+  outage.
+- **Best-effort mirror and degrade paths.** `claim_issue`/`release_claim`
+  also write or clear a mirror record in the project memory, purely so the
+  holder is queryable via the memory MCP tools and the digest without a git
+  fetch — never consulted for the decision itself. Memory down: the git ref
+  still governs. Git fetch failing: the board-scan filters degrade to the
+  unfiltered list, since the real enforcement point is the compare-and-swap
+  inside `claim_issue` at `start` time, not the scan.
+- **Operator commands and release.** `solomon-harness claim status <issue>`
+  shows the holder, age, and PR/review protection; `claim release <issue>`
+  clears it. A successful `gh pr merge` also force-releases the claim.
+
+See ADR-0027 for the full decision, and ADR-0010 for the repo-wide lock this
+layers on top of.
+
 ## Autonomy levels and the kill-switch
 
 How far the automation path (`solomon-harness dev <stage>` and any host-scheduled

@@ -197,6 +197,108 @@ def handle_loop_lock(workspace_root: str, action: str) -> None:
         print("No loop lock to release.")
 
 
+def handle_claim(workspace_root: str, action: str, issue_number: int, force: bool = False) -> None:
+    """Inspect, acquire, or release an issue claim/lease."""
+    from solomon_harness import claim
+    import datetime
+    import sys
+
+    if action == "acquire":
+        # The interactive chokepoint (ADR-0027): /solomon-start runs this
+        # before creating any branch or PLAN so interactive sessions get the
+        # same mutual exclusion the headless gate enforces. Exit 0 = claim
+        # held by this session; exit 1 = refused (holder shown when known).
+        current_sess = claim.get_current_session_id()
+        if claim.claim_issue(workspace_root, issue_number, current_session_id=current_sess):
+            print(f"Claimed issue #{issue_number} for session {current_sess}.")
+            return
+        # Mirror the headless gate's semantics exactly: any ref still present
+        # (well-formed or malformed) means refused; a genuinely absent ref
+        # means there is no reachable claims remote -- a no-op environment,
+        # where interactive and headless both proceed without a claim.
+        ref_info = claim.get_claim_ref(workspace_root, issue_number)
+        if ref_info is None:
+            print(
+                f"Warning: could not record a claim ref for issue #{issue_number} "
+                "(no claims remote configured?); proceeding without one.",
+                file=sys.stderr,
+            )
+            return
+        holder = ref_info[1]
+        if holder is not None:
+            acquired_str = holder.get("acquired_at") or "unknown"
+            age_str = "unknown"
+            try:
+                acquired = datetime.datetime.fromisoformat(acquired_str.replace("Z", "+00:00"))
+                now = datetime.datetime.now(datetime.timezone.utc)
+                age_str = f"{int((now - acquired).total_seconds() / 60)} minutes"
+            except Exception:
+                pass
+            print(
+                f"Error: issue #{issue_number} is claimed by session "
+                f"'{holder.get('session_id')}' (age: {age_str}), or its PR/review "
+                "liveness could not be confirmed. Refusing to claim.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Error: issue #{issue_number} carries a malformed claim ref that "
+                "could not be reclaimed; inspect with 'solomon-harness claim status' "
+                f"and clear it with 'solomon-harness claim release {issue_number} --force'.",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if action == "status":
+        ref_info = claim.get_claim_ref(workspace_root, issue_number)
+        if ref_info is not None and ref_info[1] is None:
+            # A poisoned ref must not read as "unclaimed" to an operator
+            # during a corruption incident: it still occupies the ref.
+            print(
+                f"Issue #{issue_number} carries a MALFORMED claim ref (recoverable: "
+                f"a new claim reclaims it, or 'claim release {issue_number} --force' deletes it)."
+            )
+            return
+        c = ref_info[1] if ref_info else None
+        if not c:
+            print(f"Issue #{issue_number} is unclaimed.")
+            return
+        has_pr = claim.has_active_pr_or_review(workspace_root, issue_number)
+        current_sess = claim.get_current_session_id()
+        active = claim.is_claim_active(c, current_sess, has_open_pr=has_pr)
+        status_str = "ACTIVE" if active else "STALE"
+        acquired_str = c.get("acquired_at") or "unknown"
+        age_str = "unknown"
+        try:
+            acquired = datetime.datetime.fromisoformat(acquired_str.replace("Z", "+00:00"))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            diff = now - acquired
+            age_str = f"{int(diff.total_seconds() / 60)} minutes"
+        except Exception:
+            pass
+        print(f"Claim status: {status_str}")
+        print(f"  Holder (session): {c.get('session_id')}")
+        print(f"  Acquired: {acquired_str} (age: {age_str})")
+        print(f"  Protected by open PR/review: {has_pr}")
+        return
+
+    if action == "release":
+        current_sess = claim.get_current_session_id()
+        if claim.release_claim(
+            workspace_root, issue_number, current_session_id=current_sess, force=force
+        ):
+            print(f"Released claim on issue #{issue_number}." + (" (forced)" if force else ""))
+        else:
+            print(
+                f"Error: failed to release claim on issue #{issue_number} "
+                "(it may be active and owned by another session, or its "
+                "PR/review liveness could not be confirmed). An operator who "
+                "must clear it anyway can rerun with --force.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def handle_loop_stop(workspace_root: str, clear: bool) -> None:
     """Kill-switch: halt all autonomous loop stages immediately, or clear it."""
     from solomon_harness import loop_policy
@@ -653,6 +755,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="status (default) shows the holder; release clears a stale or stuck lock",
     )
 
+    claim_parser = subparsers.add_parser(
+        "claim", help="Inspect, acquire, or release an issue claim/lease"
+    )
+    claim_parser.add_argument(
+        "action", choices=["status", "acquire", "release"],
+        help="status shows the holder; acquire claims the issue for this session "
+        "(the /solomon-start interactive gate); release clears a claim",
+    )
+    claim_parser.add_argument(
+        "issue", type=int,
+        help="The issue number to inspect, acquire, or release",
+    )
+    claim_parser.add_argument(
+        "--force", action="store_true",
+        help="release only: clear the claim even if it is active and owned by "
+        "another session (operator escape hatch for a stuck claim)",
+    )
+
     log_parser = subparsers.add_parser(
         "log", help="Show the loop activity feed (loop runs, decisions, handoffs)"
     )
@@ -769,9 +889,19 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         harness_dir = os.getcwd()
 
     # Determine workspace root
+    ceilings = []
+    if "GIT_CEILING_DIRECTORIES" in os.environ:
+        ceilings = [
+            os.path.abspath(p)
+            for p in os.environ["GIT_CEILING_DIRECTORIES"].split(os.pathsep)
+            if p
+        ]
+
     project_root = harness_dir
     found_root = False
     while project_root and project_root != os.path.dirname(project_root):
+        if os.path.abspath(project_root) in ceilings:
+            break
         if os.path.exists(os.path.join(project_root, ".git")):
             found_root = True
             break
@@ -808,6 +938,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         sys.exit(0)
     elif args.command == "loop-lock":
         handle_loop_lock(workspace_root, args.action)
+    elif args.command == "claim":
+        handle_claim(workspace_root, args.action, args.issue, force=args.force)
     elif args.command == "loop-guard":
         handle_loop_guard(workspace_root)
     elif args.command == "loop-stop":
