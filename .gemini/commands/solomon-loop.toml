@@ -15,5 +15,12 @@ Once you have the limit (default to 3 if not specified), run the parallel loop o
 uv run python -m solomon_harness.cli dev loop --concurrency <limit> {{args}}
 ```
 
+Capability gaps: the start/refine stages the loop drives run a Capability
+Check (ADR-0008) and may report a capability gap in their output. The loop
+only surfaces the gap — acquisition (adapt a skill, create an agent) is
+human-gated, and `solomon-harness broker apply` refuses headless runs (exit 3).
+Report any surfaced gap to the user as a candidate next action;
+never attempt the acquisition from the loop.
+
 After the command completes, summarize the success/failure of each issue's autonomous pipeline.
 '''

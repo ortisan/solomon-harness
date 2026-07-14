@@ -265,3 +265,44 @@ def test_product_owner_has_the_socratic_elicitation_skill():
         os.path.join("agents", "product_owner", "agents", "product_owner.md")
     )
     assert "socratic_elicitation" in profile
+
+
+# --- Capability broker wiring in refine/start (#50, ADR-0008) -----------------
+
+
+def test_start_and_refine_wire_the_broker_through_the_cli():
+    for rel in (
+        os.path.join(".claude", "commands", "solomon-start.md"),
+        os.path.join(".claude", "commands", "solomon-refine.md"),
+    ):
+        body = _read(rel)
+        low = body.lower()
+        assert "capability check" in low, rel
+        # The mechanism is the CLI over a JSON file, never inline Python over
+        # issue-derived text (PR #213 review B1/B3).
+        assert "broker route --file" in body, rel
+        assert "broker apply --file" in body, rel
+        assert 'python -c "from solomon_harness' not in body, rel
+        # Acquisition is human-gated: headless records the gap, never applies
+        # (PR #213 review B2, issue #50 AC2).
+        assert "human-gated" in low, rel
+        assert "fails closed" in low, rel
+        # The enumerated gate must be answerable: the tool is allowlisted.
+        frontmatter = body.split("---")[1]
+        assert "AskUserQuestion" in frontmatter, rel
+
+
+def test_gemini_mirrors_carry_the_broker_wiring():
+    for name in ("start", "refine"):
+        body = _read(os.path.join(".gemini", "commands", f"solomon-{name}.toml"))
+        assert "broker route --file" in body, name
+        assert "broker apply --file" in body, name
+        assert 'python -c "from solomon_harness' not in body, name
+
+
+def test_loop_documents_gap_surfacing_as_human_gated():
+    body = _read(os.path.join(".claude", "commands", "solomon-loop.md"))
+    low = body.lower()
+    assert "capability gap" in low
+    assert "human-gated" in low
+    assert "never attempt the acquisition" in low
