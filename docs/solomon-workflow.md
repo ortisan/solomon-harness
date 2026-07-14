@@ -145,8 +145,8 @@ explicit placeholder `TBD (refine)` wherever content is unknown.
 present and non-empty, Traceability citing the issue) and runs in the CI
 validators job. The spec ships with the issue's first implementation PR —
 never pushed to a protected branch directly. The convention's full definition
-lives in `docs/specs/README.md`; its decision record lands with the
-`docs/adrs` → `docs/adrs` migration (#221 S2a).
+lives in `docs/specs/README.md`; its decision record is ADR-0028, shipped
+with the migration of the decision tree to `docs/adrs` (#221 S2a).
 
 ## Implementation mode (automatic or manual)
 

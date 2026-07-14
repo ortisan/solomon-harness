@@ -29,5 +29,5 @@ uv run python scripts/spec-lint.py                     # lint the whole tree
 uv run python scripts/spec-lint.py docs/specs/42-x.md  # lint one spec
 ```
 
-Decisions live beside specs: architecture records are under `docs/adrs/` (their
-move to `docs/adrs/` and the convention's decision record are #221 S2a).
+Decisions live beside specs: architecture records are under `docs/adrs/`
+(ADR-0028 records that home and this convention; #221 S2a).

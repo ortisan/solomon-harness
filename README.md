@@ -40,7 +40,9 @@ uv pip install -e .     # expose the `solomon-harness` CLI on PATH
 From your project directory, run init: it checks prerequisites, copies the harness
 in (agents, the `solomon_harness` package, scripts, config), configures it,
 generates the host-tool integrations, sets the project's memory tenant, and
-indexes the codebase.
+indexes the codebase. The harness's own documents never travel: your project's
+`docs/` receives only its own empty `adrs/` and `specs/` trees, seeded with
+each convention's template and README (ADR-0029).
 
 ```bash
 cd /path/to/your/project

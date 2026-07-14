@@ -315,47 +315,32 @@ def _install_harness_files(workspace_root: str) -> None:
         dest = os.path.join(workspace_root, name)
         if os.path.isfile(src) and not os.path.exists(dest):
             shutil.copy2(src, dest)
-    _install_docs_skeleton(repo_root, workspace_root, ignore)
+    _install_docs_skeleton(repo_root, workspace_root)
     print("  Harness files installed.")
 
 
-# The operating documents the /solomon-* commands read at run time; everything
-# else under docs/ (the harness's own decision records, specs, wiki pages)
-# describes the harness, never the installing project (ADR-0028).
-DOCS_OPERATING_FILES = (
-    "solomon-workflow.md",
-    "release-policy.md",
-    "loop-engineering.md",
-)
-DOCS_OPERATING_TREES = ("templates",)
-# Record trees travel as convention scaffolding only: template + README.
+# The harness's documents never travel into installed projects (ADR-0029):
+# a child project's docs/ receives ONLY its own empty record trees, seeded
+# with each convention's template and README so the project can write ITS
+# decisions and specs. The operating conventions the commands read re-home
+# into the tooling layer with #240 (.agents/solomon).
 DOCS_RECORD_TREES = {
     "adrs": ("0000-adr-template.md", "README.md"),
     "specs": ("0000-spec-template.md", "README.md"),
 }
 
 
-def _install_docs_skeleton(repo_root: str, workspace_root: str, ignore) -> None:
-    """Install the docs skeleton: operating docs plus empty record trees.
+def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
+    """Scaffold the project's own record trees; nothing else travels.
 
     An installed project's docs/adrs and docs/specs hold that project's OWN
-    decisions and specs; the harness's records stay in the harness repository.
+    decisions and specs; every harness document (records, specs, wiki,
+    conventions, README) stays in the harness repository.
     """
     src_docs = os.path.join(repo_root, "docs")
     dest_docs = os.path.join(workspace_root, "docs")
     if not os.path.isdir(src_docs):
         return
-    os.makedirs(dest_docs, exist_ok=True)
-    for name in DOCS_OPERATING_FILES:
-        src = os.path.join(src_docs, name)
-        dest = os.path.join(dest_docs, name)
-        if os.path.isfile(src) and not os.path.exists(dest):
-            shutil.copy2(src, dest)
-    for tree in DOCS_OPERATING_TREES:
-        src = os.path.join(src_docs, tree)
-        dest = os.path.join(dest_docs, tree)
-        if os.path.isdir(src) and not os.path.exists(dest):
-            shutil.copytree(src, dest, ignore=ignore)
     for tree, scaffolding in DOCS_RECORD_TREES.items():
         dest_tree = os.path.join(dest_docs, tree)
         os.makedirs(dest_tree, exist_ok=True)

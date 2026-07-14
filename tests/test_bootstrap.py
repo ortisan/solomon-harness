@@ -476,13 +476,19 @@ class TestInstallDocsBoundary(unittest.TestCase):
             sorted(os.listdir(specs)), ["0000-spec-template.md", "README.md"],
             "an installed project's docs/specs holds only the convention scaffolding",
         )
-        # The harness's own wiki pages and root README stay home.
+        # Nothing else from the harness's docs travels (ADR-0029): no wiki,
+        # no conventions, no templates tree, no root README — the record
+        # scaffolding above is the entire docs payload.
         self.assertFalse(os.path.isdir(os.path.join(self.workspace, "docs", "wiki")))
         self.assertFalse(os.path.isfile(os.path.join(self.workspace, "README.md")))
-        # The operating documents the commands read do travel.
-        self.assertTrue(
+        self.assertFalse(
             os.path.isfile(os.path.join(self.workspace, "docs", "solomon-workflow.md"))
         )
-        self.assertTrue(
+        self.assertFalse(
             os.path.isdir(os.path.join(self.workspace, "docs", "templates"))
+        )
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.workspace, "docs"))),
+            ["adrs", "specs"],
+            "the record scaffolding is the entire docs payload of an install",
         )
