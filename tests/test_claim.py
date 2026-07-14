@@ -1101,6 +1101,71 @@ class TestClaimConcurrency(unittest.TestCase):
         self.assertIsNotNone(recorded)
         self.assertEqual(recorded.get("session_id"), f"sess-{winners[0]}")
 
+    def _seed_stale_claim(self, issue_number, owner):
+        """Push a past-TTL claim commit onto the origin's claim ref."""
+        past = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=40)
+        ).isoformat()
+        claim_data = {"session_id": owner, "acquired_at": past, "heartbeat_at": past}
+        seed = os.path.join(self.tmp, "stale-seed")
+        _git(None, "clone", "-q", self.origin, seed)
+        _git(seed, "config", "user.email", "t@example.com")
+        _git(seed, "config", "user.name", "Test")
+        tree = _git(seed, "write-tree").stdout.strip()
+        commit = _git(seed, "commit-tree", "-m", json.dumps(claim_data), tree).stdout.strip()
+        _git(seed, "push", "-q", "origin", f"{commit}:refs/claims/issue-{issue_number}")
+
+    def test_exactly_one_session_wins_a_stale_reclaim_race(self):
+        # Seed a past-TTL claim so every racer exercises the RECLAIM branch
+        # (claim_issue's `existing_sha` push with --force-with-lease={ref}:{sha}),
+        # which the fresh-claim race never touches. This asserts the observable
+        # end-to-end guarantee: exactly one of N distinct sessions reclaims a
+        # stale claim, and the stale owner is replaced.
+        #
+        # Note on what actually enforces this: under a real race the primary
+        # guard is claim_issue's is_claim_active recheck (a racer whose fetch
+        # lands after the winner's reclaim sees a fresh, active claim and bails
+        # before pushing). The git CAS lease is defense-in-depth for the
+        # narrower window where two sessions fetch the SAME stale sha at the same
+        # instant and both reach the push -- a window this test cannot force
+        # deterministically (the fetch happens inside claim_issue, after the
+        # Barrier), so this test does not, on its own, isolate the lease. The
+        # fresh-claim race above is the one that catches a broken push signal.
+        import threading
+
+        self._seed_stale_claim(99, "sess-old")
+        results = {}
+        errors = {}
+        start = threading.Barrier(self.N)
+
+        def _attempt(i):
+            try:
+                start.wait(timeout=10)
+                results[i] = claim.claim_issue(
+                    self.clones[i], 99, current_session_id=f"sess-{i}"
+                )
+            except Exception as exc:  # noqa: BLE001 - a racing thread must never crash the test
+                errors[i] = repr(exc)
+
+        threads = [threading.Thread(target=_attempt, args=(i,)) for i in range(self.N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        self.assertEqual(errors, {}, f"no racing thread should raise: {errors}")
+        self.assertEqual(len(results), self.N, "every thread recorded a result")
+        winners = [i for i, ok in results.items() if ok]
+        self.assertEqual(
+            len(winners), 1, f"exactly one reclaimer expected, got {winners} (results={results})"
+        )
+        recorded = claim.get_claim(self.clones[winners[0]], 99)
+        self.assertIsNotNone(recorded)
+        self.assertEqual(recorded.get("session_id"), f"sess-{winners[0]}")
+        self.assertNotEqual(
+            recorded.get("session_id"), "sess-old", "the stale owner must have been replaced"
+        )
+
 
 if __name__ == '__main__':
     from io import StringIO
