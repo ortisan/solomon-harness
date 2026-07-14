@@ -11,7 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "spec-lint.py"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "spec-lint.py"
+DOCS_SPECS = REPO_ROOT / "docs" / "specs"
 
 SECTION_HEADINGS = [
     "Context",
@@ -104,3 +106,26 @@ def test_nonexistent_path_fails_cleanly(tmp_path):
     assert result.returncode == 2
     assert "not found" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+# --- House template and convention doc --------------------------------------
+
+
+def test_template_and_readme_exist():
+    assert (DOCS_SPECS / "0000-spec-template.md").is_file()
+    assert (DOCS_SPECS / "README.md").is_file()
+
+
+def test_template_has_headings_in_canonical_order():
+    content = (DOCS_SPECS / "0000-spec-template.md").read_text(encoding="utf-8")
+    positions = [content.index(f"## {heading}") for heading in SECTION_HEADINGS]
+    assert positions == sorted(positions)
+
+
+def test_fresh_docs_specs_directory_passes_lint():
+    # Only the template and the README live in docs/specs at this point (no
+    # issue has generated a spec yet); the scan must still exit 0.
+    result = _run(str(DOCS_SPECS))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
