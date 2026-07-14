@@ -7,7 +7,10 @@ sections, and (later steps) render and write the seven-heading spec document.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -358,6 +361,95 @@ def test_write_spec_stays_within_the_latency_budget(tmp_path):
     assert elapsed < 2.0, f"write_spec took {elapsed:.3f}s, budget is 2.0s"
 
 
+# --- write-only guarantee ----------------------------------------------------------
+#
+# A prior version of this guarantee only checked stdout for the absence of
+# the substrings "commit"/"push", which proves nothing about the module's own
+# behavior (it would pass even if spec_doc.py silently ran `git add`, as long
+# as it never printed the word). These two tests instead check the actual
+# guarantee: no version-control API is even reachable from the module's
+# source, and a real git repository is provably untouched after generation.
+
+
+def _banned_vcs_usage(module_path: Path) -> list[str]:
+    """Return every disallowed version-control touchpoint found in source.
+
+    Flags a top-level import of `subprocess` or `git`, and any call to
+    `os.system`, wherever in the module they occur.
+    """
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    banned_modules = {"subprocess", "git"}
+    findings: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            findings.extend(
+                alias.name
+                for alias in node.names
+                if alias.name.split(".")[0] in banned_modules
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.split(".")[0] in banned_modules:
+                findings.append(node.module)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "system":
+                findings.append("os.system(...)")
+
+    return findings
+
+
+def test_spec_doc_module_source_never_imports_or_calls_a_vcs_api():
+    findings = _banned_vcs_usage(Path(spec_doc.__file__))
+    assert findings == []
+
+
+def test_generate_cli_makes_no_git_commit_or_staging_in_a_real_repo(tmp_path):
+    subprocess.run(["git", "init", "--quiet"], cwd=str(tmp_path), check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=str(tmp_path), check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(tmp_path), check=True)
+
+    body_file = tmp_path / "body.md"
+    body_file.write_text(FULL_ISSUE_BODY, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "solomon_harness.spec_doc",
+            "generate",
+            "--issue",
+            "226",
+            "--title",
+            "Spec doc per issue",
+            "--body-file",
+            str(body_file),
+            "--root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+    assert result.returncode == 0, result.stderr
+
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=str(tmp_path), capture_output=True, text=True
+    )
+    assert log.stdout.strip() == "", "generation must never create a commit"
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=str(tmp_path), capture_output=True, text=True
+    )
+    assert status.stdout.strip() != ""  # sanity: the new files do show up as untracked
+    for line in status.stdout.splitlines():
+        # The index-column code (the first character) is the staged status;
+        # untracked ("?") or unmodified (" ") are the only codes consistent
+        # with "stages nothing".
+        assert line[0] in (" ", "?"), f"unexpected staged entry: {line}"
+
+
 # --- generate CLI ----------------------------------------------------------------
 
 
@@ -399,9 +491,6 @@ def test_generate_cli_writes_spec_and_prints_uncommitted_note(tmp_path):
 
 
 def test_generate_cli_missing_body_file_fails_cleanly(tmp_path):
-    import subprocess
-    import sys
-
     missing_body_file = tmp_path / "does-not-exist.md"
 
     result = subprocess.run(
