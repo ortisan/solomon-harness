@@ -199,7 +199,11 @@ def apply_proposal(
         title = f"feat(agents): apply proposal for {proposal.agent}"
         body = f"Closes #{proposal.decision_id or ''}"
         gh_cmd = ["gh", "pr", "create", "--draft", "--base", "main", "--title", title, "--body", body]
-        if proposal.kind == ADAPT_SKILL_KIND:
+        # Every brokered acquisition gets the security reviewer: an adapted
+        # skill and a new agent's persona/duties both become trusted
+        # instruction content for future sessions. Plain drift proposals
+        # (no kind) keep the default reviewer set.
+        if proposal.kind in (ADAPT_SKILL_KIND, "create_agent"):
             gh_cmd.extend(["--reviewer", "security"])
         
         if gh_runner:
@@ -239,6 +243,14 @@ def apply_proposal(
         try:
             from solomon_harness.tools.database_client import DatabaseClient
             import datetime
+            head_sha = ""
+            try:
+                head_sha = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+            except (subprocess.SubprocessError, OSError):
+                pass
             with DatabaseClient(harness_dir=root) as db:
                 title = f"ADR-Broker: Applied {proposal.kind} for {proposal.agent}"
                 if proposal.decision_id:
@@ -250,7 +262,7 @@ def apply_proposal(
                     outcome=outcome,
                     author="practice_curator",
                     branch=branch_name,
-                    commit_sha="",
+                    commit_sha=head_sha,
                 )
                 
                 if proposal.decision_id:
@@ -496,9 +508,15 @@ def broker_skill(
     issue_id: Optional[str] = None
 ) -> str:
     """Acquires a skill from an allowlisted external source, adapts it, and installs it via apply_proposal."""
+    import re
     import tempfile
     from solomon_harness.skills import load_sources, discover_skill_files
-    
+
+    # issue_id reaches decision titles and the handoff filename; keep it a
+    # plain issue number so malformed values never reach disk paths.
+    if issue_id is not None and not re.fullmatch(r"[0-9]+", str(issue_id)):
+        raise ValueError("issue_id must be a plain issue number")
+
     sources = load_sources(workspace_root)
     source = sources.get(source_name)
     if not source:
@@ -547,6 +565,11 @@ def broker_agent(
     # Validate agent name strictly to prevent path traversal/confinement escape
     if not re.match(r"^[a-z0-9_]+$", agent_name):
         raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    # issue_id reaches decision titles and the handoff filename; keep it a
+    # plain issue number so malformed values never reach disk paths.
+    if issue_id is not None and not re.fullmatch(r"[0-9]+", str(issue_id)):
+        raise ValueError("issue_id must be a plain issue number")
 
     def edit_callback(agent_dir: str) -> None:
         # Confinement check
