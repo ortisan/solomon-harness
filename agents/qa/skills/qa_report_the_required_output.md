@@ -1,3 +1,8 @@
+---
+name: qa-report-the-required-output
+description: Defines the required structure of the QA report that the /solomon-review gate reads to pass or block a pull request, including requirements coverage, risk-band results, defect lists, and the mechanical go/no-go rule. Use when publishing a verification report or deciding a build's GO/NO-GO verdict.
+---
+
 # QA Report the Required Output
 
 The QA report is the artifact `/solomon-review` reads to pass or block a pull request. It is the gate, not a courtesy summary. A verbal "looks good", a green CI badge, or a screenshot of a passing run is not acceptable evidence: the reviewer needs one document that states scope, maps every exit criterion to evidence, and ends in an explicit machine-checkable verdict. This skill owns the report's structure and the go/no-go decision rule. It pulls thresholds from the sibling skills rather than re-deriving them: coverage numbers come from `coverage_a_floor_not_a_finish_line`, the mutation score from `mutation_testing`, requirements-coverage and the traceability matrix from `test_planning_and_traceability`, and defect severities from `uat`.

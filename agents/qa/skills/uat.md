@@ -1,3 +1,8 @@
+---
+name: uat
+description: Governs user acceptance testing as the business validation gate before release, covering Gherkin case derivation, production-like environments, sign-off roles, and the Blocker/Critical/Major/Minor/Trivial severity scale. Use when facilitating UAT or deciding whether a defect blocks sign-off.
+---
+
 # User Acceptance Testing and the Sign-Off Gate
 
 User acceptance testing (UAT) is the validation step that answers a different question from every test below it: not "does the code work as built" but "did we build the thing the business actually needs". It is the last gate before a `release/*` branch ships, and it is owned by the business, not engineering. At the `/solomon-review` stage QA does not pass UAT itself; QA facilitates it, scripts the cases from acceptance criteria, runs them on a production-like environment, records defects against a fixed severity scale, and captures the sign-off that converts a green technical pipeline into a release decision. This skill owns that gate and the defect-severity scale used at release. The requirement-to-test mapping is owned by `test_planning_and_traceability`; the published gate report by `qa_report_the_required_output`.

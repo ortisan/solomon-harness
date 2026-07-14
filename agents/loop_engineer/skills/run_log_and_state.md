@@ -1,3 +1,8 @@
+---
+name: run-log-and-state
+description: Governs the loop_runs ledger, the merged decisions-and-handoffs activity feed in solomon_harness/loop_log.py, and the throughput and failure-rate aggregates that make an unattended loop auditable and resumable. Use when auditing what a headless loop did, adding a new ledger writer, or reconciling the failed-versus-failure status vocabulary.
+---
+
 # Run-Log and Loop State
 
 A loop's own decisions must trace to a file on disk; this skill governs the run-log ledger and the activity feed that make an unattended loop auditable and resumable. A fresh-context tick should read where the last ticks stopped from durable state, not re-derive it.

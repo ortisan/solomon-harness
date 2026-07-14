@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the exit gate for product work - what a PRD and its stories must satisfy before handoff to engineering - and the specific ways this checklist gets falsely marked satisfied. Use when deciding whether a PRD and its stories are ready to hand off to engineering.
+---
+
 # Product Owner Definition of Done
 
 The exit gate for product work: what must hold before a PRD and its stories are handed to engineering. The pitfalls below are the ways this checklist gets falsely satisfied; the checklist itself follows.

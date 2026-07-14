@@ -1,3 +1,8 @@
+---
+name: page-speed-and-core-web-vitals
+description: Explains how to measure and hit the Core Web Vitals — the LCP, INP, and CLS thresholds, the field-versus-lab measurement discipline, the highest-impact fixes per metric, and enforceable Lighthouse CI performance budgets. Use when diagnosing a failing Core Web Vitals metric, setting a performance budget in CI, or choosing the fix for a slow LCP, layout shift, or unresponsive interaction.
+---
+
 # Page Speed and Core Web Vitals
 
 How to measure and hit the Core Web Vitals: the thresholds, the field-versus-lab discipline, the highest-impact fixes per metric, and enforceable performance budgets. The stance: the only score that counts is the field 75th percentile from real users; lab tools exist to diagnose, and a Lighthouse 100 with failing CrUX is a failing page.

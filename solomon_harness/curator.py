@@ -199,7 +199,11 @@ def apply_proposal(
         title = f"feat(agents): apply proposal for {proposal.agent}"
         body = f"Closes #{proposal.decision_id or ''}"
         gh_cmd = ["gh", "pr", "create", "--draft", "--base", "main", "--title", title, "--body", body]
-        if proposal.kind == ADAPT_SKILL_KIND:
+        # Every brokered acquisition gets the security reviewer: an adapted
+        # skill and a new agent's persona/duties both become trusted
+        # instruction content for future sessions. Plain drift proposals
+        # (no kind) keep the default reviewer set.
+        if proposal.kind in (ADAPT_SKILL_KIND, "create_agent"):
             gh_cmd.extend(["--reviewer", "security"])
         
         if gh_runner:
@@ -236,6 +240,72 @@ def apply_proposal(
                 else:
                     raise
             
+        try:
+            from solomon_harness.tools.database_client import DatabaseClient
+            import datetime
+            head_sha = ""
+            try:
+                head_sha = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+            except (subprocess.SubprocessError, OSError):
+                pass
+            with DatabaseClient(harness_dir=root) as db:
+                title = f"ADR-Broker: Applied {proposal.kind} for {proposal.agent}"
+                if proposal.decision_id:
+                    title += f" for #{proposal.decision_id}"
+                outcome = f"PR: {pr_url}\nBranch: {branch_name}"
+                db.log_decision(
+                    title=title,
+                    rationale=proposal.rationale,
+                    outcome=outcome,
+                    author="practice_curator",
+                    branch=branch_name,
+                    commit_sha=head_sha,
+                )
+                
+                if proposal.decision_id:
+                    date_str = datetime.date.today().isoformat()
+                    contract_dir = os.path.join(root, ".solomon", "handoffs")
+                    os.makedirs(contract_dir, exist_ok=True)
+                    contract_path = os.path.join(contract_dir, f"issue-{proposal.decision_id}-start-to-review.md")
+                    
+                    content = f"""# Handoff: start -> review · issue #{proposal.decision_id}
+- Date: {date_str} · Author: practice_curator
+- Issue: #{proposal.decision_id} · Branch: {branch_name} · PR: {pr_url}
+
+## What this stage did
+Acquired missing capability via capability broker: {proposal.drift_description}. Scaffolds and files created/updated, compiled, and draft PR opened.
+
+## Artifacts (open only if needed)
+- PR: {pr_url}
+- Branch: {branch_name}
+
+## Acceptance criteria status
+Ready for review and verification.
+
+## Input for the next stage (review)
+Verify the newly created/adapted agent or skill on the PR branch.
+
+## Open questions / risks
+None.
+"""
+                    with open(contract_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    
+                    db.log_handoff(
+                        sender="practice_curator",
+                        recipient="qa",
+                        contract_type="pull_request",
+                        contract_path=f".solomon/handoffs/issue-{proposal.decision_id}-start-to-review.md",
+                        status="ready",
+                        summary=f"Acquired capability: {proposal.drift_description}",
+                    )
+        except Exception as db_exc:
+            import logging
+            logging.warning(f"Could not log broker decisions to database: {db_exc}")
+
         return pr_url
     except Exception:
         raise
@@ -434,12 +504,19 @@ def broker_skill(
     source_name: str,
     skill_name: str,
     agent_name: str,
-    gh_runner: Optional[Callable[[List[str]], Any]] = None
+    gh_runner: Optional[Callable[[List[str]], Any]] = None,
+    issue_id: Optional[str] = None
 ) -> str:
     """Acquires a skill from an allowlisted external source, adapts it, and installs it via apply_proposal."""
+    import re
     import tempfile
     from solomon_harness.skills import load_sources, discover_skill_files
-    
+
+    # issue_id reaches decision titles and the handoff filename; keep it a
+    # plain issue number so malformed values never reach disk paths.
+    if issue_id is not None and not re.fullmatch(r"[0-9]+", str(issue_id)):
+        raise ValueError("issue_id must be a plain issue number")
+
     sources = load_sources(workspace_root)
     source = sources.get(source_name)
     if not source:
@@ -463,7 +540,7 @@ def broker_skill(
             drift_description=f"Adapt skill {skill_name} from {source_name}",
             sources=(f"{source_name}@{source.get('pin')}",),
             rationale=f"Acquiring missing capability '{skill_name}' via broker",
-            decision_id=None,
+            decision_id=issue_id,
             kind=ADAPT_SKILL_KIND,
         )
         return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
@@ -475,7 +552,8 @@ def broker_agent(
     title: str,
     description: str,
     duties: List[str],
-    gh_runner: Optional[Callable[[List[str]], Any]] = None
+    gh_runner: Optional[Callable[[List[str]], Any]] = None,
+    issue_id: Optional[str] = None
 ) -> str:
     """Acquires a new agent by scaffolding its directories, files, and default skill,
 
@@ -487,6 +565,11 @@ def broker_agent(
     # Validate agent name strictly to prevent path traversal/confinement escape
     if not re.match(r"^[a-z0-9_]+$", agent_name):
         raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    # issue_id reaches decision titles and the handoff filename; keep it a
+    # plain issue number so malformed values never reach disk paths.
+    if issue_id is not None and not re.fullmatch(r"[0-9]+", str(issue_id)):
+        raise ValueError("issue_id must be a plain issue number")
 
     def edit_callback(agent_dir: str) -> None:
         # Confinement check
@@ -509,7 +592,7 @@ def broker_agent(
         drift_description=f"Create agent {agent_name}",
         sources=(f"demand@{agent_name}", f"template@{agent_name}"),
         rationale=f"Creating missing agent {agent_name} for capability",
-        decision_id=None,
+        decision_id=issue_id,
         kind="create_agent",
     )
     return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)

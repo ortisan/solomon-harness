@@ -1,3 +1,8 @@
+---
+name: rbac-abac
+description: Governs choosing and implementing an authorization model, RBAC, ABAC, or ReBAC, enforced deny-by-default at every endpoint to close the IDOR/BOLA class of bugs atop the OWASP API risk list. Use when designing or reviewing the authorization layer that consumes an authenticated principal from OAuth or session tokens.
+---
+
 # Authorization Models: RBAC, ABAC, ReBAC
 
 Purpose: choose and implement the right authorization model, enforce it deny-by-default at every endpoint, and close the IDOR/BOLA class of bugs that tops the OWASP API risk list. This skill is for the auth_engineer building the decision layer; pair it with the OAuth/OIDC and session/token skills, which produce the authenticated principal this layer consumes.

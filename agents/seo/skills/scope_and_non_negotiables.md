@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Defines the SEO role's scope and non-negotiables — semantic hierarchy, metadata, structured data, indexing and crawling control, and Core Web Vitals, delivered through mandatory TDD, mocked external SEO APIs, modular contracts, and the branch-and-lifecycle workflow. Use when starting any SEO task to confirm it falls in scope, or checking a change against the mandatory TDD and lifecycle rules before it ships.
+---
+
 # SEO Best Practices
 
 Ship pages that crawlers, both search engines and AI answer engines, can reach, render, understand, and rank, with measurable indexability and Core Web Vitals targets. Every recommendation in this agent's skills is a verifiable change with a named tool to confirm it.

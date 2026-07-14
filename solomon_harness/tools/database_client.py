@@ -287,7 +287,7 @@ def normalize_milestone_state(state: Optional[str]) -> Optional[str]:
 # A DENYLIST, deliberately: an unknown category keeps its embedding and stays
 # searchable without a code change, whereas an allowlist would silently drop
 # new categories from the index -- the failure mode being fixed, inverted.
-NON_SEMANTIC_MEMORY_CATEGORIES = ("codebase_index", "index", "board_history")
+NON_SEMANTIC_MEMORY_CATEGORIES = ("codebase_index", "index", "board_history", "claim")
 
 
 def is_semantic_category(category: Optional[str]) -> bool:
@@ -1746,6 +1746,11 @@ class DatabaseClient:
         never raises solely because the backend is down (it falls back to SQLite),
         so the write is durable even during an outage.
         """
+        # Skip mirroring for internal database index and project structure files
+        # to prevent repository bloat.
+        if kind == "memory" and fields.get("category") in ("codebase_index", "index", "project_model", "project_evolution"):
+            return db_op(record_id, fields)
+
         created_at = self._utc_iso()
         self._mirror_write(kind, record_id, fields, synced=False, created_at=created_at)
         result = db_op(record_id, fields)
@@ -2286,9 +2291,50 @@ class DatabaseClient:
             "milestone_id": mid,
             "commit_sha": commit_sha,
         }
-        return self._write_through(
+        release_id = self._write_through(
             "release", self._mint_id("release"), fields, self._db_save_release
         )
+        try:
+            import json as _json
+            import datetime
+            from solomon_harness.bootstrap import scan_project_structure
+
+            # Fetch issue details if issue_github_id is provided
+            issue_title = ""
+            if issue_github_id:
+                issue_row = self.get_issue(issue_github_id)
+                if issue_row:
+                    issue_title = issue_row.get("title", "")
+
+            # Format the evolution entry
+            evolution_entry = {
+                "issue_number": issue_github_id or "",
+                "issue_title": issue_title,
+                "version": version,
+                "date": datetime.date.today().isoformat()
+            }
+
+            # Retrieve existing evolution log
+            existing_evo_raw = self.get_memory("__project_evolution__")
+            evolution_list = []
+            if existing_evo_raw:
+                try:
+                    evolution_list = _json.loads(existing_evo_raw)
+                except Exception:
+                    evolution_list = []
+
+            # Append and save
+            evolution_list.append(evolution_entry)
+            self.save_memory(key="__project_evolution__", value=_json.dumps(evolution_list), category="project_evolution")
+
+            # Refresh structure
+            scan_project_structure(self._project_root, self)
+
+        except Exception as exc:
+            import logging
+            logging.warning(f"Failed to record project evolution or refresh structure: {type(exc).__name__}")
+
+        return release_id
 
     @_resilient
     def _db_save_release(
@@ -2755,9 +2801,17 @@ class DatabaseClient:
             "status": normalize_handoff_status(status),
             "summary": summary,
         }
-        return self._write_through(
+        handoff_id = self._write_through(
             "handoff", self._mint_id("handoff"), fields, self._db_log_handoff
         )
+        try:
+            from solomon_harness.bootstrap import index_codebase, scan_project_structure
+            index_codebase(self._project_root, self)
+            scan_project_structure(self._project_root, self)
+        except Exception as exc:
+            import logging
+            logging.warning(f"Project structure scan refresh failed on handoff: {type(exc).__name__}")
+        return handoff_id
 
     @_resilient
     def _db_log_handoff(

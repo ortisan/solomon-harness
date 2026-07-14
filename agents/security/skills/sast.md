@@ -1,3 +1,8 @@
+---
+name: sast
+description: Standardizes static analysis on this Python codebase — the ruff-S, bandit, semgrep, and CodeQL tool stack, where each runs in pre-commit and CI, what severity blocks a merge, and how findings are triaged and suppressed with a justified, attributable comment. Use when adding a scanner to CI, writing a custom Semgrep rule, or reviewing whether a suppression is justified rather than a bare bypass.
+---
+
 # Static Application Security Testing (SAST)
 
 The standard for running static analysis on this Python codebase: which scanners run, where they run (pre-commit and CI), what blocks a merge, and how findings are triaged and suppressed. SAST is a merge gate, not a dashboard — a finding that does not block or get a justified suppression is noise, and noise kills the program through alert fatigue.

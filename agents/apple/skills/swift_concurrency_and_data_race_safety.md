@@ -1,3 +1,8 @@
+---
+name: swift-concurrency-and-data-race-safety
+description: Governs Swift 6 strict concurrency checking, Sendable conformance and isolation domains, actor reentrancy, main-actor isolation, structured concurrency, cancellation, and migrating completion handlers and Combine to async/await. Use when writing or reviewing concurrent Swift code, resolving a Sendable or actor-isolation diagnostic, or migrating a target to Swift 6 language mode.
+---
+
 # Swift Concurrency and Data-Race Safety
 
 Use Swift 6 language mode so the compiler proves the absence of data races at build time, with isolation expressed through `Sendable`, actors, and `@MainActor` rather than locks and dispatch queues. The stance is: every mutable state lives in exactly one isolation domain, all asynchronous work is structured and cancellation-aware, and the main actor is reserved for UI updates and never blocked. Adopt the Swift 6.2 "Approachable Concurrency" defaults so single-module app targets are `@MainActor` by default and you opt into background execution explicitly.

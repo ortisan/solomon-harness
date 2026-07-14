@@ -1,3 +1,8 @@
+---
+name: release-engineering-and-progressive-delivery
+description: Governs progressive delivery for a deployed running service, covering canary, blue-green, and rolling rollout strategies, Argo Rollouts/Flagger analysis gates, multi-window burn-rate abort, and feature-flag ramping via OpenFeature. Use when choosing a rollout strategy or wiring an automated canary gate.
+---
+
 # Release Engineering and Progressive Delivery
 
 This skill applies only when a deployed, running service ships: canary, blue-green or rolling rollouts gated by SLO burn-rate and on-call. It does **not** apply to solomon-harness itself — a source-distributed library released as a git tag plus GitHub Release with no running service, so the canary/blue-green/rolling controllers (Argo Rollouts, Flagger), the SLO burn-rate gates, and the on-call Production Readiness Review described below do **not** govern it; for that case the real release mechanics live in the sibling skill `tag_release_and_changelog` and in `docs/release-policy.md`. Everything below is correct and kept intact for the deployed-service case — read it only when shipping such a service.

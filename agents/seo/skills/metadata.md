@@ -1,3 +1,8 @@
+---
+name: metadata
+description: Governs the head of every indexable page — title and description pixel budgets, server-rendered Open Graph and Twitter Card tags, the canonical-target correctness matrix, reciprocal hreflang clusters, pagination metadata, and robots snippet-control directives. Use when writing or testing a page's title, description, canonical, hreflang, or social-card tags, or diagnosing why the SERP or a scraper renders them wrong.
+---
+
 # Metadata: Titles, Descriptions, Social Cards, Canonical and hreflang
 
 Rules for the head of every indexable page. The stance: metadata is a rendering contract with three consumers — the SERP, social scrapers, and answer engines — and it is measured in pixels and eligibility rules, not character counts and hope. Every rule here is testable in a template unit test.

@@ -1,3 +1,8 @@
+---
+name: sourcing-the-state-of-the-art
+description: Governs how the practice_curator finds, dates, and credibility-ranks evidence — a two-independent-source minimum, a four-tier credibility ladder from standards bodies to vendor docs, and mandatory dating — before a best-practice claim can back a finding. Use when sourcing evidence for an audit finding or a benchmarking yardstick before it drives a proposal.
+---
+
 # Sourcing the State of the Art
 
 Every best-practice claim the curator makes must rest on at least two dated, credible sources, gathered and ranked before the claim is allowed to drive a finding. This skill governs how the practice_curator finds, dates, and grades evidence so that an audit's statement of "the current standard is X" is a checkable fact rather than an opinion. It is the evidence engine for `auditing_delivered_work` and the supplier of the yardsticks named in `benchmarking_across_domains`. Without a recorded source set, a claim cannot back a finding.

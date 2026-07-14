@@ -1,3 +1,8 @@
+---
+name: widgets-rendering-and-performance
+description: Governs Flutter build-method hygiene, list virtualization, RepaintBoundary isolation, Impeller rendering behavior, and frame-budget measurement via DevTools on a profile-mode device. Use when optimizing a slow widget tree, virtualizing a list, isolating repaints, or verifying a performance claim against a DevTools timeline.
+---
+
 # Widgets, Rendering, and Performance
 
 This skill governs build-method hygiene, list virtualization, repaint isolation, Impeller-era rendering behavior, and how performance is measured. The stance: the frame budget is 16.7 ms at 60 Hz and 8.3 ms at 120 Hz across both the UI and raster threads; a claim that "it feels faster" without a DevTools timeline from a profile build on a real device is not evidence.

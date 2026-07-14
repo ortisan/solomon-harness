@@ -1,3 +1,8 @@
+---
+name: common-pitfalls
+description: Catalogs the reasoning errors that corrupt fundamental research — anchoring, confirmation bias, recency bias, survivorship bias, base-rate neglect, narrative over numbers, valuation traps, stale data, and overfitting — with a written countermeasure for each. Use when drafting a research memo, sizing conviction, or sanity-checking a valuation before it reaches a recommendation.
+---
+
 # Common Analytical Pitfalls
 
 This skill catalogs the recurring reasoning errors that corrupt fundamental investment research and gives the research_analyst a written countermeasure for each one before any conclusion reaches a recommendation.

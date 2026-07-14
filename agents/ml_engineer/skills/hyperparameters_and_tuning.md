@@ -1,3 +1,8 @@
+---
+name: hyperparameters-and-tuning
+description: Governs how hyperparameter search is designed, budgeted, executed, and reported, covering grid search, random search, and Optuna with the TPE sampler run only against cross-validation folds. Use when designing a hyperparameter search, choosing a search strategy or budget, or reviewing a tuning report for holdout contamination.
+---
+
 # Hyperparameters and Tuning
 
 This skill governs how hyperparameter search is designed, budgeted, executed, and reported. Search is a tracked, reproducible experiment with a pre-declared budget, run against cross-validation folds and never against the final holdout — and the tuning process itself is reported, because a best-of-500-trials number means something different from a best-of-10.

@@ -23,6 +23,14 @@ build/
 *.db-wal
 *.db-shm
 
+# Stray root-level database files from manual debugging sessions (no code path
+# writes here; the canonical SQLite fallback lives under memory/long_term/)
+/*.db
+
+# Session working notes (review verdicts, PR diffs, ad hoc scripts); local state,
+# never source
+/scratch/
+
 # Test coverage database
 .coverage
 

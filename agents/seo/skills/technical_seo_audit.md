@@ -1,3 +1,8 @@
+---
+name: technical-seo-audit
+description: Defines an ordered, evidence-first technical SEO audit method — crawl, index, render, content, and links in dependency order, with Screaming Frog and GSC tooling, P0/P1/P2 severity triage, and a closed fix-verification loop. Use when running a technical SEO audit, triaging a batch of findings by severity, or verifying a fix with a re-crawl and GSC validation.
+---
+
 # Technical SEO Audit Playbook
 
 An ordered, evidence-first audit method: crawl, then index, then render, then content, then links, with severity triage and a closed verification loop. The stance: audit stages in dependency order — every stage's findings can invalidate work downstream, so there is no point polishing content Google cannot crawl — and a finding is only closed by re-measurement, never by a deploy.

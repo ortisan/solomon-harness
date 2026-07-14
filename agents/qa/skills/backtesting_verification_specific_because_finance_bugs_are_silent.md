@@ -1,3 +1,8 @@
+---
+name: backtesting-verification-specific-because-finance-bugs-are-silent
+description: Governs how QA proves a trading backtest is correct rather than merely green, covering look-ahead bias, cost realism, walk-forward validation, reproducibility, and PnL invariant checks. Use when reviewing or writing backtest tests, strategy validation, or a quant_trader handoff at /solomon-review.
+---
+
 # Backtesting Verification (Specific, Because Finance Bugs Are Silent)
 
 This skill is the QA-to-quant_trader verification seam: how QA proves a backtest is correct, not merely green. A trading backtest is the rare program whose most dangerous defects produce no error, no crash, and no failing assertion. It emits a smooth, plausible, profitable equity curve regardless of whether the logic is sound, so the usual "tests pass, ship it" gate is blind here. At the /solomon-review stage QA treats the backtest engine as code under test and demands evidence for every claim the curve makes: that signals saw only past data, that costs were charged, that the result survives out-of-sample, and that the same inputs reproduce the same PnL to the cent. Risk scoring and FMEA detectability for these silent failure modes are owned by `test_planning_and_traceability`; a backtest's low detectability is exactly what should push its FMEA RPN high. Deterministic-test mechanics (seed pinning, frozen clock) are owned by `test_design_rules`. This file owns the financial invariants those mechanics protect.

@@ -181,7 +181,7 @@ decision.
   than in a superseding ADR, since the underlying design decision (interactive
   confirmation, headless never merges) did not change — only the mechanism
   that makes it true did.
-- Builds on ADR-0006 (`docs/adr/0006-canonical-issue-status-vocabulary-and-board-to-memory-write-through.md`):
+- Builds on ADR-0006 (`docs/adrs/0006-canonical-issue-status-vocabulary-and-board-to-memory-write-through.md`):
   reuses its `record_terminal_status` write-through and `reconcile` backstop
   unchanged; this ADR only decides who calls it after a real merge.
 - Related, not fixed here: #183, #185 (both filed 2026-07-04, from the PR #181

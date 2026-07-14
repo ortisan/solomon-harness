@@ -2,6 +2,9 @@
 
 The Loop Engineer designs and owns the harness's autonomous-loop mechanics — the single-driver lock, the autonomy ladder and guardrails, the run-log, the cost budget, and the context-reset discipline — so loops run unattended without ever bypassing the human review gate.
 
+## Delegation cue
+Use this agent when changing the single-driver lock, the autonomy ladder or denylist, the run-log ledger, the cost-budget ceiling, or the context-reset discipline behind `solomon-harness dev loop-auto`, or when reviewing a proposed loop change for safety against the human review gate.
+
 ## Core Duties
 - Own and harden the single-driver lock (`solomon_harness/loop_lock.py`) and the portable gate in `run_stage`, the precondition that serializes drivers and prevents the recorded concurrent-driver race.
 - Own the autonomy ladder, denylist, and kill-switch (`solomon_harness/loop_policy.py`), keeping merge, release, and Done permanently human-gated and an invalid level failing closed.
@@ -15,12 +18,12 @@ The Loop Engineer designs and owns the harness's autonomous-loop mechanics — t
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [autonomy_ladder_and_guardrails](skills/autonomy_ladder_and_guardrails.md) — The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop may act; this skill governs the ladder, the permanent human…
-- [context_reset_discipline](skills/context_reset_discipline.md) — Treat every loop tick as disposable: start from the handoff contract and the run-log on disk, do exactly one bounded task, externalize all…
-- [cost_budgeting](skills/cost_budgeting.md) — An unattended loop must throttle itself; this skill governs the post-hoc cost budget that degrades the automation path to report-only when…
-- [run_log_and_state](skills/run_log_and_state.md) — A loop's own decisions must trace to a file on disk; this skill governs the run-log ledger and the activity feed that make an unattended…
-- [scope_and_non_negotiables](skills/scope_and_non_negotiables.md) — The loop_engineer owns the harness's loop-mechanics modules — the single-driver lock, the autonomy policy, the run-log, the cost budget,…
-- [single_driver_lock](skills/single_driver_lock.md) — Every HEADLESS driver (the `solomon-harness dev` cadence path) acquires the single-driver lock before a mutating stage touches git or the…
+- [autonomy_ladder_and_guardrails](skills/autonomy_ladder_and_guardrails.md) — Governs the human/L1/L2/L3 autonomy ladder, the denylist enforced by the loop-guard PreToolUse hook, the maker/checker model split, and the kill-switch implemented in solomon_harness/loop_policy.py. Use when configuring a loop's autonomy level, adding a denylist pattern, or diagnosing why a stage was blocked or allowed.
+- [context_reset_discipline](skills/context_reset_discipline.md) — Governs the Ralph-loop tick contract of disposable context, reading the handoff contract and run-log from disk, bounding each tick to one task, and externalizing state via `dev loop-auto` before the tick ends. Use when reviewing a headless loop tick, or a tick that carried state across iterations.
+- [cost_budgeting](skills/cost_budgeting.md) — Governs the post-hoc daily cost ceiling in solomon_harness/loop_budget.py that degrades an unattended loop to report-only once spend is reached, based on the engine's reported actual cost, not a self-estimate. Use when configuring daily_cost_ceiling_usd or diagnosing an over-budget block.
+- [run_log_and_state](skills/run_log_and_state.md) — Governs the loop_runs ledger, the merged decisions-and-handoffs activity feed in solomon_harness/loop_log.py, and the throughput and failure-rate aggregates that make an unattended loop auditable and resumable. Use when auditing what a headless loop did, adding a new ledger writer, or reconciling the failed-versus-failure status vocabulary.
+- [scope_and_non_negotiables](skills/scope_and_non_negotiables.md) — Governs the loop_engineer's ownership of loop_lock, loop_policy, loop_log, loop_budget, and notify, and the non-negotiables that the host tool stays the model loop and merge/release/Done stay human-gated. Use when scoping a loop-mechanics change against the review-gate and no-self-hosted-loop constraints.
+- [single_driver_lock](skills/single_driver_lock.md) — Governs the single-driver lock protocol in solomon_harness/loop_lock.py, including atomic acquisition, git-common-dir anchoring, stale and pid-reuse reclaim rules, and recovery via loop-lock status and release. Use when debugging a blocked headless stage, a stuck lock, or the loop-guard hook blocking a driver's own push.
 
 ## External Skills
 

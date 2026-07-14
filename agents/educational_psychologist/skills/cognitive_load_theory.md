@@ -1,3 +1,8 @@
+---
+name: cognitive-load-theory
+description: Governs optimizing instructional materials and interfaces against Cognitive Load Theory (Sweller), including the four-chunk working-memory limit, the split-attention effect, and the redundancy effect. Use when designing or reviewing instructional text, slides, or a code walkthrough for information overload or split-attention layout.
+---
+
 # Cognitive Load Theory
 
 This skill governs the optimization of instructional materials and user interfaces to align with human cognitive architecture by minimizing extraneous cognitive load and managing intrinsic demand.

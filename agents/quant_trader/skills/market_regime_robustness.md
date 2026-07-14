@@ -1,3 +1,8 @@
+---
+name: market-regime-robustness
+description: Requires detecting market regimes explicitly, scoring strategy performance in each, stress-testing through named crisis windows, and proving parameter stability before any all-weather claim. Use when validating regime robustness or reviewing a backtest with a single blended PnL curve.
+---
+
 # Market-Regime Robustness
 
 A backtest average hides which market states produced the PnL, and this skill requires detecting regimes explicitly, scoring the strategy in each, stressing it through named crisis windows, and proving parameter stability before any deployment claim. One-regime PnL presented as all-weather is the polite name for an undisclosed short-volatility position.

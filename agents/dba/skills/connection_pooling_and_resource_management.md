@@ -1,3 +1,8 @@
+---
+name: connection-pooling-and-resource-management
+description: Governs how PostgreSQL stays healthy under many clients: why connection count must stay low, PgBouncer pooling modes, pool-sizing arithmetic, and the memory settings that decide whether the server is fast or OOM-killed. Use when sizing a connection pool or tuning `max_connections`.
+---
+
 # Connection Pooling and Resource Management
 
 How to keep PostgreSQL healthy under many clients: why connection count must stay low, PgBouncer pooling modes and their semantics, the pool sizing arithmetic, and the memory settings that decide whether the server is fast or getting OOM-killed. The stance: connections are a scarce server resource multiplexed by a pooler, and every memory setting is derived from a worst-case product, not copied from a blog.

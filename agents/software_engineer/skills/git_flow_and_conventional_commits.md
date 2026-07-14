@@ -1,3 +1,8 @@
+---
+name: git-flow-and-conventional-commits
+description: Governs trunk-based branch naming (feature/bugfix slug with no issue number), issue linking via Refs and Closes, Conventional Commits 1.0.0 typing that drives the computed SemVer bump, and the ban on attribution trailers. Use when creating a branch, writing a commit message, or preparing a squash-merge subject line for this repository.
+---
+
 # Trunk-Based Development and Conventional Commits
 
 This skill governs the implementer's branch and commit workflow for this repository: how to name a branch, how to link it to an issue, and how to write Conventional Commits 1.0.0 messages. The model is trunk-based — short-lived branches squash-merge into `main`, with no `develop` and no long-lived `release/*` or `hotfix/*` branches. The stance is exact and non-negotiable on three repo-specific facts: branches carry no issue number, commit messages carry no attribution trailer, and the Conventional-Commit type is load-bearing because it drives the computed SemVer bump and the CHANGELOG. Everything below respects all three.

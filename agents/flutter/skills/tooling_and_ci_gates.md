@@ -1,3 +1,8 @@
+---
+name: tooling-and-ci-gates
+description: Governs Flutter toolchain discipline, covering very_good_analysis lint policy, mechanical dart format enforcement, reproducible code generation in CI, build flavor and scheme setup, and the fail-fast CI pipeline with caching. Use when configuring analysis_options.yaml, setting up a CI pipeline, adding a build flavor, or reviewing whether generated code is reproducible.
+---
+
 # Tooling and CI Gates
 
 This skill governs the Flutter toolchain discipline: static analysis and lint policy, formatting, code generation in CI, flavor/scheme setup, and the CI pipeline with its caching strategy. The stance: the pipeline is the quality gate — analyzer clean at the strictest ruleset, format enforced mechanically, generated code reproducible, and every merge blocked on the full ladder. A rule that only lives in review comments does not exist.

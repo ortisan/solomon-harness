@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Governs the completion criteria every educational psychologist deliverable must meet, covering allow-list citation, objectives-before-materials sequencing, and constructive alignment verification. Use when signing off on a learning design deliverable or checking whether it is ready for review.
+---
+
 # Educational Psychologist Definition of Done
 
 This skill defines the criteria that all educational psychologist deliverables must meet to be considered complete.

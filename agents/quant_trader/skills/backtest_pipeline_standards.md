@@ -1,3 +1,8 @@
+---
+name: backtest-pipeline-standards
+description: Defines the backtest protocol that makes a result admissible: choosing event-driven versus vectorized engines, data quality requirements, fill and cost simulation, time-based validation, and the minimum contents of a backtest report. Use when building, running, or reviewing a strategy backtest pipeline or its report.
+---
+
 # Backtest Pipeline Standards
 
 A backtest is an experiment, and this skill defines the protocol that makes its result admissible: which engine class to use and when, what the data must look like, how fills and costs are simulated, how the strategy is validated across time, and the minimum contents of the report. A pipeline that skips any of these produces a number, not evidence.

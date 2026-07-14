@@ -1,3 +1,8 @@
+---
+name: autonomy-ladder-and-guardrails
+description: Governs the human/L1/L2/L3 autonomy ladder, the denylist enforced by the loop-guard PreToolUse hook, the maker/checker model split, and the kill-switch implemented in solomon_harness/loop_policy.py. Use when configuring a loop's autonomy level, adding a denylist pattern, or diagnosing why a stage was blocked or allowed.
+---
+
 # Autonomy Ladder and Guardrails
 
 The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop may act; this skill governs the ladder, the permanent human gate, the denylist, and the kill-switch. It is the policy that makes a loop more capable without ever making it less safe, enforced in portable Python (`solomon_harness/loop_policy.py`) on both hosts.

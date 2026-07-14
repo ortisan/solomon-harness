@@ -1,3 +1,8 @@
+---
+name: mocking-and-isolation-mock-all-external-services
+description: Governs test-double selection under the Meszaros taxonomy (dummy, stub, spy, mock, fake), mocking only at boundaries you own, and injecting deterministic seams for clock, uuid, and randomness. Use when choosing a test double, patching a dependency, or reviewing a test for over-mocking or call-shape assertions.
+---
+
 # Mocking and Isolation
 
 Test doubles let a unit or integration test run without the slow, flaky, or unowned dependency a component talks to: an HTTP API, a payment gateway, a clock, a queue. The skill is choosing the right double at the right seam so the test is fast and deterministic without going blind to real failures. Get it wrong and the suite is green theater: it passes because it only ever talks to a hand-built fake that drifted from the real provider months ago. This gates `/solomon-review` because over-mocked tests pass through coverage gates while asserting nothing a user would notice. Where each kind of double sits across the pyramid is owned by `the_test_pyramid_target_distribution`; what to keep real at the integration and E2E layers is owned by `integration_and_e2e_testing`. This file owns the doubles themselves and the boundary you attach them to.

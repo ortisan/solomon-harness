@@ -1,3 +1,8 @@
+---
+name: definition-of-done
+description: Defines the exit gate for work the Scrum Master tracks, stating what must hold before an issue, milestone, or release counts as delivered. Use when closing an issue, milestone, or release, or reviewing whether a delivered item has its milestone link, PLAN.md, correct branch base, and correctly labeled commits.
+---
+
 # Scrum Master Definition of Done
 
 The exit gate for work the Scrum Master tracks: what must hold before an issue, milestone, or release counts as delivered. Ready protects the sprint from ambiguity; this gate protects the increment and the project memory from fiction.

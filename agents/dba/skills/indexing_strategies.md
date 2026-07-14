@@ -1,3 +1,8 @@
+---
+name: indexing-strategies
+description: Guides choosing, shaping, and retiring PostgreSQL indexes: access method per workload, multicolumn ordering, partial, covering, and expression indexes, and the write amplification every index costs. Use when adding, reviewing, or removing an index, or when `EXPLAIN` skips the expected index.
+---
+
 # Indexing Strategies
 
 How to choose, shape, and retire indexes in PostgreSQL: the right access method per workload, multicolumn ordering, partial/covering/expression indexes, the selectivity arithmetic that decides whether an index pays, and the write amplification every index costs. The stance: an index is a purchase, paid for on every write and every vacuum, so each one must be justified by a named query and re-verified with `EXPLAIN` after creation.

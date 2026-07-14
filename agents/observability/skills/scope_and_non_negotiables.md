@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: States the binding project rules for observability deliverables covering TDD against in-memory exporters, hermetic mocked test suites, guarded derived-metric math, quant trading latency and slippage budgets, and STRIDE controls on the telemetry pipeline itself. Use when scoping or reviewing observability work for compliance with the project's non-negotiable engineering and security rules.
+---
+
 # Observability Scope and Non-Negotiables
 
 The binding project rules for every observability deliverable, with OpenTelemetry as the house telemetry standard. They cover TDD against in-memory exporters, hermetic test suites, guarded derived-metric math, quant latency budgets, and STRIDE applied to the telemetry pipeline itself.

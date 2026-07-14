@@ -1,3 +1,8 @@
+---
+name: solid-and-structural-discipline
+description: Governs applying the five SOLID principles at component-boundary scope alongside Martin's package cohesion and coupling principles (REP, CCP, CRP, ADP, SDP, SAP), and stating the dependency-direction rule a fitness function will enforce. Use when reviewing a design boundary for a structural objection or defining which way a module's dependencies must point.
+---
+
 # SOLID and Structural Discipline
 
 Apply SOLID at the boundaries you design rather than inside a single class, and name the violated principle whenever you reject a design, because an unnamed structural objection is opinion a peer can dismiss.

@@ -1,3 +1,8 @@
+---
+name: performance-tuning
+description: Provides the working method for diagnosing slow PostgreSQL queries: find offenders with `pg_stat_statements`, read the plan with `EXPLAIN (ANALYZE, BUFFERS)`, fix the estimate first, and only then reach for indexes or configuration. Use when investigating a slow query or a latency regression.
+---
+
 # Performance Tuning
 
 A working method for diagnosing and fixing slow queries: find the offenders with `pg_stat_statements`, read the plan with `EXPLAIN (ANALYZE, BUFFERS)`, fix the estimate before fixing the query, and only then reach for indexes or configuration. The stance: tuning without a measurement is guessing, and a fix that is not verified against the same measurement is not a fix. PostgreSQL is the reference engine.

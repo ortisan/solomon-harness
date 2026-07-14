@@ -1,3 +1,8 @@
+---
+name: logging
+description: Sets the logging standard covering structured JSON events with mandatory fields, trace correlation, the ERROR/WARN/INFO/DEBUG level policy, secret and PII redaction, and log-volume cost control. Use when adding or reviewing log statements, choosing a log level, or evaluating log ingest cost and retention.
+---
+
 # Logging
 
 This skill sets the logging standard: structured JSON events, correlated to traces, safe by construction, and priced in before they ship. Logs are the highest-volume and most expensive signal per byte, so structure, level discipline, and cost control are engineering requirements, not style preferences.

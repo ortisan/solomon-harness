@@ -1,3 +1,8 @@
+---
+name: distributed-tracing
+description: Governs trace design, W3C context propagation, span naming and kind conventions, head-versus-tail sampling policy, and trace-to-log correlation so a request can be followed across every service and queue hop. Use when instrumenting spans, configuring Collector sampling, or debugging broken trace propagation or correlation.
+---
+
 # Distributed Tracing
 
 This skill governs how traces are designed, propagated, sampled, and correlated with logs so any request can be followed across every service, queue, and background job it touches. The stance: context propagation is non-negotiable on every hop, span names stay low-cardinality, and the sampling design must guarantee that the trace you need during an incident was actually kept.

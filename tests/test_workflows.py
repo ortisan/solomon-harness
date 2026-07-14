@@ -287,7 +287,10 @@ class TestRunStageGitEnvHygiene(unittest.TestCase):
         _, kwargs = mock_run.call_args
         env = kwargs.get("env")
         self.assertIsNotNone(env, "run_stage must pass an explicit, scrubbed env")
-        self.assertFalse(any(k.startswith("GIT_") for k in env))
+        # GIT_TERMINAL_PROMPT=0 is deliberately (re)set by clean_git_env so a
+        # stalled credential prompt fails fast; it is the one GIT_* key allowed
+        # through. No *inherited* GIT_* var may leak.
+        self.assertFalse(any(k.startswith("GIT_") for k in env if k != "GIT_TERMINAL_PROMPT"))
 
     def test_cost_capture_path_strips_git_env(self):
         # L2: the cost-capturing subprocess.run call (a second, separate call site).
@@ -304,7 +307,10 @@ class TestRunStageGitEnvHygiene(unittest.TestCase):
         _, kwargs = mock_run.call_args
         env = kwargs.get("env")
         self.assertIsNotNone(env, "run_stage must pass an explicit, scrubbed env")
-        self.assertFalse(any(k.startswith("GIT_") for k in env))
+        # GIT_TERMINAL_PROMPT=0 is deliberately (re)set by clean_git_env so a
+        # stalled credential prompt fails fast; it is the one GIT_* key allowed
+        # through. No *inherited* GIT_* var may leak.
+        self.assertFalse(any(k.startswith("GIT_") for k in env if k != "GIT_TERMINAL_PROMPT"))
 
 
 class TestRunStageDriverLock(unittest.TestCase):
@@ -378,16 +384,15 @@ class TestRunStageSessionIdPropagation(unittest.TestCase):
 
     def test_default_session_id_fallback_still_propagates_to_the_child(self):
         # The actual gap in #197: SOLOMON_SESSION_ID is usually never set
-        # upstream at all, so the acquired lock's session_id falls back to
-        # f"{host}:{pid}" -- a value that only ever lived on the LoopLock
-        # instance, never as an exported env var. clean_git_env() alone can
-        # only pass through a var that already exists in os.environ, so this
-        # computed fallback identity must be explicitly injected into the
-        # child's env for a nested call to ever resolve the same one.
-        import socket
-
+        # upstream at all, so the acquired lock's session_id falls back to a
+        # computed default that only ever lived on the LoopLock instance,
+        # never as an exported env var; it must be explicitly injected into the
+        # child's env for a nested call to resolve the same one. That default
+        # now comes from claim.get_current_session_id() (host:pid:entropy,
+        # cached), the SINGLE source the per-issue claim layer uses too, so the
+        # lock and the claim never diverge and a nested start cannot
+        # self-deadlock on its own claim.
         root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
-        expected = f"{socket.gethostname()}:{os.getpid()}"
         stripped = {
             k: v for k, v in os.environ.items()
             if k not in ("SOLOMON_SESSION_ID", "CLAUDE_SESSION_ID")
@@ -396,14 +401,19 @@ class TestRunStageSessionIdPropagation(unittest.TestCase):
         class _Proc:
             returncode = 0
 
+        from solomon_harness import claim
         with patch.dict(os.environ, stripped, clear=True):
             with patch("subprocess.run", return_value=_Proc()) as mock_run:
                 rc = workflows.run_stage(root, "start", ["1"], engine="claude")
+            # Resolved inside the stripped env: returns the same cached identity
+            # the lock acquired during run_stage.
+            expected = claim.get_current_session_id()
         self.assertEqual(rc, 0)
         _, kwargs = mock_run.call_args
         env = kwargs.get("env")
         self.assertIsNotNone(env)
         self.assertEqual(env.get("SOLOMON_SESSION_ID"), expected)
+        self.assertEqual(expected.count(":"), 2, "unified identity carries the entropy suffix")
 
     def test_cost_capture_path_also_carries_the_drivers_session_id(self):
         # L2: the cost-capturing subprocess.run call is a second, separate call

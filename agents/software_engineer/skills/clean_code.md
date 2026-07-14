@@ -1,3 +1,8 @@
+---
+name: clean-code
+description: Governs writing clean, readable Python through intent-revealing names, single-responsibility functions capped at two nesting levels, comments that explain why rather than what, and the boy-scout rule of leaving each touched file cleaner. Use when writing or reviewing production code for naming, function size, nesting, magic numbers, or comment quality.
+---
+
 # Clean Code In Python
 
 Clean code is code a reviewer can read top to bottom and trust without running it: every name states intent, every function does one thing at one level of abstraction, and every comment explains a decision the code cannot. The stance is that readability is a feature with a cost paid by the next engineer, so we optimize the cost of reading over the cost of writing.

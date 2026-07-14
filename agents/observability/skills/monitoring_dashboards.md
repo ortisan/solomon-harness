@@ -1,3 +1,8 @@
+---
+name: monitoring-dashboards
+description: Sets the dashboard standard covering the fleet/service/instance hierarchy, Grafana-as-code provisioning, panel-count discipline against wall-of-graphs sprawl, and working cross-signal links between metrics, traces, and logs. Use when building or reviewing a Grafana dashboard, or verifying the metric-to-trace-to-log pivot works end to end.
+---
+
 # Monitoring Dashboards
 
 This skill sets the dashboard standard: a strict fleet-to-service-to-instance hierarchy, Grafana managed as code, ruthless panel discipline instead of walls of graphs, and working links between metrics, traces, and logs. A dashboard is an answer machine for a named question; if nobody can say what question a panel answers, the panel goes.

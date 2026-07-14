@@ -1,3 +1,8 @@
+---
+name: encoding-other-specialists-requirements-into-acceptance-criteria
+description: Governs encoding another specialist's non-functional requirement into a PRD as a measurable Given-When-Then acceptance criterion, sourced and attributed to that specialist rather than invented or softened into prose. Use when a PRD touches a quant, ML, QA, security, or SRE constraint.
+---
+
 # Encoding Other Specialists' Requirements Into Acceptance Criteria
 
 This skill governs how the product_owner carries another specialist's non-functional requirement into a PRD as a measurable, pass-or-fail acceptance criterion rather than soft prose. You write the PRD, but the constraints belong to the specialists who own them; your job is to name the right specialist's bar and state it as something QA can run and fail, never to design the solution yourself.

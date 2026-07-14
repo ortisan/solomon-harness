@@ -296,12 +296,14 @@ def _install_harness_files(workspace_root: str) -> None:
 
     print("Installing harness files into the project...")
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "build", "node_modules")
-    trees = ["agents", "scripts", "solomon_harness", "docs", ".claude", ".gemini"]
+    trees = ["agents", "scripts", "solomon_harness", ".claude", ".gemini"]
     # No per-project docker-compose.yml: the memory backend is a single shared
     # instance in ~/.solomon-harness (see solomon_harness/memory.py).
+    # The harness's own README stays home: an installed project's README is its
+    # own document (maintainer directive recorded in ADR-0028).
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "AGY.md", "CLAUDE.md", "README.md", "skill-sources.json",
+        "AGENTS.md", "AGY.md", "CLAUDE.md", "skill-sources.json",
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -313,7 +315,40 @@ def _install_harness_files(workspace_root: str) -> None:
         dest = os.path.join(workspace_root, name)
         if os.path.isfile(src) and not os.path.exists(dest):
             shutil.copy2(src, dest)
+    _install_docs_skeleton(repo_root, workspace_root)
     print("  Harness files installed.")
+
+
+# The harness's documents never travel into installed projects (ADR-0029):
+# a child project's docs/ receives ONLY its own empty record trees, seeded
+# with each convention's template and README so the project can write ITS
+# decisions and specs. The operating conventions the commands read re-home
+# into the tooling layer with #240 (.agents/solomon).
+DOCS_RECORD_TREES = {
+    "adrs": ("0000-adr-template.md", "README.md"),
+    "specs": ("0000-spec-template.md", "README.md"),
+}
+
+
+def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
+    """Scaffold the project's own record trees; nothing else travels.
+
+    An installed project's docs/adrs and docs/specs hold that project's OWN
+    decisions and specs; every harness document (records, specs, wiki,
+    conventions, README) stays in the harness repository.
+    """
+    src_docs = os.path.join(repo_root, "docs")
+    dest_docs = os.path.join(workspace_root, "docs")
+    if not os.path.isdir(src_docs):
+        return
+    for tree, scaffolding in DOCS_RECORD_TREES.items():
+        dest_tree = os.path.join(dest_docs, tree)
+        os.makedirs(dest_tree, exist_ok=True)
+        for name in scaffolding:
+            src = os.path.join(src_docs, tree, name)
+            dest = os.path.join(dest_tree, name)
+            if os.path.isfile(src) and not os.path.exists(dest):
+                shutil.copy2(src, dest)
 
 
 def scaffold_agents(workspace_root: str) -> None:
@@ -400,6 +435,10 @@ This agent is the {name} brain for solomon-harness. It reasons within the shared
 
 {description}
 
+## Delegation cue
+
+Use this agent when the task falls within this mandate: {description}
+
 ## Core Duties
 {duties_str}
 
@@ -418,13 +457,26 @@ solomon-harness skills add <source> <skill> --agent {name}
         f.write(role_content)
 
     # Write scope_and_mandate.md skill
-    skill_content = f"""# {title} Best Practices
+    skill_content = f"""---
+name: scope-and-mandate
+description: Defines what the {name} specialist owns and what it hands off. Use when clarifying whether a task belongs to this agent.
+---
+
+# {title} Best Practices
 
 Reference standard for the {name} specialist.
 
 ## Scope and mandate
 
 This skill covers the {name} role's duties.
+
+## Common pitfalls
+
+- Acting outside the {name} mandate instead of handing the work to the owning specialist.
+
+## Definition of done
+
+- [ ] The work stayed within this agent's mandate or was handed off explicitly.
 """
     with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
         f.write(skill_content)
@@ -455,7 +507,11 @@ This skill covers the {name} role's duties.
                     in_list = False
                     other_lines.append(line)
 
-            formatted_desc = description
+            # The roster is one line per agent, and AGENTS.md is the trust
+            # root every session reads as instructions: collapse the
+            # description to a single line so embedded newlines can never
+            # splice new sections into it.
+            formatted_desc = " ".join(str(description).split())
             if formatted_desc:
                 formatted_desc = formatted_desc[0].lower() + formatted_desc[1:]
 
@@ -1155,3 +1211,201 @@ def write_code_overview(workspace_root: str, db) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(overview)
     return path
+
+
+def scan_project_structure(workspace_root: str, db) -> dict:
+    """Scan the project structure, modules, stack, and patterns.
+
+    Writes the result to db memory under key '__project_structure__' in category 'project_model'.
+    If the codebase manifest matches the signature of the existing record, skips the scan.
+    """
+    import os
+    import json as _json
+    import hashlib
+    import datetime
+
+    # Scenario (failure path): a scan failure never blocks the loop
+    try:
+        # 1. Fetch current manifest to check if we can skip.
+        manifest_raw = db.get_memory("__code_index_manifest__")
+        if not manifest_raw:
+            # Code index manifest not found. We should run index_codebase first to have it.
+            index_codebase(workspace_root, db)
+            manifest_raw = db.get_memory("__code_index_manifest__")
+
+        manifest_signature = ""
+        if manifest_raw:
+            manifest_signature = hashlib.sha256(manifest_raw.encode("utf-8")).hexdigest()
+
+        # Check if existing project structure matches the manifest signature
+        existing_raw = db.get_memory("__project_structure__")
+        if existing_raw:
+            try:
+                existing = _json.loads(existing_raw)
+                if existing.get("manifest_signature") == manifest_signature:
+                    # Idempotent skip: no source file has changed
+                    print("Project structure is current (signatures match). Skipping scan.")
+                    return existing
+            except Exception:
+                pass
+
+        print("Scanning project structure...")
+        # 2. Extract top-level layout
+        top_level_layout = []
+        try:
+            top_level_layout = sorted(os.listdir(workspace_root))
+        except Exception:
+            pass
+
+        # 3. Detect stack and frameworks
+        detected_stack = []
+        pyproject_path = os.path.join(workspace_root, "pyproject.toml")
+        if os.path.isfile(pyproject_path):
+            detected_stack.append("pyproject.toml")
+            # Try to parse dependencies
+            try:
+                with open(pyproject_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if "fastapi" in content.lower():
+                        detected_stack.append("FastAPI")
+                    if "surrealdb" in content.lower():
+                        detected_stack.append("SurrealDB")
+                    if "sqlite" in content.lower():
+                        detected_stack.append("SQLite")
+                    if "pytest" in content.lower():
+                        detected_stack.append("pytest")
+            except Exception:
+                pass
+        if os.path.isfile(os.path.join(workspace_root, "package.json")):
+            detected_stack.append("package.json")
+        if os.path.isfile(os.path.join(workspace_root, "requirements.txt")):
+            detected_stack.append("requirements.txt")
+
+        # 4. Entry points
+        entry_points = []
+        if os.path.isfile(pyproject_path):
+            # Try parsing scripts from pyproject.toml
+            try:
+                with open(pyproject_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                in_scripts = False
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("[project.scripts]"):
+                        in_scripts = True
+                        continue
+                    if in_scripts and line.startswith("["):
+                        in_scripts = False
+                    if in_scripts and "=" in line:
+                        entry_points.append(f"script:{line}")
+            except Exception:
+                pass
+
+        # Look for __main__.py files or standard entry scripts
+        for root, dirs, files in os.walk(workspace_root):
+            # Skip excluded dirs
+            dirs[:] = [d for d in dirs if d not in {".git", ".venv", "node_modules", "build", "dist", ".solomon"}]
+            if "__main__.py" in files:
+                entry_points.append(os.path.relpath(os.path.join(root, "__main__.py"), workspace_root))
+
+        # 5. Modules and their dependencies
+        modules = {}
+        test_layout = []
+        # Identify modules (dirs with __init__.py)
+        for root, dirs, files in os.walk(workspace_root):
+            dirs[:] = [d for d in dirs if d not in {".git", ".venv", "node_modules", "build", "dist", ".solomon"}]
+            rel_dir = os.path.relpath(root, workspace_root)
+            if rel_dir == ".":
+                continue
+            
+            # Test layout detection
+            if rel_dir.startswith("tests") or "tests" in rel_dir.split(os.sep):
+                for fname in files:
+                    if fname.endswith(".py"):
+                        test_layout.append(os.path.join(rel_dir, fname))
+                continue
+
+            if "__init__.py" in files:
+                # It's a module/package!
+                module_name = rel_dir.replace(os.sep, ".")
+                deps = set()
+                # Scan files inside this directory for imports
+                for fname in files:
+                    if fname.endswith(".py"):
+                        file_path = os.path.join(root, fname)
+                        try:
+                            with open(file_path, "r", encoding="utf-8", errors="ignore") as py_file:
+                                for line in py_file:
+                                    line = line.strip()
+                                    if line.startswith("import ") or line.startswith("from "):
+                                        # simple import extraction
+                                        parts = line.split()
+                                        if len(parts) >= 2:
+                                            dep = parts[1].split(".")[0]
+                                            if dep and dep != module_name.split(".")[0]:
+                                                deps.add(dep)
+                        except Exception:
+                            pass
+                modules[module_name] = sorted(list(deps))
+
+        # 6. Recurring architectural patterns
+        patterns: dict[str, list[str]] = {
+            "adrs": [],
+            "agents": [],
+            "commands": []
+        }
+        # ADRs
+        adr_dir = os.path.join(workspace_root, "docs", "adr")
+        if os.path.isdir(adr_dir):
+            try:
+                patterns["adrs"] = sorted([f for f in os.listdir(adr_dir) if f.endswith(".md") and f != "README.md" and f != "0000-adr-template.md"])
+            except Exception:
+                pass
+
+        # Agents
+        agents_dir = os.path.join(workspace_root, "agents")
+        if os.path.isdir(agents_dir):
+            try:
+                patterns["agents"] = sorted([d for d in os.listdir(agents_dir) if os.path.isdir(os.path.join(agents_dir, d))])
+            except Exception:
+                pass
+
+        # Commands
+        cmd_dir = os.path.join(workspace_root, ".claude", "commands")
+        if os.path.isdir(cmd_dir):
+            try:
+                patterns["commands"] = sorted([f for f in os.listdir(cmd_dir) if f.endswith(".md")])
+            except Exception:
+                pass
+
+        # 7. Construct final record
+        project_structure = {
+            "manifest_signature": manifest_signature,
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "top_level_layout": top_level_layout,
+            "detected_stack": detected_stack,
+            "entry_points": entry_points,
+            "modules": modules,
+            "test_layout": sorted(test_layout),
+            "patterns": patterns
+        }
+
+        db.save_memory(key="__project_structure__", value=_json.dumps(project_structure), category="project_model")
+        return project_structure
+
+    except Exception as e:
+        # Scenario (failure path): a scan failure never blocks the loop
+        import logging
+        logging.warning(f"Project structure scan failed: {type(e).__name__}")
+        # Return a fallback empty structure so caller doesn't fail
+        return {
+            "manifest_signature": "",
+            "generated_at": "",
+            "top_level_layout": [],
+            "detected_stack": [],
+            "entry_points": [],
+            "modules": {},
+            "test_layout": [],
+            "patterns": {"adrs": [], "agents": [], "commands": []}
+        }
+

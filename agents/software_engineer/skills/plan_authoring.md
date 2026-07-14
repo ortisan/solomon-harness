@@ -1,3 +1,8 @@
+---
+name: plan-authoring
+description: Governs authoring PLAN.md between the Planning and Execution phases, covering the problem statement, proposed change, target-files fence, edge cases, a 3-to-8-step TDD breakdown, STRIDE notes, and checkable verification criteria. Use when starting a non-trivial feature or bugfix before writing any production code.
+---
+
 # Authoring PLAN.md
 
 Write the PLAN.md the workflow mandates between Planning and Execution so a reviewer can approve the approach before a line of code exists. A plan earns approval when it is small enough to finish in one sitting, testable enough that every claim maps to a check, and reviewable enough that a second engineer can predict the diff from the plan alone. Vague plans produce sprawling diffs; this file is where you constrain scope, not in the pull request.

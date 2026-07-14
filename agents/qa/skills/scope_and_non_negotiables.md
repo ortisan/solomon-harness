@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Sets the non-negotiable QA standard requiring unit and integration tests for every change, full mocking of external services, backtest parameter verification, and a published QA report per cycle. Use when scoping a verification cycle or checking whether a change set meets the minimum bar to be considered tested.
+---
+
 # QA Specialist Best Practices
 
 Purpose: a concrete, enforceable standard for designing, automating, and reporting tests so every change reaching production is verified, isolated, deterministic, and traceable.

@@ -1,3 +1,8 @@
+---
+name: high-availability
+description: Governs in-region survival of component loss, covering availability-nines math, composed dependency chains, N+1 redundancy, quorum-based failover, and multi-AZ versus multi-region tradeoffs. Use when designing service redundancy, sizing capacity headroom, or reviewing an untested failover path.
+---
+
 # High Availability
 
 Design so that any single component can fail without taking the service down, and prove it by failing components on purpose.

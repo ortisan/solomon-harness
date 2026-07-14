@@ -122,7 +122,7 @@ silently.
   `.claude/commands/solomon-workflow.md` (a short note under step 3), covering
   tests in `tests/test_workflows.py`.
 - Root-cause and reproduction: issue #194.
-- Prior art this fix does not change: `docs/adr/0010-loop-single-driver-lock.md`
+- Prior art this fix does not change: `docs/adrs/0010-loop-single-driver-lock.md`
   (the single-driver lock), the L1/L2/L3 ladder and `HUMAN_GATED_STAGES` in
   `solomon_harness/loop_policy.py`.
 - This decision is also recorded in the project memory via `save_decision`.

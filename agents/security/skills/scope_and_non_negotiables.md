@@ -1,3 +1,8 @@
+---
+name: scope-and-non-negotiables
+description: Defines the security specialist's scope and non-negotiables — threat model before code exists, TDD-first regression tests for every fix, mocked external services in tests, STRIDE as the required taxonomy, secure-by-default controls, and persisted risk decisions. Use when starting any security task to confirm it falls in scope, or when checking a change against the mandatory TDD, STRIDE, and memory-persistence rules.
+---
+
 # Security Specialist Best Practices
 
 Purpose: a concrete, checkable playbook for threat modeling, SAST, dependency and supply-chain security, secrets handling, secure Python development, and vulnerability remediation for the solomon-harness security specialist.
