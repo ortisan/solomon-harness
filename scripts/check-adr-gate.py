@@ -25,37 +25,50 @@ import os
 import re
 import sys
 
+# The canonical output form uses the em dash, but the validator tolerates the
+# dashes humans and hosts actually type (em, en, --, -): the contract is the
+# decision statement, not the typography.
+DASH = r"(?:—|–|--|-)"
 ADR_LINK = re.compile(r"^ADR: docs/adrs/\d{4}-[a-z0-9-]+\.md\s*$", re.MULTILINE)
-ADR_SKIP = re.compile(r"^ADR: not warranted — (?P<reason>.+)$", re.MULTILINE)
-ADR_SKIP_BARE = re.compile(r"^ADR: not warranted\s*$", re.MULTILINE)
+ADR_SKIP = re.compile(rf"^ADR: not warranted {DASH} (?P<reason>.+)$", re.MULTILINE)
+ADR_SKIP_BARE = re.compile(rf"^ADR: not warranted(?: {DASH})?\s*$", re.MULTILINE)
 OLD_PATH_LINK = re.compile(r"^ADR: docs/adr/", re.MULTILINE)
 ANY_ADR_LINE = re.compile(r"^ADR: ", re.MULTILINE)
+INDENTED_ADR_LINE = re.compile(r"^[ \t]+ADR: ", re.MULTILINE)
+FENCED_BLOCK = re.compile(r"^```.*?^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
 def check_body(body: str) -> list[str]:
     """Return the list of contract violations (empty == the gate passes)."""
-    links = ADR_LINK.findall(body)
-    skips = ADR_SKIP.findall(body)
+    # A canonical line inside a fenced code block is illustration, not a
+    # decision: strip fences before matching.
+    prose = FENCED_BLOCK.sub("", body)
+    links = ADR_LINK.findall(prose)
+    skips = ADR_SKIP.findall(prose)
     problems: list[str] = []
-    if OLD_PATH_LINK.search(body):
+    if OLD_PATH_LINK.search(prose):
         problems.append(
             "the ADR line links the pre-migration docs/adr/ path — records "
             "live under docs/adrs/ (ADR-0028)"
         )
-    if ADR_SKIP_BARE.search(body):
+    if ADR_SKIP_BARE.search(prose):
         problems.append(
             "the skip line must carry a reason: 'ADR: not warranted — <reason>'"
         )
-    if links and skips:
+    if len(links) + len(skips) > 1:
         problems.append(
-            "the body carries both an ADR link and a skip line — one decision, "
-            "one line"
+            "the body carries more than one ADR line — one decision, one line"
         )
     if not links and not skips and not problems:
-        if ANY_ADR_LINE.search(body):
+        if ANY_ADR_LINE.search(prose):
             problems.append(
                 "an 'ADR:' line is present but matches neither canonical form "
                 "('ADR: docs/adrs/NNNN-<slug>.md' or 'ADR: not warranted — <reason>')"
+            )
+        elif INDENTED_ADR_LINE.search(prose):
+            problems.append(
+                "an indented ADR line is not recognized — start the canonical "
+                "line at column 1"
             )
         else:
             problems.append(

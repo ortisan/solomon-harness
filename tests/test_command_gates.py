@@ -361,13 +361,32 @@ def test_gemini_mirror_carries_the_spec_generation_step():
 # --- Automatic ADR capture gate (#221 S2b, #235) -------------------------------
 
 
-def test_ci_enforces_the_adr_gate_on_pull_requests():
+def test_dedicated_workflow_enforces_the_adr_gate_and_stays_fresh_on_edits():
+    gate = _read(os.path.join(".github", "workflows", "adr-gate.yml"))
+    assert "scripts/check-adr-gate.py" in gate
+    # Body-only edits must re-run the gate (a stale green would let an
+    # edited-away ADR line through) — hence the explicit types list...
+    assert "types: [opened, synchronize, reopened, edited]" in gate
+    # ...the body travels as an env var, never shell-interpolated...
+    assert "PR_BODY: ${{ github.event.pull_request.body }}" in gate
+    # ...and the workflow stays least-privilege.
+    assert "contents: read" in gate
+    # Single owner: the heavy CI workflow does not duplicate the gate.
     ci = _read(os.path.join(".github", "workflows", "ci.yml"))
-    assert "scripts/check-adr-gate.py" in ci
-    # Guarded to pull_request events (push builds carry no PR body)...
-    assert "if: github.event_name == 'pull_request'" in ci
-    # ...and the body travels as an env var, never shell-interpolated.
-    assert "PR_BODY: ${{ github.event.pull_request.body }}" in ci
+    assert "check-adr-gate" not in ci
+
+
+def test_workflow_doc_defines_the_adr_gate():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    assert "ADR: docs/adrs/NNNN-<slug>.md" in doc
+    assert "ADR: not warranted — <reason>" in doc
+    assert "check-adr-gate.py" in doc
+
+
+def test_scan_loops_write_the_canonical_adr_line():
+    for name in ("scan-arch", "scan-dedup"):
+        body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
+        assert "ADR: not warranted — <reason>" in body, name
 
 
 def test_start_release_and_review_carry_the_canonical_adr_line():

@@ -54,6 +54,9 @@ def test_no_reference_to_the_old_adr_path_remains():
             Path("tests") / "test_adr_migration.py",
             Path("PLAN.md"),
             Path("docs") / "adrs" / "0028-adrs-directory-and-spec-driven-convention.md",
+            # The ADR gate names the old path to detect and reject it.
+            Path("scripts") / "check-adr-gate.py",
+            Path("tests") / "test_adr_gate.py",
         ):
             continue
         try:

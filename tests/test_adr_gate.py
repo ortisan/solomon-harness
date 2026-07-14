@@ -57,10 +57,45 @@ def test_both_forms_fail_as_ambiguous(tmp_path):
     assert "one decision" in result.stderr
 
 
+def test_two_link_lines_fail_as_ambiguous(tmp_path):
+    result = _run_body(
+        tmp_path,
+        "ADR: docs/adrs/0028-adrs-directory-and-spec-driven-convention.md\n"
+        "ADR: docs/adrs/0029-install-documents-boundary.md\n",
+    )
+    assert result.returncode == 1
+    assert "one decision" in result.stderr
+
+
 def test_bare_skip_without_reason_fails(tmp_path):
     result = _run_body(tmp_path, "ADR: not warranted\n")
     assert result.returncode == 1
-    assert "reason" in result.stderr
+    assert "must carry a reason" in result.stderr
+    dangling_dash = _run_body(tmp_path, "ADR: not warranted —\n")
+    assert dangling_dash.returncode == 1
+    assert "must carry a reason" in dangling_dash.stderr
+
+
+def test_ascii_and_en_dashes_are_tolerated_in_the_skip_line(tmp_path):
+    for dash in ("-", "--", "–"):
+        result = _run_body(tmp_path, f"ADR: not warranted {dash} docs-only change.\n")
+        assert result.returncode == 0, (dash, result.stderr)
+
+
+def test_canonical_line_inside_a_code_fence_is_illustration_not_a_decision(tmp_path):
+    body = (
+        "The gate expects:\n\n```\nADR: docs/adrs/0000-example.md\n```\n\n"
+        "No real decision stated.\n"
+    )
+    result = _run_body(tmp_path, body)
+    assert result.returncode == 1
+    assert "no ADR line" in result.stderr
+
+
+def test_indented_line_gets_a_pointed_message(tmp_path):
+    result = _run_body(tmp_path, "  ADR: not warranted — indented under a bullet.\n")
+    assert result.returncode == 1
+    assert "column 1" in result.stderr
 
 
 def test_noncanonical_adr_line_fails(tmp_path):

@@ -517,3 +517,30 @@ def test_cmd_plan_returns_clean_error_for_prerelease_version_without_tags(tmp_pa
     err = capsys.readouterr().err
     assert "release plan" in err
     assert "0.1.0-rc.1" in err
+
+
+def test_prep_pr_body_carries_the_canonical_adr_skip_line():
+    """The ADR gate (#235) validates every PR body, release preps included:
+    the hardcoded body must satisfy scripts/check-adr-gate.py."""
+    import importlib.util
+    import inspect
+
+    from solomon_harness import release
+
+    source = inspect.getsource(release.cmd_prep)
+    assert "ADR: not warranted" in source
+
+    spec = importlib.util.spec_from_file_location(
+        "check_adr_gate",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "scripts", "check-adr-gate.py"),
+    )
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    body = (
+        "Release v9.9.9 prep. The version bump and CHANGELOG were written by "
+        "`solomon-harness release prep`; merging this PR is the human release gate.\n\n"
+        "ADR: not warranted — release prep carries only the mechanical version "
+        "bump and CHANGELOG section; decisions live with the merged issues.\n"
+    )
+    assert gate.check_body(body) == []
