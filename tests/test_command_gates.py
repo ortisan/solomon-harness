@@ -316,3 +316,43 @@ def test_loop_documents_gap_surfacing_as_human_gated():
     assert "capability gap" in low
     assert "human-gated" in low
     assert "never attempt the acquisition" in low
+
+
+# --- Spec-driven issue documents (#221 S1, #233) -------------------------------
+
+
+def test_ci_runs_spec_lint_beside_the_other_validators():
+    ci = _read(os.path.join(".github", "workflows", "ci.yml"))
+    assert "scripts/spec-lint.py" in ci
+
+
+def test_issue_command_generates_the_spec_document():
+    body = _read(os.path.join(".claude", "commands", "solomon-issue.md"))
+    assert "docs/specs/0000-spec-template.md" in body
+    assert "docs/specs/<n>-<slug>.md" in body.lower()
+    assert "spec-lint.py" in body
+    # The fill mapping covers every template section, Design Constraints
+    # included — a skipped section would ship raw template text forever.
+    for section in (
+        "Context", "Problem", "Requirements", "Acceptance Criteria",
+        "Design Constraints", "Out of Scope", "Traceability",
+    ):
+        assert section in body, section
+    # The spec ships with the implementation PR, never straight to main.
+    assert "never push" in body.lower() or "never pushed" in body.lower()
+
+
+def test_workflow_doc_defines_the_spec_generation():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    low = doc.lower()
+    assert "spec generation" in low
+    assert "docs/specs/0000-spec-template.md" in doc
+    assert "spec-lint.py" in doc
+    assert "TBD (refine)" in doc
+
+
+def test_gemini_mirror_carries_the_spec_generation_step():
+    body = _read(os.path.join(".gemini", "commands", "solomon-issue.toml"))
+    assert "docs/specs/0000-spec-template.md" in body
+    assert "spec-lint.py" in body
+    assert "Design Constraints" in body

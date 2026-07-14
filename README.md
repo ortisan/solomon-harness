@@ -126,7 +126,7 @@ Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 | --- | --- | --- |
 | `/solomon-workflow` | run a task end-to-end or continue | loop_engineer |
 | `/solomon-idea` | capture an idea | product_owner |
-| `/solomon-issue` | create a feature/story; a vague demand first passes the Socratic elicitation gate | product_owner |
+| `/solomon-issue` | create a feature/story; a vague demand first passes the Socratic elicitation gate, and every issue gets a `docs/specs/` spec doc | product_owner |
 | `/solomon-bug` | create a bug | qa, software_engineer |
 | `/solomon-refine` | ready an issue | product_owner, scrum_master |
 | `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |

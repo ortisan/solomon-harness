@@ -133,6 +133,21 @@ permanently human-gated: a headless stage subprocess, an automation autonomy
 level, or an engaged kill-switch is refused (exit 3) before any change — the
 loop surfaces gaps, a human applies them.
 
+### Spec generation (`/solomon-issue`)
+
+Every feature/story issue gets a durable spec document: after creation,
+`/solomon-issue` copies `docs/specs/0000-spec-template.md` to
+`docs/specs/<N>-<slug>.md` via the Write tool and pre-fills the seven mandated
+sections (Context, Problem, Requirements, Acceptance Criteria, Design
+Constraints, Out of Scope, Traceability) from the shaped issue body, with the
+explicit placeholder `TBD (refine)` wherever content is unknown.
+`scripts/spec-lint.py` enforces the convention (filename rule, sections
+present and non-empty, Traceability citing the issue) and runs in the CI
+validators job. The spec ships with the issue's first implementation PR —
+never pushed to a protected branch directly. The convention's full definition
+lives in `docs/specs/README.md`; its decision record lands with the
+`docs/adr` → `docs/adrs` migration (#221 S2a).
+
 ## Implementation mode (automatic or manual)
 
 `/solomon-start` asks, before any code is written, whether the change is implemented
@@ -325,7 +340,7 @@ Contract template:
 <2-5 lines>
 
 ## Artifacts (open only if needed)
-- PLAN.md · docs/adr/NNNN-*.md · PR #<M> · test plan · ...
+- PLAN.md · docs/specs/<N>-*.md · docs/adr/NNNN-*.md · PR #<M> · test plan · ...
 
 ## Acceptance criteria status
 <which acceptance criteria are met; what remains>
