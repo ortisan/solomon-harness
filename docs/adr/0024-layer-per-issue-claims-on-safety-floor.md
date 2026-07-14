@@ -1,4 +1,4 @@
-# ADR-0023: Layering per-issue claims on safety floor
+# ADR-0024: Layering per-issue claims on safety floor
 
 - Status: accepted
 - Date: 2026-07-06

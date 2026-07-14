@@ -11,6 +11,8 @@ import datetime
 import subprocess
 from typing import Any, Dict, Optional, Tuple
 
+from solomon_harness.subprocess_env import clean_git_env
+
 CLAIM_TTL_SECONDS = 1800.0  # 30 minutes
 
 def get_current_session_id() -> str:
@@ -82,7 +84,7 @@ def get_claim_ref(workspace_root: str, issue_number: int) -> Optional[Tuple[str,
     """Fetch the claim ref from origin and return (sha, parsed_metadata) or None."""
     ref = f"refs/claims/issue-{issue_number}"
     remote_ref = f"refs/remotes/origin/claims/issue-{issue_number}"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = clean_git_env(workspace_root)
     
     res = subprocess.run(
         ["git", "fetch", "-q", "origin", f"+{ref}:{remote_ref}"],
@@ -181,7 +183,7 @@ def claim_issue(workspace_root: str, issue_number: int, current_session_id: Opti
         "heartbeat_at": now_str,
     }
     
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = clean_git_env(workspace_root)
     mktree_res = subprocess.run(
         ["git", "mktree"],
         input="",
@@ -247,7 +249,7 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
         return False
         
     ref = f"refs/claims/issue-{issue_number}"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = clean_git_env(workspace_root)
     push_res = subprocess.run(
         ["git", "push", f"--force-with-lease={ref}:{sha}", "origin", f":{ref}"],
         cwd=workspace_root,
@@ -264,7 +266,7 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
 
 def fetch_all_claims(workspace_root: str) -> Dict[int, Dict[str, Any]]:
     """Fetch all claim references from the remote and return a dict of active claims."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = clean_git_env(workspace_root)
     subprocess.run(
         ["git", "fetch", "-q", "origin", "+refs/claims/*:refs/remotes/origin/claims/*"],
         cwd=workspace_root,

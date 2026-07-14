@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import datetime
 import os
 import shutil
@@ -85,6 +85,17 @@ class TestClaimGitOperations(unittest.TestCase):
         _git(self.local, "add", "README.md")
         _git(self.local, "commit", "-q", "-m", "initial commit")
         _git(self.local, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+        # Isolate from GitHub: the CAS pushes go to the temp bare origin above, but
+        # claim_issue/release_claim also consult has_active_pr_or_review and edit the
+        # issue assignee via gh -- those must never reach the real repo in a test.
+        for target, kwargs in (
+            ("solomon_harness.claim.has_active_pr_or_review", {"return_value": False}),
+            ("solomon_harness.github._gh", {"return_value": {"ok": True, "stdout": ""}}),
+        ):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -197,7 +208,6 @@ class TestClaimGitOperations(unittest.TestCase):
     @patch("sys.stdout", new_callable=lambda: StringIO())
     @patch("solomon_harness.claim.get_claim")
     def test_cli_claim_status_unclaimed(self, mock_get, mock_stdout):
-        from io import StringIO
         from solomon_harness.cli import main
         mock_get.return_value = None
         
@@ -207,7 +217,6 @@ class TestClaimGitOperations(unittest.TestCase):
     @patch("sys.stdout", new_callable=lambda: StringIO())
     @patch("solomon_harness.claim.release_claim")
     def test_cli_claim_release(self, mock_release, mock_stdout):
-        from io import StringIO
         from solomon_harness.cli import main
         mock_release.return_value = True
         

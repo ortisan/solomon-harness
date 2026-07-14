@@ -305,7 +305,7 @@ def run_stage(
             )
             return 1
 
-    # Per-issue claim gate + acquisition (ADR-0016): layered on top of the
+    # Per-issue claim gate + acquisition (ADR-0024): layered on top of the
     # repo-wide lock above, not a replacement for it. Only meaningful inside a
     # real git repo -- a plain workspace with no `.git` has no claims remote
     # to check or race against in the first place.
