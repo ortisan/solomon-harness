@@ -96,6 +96,10 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   `docs/adrs/NNNN-<slug>.md` (next number), fills the MADR sections, and records it with
   `mcp__solomon-memory__save_decision(title="ADR-NNNN: ...", outcome="Status: Accepted\n...", author="software_architect", branch="feature/<slug>")`.
 - If not significant: state that explicitly (you will repeat it in the PR body).
+- Either way the PR body will carry exactly one canonical, machine-checked
+  line (`scripts/check-adr-gate.py` fails CI otherwise):
+  `ADR: docs/adrs/NNNN-<slug>.md` when a record was written, or
+  `ADR: not warranted — <reason>` when the checklist did not trip.
 
 ## 5. Choose the implementation mode, then implement (software_engineer)
 - Before writing any production or test code, ask how this issue should be implemented,
@@ -127,8 +131,9 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 ## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
 - Open a draft PR: `uv run python -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
-  The body must contain `Closes #$ARGUMENTS`, summarize the change, and either link the ADR
-  (`docs/adrs/NNNN-<slug>.md`) or state that no ADR was warranted and why.
+  The body must contain `Closes #$ARGUMENTS`, summarize the change, and carry the
+  canonical ADR line from step 4 — `ADR: docs/adrs/NNNN-<slug>.md` or
+  `ADR: not warranted — <reason>` — which the CI ADR gate enforces verbatim.
 - `uv run python -m solomon_harness.cli github set-status --issue $ARGUMENTS --status "Code Review"`.
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-$ARGUMENTS-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,

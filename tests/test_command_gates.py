@@ -356,3 +356,54 @@ def test_gemini_mirror_carries_the_spec_generation_step():
     assert "docs/specs/0000-spec-template.md" in body
     assert "spec-lint.py" in body
     assert "Design Constraints" in body
+
+
+# --- Automatic ADR capture gate (#221 S2b, #235) -------------------------------
+
+
+def test_dedicated_workflow_enforces_the_adr_gate_and_stays_fresh_on_edits():
+    gate = _read(os.path.join(".github", "workflows", "adr-gate.yml"))
+    assert "scripts/check-adr-gate.py" in gate
+    # Body-only edits must re-run the gate (a stale green would let an
+    # edited-away ADR line through) — hence the explicit types list...
+    assert "types: [opened, synchronize, reopened, edited]" in gate
+    # ...the body travels as an env var, never shell-interpolated...
+    assert "PR_BODY: ${{ github.event.pull_request.body }}" in gate
+    # ...and the workflow stays least-privilege.
+    assert "contents: read" in gate
+    # Single owner: the heavy CI workflow does not duplicate the gate.
+    ci = _read(os.path.join(".github", "workflows", "ci.yml"))
+    assert "check-adr-gate" not in ci
+
+
+def test_workflow_doc_defines_the_adr_gate():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    assert "ADR: docs/adrs/NNNN-<slug>.md" in doc
+    assert "ADR: not warranted — <reason>" in doc
+    assert "check-adr-gate.py" in doc
+
+
+def test_scan_loops_write_the_canonical_adr_line():
+    for name in ("scan-arch", "scan-dedup"):
+        body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
+        assert "ADR: not warranted — <reason>" in body, name
+
+
+def test_start_release_and_review_carry_the_canonical_adr_line():
+    canonical_link = "ADR: docs/adrs/NNNN-<slug>.md"
+    canonical_skip = "ADR: not warranted — <reason>"
+    for name in ("start", "release"):
+        body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
+        assert canonical_link in body, name
+        assert canonical_skip in body, name
+    review = _read(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "check-adr-gate.py" in review
+
+
+def test_gemini_mirrors_carry_the_canonical_adr_line():
+    for name in ("start", "release"):
+        body = _read(os.path.join(".gemini", "commands", f"solomon-{name}.toml"))
+        assert "ADR: docs/adrs/NNNN-<slug>.md" in body, name
+        assert "ADR: not warranted — <reason>" in body, name
+    review = _read(os.path.join(".gemini", "commands", "solomon-review.toml"))
+    assert "check-adr-gate.py" in review

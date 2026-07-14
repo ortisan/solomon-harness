@@ -511,6 +511,14 @@ architecturally significant using the checklist in
 `save_decision`, and links it in the PR. If not significant, state that explicitly
 in the PR so the decision to skip an ADR is also visible.
 
+The statement is machine-checked (ADR-0031): every PR body carries exactly one
+canonical line — `ADR: docs/adrs/NNNN-<slug>.md` or
+`ADR: not warranted — <reason>` — enforced by `scripts/check-adr-gate.py` in a
+dedicated workflow that re-runs on body edits, and re-checked mechanically by
+the review stage before the architect judges whether the line's content is
+honest. Every flow that opens a PR (start, release prep, the scan loops)
+writes the line.
+
 ## Authorization
 
 These workflows perform outward-facing actions (creating issues, branches, PRs,
