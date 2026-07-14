@@ -16,6 +16,7 @@ Run it against a single file or a directory:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -32,6 +33,11 @@ SECTION_HEADINGS = [
     "Traceability",
 ]
 
+# The house template and the convention doc are not specs; they are excluded
+# from directory scans (mirrors check-adr-unique.py's EXCLUDED set).
+EXCLUDED = {"README.md", "0000-spec-template.md"}
+FILENAME_RE = re.compile(r"^(\d+)-")
+
 
 def check_file(path: Path) -> list[str]:
     """Return a list of problems found in path; an empty list means valid."""
@@ -44,11 +50,29 @@ def check_file(path: Path) -> list[str]:
     return errors
 
 
+def check_directory(spec_dir: Path) -> list[str]:
+    """Return a list of problems found across spec_dir; empty means valid.
+
+    A malformed filename (no leading issue-number prefix) is reported and its
+    section check is skipped, mirroring check-adr-unique.py's `continue` after
+    a filename miss (no redundant double-report for the same file).
+    """
+    errors: list[str] = []
+    for path in sorted(spec_dir.glob("*.md")):
+        if path.name in EXCLUDED:
+            continue
+        if not FILENAME_RE.match(path.name):
+            errors.append(f"{path.name}: filename does not start with an issue number")
+            continue
+        errors.extend(check_file(path))
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Check a spec document carries every canonical section heading."
+        description="Check spec document(s) carry every canonical section heading."
     )
-    parser.add_argument("path", help="A spec markdown file to validate.")
+    parser.add_argument("path", help="A spec markdown file or a docs/specs-shaped directory.")
     args = parser.parse_args(argv)
 
     path = Path(args.path)
@@ -56,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"path not found: {path}", file=sys.stderr)
         return 2
 
-    errors = check_file(path)
+    errors = check_directory(path) if path.is_dir() else check_file(path)
     if errors:
         for err in errors:
             print(err, file=sys.stderr)

@@ -62,3 +62,45 @@ def test_single_file_all_sections_pass(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "OK"
+
+
+def test_directory_malformed_filename_fails(tmp_path):
+    (tmp_path / "sample-no-number.md").write_text("not a spec\n", encoding="utf-8")
+
+    result = _run(str(tmp_path))
+
+    assert result.returncode == 1
+    assert (
+        result.stderr.strip()
+        == "sample-no-number.md: filename does not start with an issue number"
+    )
+
+
+def test_directory_excludes_template_and_readme(tmp_path):
+    (tmp_path / "0000-spec-template.md").write_text("template\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("readme\n", encoding="utf-8")
+
+    result = _run(str(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
+
+
+def test_directory_valid_specs_pass(tmp_path):
+    _write_spec(tmp_path / "1-a-title.md")
+    _write_spec(tmp_path / "2-b-title.md")
+
+    result = _run(str(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
+
+
+def test_nonexistent_path_fails_cleanly(tmp_path):
+    missing = tmp_path / "does-not-exist"
+
+    result = _run(str(missing))
+
+    assert result.returncode == 2
+    assert "not found" in result.stderr
+    assert "Traceback" not in result.stderr
