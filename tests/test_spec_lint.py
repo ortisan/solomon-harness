@@ -162,6 +162,36 @@ def test_template_has_headings_in_canonical_order():
     assert positions == sorted(positions)
 
 
+def test_template_context_guidance_does_not_contradict_the_user_story_mapping():
+    # Context is mapped from the issue's "User story" section
+    # (spec_doc._DIRECT_SECTION_MAP), but the template used to tell authors
+    # "No solutioning yet" without ever mentioning that source, which reads
+    # as a contradiction once you know where the content actually comes from.
+    content = (DOCS_SPECS / "0000-spec-template.md").read_text(encoding="utf-8")
+    context_section = content.split("## Context", 1)[1].split("## Problem", 1)[0]
+
+    assert "No solutioning yet" not in context_section
+    assert "user story" in context_section.lower()
+
+
+def test_readme_documents_the_section_to_source_mapping():
+    content = (DOCS_SPECS / "README.md").read_text(encoding="utf-8")
+
+    assert "Where content comes from" in content
+    mapping = {
+        "Problem": "Problem statement",
+        "Context": "User story",
+        "Requirements": "in scope",
+        "Out of Scope": "out of scope",
+        "Design Constraints": "Definition of Ready",
+        "Acceptance Criteria": "Acceptance criteria",
+        "Traceability": "synthesized",
+    }
+    for heading, source in mapping.items():
+        assert heading in content, heading
+        assert source.lower() in content.lower(), source
+
+
 def test_fresh_docs_specs_directory_passes_lint():
     # Only the template and the README live in docs/specs at this point (no
     # issue has generated a spec yet); the scan must still exit 0.

@@ -27,6 +27,24 @@ Every spec carries these headings, in this order: Context, Problem,
 Requirements, Acceptance Criteria, Design Constraints, Out of Scope,
 Traceability. See `0000-spec-template.md` for the guidance in each.
 
+## Where content comes from
+
+Each heading is mapped from a specific part of the issue body (see
+`solomon_harness/spec_doc.py`'s `_DIRECT_SECTION_MAP` and `_scope_subsection`):
+
+| Spec heading        | Issue body source                                |
+| -------------------- | ------------------------------------------------- |
+| Problem              | `## Problem statement`                             |
+| Context              | `## User story`                                    |
+| Requirements         | `## Scope`, the "in scope" sub-block                |
+| Out of Scope         | `## Scope`, the "out of scope" sub-block            |
+| Design Constraints   | `## Definition of Ready`                           |
+| Acceptance Criteria  | `## Acceptance criteria`                           |
+| Traceability         | Synthesized: never read from the issue body        |
+
+A section with no derivable content falls back to the placeholder
+`TBD (refine)` (Traceability never falls back: it is always synthesized).
+
 ## Generate-once vs. hand-edit-after
 
 The generator maps the issue body onto the seven headings once, at creation

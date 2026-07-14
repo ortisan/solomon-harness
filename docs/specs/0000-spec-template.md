@@ -9,8 +9,8 @@ the spec progresses to `refined` (acceptance criteria locked in) or
 
 ## Context
 
-Why this matters now: the user need, the surrounding system, and any prior
-decisions this builds on. No solutioning yet.
+The issue's user story, plus why this matters now: the surrounding system and
+any prior decisions this builds on.
 
 ## Problem
 
