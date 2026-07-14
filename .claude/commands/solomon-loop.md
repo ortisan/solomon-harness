@@ -1,7 +1,7 @@
 ---
 description: Fully autonomous parallel loop - spawn multiple agents to start, develop, test, review and open PRs for ready issues
 argument-hint: (optional) --issues 42,43
-allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, AskUserQuestion
+allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, AskUserQuestion, mcp__solomon-memory__get_memory
 ---
 
 You are running the fully autonomous parallel loop stage.
