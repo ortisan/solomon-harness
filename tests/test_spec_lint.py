@@ -150,6 +150,12 @@ def test_template_and_readme_exist():
     assert (DOCS_SPECS / "README.md").is_file()
 
 
+def test_template_front_matter_matches_generated_status_default():
+    content = (DOCS_SPECS / "0000-spec-template.md").read_text(encoding="utf-8")
+    assert "- Status: draft" in content
+    assert "draft | refined | implemented" not in content
+
+
 def test_template_has_headings_in_canonical_order():
     content = (DOCS_SPECS / "0000-spec-template.md").read_text(encoding="utf-8")
     positions = [content.index(f"## {heading}") for heading in SECTION_HEADINGS]

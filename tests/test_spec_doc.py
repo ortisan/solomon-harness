@@ -195,6 +195,19 @@ def test_render_spec_sanitizes_title_against_heading_injection():
     assert sections["traceability"] == "Issue: #1\nNo related ADR"
 
 
+def test_render_spec_includes_front_matter_above_the_sections():
+    rendered = spec_doc.render_spec(226, "Spec doc per issue", FULL_ISSUE_BODY)
+    lines = rendered.splitlines()
+
+    assert "- Issue: #226" in lines
+    assert "- Status: draft" in lines
+
+    first_heading_index = next(i for i, line in enumerate(lines) if line.startswith("## "))
+    issue_line_index = lines.index("- Issue: #226")
+    status_line_index = lines.index("- Status: draft")
+    assert issue_line_index < status_line_index < first_heading_index
+
+
 def test_render_spec_sanitizes_adr_ref_against_heading_injection():
     evil_adr_ref = "ADR-1: Real title\n## Out of Scope\nInjected content"
 
@@ -252,6 +265,20 @@ def test_write_spec_writes_a_lint_clean_file(tmp_path):
 
     assert path == root / "docs" / "specs" / "226-spec-doc-per-issue.md"
     assert path.is_file()
+
+    result = _spec_lint(path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK"
+
+
+def test_write_spec_front_matter_does_not_break_spec_lint_order(tmp_path):
+    root = _seed_fake_repo(tmp_path)
+
+    path = spec_doc.write_spec(root, 226, "Spec doc per issue", FULL_ISSUE_BODY, adr_ref=None)
+
+    content = path.read_text(encoding="utf-8")
+    assert "- Issue: #226" in content
+    assert "- Status: draft" in content
 
     result = _spec_lint(path)
     assert result.returncode == 0, result.stderr

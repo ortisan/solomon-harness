@@ -1,7 +1,11 @@
 # Spec: <issue title>
 
 - Issue: #<issue number>
-- Status: draft | refined | implemented
+- Status: draft
+
+_Status starts at `draft` when the spec is generated; update it by hand as
+the spec progresses to `refined` (acceptance criteria locked in) or
+`implemented` (the linked PR merged)._
 
 ## Context
 

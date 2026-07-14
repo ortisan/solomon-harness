@@ -174,7 +174,9 @@ def render_spec(
     (never derived from the body) as "Issue: #<N>" plus either the supplied
     `adr_ref` verbatim or the literal "No related ADR" when none is given.
     `title` and `adr_ref` are sanitized (see `_sanitize_inline`) before
-    interpolation, since both are caller-controlled strings.
+    interpolation, since both are caller-controlled strings. Emits the
+    template's front-matter block (`- Issue: #<N>` / `- Status: draft`)
+    right under the `# Spec: <title>` heading, above the `## ` sections.
     """
     title = _sanitize_inline(title)
     sections = parse_issue_sections(body)
@@ -190,7 +192,10 @@ def render_spec(
         f"{_sanitize_inline(adr_ref) if adr_ref else 'No related ADR'}"
     )
 
-    parts = [f"# Spec: {title}\n"]
+    parts = [
+        f"# Spec: {title}\n",
+        f"- Issue: #{issue_number}\n- Status: draft\n",
+    ]
     for heading in SECTION_HEADINGS:
         content = content_by_heading.get(heading) or TBD_PLACEHOLDER
         parts.append(f"## {heading}\n\n{content}\n")
