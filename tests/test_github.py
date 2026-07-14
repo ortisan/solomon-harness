@@ -737,6 +737,9 @@ class TestMergePrAndClose(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["pr"], 42)
         self.assertEqual(res["issue"], 172)
+        # M14: the merge-triggered per-issue claim release must actually run,
+        # not merely be patchable -- confirm it was called for this issue.
+        self.mock_release_claim.assert_called_once_with(unittest.mock.ANY, 172, force=True)
 
     def test_merge_succeeds_but_board_move_fails_reports_partial_state(self):
         """#195 architecture-review finding: a merge that succeeds but whose
@@ -771,6 +774,45 @@ class TestMergePrAndClose(unittest.TestCase):
             res = github.merge_pr_and_close(42, 172)
         set_status.assert_not_called()
         record_terminal.assert_not_called()
+        self.assertFalse(res["ok"])
+        self.assertIn("error", res)
+
+
+class TestListOpenIssuesClaimAware(unittest.TestCase):
+    """ADR-0024 item 6: the direct board-scan read path (gh issue list) must
+    exclude actively-claimed issues too, not only MemoryService.get_open_issues."""
+
+    def test_excludes_actively_claimed_issue(self):
+        with (
+            patch(
+                "solomon_harness.github._gh",
+                return_value={
+                    "ok": True,
+                    "data": [
+                        {"number": 1, "title": "claimed by someone else"},
+                        {"number": 2, "title": "unclaimed"},
+                    ],
+                },
+            ),
+            patch(
+                "solomon_harness.claim.filter_unclaimed",
+                return_value=[2],
+            ) as filter_unclaimed,
+        ):
+            res = github.list_open_issues("/tmp/workspace")
+
+        self.assertTrue(res["ok"])
+        numbers = [i["number"] for i in res["issues"]]
+        self.assertNotIn(1, numbers)
+        self.assertIn(2, numbers)
+        filter_unclaimed.assert_called_once_with("/tmp/workspace", [1, 2])
+
+    def test_gh_failure_degrades_to_ok_false(self):
+        with patch(
+            "solomon_harness.github._gh",
+            return_value={"ok": False, "error": "not authenticated"},
+        ):
+            res = github.list_open_issues("/tmp/workspace")
         self.assertFalse(res["ok"])
         self.assertIn("error", res)
 
