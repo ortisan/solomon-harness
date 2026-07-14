@@ -8,6 +8,7 @@ sections, and (later steps) render and write the seven-heading spec document.
 from __future__ import annotations
 
 import importlib.util
+import time
 from pathlib import Path
 
 from solomon_harness import spec_doc
@@ -241,6 +242,50 @@ def test_write_spec_creates_docs_specs_if_missing(tmp_path):
     assert path.is_file()
     result = _spec_lint(path)
     assert result.returncode == 0, result.stderr
+
+
+# --- latency budget ----------------------------------------------------------------
+
+# A realistic ~2 KB rendered issue body (modeled on #226's own rendered body:
+# Problem statement, User story, a fenced gherkin Acceptance criteria block,
+# Scope with In/Out of scope sub-blocks, Sequencing, Definition of Ready/Done).
+REALISTIC_ISSUE_BODY = (
+    FULL_ISSUE_BODY
+    + """
+## Sequencing
+
+Parent: #221. Soft dependency on a sibling migration issue: land it before or
+together with this issue, so the Traceability section links to the current
+ADR path and never to a deprecated one. If that migration has not landed when
+this ships, the Traceability section must state "No related ADR" rather than
+linking the old path.
+
+## Definition of Done
+
+- Every acceptance criterion met with a covering test (TDD red/green/refactor).
+- scripts/spec-lint.py wired into CI and green for the template and every
+  generated spec.
+- /solomon-issue verified end to end against a real issue creation, producing
+  a valid docs/specs/<N>-<slug>.md; both .claude and .gemini command files
+  updated in the same PR.
+- Code reviewed and merged with CI green; enforced at /solomon-review as the
+  close gate.
+"""
+)
+
+
+def test_write_spec_stays_within_the_latency_budget(tmp_path):
+    assert len(REALISTIC_ISSUE_BODY) > 1500  # sanity: this is a realistic ~2 KB body
+
+    root = _seed_fake_repo(tmp_path)
+
+    start = time.perf_counter()
+    spec_doc.write_spec(root, 226, "Spec doc per issue", REALISTIC_ISSUE_BODY, adr_ref=None)
+    elapsed = time.perf_counter() - start
+
+    # Generous margin over the 2s workflow budget to absorb CI noise while
+    # still catching a real regression.
+    assert elapsed < 2.0, f"write_spec took {elapsed:.3f}s, budget is 2.0s"
 
 
 # --- generate CLI ----------------------------------------------------------------
