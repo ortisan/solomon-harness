@@ -57,47 +57,51 @@ REQUIRED_SECTIONS = (
 # nor an earlier changelog note in the header can shadow it, tolerating
 # bold/code-span markup so a formatted header does not silently disable the gate.
 TBD_PLACEHOLDER = "TBD (refine)"
-# Normalized placeholder key: lowercase, whitespace removed, so "TBD (refine)",
-# "tbd(refine)", and "- TBD (Refine)" all reduce to this.
-_PLACEHOLDER_KEY = "tbd(refine)"
+_PLACEHOLDER_KEYS = ("tbd(refine)", "todo", "fixme", "tbd")
 COMPLETION_GATED_STATUSES = {"ready", "implemented"}
-STATUS_RE = re.compile(r"Status:\s*([A-Za-z]+)")
+VALID_STATUSES = {"draft", "ready", "implemented", "superseded"}
+CANONICAL_LINE_RE = re.compile(
+    r"^\s*-\s*Issue:\s*#([1-9][0-9]*)\s*·\s*Status:\s*([A-Za-z0-9_-]+)"
+)
 
 
-def _spec_status(text: str) -> str | None:
-    """The spec's lowercased Status token, or None when the header lacks one.
+def _spec_status(text: str) -> tuple[str | None, str | None]:
+    """The spec's lowercased Status token and status issue number, or (None, None).
 
     The status lives on the header's ``- Issue: #N · Status: <token>`` line.
     It is read from that line specifically — not the leftmost "Status:" in the
     header blob — so an earlier changelog note or quoted old header ("Migrated
     from Status: draft ...") cannot shadow the real value. Markup around the
-    label and value (``**Status:**``, ``Status: `ready```) is tolerated, and
-    the last match on the line wins so a same-line aside cannot shadow the
-    trailing canonical token.
+    label and value (``**Status:**``, ``Status: `ready```) is tolerated.
     """
     header = text.split("\n## ", 1)[0]
     for line in header.splitlines():
         clean = line.replace("*", "").replace("`", "")
-        if "Issue:" in clean and "Status:" in clean:
-            matches = STATUS_RE.findall(clean)
-            if matches:
-                return matches[-1].lower()
-    return None
+        match = CANONICAL_LINE_RE.match(clean)
+        if match:
+            return match.group(2).lower(), match.group(1)
+    return None, None
 
 
 def _is_unresolved_placeholder(line: str) -> bool:
-    """True when a line is an unresolved ``TBD (refine)`` placeholder.
+    """True when a line contains an unresolved placeholder key.
 
-    The line is reduced to a bare token — whitespace removed, casefolded, and
-    any leading run of non-alphanumeric characters (list markers, quotes,
-    brackets, backticks, emphasis) stripped — then matched on a prefix. So
-    ``- `TBD (refine)```, ``[TBD (refine)]``, and ``TBD (refine) — blocked`` are
-    all caught, while a sentence that merely quotes the phrase mid-text is not
-    (it does not start with the token).
+    Catches common placeholders like TBD (refine), TODO, FIXME, TBD, and empty
+    markdown checkboxes [ ] at the start of a list item or line.
     """
+    # Check for empty checkboxes like "[ ]", "- [ ]", etc.
+    collapsed_checkbox = re.sub(r"\s+", "", line)
+    if collapsed_checkbox.startswith("-[]") or collapsed_checkbox.startswith("[]") or collapsed_checkbox.startswith("*[]"):
+        return True
+
     collapsed = re.sub(r"\s+", "", line).casefold()
-    collapsed = re.sub(r"^[^a-z0-9]+", "", collapsed)
-    return collapsed.startswith(_PLACEHOLDER_KEY)
+    collapsed = re.sub(r"^[^a-z]+", "", collapsed)
+    for key in _PLACEHOLDER_KEYS:
+        if collapsed.startswith(key):
+            suffix = collapsed[len(key):]
+            if not suffix or not suffix[0].isalnum():
+                return True
+    return False
 
 
 def _sections(text: str) -> tuple[dict[str, str], list[str]]:
@@ -134,10 +138,11 @@ def check_spec(path: Path) -> list[str]:
             f"{path}: filename must be <issue-number>-<kebab-slug>.md "
             f"(lowercase, hyphens, no leading zeros), got '{path.name}'"
         ]
-    if path.stat().st_size > MAX_SPEC_BYTES:
+    # Read the file first and check the size of the read text to prevent TOCTOU race
+    text = path.read_text(encoding="utf-8")
+    if len(text.encode("utf-8")) > MAX_SPEC_BYTES:
         return [f"{path}: larger than {MAX_SPEC_BYTES} bytes — not a spec"]
     issue_number = match.group(1)
-    text = path.read_text(encoding="utf-8")
     sections, duplicates = _sections(text)
     for heading in duplicates:
         gaps.append(f"{path}: duplicated section heading '{heading}'")
@@ -149,20 +154,31 @@ def check_spec(path: Path) -> list[str]:
                 f"{path}: section '{heading}' is empty — carry content or the "
                 f"explicit placeholder 'TBD (refine)'"
             )
-    status = _spec_status(text)
+    status, status_issue = _spec_status(text)
     if status is None:
         gaps.append(
             f"{path}: header must carry a parseable 'Status:' line "
             f"(draft | ready | implemented | superseded)"
         )
-    elif status in COMPLETION_GATED_STATUSES:
-        for heading, body in sections.items():
-            if any(_is_unresolved_placeholder(line) for line in body.splitlines()):
-                gaps.append(
-                    f"{path}: section '{heading}' still holds an unresolved "
-                    f"'{TBD_PLACEHOLDER}' but the spec is marked Status: "
-                    f"{status} — resolve every section before Ready"
-                )
+    elif status not in VALID_STATUSES:
+        gaps.append(
+            f"{path}: header carries an invalid status '{status}' — must be one of "
+            f"(draft | ready | implemented | superseded)"
+        )
+    else:
+        if status_issue != issue_number:
+            gaps.append(
+                f"{path}: status line issue number '#{status_issue}' must match "
+                f"filename issue number '#{issue_number}'"
+            )
+        if status in COMPLETION_GATED_STATUSES:
+            for heading, body in sections.items():
+                if any(_is_unresolved_placeholder(line) for line in body.splitlines()):
+                    gaps.append(
+                        f"{path}: section '{heading}' still holds an unresolved "
+                        f"'{TBD_PLACEHOLDER}' but the spec is marked Status: "
+                        f"{status} — resolve every section before Ready"
+                    )
     traceability = sections.get("## Traceability", "")
     if "## Traceability" in sections and not re.search(
         rf"#{issue_number}\b", traceability

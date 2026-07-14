@@ -337,3 +337,42 @@ def test_decoy_status_line_in_header_does_not_shadow_the_real_status(tmp_path):
     result = _run(tmp_path)
     assert result.returncode == 1
     assert "## Design Constraints" in result.stderr
+
+
+def test_invalid_status_value_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: raedy")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "invalid status 'raedy'" in result.stderr
+
+
+def test_mismatched_status_issue_number_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("- Issue: #42 · Status: draft", "- Issue: #99 · Status: draft")
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "status line issue number '#99' must match filename issue number '#42'" in result.stderr
+
+
+def test_numbered_list_placeholder_under_ready_is_rejected(tmp_path):
+    body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+        "## Design Constraints\n\nTBD (refine)\n",
+        "## Design Constraints\n\n1. TBD (refine)\n",
+    )
+    (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert "## Design Constraints" in result.stderr
+
+
+def test_alternative_placeholders_under_ready_are_rejected(tmp_path):
+    for placeholder in ("TODO", "FIXME", "TBD", "- [ ]"):
+        body = VALID_SPEC.replace("Status: draft", "Status: ready").replace(
+            "## Design Constraints\n\nTBD (refine)\n",
+            f"## Design Constraints\n\n{placeholder}\n",
+        )
+        (tmp_path / "42-add-csv-export.md").write_text(body, encoding="utf-8")
+        result = _run(tmp_path)
+        assert result.returncode == 1, f"Failed for placeholder {placeholder}"
+        assert "## Design Constraints" in result.stderr, f"Failed for placeholder {placeholder}"

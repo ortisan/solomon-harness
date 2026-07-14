@@ -18,7 +18,7 @@ ADR-0028, which established `docs/specs/` with seven mandated sections.
 
 ## Decision drivers
 
-- A refined (Ready) issue must be implementable without asking anything.
+- A refined (`ready`) issue must be implementable without asking anything.
 - Enforcement must be mechanical, not prose the model can skip (the standing
   "enforcement is prose, not mechanism" weakness).
 - Reuse the existing spec machinery; ADR-0028 restricts this convention to
@@ -43,7 +43,7 @@ approach) and **Verification** (the exact command that proves the change) —
 raising the mandated set from seven to nine. `scripts/spec-lint.py` requires
 both and, once a spec is `Status: ready` or `implemented`, rejects any section
 still holding a `TBD (refine)` line: refinement resolves every placeholder, so
-Ready means implementable. `/solomon-issue` pre-fills the sections (placeholders
+`ready` means implementable. `/solomon-issue` pre-fills the sections (placeholders
 allowed at `draft`); `/solomon-refine` resolves them and flips the spec to
 `ready` behind the lint gate. Bugs, which have no spec, carry the same detail
 in the issue body (suspected `file:line`, verification command).
@@ -57,10 +57,10 @@ discovery is surfaced to the human as enumerated options.
 ### Consequences
 
 - Positive: an implementing model reads a spec that names where, what, how, and
-  how to verify; discovered work is tracked as first-class issues; the Ready
+  how to verify; discovered work is tracked as first-class issues; the `ready`
   gate is machine-checked in CI.
 - Negative: refinement does more work (resolve real `file:line` pointers before
-  Ready); a spec marked `ready` with a lingering placeholder now fails CI.
+  `ready`); a spec marked `ready` with a lingering placeholder now fails CI.
 - Follow-ups: amends ADR-0028 (seven sections to nine); bugs enforce the bar by
   prose only; backfilling historical specs and issues is out of scope.
 

@@ -151,7 +151,7 @@ should be able to implement from the spec without asking anything.
 `/solomon-refine` resolves every placeholder and flips the spec to
 `Status: ready`. `scripts/spec-lint.py` enforces the convention (filename rule,
 sections present and non-empty, Traceability citing the issue) and, once a spec
-is `Status: ready` or `implemented`, that no section still holds a
+is `Status: ready` or `implemented`, asserts that no section still holds a
 `TBD (refine)` line — the mechanical gate that a refined issue is implementable
 without guessing. It runs in the CI validators job. The spec ships with the
 issue's first implementation PR — never pushed to a protected branch directly.
@@ -189,9 +189,11 @@ fixed (maintainer directive 2026-07-14):
   discovery becomes a fresh issue — `/solomon-bug` for a defect, `/solomon-issue`
   for a feature or improvement, a `type:chore` for cleanup — whose body links
   the parent with a `Refs #<parent>` line. Appending it as a comment on the
-  issue being worked pollutes that thread and loses tracking. (The single status
-  comment `/solomon-start` posts — the branch back-link — is not a discovery and
-  stays.)
+  issue being worked pollutes that thread and loses tracking. *(Exception: if
+  the discovery exposes a security vulnerability, it must never be filed as a
+  public issue; route it privately through a private GitHub Security Advisory
+  or direct maintainer alert instead.)* (The single status comment `/solomon-start`
+  posts — the branch back-link — is not a discovery and stays.)
 - **Do not silently widen the current change.** The diff stays inside the
   PLAN.md target-files fence. A discovery outside that fence is out of scope for
   the current PR; it goes to its own issue and its own branch.
@@ -200,6 +202,11 @@ fixed (maintainer directive 2026-07-14):
   never decide unilaterally to abandon or rescope in-flight work. A headless run
   files the `Refs #<parent>` issue, records the block in its run report, and
   stops the current issue rather than expanding it.
+- **Rate-limit automated issue creation.** To prevent API denial of service or
+  infinite loops under autonomous run sessions (`/solomon-loop`), a runner is
+  strictly capped to creating at most 3 automated issues per run session. If
+  this threshold is reached, issue creation halts and the session reports a
+  budget limit block.
 
 This keeps each issue's record clean and every discovered unit of work
 independently trackable, refinable, and claimable. The protocol is recorded
