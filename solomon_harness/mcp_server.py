@@ -177,6 +177,20 @@ def build_server() -> Any:
         return service.get_backend_status()
 
     @server.tool()
+    def get_claim_holder(issue_number: int) -> dict:
+        """Best-effort read of an issue's claim holder from the memory mirror (ADR-0027).
+
+        Answers "who is working issue N" without a live git fetch. The mirror
+        is queryability only -- the git claim ref stays the authority for any
+        claim decision; use `solomon-harness claim status` for the
+        authoritative read.
+        """
+        from solomon_harness import claim
+
+        holder = claim.get_claim_holder(harness_dir, issue_number)
+        return {"issue": issue_number, "holder": holder}
+
+    @server.tool()
     def relate(
         edge: str, from_id: str, to_id: str, fields: Optional[dict] = None
     ) -> dict:

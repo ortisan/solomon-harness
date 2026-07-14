@@ -274,7 +274,7 @@ class TestBuildDigest(unittest.TestCase):
         _, kwargs = mock_run.call_args
         env = kwargs.get("env")
         self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
-        self.assertFalse(any(k.startswith("GIT_") for k in env))
+        self.assertFalse(any(k.startswith("GIT_") for k in env if k != "GIT_TERMINAL_PROMPT"))
 
     def test_safe_id_edge_cases(self):
         self.assertIsNone(digest._safe_id(None))

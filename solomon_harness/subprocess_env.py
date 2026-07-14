@@ -15,9 +15,21 @@ of them should now call :func:`clean_git_env` instead of reimplementing it.
 """
 
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 
-def clean_git_env() -> Dict[str, str]:
-    """Return a copy of the environment with every ``GIT_*`` variable removed."""
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+def clean_git_env(workspace_root: Optional[str] = None) -> Dict[str, str]:
+    """Return a copy of the environment with every ``GIT_*`` variable removed.
+
+    If ``workspace_root`` is provided, sets ``GIT_CEILING_DIRECTORIES`` to the parent
+    of the workspace root so git commands never walk up past the workspace.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    # A stalled credential prompt is one of the ways a git subprocess can hang
+    # forever; force it to fail fast instead of blocking (belt-and-suspenders
+    # with the explicit subprocess timeouts callers set). Stripping GIT_* above
+    # would otherwise drop any inherited GIT_TERMINAL_PROMPT=0, so re-assert it.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if workspace_root:
+        env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(os.path.abspath(workspace_root))
+    return env

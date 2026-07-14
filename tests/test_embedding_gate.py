@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - depends on the discovery entry point
 class TestCategoryGate(unittest.TestCase):
     def test_denylist_names_the_known_non_semantic_categories(self):
         self.assertEqual(
-            NON_SEMANTIC_MEMORY_CATEGORIES, ("codebase_index", "index", "board_history")
+            NON_SEMANTIC_MEMORY_CATEGORIES, ("codebase_index", "index", "board_history", "claim")
         )
 
     def test_is_semantic_category(self):

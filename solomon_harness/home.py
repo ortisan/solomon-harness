@@ -86,7 +86,7 @@ def _git_remote(workspace_root: str) -> Optional[str]:
             cwd=workspace_root,
             stderr=subprocess.DEVNULL,
             text=True,
-            env=clean_git_env(),
+            env=clean_git_env(workspace_root),
         ).strip()
         return out or None
     except Exception:
