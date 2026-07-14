@@ -622,17 +622,20 @@ class TestClaimGitOperations(unittest.TestCase):
         self.assertIn("Claimed issue #99", mock_stdout.getvalue())
 
     @patch("sys.stderr", new_callable=lambda: StringIO())
-    @patch("solomon_harness.claim.get_claim")
+    @patch("solomon_harness.claim.get_claim_ref")
     @patch("solomon_harness.claim.claim_issue")
     def test_cli_claim_acquire_refused_names_holder_and_exits_1(
-        self, mock_claim, mock_get, mock_stderr
+        self, mock_claim, mock_get_ref, mock_stderr
     ):
         from solomon_harness.cli import main
         mock_claim.return_value = False
-        mock_get.return_value = {
-            "session_id": "other-session",
-            "acquired_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }
+        mock_get_ref.return_value = (
+            "sha1",
+            {
+                "session_id": "other-session",
+                "acquired_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            },
+        )
 
         with self.assertRaises(SystemExit) as ctx:
             main(harness_dir=self.local, argv=["claim", "acquire", "99"])
@@ -640,6 +643,30 @@ class TestClaimGitOperations(unittest.TestCase):
         err = mock_stderr.getvalue()
         self.assertIn("other-session", err)
         self.assertIn("age:", err)
+
+    @patch("sys.stderr", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.get_claim_ref", return_value=None)
+    @patch("solomon_harness.claim.claim_issue", return_value=False)
+    def test_cli_claim_acquire_proceeds_when_no_claims_remote(
+        self, mock_claim, mock_get_ref, mock_stderr
+    ):
+        # Interactive and headless must share the no-op-environment semantics:
+        # a refusal with NO ref present means no reachable claims remote, and
+        # the session proceeds without a claim (exit 0) instead of being
+        # permanently blocked where headless would run.
+        from solomon_harness.cli import main
+        main(harness_dir=self.local, argv=["claim", "acquire", "99"])
+        self.assertIn("proceeding without one", mock_stderr.getvalue())
+
+    @patch("sys.stdout", new_callable=lambda: StringIO())
+    @patch("solomon_harness.claim.get_claim_ref", return_value=("sha1", None))
+    def test_cli_claim_status_reports_malformed_ref(self, mock_get_ref, mock_stdout):
+        # A poisoned ref must not read as "unclaimed" to an operator.
+        from solomon_harness.cli import main
+        main(harness_dir=self.local, argv=["claim", "status", "99"])
+        out = mock_stdout.getvalue()
+        self.assertIn("MALFORMED", out)
+        self.assertIn("--force", out)
 
 
 class TestMalformedClaimRefRecovery(unittest.TestCase):
@@ -842,6 +869,26 @@ class TestPrLivenessBoardPaths(unittest.TestCase):
             claim.filter_unclaimed("/tmp", [1, 2, 3], current_session_id="me")
         mock_board.assert_called_once()
 
+    def test_filter_unclaimed_caches_a_failed_board_fetch_too(self):
+        # A failed board fetch returns None -- which is also _pr_liveness's
+        # "fetch here" sentinel. The failure must be cached like a success,
+        # or the N+1 comes back exactly when gh is failing.
+        fresh = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        claims = {
+            n: {"session_id": f"sess-{n}", "acquired_at": fresh, "heartbeat_at": fresh}
+            for n in (1, 2, 3)
+        }
+        with (
+            patch("solomon_harness.claim.fetch_all_claims", return_value=claims),
+            patch(
+                "solomon_harness.claim.fetch_board_items", return_value=None
+            ) as mock_board,
+            patch("solomon_harness.claim._pr_liveness") as mock_liveness,
+        ):
+            claim.filter_unclaimed("/tmp", [1, 2, 3], current_session_id="me")
+        mock_board.assert_called_once()
+        mock_liveness.assert_not_called()
+
 
 class TestRunStageClaimLifecycle(unittest.TestCase):
     """run_stage's heartbeat-loss abort and failed-run claim release (review
@@ -930,6 +977,24 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         mock_release.assert_not_called()
+
+    @patch("solomon_harness.claim.release_claim")
+    @patch("solomon_harness.claim.claim_issue", return_value=True)
+    @patch("solomon_harness.claim.has_active_pr_or_review", return_value=False)
+    @patch("solomon_harness.claim.get_claim", return_value=None)
+    def test_missing_engine_still_releases_the_claim(
+        self, mock_get, mock_pr, mock_claim, mock_release
+    ):
+        # Verifier regression (round 3): a FileNotFoundError from the engine
+        # spawn returned 1 while the local rc still read 0, so the finally
+        # skipped the release and the claim survived for the whole TTL.
+        from solomon_harness import workflows
+
+        with patch("subprocess.run", side_effect=FileNotFoundError()):
+            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 1)
+        mock_release.assert_called_once()
 
     @patch("sys.stderr", new_callable=lambda: StringIO())
     @patch("solomon_harness.claim.is_claim_active", return_value=True)

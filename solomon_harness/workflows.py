@@ -472,7 +472,11 @@ def run_stage(
                 # foreign competing driver.
                 child_env["SOLOMON_SESSION_ID"] = lock.session_id
 
-            rc = 0
+            # rc stays at its pessimistic 1 until the engine reports a real
+            # exit code: re-initializing it to 0 here would make the finally's
+            # failed-run claim release read any mid-run exception (engine
+            # missing, KeyboardInterrupt) as a success and keep the claim for
+            # the whole TTL.
             for i in range(iterations):
                 if iterations > 1:
                     log_progress(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
@@ -537,6 +541,7 @@ def run_stage(
                     break
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
+            rc = 1  # keep the local in sync so the finally releases the claim
             return 1
         if claim_lost_event is not None and claim_lost_event.is_set():
             # The claim was confirmed taken over mid-run: whatever the engine

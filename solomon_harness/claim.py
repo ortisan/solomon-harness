@@ -770,7 +770,11 @@ def filter_unclaimed(
         return list(issue_numbers)
 
     # One board fetch shared across every liveness check in this scan; the
-    # per-issue re-fetch was an N+1 on the session-start hot path.
+    # per-issue re-fetch was an N+1 on the session-start hot path. A FAILED
+    # fetch (None = uncertain) is cached too: passing None down would make
+    # _pr_liveness re-fetch per issue, bringing the N+1 back exactly when gh
+    # is failing. On this advisory path uncertainty degrades to "not
+    # protected" -- the real enforcement stays claim_issue's fail-closed CAS.
     board_items: Optional[List[Dict[str, Any]]] = None
     board_fetched = False
 
@@ -783,7 +787,10 @@ def filter_unclaimed(
         if not board_fetched:
             board_items = fetch_board_items(workspace_root)
             board_fetched = True
-        has_pr = has_active_pr_or_review(workspace_root, number, board_items=board_items)
+        if board_items is None:
+            has_pr = False
+        else:
+            has_pr = has_active_pr_or_review(workspace_root, number, board_items=board_items)
         if is_claim_active(claim_data, current_session_id, has_open_pr=has_pr):
             continue
         unclaimed.append(number)

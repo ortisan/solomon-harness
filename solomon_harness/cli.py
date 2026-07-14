@@ -212,7 +212,19 @@ def handle_claim(workspace_root: str, action: str, issue_number: int, force: boo
         if claim.claim_issue(workspace_root, issue_number, current_session_id=current_sess):
             print(f"Claimed issue #{issue_number} for session {current_sess}.")
             return
-        holder = claim.get_claim(workspace_root, issue_number)
+        # Mirror the headless gate's semantics exactly: any ref still present
+        # (well-formed or malformed) means refused; a genuinely absent ref
+        # means there is no reachable claims remote -- a no-op environment,
+        # where interactive and headless both proceed without a claim.
+        ref_info = claim.get_claim_ref(workspace_root, issue_number)
+        if ref_info is None:
+            print(
+                f"Warning: could not record a claim ref for issue #{issue_number} "
+                "(no claims remote configured?); proceeding without one.",
+                file=sys.stderr,
+            )
+            return
+        holder = ref_info[1]
         if holder is not None:
             acquired_str = holder.get("acquired_at") or "unknown"
             age_str = "unknown"
@@ -230,14 +242,24 @@ def handle_claim(workspace_root: str, action: str, issue_number: int, force: boo
             )
         else:
             print(
-                f"Error: could not record a claim on issue #{issue_number} "
-                "(existing claim, malformed ref, or no reachable claims remote).",
+                f"Error: issue #{issue_number} carries a malformed claim ref that "
+                "could not be reclaimed; inspect with 'solomon-harness claim status' "
+                f"and clear it with 'solomon-harness claim release {issue_number} --force'.",
                 file=sys.stderr,
             )
         sys.exit(1)
 
     if action == "status":
-        c = claim.get_claim(workspace_root, issue_number)
+        ref_info = claim.get_claim_ref(workspace_root, issue_number)
+        if ref_info is not None and ref_info[1] is None:
+            # A poisoned ref must not read as "unclaimed" to an operator
+            # during a corruption incident: it still occupies the ref.
+            print(
+                f"Issue #{issue_number} carries a MALFORMED claim ref (recoverable: "
+                f"a new claim reclaims it, or 'claim release {issue_number} --force' deletes it)."
+            )
+            return
+        c = ref_info[1] if ref_info else None
         if not c:
             print(f"Issue #{issue_number} is unclaimed.")
             return
