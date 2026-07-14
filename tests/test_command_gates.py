@@ -358,6 +358,80 @@ def test_gemini_mirror_carries_the_spec_generation_step():
     assert "Design Constraints" in body
 
 
+# --- Implementation-ready spec bar + discovered-problem protocol (#280) --------
+
+
+def test_spec_template_and_lint_carry_the_implementation_ready_sections():
+    template = _read(os.path.join("docs", "specs", "0000-spec-template.md"))
+    assert "## Implementation Pointers" in template
+    assert "## Verification" in template
+    lint = _read(os.path.join("scripts", "spec-lint.py"))
+    # Both sections are required by the validator...
+    assert '"## Implementation Pointers"' in lint
+    assert '"## Verification"' in lint
+    # ...and a Ready spec may not keep an unresolved placeholder.
+    assert "COMPLETION_GATED_STATUSES" in lint
+
+
+def test_issue_and_refine_author_the_implementation_ready_sections():
+    for rel in (
+        os.path.join(".claude", "commands", "solomon-issue.md"),
+        os.path.join(".claude", "commands", "solomon-refine.md"),
+    ):
+        body = _read(rel)
+        assert "Implementation Pointers" in body, rel
+        assert "Verification" in body, rel
+    # Refine is the Ready gate: it resolves placeholders and re-lints.
+    refine = _read(os.path.join(".claude", "commands", "solomon-refine.md"))
+    assert "spec-lint.py" in refine
+    assert "Status: ready" in refine or "Status` to" in refine
+
+
+def test_start_and_loop_wire_the_discovered_problem_protocol():
+    for rel in (
+        os.path.join(".claude", "commands", "solomon-start.md"),
+        os.path.join(".claude", "commands", "solomon-loop.md"),
+    ):
+        body = _read(rel)
+        low = body.lower()
+        assert "discovered-problem protocol" in low, rel
+        # A discovery is a new linked issue, never a comment on the parent.
+        assert "Refs #" in body, rel
+        assert "never" in low and "comment" in low, rel
+
+
+def test_bug_command_and_template_carry_suspected_location_and_verification():
+    cmd = _read(os.path.join(".claude", "commands", "solomon-bug.md"))
+    low = cmd.lower()
+    assert "suspected location" in low
+    assert "verification" in low
+    tmpl = _read(os.path.join(".github", "ISSUE_TEMPLATE", "bug_report.md"))
+    assert "## Suspected Location" in tmpl
+    assert "## Verification" in tmpl
+
+
+def test_feature_template_carries_implementation_pointers_and_verification():
+    tmpl = _read(os.path.join(".github", "ISSUE_TEMPLATE", "feature_conception.md"))
+    assert "## Implementation Pointers" in tmpl
+    assert "Verification command" in tmpl
+
+
+def test_workflow_doc_defines_the_discovered_problem_protocol():
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    low = doc.lower()
+    assert "discovered-problem protocol" in low
+    assert "implementation pointers" in low
+    assert "refs #<parent>" in low
+
+
+def test_gemini_mirrors_carry_the_new_wiring():
+    refine = _read(os.path.join(".gemini", "commands", "solomon-refine.toml"))
+    assert "Implementation Pointers" in refine
+    assert "spec-lint.py" in refine
+    start = _read(os.path.join(".gemini", "commands", "solomon-start.toml"))
+    assert "iscovered-problem protocol" in start
+
+
 # --- Automatic ADR capture gate (#221 S2b, #235) -------------------------------
 
 
