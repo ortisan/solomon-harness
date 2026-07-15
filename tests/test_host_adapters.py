@@ -6,6 +6,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from typing import TypedDict
 
 from solomon_harness.engine_adapters import build_engine_command
 from solomon_harness.host_adapters import HOSTS, compile_adapters, inspect_capabilities
@@ -15,6 +16,13 @@ from solomon_harness.layout import HarnessPaths
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+
+
+class McpDocument(TypedDict, total=False):
+    command: str
+    args: list[str]
+    env: dict[str, str]
+    required: bool
 
 
 class HostAdaptersTest(unittest.TestCase):
@@ -143,7 +151,7 @@ class HostAdaptersTest(unittest.TestCase):
         )
         return root
 
-    def _mcp_documents(self, root: Path) -> dict[str, dict[str, object]]:
+    def _mcp_documents(self, root: Path) -> dict[str, McpDocument]:
         claude = json.loads((root / ".mcp.json").read_text(encoding="utf-8"))[
             "mcpServers"
         ]["solomon-memory"]
