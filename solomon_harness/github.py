@@ -607,22 +607,44 @@ def capture_issue_assignee(issue_number) -> Optional[str]:
         return None
 
 
-def record_terminal_status(issue_number) -> None:
-    """Write the delivered issue's terminal status through to the project memory.
+def record_status_write_through(issue_number, column) -> None:
+    """Write a board transition's canonical status through to the project memory.
 
-    Fired on the Done board transition (the merge critical path) so the memory row
-    converges to GitHub the moment a card is delivered, instead of waiting for
-    reconcile. It read-modify-writes through the unchanged 5-arg log_issue (UPSERT
-    on github_id): it reads the current row and, only when that row exists and is
-    not already terminal, re-writes it as "closed" while preserving the title, type
-    and milestone. Best-effort and idempotent (ADR-0006): it MUST NOT raise on the
-    merge path, so any failure is caught and logged as a warning, leaving the row
-    at its pre-delivery value for reconcile to repair.
+    Fired on every board transition (ADR-0033, amending ADR-0006 decision point 2,
+    which gated this on Done alone and so left code_review and qa unreachable —
+    a row read in_progress for the whole review/QA phase). It runs at the single
+    CLI set-status dispatch seam, so start, review and any future caller are covered
+    without each one issuing its own log_issue.
+
+    It read-modify-writes through the unchanged log_issue contract (UPSERT on
+    github_id): it reads the current row and, only when that row exists, is not
+    already terminal, and would actually change, re-writes it with the column's
+    canonical token while preserving the title, type, milestone and assignee.
+    log_issue normalizes on write, but the token is normalized here too so the
+    no-op comparison below is made against the value that will actually be stored.
+    A missing assignee is fetched from GitHub only for a terminal destination;
+    intermediate transitions preserve the missing value without an API call.
+
+    The is_terminal short-circuit is load-bearing beyond idempotence: it stops a
+    card dragged back from Done to an earlier column from un-delivering the issue
+    in memory. GitHub stays the source of truth (ADR-0006 decision point 3).
+
+    Best-effort: it MUST NOT raise — the Done column runs on the merge critical
+    path — so any failure is caught and logged as a warning, leaving the row at its
+    prior value for reconcile to repair.
     """
     try:
-        from solomon_harness.tools.database_client import DatabaseClient, is_terminal
+        from solomon_harness.tools.database_client import (
+            DatabaseClient,
+            is_terminal,
+            normalize_status,
+        )
 
         github_id = str(issue_number)
+        status = normalize_status(column)
+        if status is None:
+            # No column means no status to assert; never invent one.
+            return
         # Targets whatever backend DatabaseClient resolves (the shared SurrealDB in
         # normal operation; the SQLite fallback only when SurrealDB is unreachable).
         # Unlike reconcile, this single best-effort mirror write does not gate on the
@@ -632,15 +654,20 @@ def record_terminal_status(issue_number) -> None:
             row = db.get_issue(github_id)
             if row is None or is_terminal(row.get("status")):
                 return
-            # Preserve an assignee already captured on the row; only when it is
-            # absent capture it fresh from GitHub (the person key, ADR-0012). The
-            # capture is best-effort and never raises, so it cannot break the merge.
-            assignee = row.get("assignee") or capture_issue_assignee(issue_number)
+            if normalize_status(row.get("status")) == status:
+                return
+            # Preserve an assignee already captured on the row. Only delivery may
+            # capture a missing value from GitHub (the person key, ADR-0012), which
+            # keeps intermediate status writes free of an added GitHub API call.
+            # The capture is best-effort and never raises, so it cannot break merge.
+            assignee = row.get("assignee")
+            if not assignee and is_terminal(status):
+                assignee = capture_issue_assignee(issue_number)
             db.log_issue(
                 github_id,
                 row.get("title"),
                 row.get("type_"),
-                "closed",
+                status,
                 row.get("milestone_id"),
                 assignee=assignee,
             )
@@ -648,10 +675,20 @@ def record_terminal_status(issue_number) -> None:
         # Log the exception type, not str(exc): a backend error message can carry
         # store internals and must not leak into logs (STRIDE: info disclosure).
         logging.warning(
-            "terminal write-through for issue %s failed: %s",
+            "status write-through for issue %s failed: %s",
             issue_number,
             type(exc).__name__,
         )
+
+
+def record_terminal_status(issue_number) -> None:
+    """Write the delivered issue's terminal status ("closed") through to memory.
+
+    The Done-shaped alias of :func:`record_status_write_through`, kept as the name
+    the merge path calls (ADR-0020) so delivery has one obvious entry point. Same
+    best-effort, idempotent guarantees.
+    """
+    record_status_write_through(issue_number, "Done")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -720,10 +757,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = set_issue_status(args.issue, args.status, title=args.title)
         if result.get("ok"):
             record_transition(args.issue, args.status)
-            # On delivery (Done) also write the terminal status through to memory
-            # so memory-only consumers converge to GitHub immediately (ADR-0006).
-            if args.status == "Done":
-                record_terminal_status(args.issue)
+            # Write every transition's canonical status through to memory, not only
+            # Done, so memory-only consumers can tell "coding" from "in review" and
+            # code_review/qa are reachable at all (ADR-0033 amends ADR-0006).
+            record_status_write_through(args.issue, args.status)
     elif args.command == "add-issue":
         result = add_issue_to_board(args.issue, title=args.title)
     elif args.command == "list-open-issues":

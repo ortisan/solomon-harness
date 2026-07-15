@@ -29,3 +29,7 @@ A bug fix, a refactor with no contract change, or a routine feature does not nee
 
 Superseding a decision: create a new ADR, set the old one's status to
 `superseded by ADR-XXXX`, and reference it from the new record.
+
+Amending a decision: use a new ADR when the amendment needs its own context,
+options, and consequences. Keep both records `accepted`, add `Amends: ADR-XXXX`
+to the new record, and add a reciprocal dated `Amended:` pointer to the old one.
