@@ -7,6 +7,10 @@ This file defines the execution profile and specific behavioral rules for the au
 - **Technologies:** {{TECH_STACK}}
 - **Repository:** {{GIT_REMOTE}}
 
+## Documentation Conventions
+- `docs/specs/` — Specification documents defining requirements and design constraints for feature issues.
+- `docs/adrs/` — Architectural Decision Records (ADRs) tracking architecture and technology selections.
+
 ## Agent Behavioral Guidelines
 - Before starting any code changes or feature implementations, writing a detailed plan in PLAN.md is mandatory.
 - Adopt the TDD development cycle (Red, Green, Refactor) continuously and rigorously.

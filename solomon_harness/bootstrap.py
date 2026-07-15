@@ -304,6 +304,7 @@ def _install_harness_files(workspace_root: str) -> None:
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
         "AGENTS.md", "AGY.md", "CLAUDE.md", "skill-sources.json",
+        os.path.join(".github", "copilot-instructions.md"),
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -314,6 +315,9 @@ def _install_harness_files(workspace_root: str) -> None:
         src = os.path.join(repo_root, name)
         dest = os.path.join(workspace_root, name)
         if os.path.isfile(src) and not os.path.exists(dest):
+            dest_dir = os.path.dirname(dest)
+            if dest_dir:
+                os.makedirs(dest_dir, exist_ok=True)
             shutil.copy2(src, dest)
     _install_docs_skeleton(repo_root, workspace_root)
     print("  Harness files installed.")
@@ -349,6 +353,69 @@ def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
             dest = os.path.join(dest_tree, name)
             if os.path.isfile(src) and not os.path.exists(dest):
                 shutil.copy2(src, dest)
+
+
+# Idempotent upsert targets for the docs/specs and docs/adrs references (#236):
+# an already-installed project's instruction files predate the convention and
+# need it inserted once, never duplicated. Retrofit never creates a file that
+# doesn't already exist -- that stays the scaffold/copy path's job.
+INSTRUCTION_DOC_REFERENCE_BLOCKS = {
+    "CLAUDE.md": (
+        "\n## Documentation Conventions\n"
+        "- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).\n"
+        "- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).\n"
+    ),
+    os.path.join("agents", "AGENTS.md"): (
+        "\n## Documentation Conventions\n"
+        "- `docs/specs/` — Specification documents defining requirements and design constraints for feature issues.\n"
+        "- `docs/adrs/` — Architectural Decision Records (ADRs) tracking architecture and technology selections.\n"
+    ),
+    "AGY.md": (
+        "\n## Documentation Conventions\n"
+        "- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).\n"
+        "- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).\n"
+    ),
+    os.path.join(".github", "copilot-instructions.md"): (
+        "\n## Documentation Conventions\n"
+        "- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).\n"
+        "- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).\n"
+    ),
+}
+
+
+# A dedicated marker, not a raw substring scan, is what makes our own
+# insertion unambiguous to redetect (PR #284 review, qa gate M1): a file that
+# mentions one of the two paths for an unrelated reason would otherwise get
+# the whole block re-appended (a plain AND-of-both-substrings check treats
+# "only one present" the same as "not wired yet").
+RETROFIT_MARKER = "<!-- solomon:docs-conventions -->"
+
+
+def retrofit_instruction_docs(workspace_root: str) -> None:
+    """Upsert docs/specs and docs/adrs references into existing instruction files.
+
+    Only acts on a file that already exists in workspace_root; a project
+    missing one of these files gets nothing created here. A file already
+    carrying RETROFIT_MARKER is left alone -- that is what makes a second run
+    a no-op. The raw both-substrings check remains a fallback purely for
+    content that predates the marker (this repo's own dogfooded instruction
+    files were hand-edited before this function existed).
+    """
+    for rel_path, block in INSTRUCTION_DOC_REFERENCE_BLOCKS.items():
+        path = os.path.join(workspace_root, rel_path)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        already_wired = RETROFIT_MARKER in content or (
+            "docs/specs/" in content and "docs/adrs/" in content
+        )
+        if already_wired:
+            continue
+        if not content.endswith("\n"):
+            content += "\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content + RETROFIT_MARKER + "\n" + block)
 
 
 def scaffold_agents(workspace_root: str) -> None:
@@ -941,6 +1008,11 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         )
     else:
         print("Keeping existing agents/AGENTS.md.")
+
+    # Retrofit the docs/specs and docs/adrs references into whichever
+    # instruction files already existed before this convention (#236);
+    # idempotent, so a repeat init never duplicates a reference.
+    retrofit_instruction_docs(workspace_root)
 
     # 6. Install Git commit-msg hook
     print("Installing Git commit-msg hook...")

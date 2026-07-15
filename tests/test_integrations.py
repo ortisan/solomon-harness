@@ -54,6 +54,19 @@ class TestThinPointers(unittest.TestCase):
     def test_agy_md_imports_central_source(self):
         self.assertIn("@agents/AGENTS.md", _read("AGY.md"))
 
+    def test_instruction_docs_reference_specs_and_adrs(self):
+        files = [
+            "CLAUDE.md",
+            "agents/AGENTS.md",
+            "AGY.md",
+            os.path.join(".github", "copilot-instructions.md"),
+        ]
+        for f in files:
+            content = _read(f)
+            self.assertIn("docs/specs/", content, f"{f} is missing a reference to docs/specs/")
+            self.assertIn("docs/adrs/", content, f"{f} is missing a reference to docs/adrs/")
+
+
 
 class TestMcpRegistration(unittest.TestCase):
     def _registers_memory_server(self, rel_path):
