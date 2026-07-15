@@ -13,6 +13,7 @@ with no built-in default (``SURREAL_TEST_URL``), so the live suites actually
 run instead of skipping.
 """
 
+import ast
 import os
 import shlex
 import unittest
@@ -21,6 +22,10 @@ import yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CI_WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "ci.yml")
+LIVE_TEST_MODULES = (
+    os.path.join(REPO_ROOT, "tests", "test_database_client_multimodel.py"),
+    os.path.join(REPO_ROOT, "tests", "test_memory_service.py"),
+)
 
 
 def _validate_job():
@@ -107,6 +112,38 @@ class TestCiRunsLiveSurrealDB(unittest.TestCase):
             "tests; exporting it here would leak into and break config-driven "
             "URL/credential unit tests",
         )
+
+    def test_validate_job_has_a_bounded_runtime(self):
+        timeout = _validate_job().get("timeout-minutes")
+        self.assertIsInstance(timeout, int, "the validate job must define timeout-minutes")
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(
+            timeout,
+            60,
+            "a blocked SDK call must not consume a runner for more than one hour",
+        )
+
+    def test_live_teardowns_do_not_remove_throwaway_databases(self):
+        # The SurrealDB 2.x client performs blocking websocket reads without a
+        # caller timeout. Removing the selected database during tearDown can
+        # therefore block the entire suite. Every live test already uses a
+        # unique database and CI destroys its tmpfs-backed service after the
+        # job, so closing the connection is the deterministic cleanup boundary.
+        for module in LIVE_TEST_MODULES:
+            with self.subTest(module=os.path.basename(module)):
+                with open(module, encoding="utf-8") as fh:
+                    source = fh.read()
+                tree = ast.parse(source, filename=module)
+                teardowns = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "tearDown"
+                ]
+                self.assertTrue(teardowns, "expected at least one tearDown method")
+                for teardown in teardowns:
+                    body = ast.get_source_segment(source, teardown) or ""
+                    self.assertNotIn("REMOVE DATABASE", body)
 
 
 if __name__ == "__main__":

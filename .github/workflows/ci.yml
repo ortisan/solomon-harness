@@ -15,6 +15,7 @@ jobs:
   validate:
     name: Validate Custom Scripts and Workspace
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Mirrors docker-compose.yml's surrealdb service so the live-integration
     # tests (gated on a reachable server, see tests/test_database_client_multimodel.py,
     # tests/test_memory_service.py and tests/test_harness_invariants.py) run

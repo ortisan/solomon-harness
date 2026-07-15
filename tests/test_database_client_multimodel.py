@@ -7,8 +7,8 @@ both layers of the contract:
 
 - LIVE integration tests, gated on a reachable SurrealDB at ws://localhost:8099.
   Each runs in a THROWAWAY database (``test_mm_<uuid>``) inside the ``solomon``
-  namespace and removes it in tearDown, so the real project tenant is never
-  touched.
+  namespace. The UUID provides isolation, and the disposable CI service owns
+  database cleanup, so the real project tenant is never touched.
 - Backend-agnostic UNIT tests that mock ``_run_surreal`` (or use the real SQLite
   path) to assert the RELATE / KNN / metric queries are constructed correctly, so
   coverage holds in CI where no SurrealDB is running.
@@ -374,12 +374,10 @@ class TestMultiModelLive(unittest.TestCase):
 
     def tearDown(self):
         try:
-            self.raw.query(f"REMOVE DATABASE {self.dbname};")
+            self.raw.close()
+        except Exception:
+            pass
         finally:
-            try:
-                self.raw.close()
-            except Exception:
-                pass
             os.environ.pop("HARNESS_MIRROR_ROOT", None)
             self.temp_dir.cleanup()
 

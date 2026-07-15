@@ -260,12 +260,10 @@ class TestMemoryServiceMultiModelLive(unittest.TestCase):
 
     def tearDown(self):
         try:
-            self.raw.query(f"REMOVE DATABASE {self.dbname};")
+            self.raw.close()
+        except Exception:
+            pass
         finally:
-            try:
-                self.raw.close()
-            except Exception:
-                pass
             self.patcher.stop()
             os.environ.pop("HARNESS_MIRROR_ROOT", None)
             self.tmp.cleanup()
