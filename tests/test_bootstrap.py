@@ -551,6 +551,67 @@ class TestRetrofitInstructionDocs(unittest.TestCase):
         after = open(self.claude_md, "r", encoding="utf-8").read()
         self.assertEqual(before, after)
 
+    def test_rerun_is_idempotent_for_a_file_with_only_one_marker_present(self):
+        """A file that already mentions docs/specs/ for an unrelated reason
+        (but not docs/adrs/) must not accumulate a fresh block on every run
+        (PR #284 review, qa gate M1: the raw AND-substring check let a
+        partial-match file's reference get duplicated across reruns)."""
+        from solomon_harness.bootstrap import retrofit_instruction_docs
+
+        with open(self.claude_md, "w", encoding="utf-8") as f:
+            f.write("# Partially wired\n\nSee docs/specs/ for background context on this repo.\n")
+
+        retrofit_instruction_docs(self.workspace)
+        with open(self.claude_md, "r", encoding="utf-8") as f:
+            after_first_run = f.read()
+        self.assertIn("docs/adrs/", after_first_run)
+
+        retrofit_instruction_docs(self.workspace)
+        with open(self.claude_md, "r", encoding="utf-8") as f:
+            after_second_run = f.read()
+
+        self.assertEqual(after_first_run, after_second_run)
+
+    def test_insertion_leaves_a_dedicated_marker_for_robust_redetection(self):
+        """A raw substring scan is fooled by unrelated prose in either
+        direction; a dedicated marker makes our own insertion unambiguous
+        to detect on a later run, regardless of what else the file says
+        (PR #284 review, qa gate M1)."""
+        from solomon_harness.bootstrap import RETROFIT_MARKER, retrofit_instruction_docs
+
+        retrofit_instruction_docs(self.workspace)
+
+        with open(self.claude_md, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn(RETROFIT_MARKER, content)
+
+
+class TestFreshInstallScaffoldsCopilotInstructions(unittest.TestCase):
+    """A fresh install must carry .github/copilot-instructions.md wired with
+    the docs/specs and docs/adrs references, per #236's own acceptance
+    scenario (PR #284 review, qa gate blocker B1: only CLAUDE.md, AGY.md, and
+    agents/AGENTS.md were scaffolded; .github/copilot-instructions.md was
+    never created by any code path on a truly fresh install)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_copilot_instructions_scaffolded_and_wired_on_fresh_install(self):
+        from solomon_harness import bootstrap
+
+        bootstrap._install_harness_files(self.workspace)
+
+        path = os.path.join(self.workspace, ".github", "copilot-instructions.md")
+        self.assertTrue(os.path.isfile(path), ".github/copilot-instructions.md was not scaffolded")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("docs/specs/", content)
+        self.assertIn("docs/adrs/", content)
+
 
 if __name__ == "__main__":
     unittest.main()

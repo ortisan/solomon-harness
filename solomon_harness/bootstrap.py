@@ -304,6 +304,7 @@ def _install_harness_files(workspace_root: str) -> None:
     files = [
         ".mcp.json", "pyproject.toml", "uv.lock",
         "AGENTS.md", "AGY.md", "CLAUDE.md", "skill-sources.json",
+        os.path.join(".github", "copilot-instructions.md"),
     ]
     for tree in trees:
         src = os.path.join(repo_root, tree)
@@ -314,6 +315,9 @@ def _install_harness_files(workspace_root: str) -> None:
         src = os.path.join(repo_root, name)
         dest = os.path.join(workspace_root, name)
         if os.path.isfile(src) and not os.path.exists(dest):
+            dest_dir = os.path.dirname(dest)
+            if dest_dir:
+                os.makedirs(dest_dir, exist_ok=True)
             shutil.copy2(src, dest)
     _install_docs_skeleton(repo_root, workspace_root)
     print("  Harness files installed.")
@@ -379,13 +383,23 @@ INSTRUCTION_DOC_REFERENCE_BLOCKS = {
 }
 
 
+# A dedicated marker, not a raw substring scan, is what makes our own
+# insertion unambiguous to redetect (PR #284 review, qa gate M1): a file that
+# mentions one of the two paths for an unrelated reason would otherwise get
+# the whole block re-appended (a plain AND-of-both-substrings check treats
+# "only one present" the same as "not wired yet").
+RETROFIT_MARKER = "<!-- solomon:docs-conventions -->"
+
+
 def retrofit_instruction_docs(workspace_root: str) -> None:
     """Upsert docs/specs and docs/adrs references into existing instruction files.
 
     Only acts on a file that already exists in workspace_root; a project
-    missing one of these files gets nothing created here. Detection is a
-    plain substring check for both `docs/specs/` and `docs/adrs/`, so a
-    second run on an already-wired file is a no-op -- 0 duplicate lines.
+    missing one of these files gets nothing created here. A file already
+    carrying RETROFIT_MARKER is left alone -- that is what makes a second run
+    a no-op. The raw both-substrings check remains a fallback purely for
+    content that predates the marker (this repo's own dogfooded instruction
+    files were hand-edited before this function existed).
     """
     for rel_path, block in INSTRUCTION_DOC_REFERENCE_BLOCKS.items():
         path = os.path.join(workspace_root, rel_path)
@@ -393,12 +407,15 @@ def retrofit_instruction_docs(workspace_root: str) -> None:
             continue
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-        if "docs/specs/" in content and "docs/adrs/" in content:
+        already_wired = RETROFIT_MARKER in content or (
+            "docs/specs/" in content and "docs/adrs/" in content
+        )
+        if already_wired:
             continue
         if not content.endswith("\n"):
             content += "\n"
         with open(path, "w", encoding="utf-8") as f:
-            f.write(content + block)
+            f.write(content + RETROFIT_MARKER + "\n" + block)
 
 
 def scaffold_agents(workspace_root: str) -> None:
