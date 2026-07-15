@@ -38,7 +38,7 @@ Use this agent when a new specialist agent needs to be scaffolded end to end —
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, confinement, and registration of specialist agents in either a source checkout or an installed consumer, including the canonical rules and all three host integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents in either a source checkout or an installed consumer, with path confinement, canonical rules updates, and compiled Claude, AGY, and Codex integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
 
 ## External Skills
 
@@ -46,3 +46,4 @@ Additional skills can be fetched and integrated from external skill servers at a
 ```bash
 solomon-harness skills add <source> <skill> --agent agent_builder
 ```
+
