@@ -20,9 +20,9 @@ own model loop.
 - `agents/AGENTS.md` — this file: the rules, the memory guide, and the agent index.
 - `agents/<name>/` — one folder per specialist agent:
   - `persona.md` — the agent's persona.
-  - `agents/<name>.md` — the role definition (duties and required competencies).
+  - `agents/<name>/agents/<name>.md` — the role definition (duties and required competencies).
   - `skills/` — the agent's skills.
-  - `.agent/config.json` — source profile metadata.
+  - `agents/<name>/.agent/config.json` — source profile metadata.
 - `docs/specs/` — Specification documents defining requirements and design constraints for feature issues.
 - `docs/adrs/` — Architectural Decision Records (ADRs) tracking architecture and technology selections.
 - `solomon_harness/` — shared Python package: the memory client

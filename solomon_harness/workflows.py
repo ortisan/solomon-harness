@@ -10,6 +10,8 @@ import subprocess
 import sys
 from typing import Any, List, Optional
 
+from solomon_harness.layout import PathConfinementError
+
 STAGES = [
     "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
     # Standing maintenance loops (Phase 3): generative, open draft PRs only.
@@ -24,7 +26,33 @@ DEPRECATED_STAGE_ALIASES = {"loop-auto": "loop"}
 # under a single driver. The lock is a portable Python gate for all three hosts —
 # the documented concurrent-driver race produced premature merges that bypassed
 # the review gate, so honoring an advisory markdown "Step 0" was not enough.
-LOCKED_STAGES = {"workflow", "loop", "start", "review", "release", "scan-arch", "scan-dedup"}
+LOCKED_STAGES = set(STAGES)
+
+# A locked headless driver receives a bearer token whose digest and exact scope
+# live in the lock record. These are the delivery operations needed to create a
+# feature worktree, test, commit, and publish it. Destructive history rewrites,
+# tags, pull/rebase, and every merge form are intentionally absent.
+SHELL_CAPABILITY_SCOPES = {
+    "dev:execute",
+    "gh:mutate",
+    "git:add",
+    "git:branch",
+    "git:checkout",
+    "git:commit",
+    "git:fetch",
+    "git:push",
+    "git:switch",
+    "git:worktree",
+    "harness:read",
+}
+SHELL_CAPABILITY_BRANCHES = {
+    "chore/*",
+    "docs/*",
+    "feature/*",
+    "fix/*",
+    "refactor/*",
+    "test/*",
+}
 
 # `loop` is the headless cadence entrypoint: `dev loop --concurrency N` drives N
 # iterations of the `workflow` stage's own prompt, with LOOP_AUTONOMOUS_MODE_DIRECTIVE
@@ -143,7 +171,7 @@ def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, 
 
 
 def _read_command_file(workspace_root: str, stage: str) -> str:
-    from solomon_harness.layout import HarnessPaths
+    from solomon_harness.layout import HarnessPaths, confined_read_path
 
     paths = HarnessPaths(workspace_root)
     name = f"solomon-{stage}.md"
@@ -153,8 +181,9 @@ def _read_command_file(workspace_root: str, stage: str) -> str:
         paths.legacy_workflows / name,
     )
     for command_file in candidates:
-        if command_file.is_file():
-            return command_file.read_text(encoding="utf-8")
+        safe_command_file = confined_read_path(paths.root, command_file)
+        if safe_command_file.is_file():
+            return safe_command_file.read_text(encoding="utf-8")
     raise FileNotFoundError(candidates[0])
 
 
@@ -201,7 +230,7 @@ def _allowed_tools(workspace_root: str, stage: str) -> Optional[str]:
     Host metadata remains in Claude's thin bridge/skill while the executable
     workflow body stays host-neutral in the canonical catalog.
     """
-    from solomon_harness.layout import HarnessPaths
+    from solomon_harness.layout import HarnessPaths, confined_read_path
 
     paths = HarnessPaths(workspace_root)
     name = f"solomon-{stage}.md"
@@ -210,10 +239,12 @@ def _allowed_tools(workspace_root: str, stage: str) -> Optional[str]:
         paths.solomon / "host-metadata" / "claude" / "commands" / name,
         paths.legacy_workflows / name,
     )
-    text = next(
-        (path.read_text(encoding="utf-8") for path in candidates if path.is_file()),
-        None,
-    )
+    text = None
+    for candidate in candidates:
+        safe_candidate = confined_read_path(paths.root, candidate)
+        if safe_candidate.is_file():
+            text = safe_candidate.read_text(encoding="utf-8")
+            break
     if text is None:
         return None
     if not text.startswith("---"):
@@ -286,6 +317,9 @@ def run_stage(
     except FileNotFoundError as exc:
         print(f"Error: command file not found ({exc}). Run 'solomon-harness init' first.", file=sys.stderr)
         return 1
+    except PathConfinementError as exc:
+        print(f"Error: unsafe workflow path ({exc}).", file=sys.stderr)
+        return 1
 
     # Governed-autonomy gate (portable across all hosts): the maturity ladder, the
     # permanent human gate for merge/release/Done, and the kill-switch. At the
@@ -318,8 +352,13 @@ def run_stage(
     # at L3 — for every stage the policy says must hold it (requires_lock), so the
     # "L3 only runs while holding the lock" contract is enforced, not just claimed.
     lock = None
+    shell_capability = ""
     if stage in LOCKED_STAGES or policy.requires_lock(stage):
-        from solomon_harness.loop_lock import LoopLock, LoopLockHeld
+        from solomon_harness.loop_lock import (
+            SHELL_CAPABILITY_ENV,
+            LoopLock,
+            LoopLockHeld,
+        )
 
         lock = LoopLock(workspace_root, stage=stage)
         try:
@@ -332,6 +371,26 @@ def run_stage(
                 file=sys.stderr,
             )
             return 1
+        capability_scopes = (
+            {"harness:read"}
+            if policy.level == "L1"
+            else SHELL_CAPABILITY_SCOPES
+        )
+        capability_branches = (
+            set() if policy.level == "L1" else SHELL_CAPABILITY_BRANCHES
+        )
+        probe_scope = sorted(capability_scopes)[0]
+        inherited_capability = os.environ.get(SHELL_CAPABILITY_ENV, "")
+        if inherited_capability and lock.shell_capability_allows(
+            inherited_capability,
+            scope=probe_scope,
+        ):
+            shell_capability = inherited_capability
+        else:
+            shell_capability = lock.issue_shell_capability(
+                scopes=capability_scopes,
+                branches=capability_branches,
+            )
 
     # Per-issue claim gate + acquisition (ADR-0027): layered on top of the
     # repo-wide lock above, not a replacement for it. Only meaningful inside a
@@ -478,13 +537,13 @@ def run_stage(
             add_dirs: list[str] = []
             if engine == "claude":
                 allowed_tools = _allowed_tools(workspace_root, prompt_stage)
-                if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
-                    try:
-                        from solomon_harness.worktree import worktree_root
+            if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
+                try:
+                    from solomon_harness.worktree import worktree_root
 
-                        add_dirs.append(worktree_root(workspace_root))
-                    except Exception:
-                        pass
+                    add_dirs.append(worktree_root(workspace_root))
+                except Exception:  # noqa: S110 - optional worktree hint may be unavailable
+                    pass
             cmd = build_engine_command(
                 engine,
                 workspace_root,
@@ -506,6 +565,7 @@ def run_stage(
                 # back to a new `host:pid` identity and being refused as a
                 # foreign competing driver.
                 child_env["SOLOMON_SESSION_ID"] = lock.session_id
+                child_env[SHELL_CAPABILITY_ENV] = shell_capability
 
             # rc stays at its pessimistic 1 until the engine reports a real
             # exit code: re-initializing it to 0 here would make the finally's
@@ -521,7 +581,7 @@ def run_stage(
                     import unittest.mock
                     import io
                     if isinstance(subprocess.run, unittest.mock.Mock) or hasattr(subprocess.run, "assert_called"):
-                        mocked_res = subprocess.run(
+                        mocked_res = subprocess.run(  # noqa: S603 - adapter builds trusted argv
                             cmd,
                             input=prompt,
                             text=True,
@@ -576,7 +636,7 @@ def run_stage(
                     if cost is not None:
                         loop_budget.record(workspace_root, cost, stage=stage)
                 else:
-                    proc = subprocess.run(
+                    proc = subprocess.run(  # noqa: S603 - adapter builds trusted argv
                         cmd,
                         input=prompt,
                         text=True,
@@ -589,6 +649,10 @@ def run_stage(
                     # A failed iteration stops the run rather than plowing ahead —
                     # consistent with the single confirmed step `loop` takes today.
                     break
+        except PathConfinementError as exc:
+            print(f"Error: unsafe workflow path ({exc}).", file=sys.stderr)
+            rc = 1
+            return 1
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
             rc = 1  # keep the local in sync so the finally releases the claim

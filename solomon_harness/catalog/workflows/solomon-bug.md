@@ -49,17 +49,17 @@ Steps:
      enforce it.
 2. If repro steps, environment, or severity are missing and cannot be inferred,
    ask the user the minimum questions needed rather than inventing details.
-3. Ensure the board exists once: `uv run python -m solomon_harness.github ensure-board`.
+3. Ensure the board exists once: `uv run python -I -m solomon_harness.github ensure-board`.
 4. Show the user the drafted title, labels (`type:bug`, `priority:<p0|p1|p2>`,
    and an `area:<domain>` label if one fits), and the body. Creating an issue is
    an outward-facing action: get explicit confirmation before proceeding.
 5. On approval, create the issue:
-   - Ensure the standard labels exist first: `uv run python -m solomon_harness.github ensure-labels`
+   - Ensure the standard labels exist first: `uv run python -I -m solomon_harness.github ensure-labels`
      (create a new `area:<domain>` with `gh label create "area:<domain>" --color BFD4F2 --force`).
    - `gh issue create --title "<title>" --label "type:bug" --label "priority:<pN>" --body "<body>"`
      (add `--label "area:<domain>"` when applicable). Capture the issue number and URL.
 6. Move the card to Backlog:
-   `uv run python -m solomon_harness.github set-status --issue <n> --status "Backlog"`.
+   `uv run python -I -m solomon_harness.github set-status --issue <n> --status "Backlog"`.
 7. Persist to memory per the handoff contract:
    - `log_issue(github_id=<n>, title=<title>, type_="bug", status="Backlog", milestone_id=null)`.
    - Write the compact handoff contract to `.agents/solomon/state/handoffs/issue-<n>-bug-to-refine.md`

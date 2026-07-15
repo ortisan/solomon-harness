@@ -19,7 +19,7 @@ Gather these and summarize them concisely:
 
 - `project-memory get_latest_activity` — the last recorded session or handoff (where the team stopped). If it returns a handoff with a `contract_path`, read that handoff contract first and treat it as the bounded input — open the artifacts it points to (PLAN.md, the diff, the ADR, the PR) only when you need them, instead of re-deriving prior context.
 - `project-memory get_memory("__project_structure__")` and `project-memory get_memory("__project_evolution__")` — the living project model and its evolution log. Compare the model's manifest signature with the current codebase state to check if the memory is stale vs. the code (flag any discrepancy).
-- `project-memory get_open_issues` and `uv run python -m solomon_harness.github list-open-issues` — open work and its labels. Both are claim-aware (ADR-0027): an issue actively claimed by another session is excluded, so this scan never proposes starting work `start` would immediately refuse. Fall back to plain `gh issue list --state open` only when that command is unavailable.
+- `project-memory get_open_issues` and `uv run python -I -m solomon_harness.github list-open-issues` — open work and its labels. Both are claim-aware (ADR-0027): an issue actively claimed by another session is excluded, so this scan never proposes starting work `start` would immediately refuse. Fall back to plain `gh issue list --state open` only when that command is unavailable.
 - `gh pr list --state open` — pull requests and their review/approval state.
 - The board columns (Ready / In Progress / Code Review / QA) via `gh project item-list` or `solomon_harness.github`. Cross-check any candidate against the claim-aware list above: an In Progress or Ready issue actively claimed by another live session must be excluded from selection here too, not just in the issue list.
 
@@ -53,7 +53,7 @@ Present the next step and execution options as a decision card with the followin
 3. **Other**: Free-text entry.
 
 - If the user selects Option 1 (Single Step):
-  - Run the recommended workflow stage by following its command file `the canonical `solomon-<stage>` workflow` or executing `uv run python -m solomon_harness.cli dev <stage> [args]`.
+  - Run the recommended workflow stage by following its command file `the canonical `solomon-<stage>` workflow` or executing `uv run python -I -m solomon_harness.cli dev <stage> [args]`.
   - Advance one stage, record the run/decision, and exit.
 
 - If the user selects Option 2 (Autonomous Mode):
@@ -61,7 +61,7 @@ Present the next step and execution options as a decision card with the followin
     1. Scan the current board and database state.
     2. Determine the next step using the "Decide the next step" rules.
     3. If the next step is a permanently human-gated stage (such as `release`), skip/bypass it and evaluate the remaining rules to find the next actionable, non-human-gated task (e.g. reviewing open PRs, starting ready issues). If no actionable tasks can be progressed, break the loop, notify the user, and report the final status.
-    4. Otherwise, execute the workflow stage headless by running `solomon-harness dev <stage> [args]` (equivalently `uv run python -m solomon_harness.cli dev <stage> [args]`). This is the only path that acquires the single-driver loop lock, so a concurrent headless `solomon-harness dev` run can detect contention instead of racing it. Never run the workflow logic directly in-process as an alternative — an iteration that pushes branches or opens PRs without going through `dev` holds no lock and defeats the single-driver guarantee.
+    4. Otherwise, execute the workflow stage headless by running `solomon-harness dev <stage> [args]` (equivalently `uv run python -I -m solomon_harness.cli dev <stage> [args]`). This is the only path that acquires the single-driver loop lock, so a concurrent headless `solomon-harness dev` run can detect contention instead of racing it. Never run the workflow logic directly in-process as an alternative — an iteration that pushes branches or opens PRs without going through `dev` holds no lock and defeats the single-driver guarantee.
     5. Save the decision and loop run to memory.
   - Present a final summary of all tasks implemented and reviewed.
 

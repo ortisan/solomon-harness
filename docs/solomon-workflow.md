@@ -442,10 +442,9 @@ incident — two concurrent `/solomon-workflow` drivers — produced premature m
 that bypassed the review gate and flipped `core.bare=true` on a worktree. The
 safety floor prevents that by construction:
 
-- **Single-driver lock.** Before a stage that touches git/board state runs
-  (`workflow`, `loop`, `start`, `review`, `release`, and the `scan-arch` /
-  `scan-dedup` maintenance loops — and, at L3, every stage the policy's
-  `requires_lock` names), the headless runner acquires one advisory lock anchored at the git
+- **Single-driver lock.** Before any headless stage runs, including the
+  idea/issue/bug/refine stages that mutate GitHub or the board, the runner
+  acquires one advisory lock anchored at the git
   *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of
   the repository contends on the same file. A second driver is refused. The lock
   is a plain JSON file (the holder is auditable). Staleness favors safety: a
@@ -454,14 +453,25 @@ safety floor prevents that by construction:
   pid, or a cross-host lock past the TTL (`DEFAULT_TTL_SECONDS = 1800`, since a
   remote pid cannot be probed), is reclaimed. Implementation:
   `solomon_harness/loop_lock.py`; the portable gate lives in `run_stage` so it
-  enforces on Claude, AGY, and Codex. (`workflows.LOCKED_STAGES` is
-  the source of truth for the static set.)
+  enforces on Claude, AGY, and Codex. `workflows.LOCKED_STAGES` equals the full
+  stage set, so every engine child receives one inherited identity and scoped
+  capability.
 - **Native pre-tool guards.** Claude's `.claude/settings.json`, AGY's
   `.agents/hooks.json`, and Codex's inline hooks in `.codex/config.toml` route shell and write
-  events through `host-hook pre-tool-use`. The normalized guard blocks
-  `git push` / `gh pr merge` while another live driver holds the lock. These
-  hooks are defense-in-depth and fail open; the `run_stage` gate, not a native
-  hook, is the enforcement of record. Codex retains its project-trust gate.
+  events through `host-hook pre-tool-use`. Every shell segment must be an
+  explicit read-only form, a known mutator with statically proven targets, or a
+  classified privileged operation. Unknown executables and opaque interpreter
+  scripts become `dev:execute` requests: they fail closed without a matching
+  live capability. A locked headless stage receives an ephemeral capability
+  bound to its lock identity, delivery-operation scopes, and non-protected branch
+  patterns. Only the token digest is stored in the mode-`0600` lock. Autonomous
+  Direct Git/GitHub merge, protected-branch push, force/delete push, and
+  destructive history commands remain denied. Malformed payloads and
+  policy/ownership errors also
+  fail closed.
+  These hooks remain defense-in-depth because a host may decline to load them;
+  the `run_stage` gate is the portable enforcement of record. Codex retains its
+  project-trust gate.
 - **Recovery.** `solomon-harness loop-lock status` shows the current holder and
   whether it is stale; `solomon-harness loop-lock release` clears a stuck lock
   after a crash.

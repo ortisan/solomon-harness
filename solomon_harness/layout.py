@@ -19,7 +19,7 @@ PathLike = Union[str, os.PathLike[str]]
 
 
 class PathConfinementError(ValueError):
-    """Raised when a write target leaves its workspace or traverses a symlink."""
+    """Raised when a path leaves its trust boundary or traverses a symlink."""
 
 
 def _absolute(path: PathLike) -> Path:
@@ -35,6 +35,45 @@ def _absolute(path: PathLike) -> Path:
     return Path(os.path.abspath(os.fspath(Path(path).expanduser())))
 
 
+def _confined_path(root: PathLike, target: PathLike, *, operation: str) -> Path:
+    """Return a path confined below ``root`` without traversing symlinks."""
+
+    workspace = _absolute(root)
+    candidate = Path(target).expanduser()
+    if ".." in candidate.parts:
+        raise PathConfinementError(
+            f"{operation} path contains parent traversal: {target}"
+        )
+    destination = _absolute(candidate) if candidate.is_absolute() else workspace / candidate
+    try:
+        destination.relative_to(workspace)
+    except ValueError as exc:
+        raise PathConfinementError(
+            f"{operation} path escapes boundary {workspace}: {destination}"
+        ) from exc
+
+    cursor = destination
+    while cursor != workspace:
+        if cursor.is_symlink():
+            raise PathConfinementError(
+                f"{operation} path traverses a symlink: {destination}"
+            )
+        parent = cursor.parent
+        if parent == cursor:
+            raise PathConfinementError(
+                f"{operation} path escapes boundary {workspace}: {destination}"
+            )
+        cursor = parent
+
+    try:
+        destination.parent.resolve().relative_to(workspace.resolve())
+    except ValueError as exc:
+        raise PathConfinementError(
+            f"{operation} path resolves outside boundary {workspace}: {destination}"
+        ) from exc
+    return destination
+
+
 def confined_path(root: PathLike, target: PathLike) -> Path:
     """Return a workspace-confined write path, rejecting every nested symlink.
 
@@ -43,38 +82,18 @@ def confined_path(root: PathLike, target: PathLike) -> Path:
     that declared root to the target are forbidden from traversing symlinks.
     """
 
-    workspace = _absolute(root)
-    candidate = Path(target).expanduser()
-    if ".." in candidate.parts:
-        raise PathConfinementError(f"write path contains parent traversal: {target}")
-    destination = _absolute(candidate) if candidate.is_absolute() else workspace / candidate
-    try:
-        destination.relative_to(workspace)
-    except ValueError as exc:
-        raise PathConfinementError(
-            f"write path escapes workspace {workspace}: {destination}"
-        ) from exc
+    return _confined_path(root, target, operation="write")
 
-    cursor = destination
-    while cursor != workspace:
-        if cursor.is_symlink():
-            raise PathConfinementError(
-                f"write path traverses a symlink: {destination}"
-            )
-        parent = cursor.parent
-        if parent == cursor:
-            raise PathConfinementError(
-                f"write path escapes workspace {workspace}: {destination}"
-            )
-        cursor = parent
 
-    try:
-        destination.parent.resolve().relative_to(workspace.resolve())
-    except ValueError as exc:
-        raise PathConfinementError(
-            f"write path resolves outside workspace {workspace}: {destination}"
-        ) from exc
-    return destination
+def confined_read_path(root: PathLike, target: PathLike) -> Path:
+    """Return a read path confined below ``root`` without following symlinks.
+
+    The target need not exist. Callers can therefore validate every ordered
+    compatibility candidate before deciding whether it is usable, preventing a
+    symlinked canonical path from silently falling through to legacy content.
+    """
+
+    return _confined_path(root, target, operation="read")
 
 
 def _preferred_path(candidates: Iterable[Path], *, directory: bool) -> Path:
@@ -178,6 +197,14 @@ class HarnessPaths:
         return self.solomon / "state"
 
     @property
+    def memory(self) -> Path:
+        return self.state / "memory"
+
+    @property
+    def sqlite_database(self) -> Path:
+        return self.memory / "long_term" / "harness.db"
+
+    @property
     def handoffs(self) -> Path:
         return self.state / "handoffs"
 
@@ -257,6 +284,16 @@ class HarnessPaths:
     @property
     def legacy_state(self) -> Path:
         return self.root / ".solomon"
+
+    @property
+    def legacy_memory(self) -> Path:
+        """Pre-layout runtime state used by releases before ADR-0034."""
+
+        return self.root / "memory"
+
+    @property
+    def legacy_sqlite_database(self) -> Path:
+        return self.legacy_memory / "long_term" / "harness.db"
 
     @property
     def legacy_handoffs(self) -> Path:
@@ -437,5 +474,6 @@ __all__ = [
     "PathConfinementError",
     "PathLike",
     "confined_path",
+    "confined_read_path",
     "find_workspace_root",
 ]

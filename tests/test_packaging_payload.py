@@ -113,6 +113,7 @@ class PackagingPayloadTest(unittest.TestCase):
                 "scripts/generate-integrations.py",
                 "solomon_harness/cli.py",
                 "solomon_harness/legacy_payloads/v0.11.0.tsv",
+                "solomon_harness/legacy_payloads/v0.11.0-main.tsv",
                 "solomon_harness/templates/AGENTS.md.template",
                 "docs/solomon-workflow.md",
                 "docs/release-policy.md",

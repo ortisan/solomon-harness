@@ -203,6 +203,27 @@ class TestHostAdapters(unittest.TestCase):
         self.assertIn("mcp", check["detail"])
         self.assertIn("compile", check["fix"])
 
+    def test_reports_codex_hooks_disabled_with_actionable_remediation(self):
+        matrix = self._matrix()
+        matrix["codex"]["capabilities"] = {
+            capability
+            for capability in matrix["codex"]["capabilities"]
+            if capability not in {"pre_tool_guard", "session_start"}
+        }
+        matrix["codex"]["capability_states"] = dict(
+            matrix["codex"]["capability_states"],
+            pre_tool_guard="disabled",
+            session_start="disabled",
+        )
+        matrix["codex"]["status"] = "disabled"
+
+        with patch.object(hc, "inspect_capabilities", return_value=matrix):
+            check = hc.check_host_adapters("/repo")[2]
+
+        self.assertEqual(check["status"], hc.WARN)
+        self.assertIn("disabled", check["detail"])
+        self.assertIn("features.hooks", check["fix"])
+
 
 class TestPendingReconcile(unittest.TestCase):
     def _write_mirror(self, root, kind, name, synced):

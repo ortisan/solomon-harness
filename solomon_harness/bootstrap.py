@@ -333,12 +333,18 @@ def _install_harness_files(workspace_root: str) -> bool:
     if os.path.abspath(repo_root) == os.path.abspath(workspace_root):
         return False
 
-    from solomon_harness.install_layout import install_project
+    from solomon_harness.install_layout import InstallConflictError, install_project
 
     print("Installing harness files into .agents/solomon...")
     result = install_project(workspace_root)
     if result.conflicts:
         print(f"  Preserved {len(result.conflicts)} locally modified managed file(s).")
+    blocking_conflicts = getattr(result, "blocking_conflicts", result.conflicts)
+    if blocking_conflicts:
+        raise InstallConflictError(
+            "Harness installation preserved conflicting managed files: "
+            + ", ".join(blocking_conflicts)
+        )
     print("  Harness files installed.")
     return True
 
@@ -444,7 +450,7 @@ def scaffold_agents(workspace_root: str) -> None:
     Non-destructive: a hand-authored entrypoint or config is never overwritten;
     only genuinely missing scaffolding is filled in from the bundled template.
     """
-    from solomon_harness.layout import HarnessPaths, confined_path
+    from solomon_harness.layout import HarnessPaths, confined_path, confined_read_path
 
     paths = HarnessPaths(workspace_root)
     agents_dir = os.fspath(confined_path(paths.root, paths.resolve_agents()))
@@ -452,8 +458,14 @@ def scaffold_agents(workspace_root: str) -> None:
         return
     package_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = os.path.join(package_dir, "templates", "harness")
-    main_src = os.path.join(template_dir, "main.py")
-    config_src = os.path.join(template_dir, ".agent", "config.json")
+    main_src = os.fspath(
+        confined_read_path(package_dir, os.path.join(template_dir, "main.py"))
+    )
+    config_src = os.fspath(
+        confined_read_path(
+            package_dir, os.path.join(template_dir, ".agent", "config.json")
+        )
+    )
 
     for name in sorted(os.listdir(agents_dir)):
         agent_dir = os.fspath(confined_path(paths.root, os.path.join(agents_dir, name)))
@@ -483,9 +495,9 @@ def _reconcile_host_adapters(workspace_root: str) -> Any:
     from solomon_harness.layout import HarnessPaths
 
     if HarnessPaths(workspace_root).manifest.is_file():
-        from solomon_harness.install_layout import install_project
+        from solomon_harness.install_layout import compile_project_adapters
 
-        return install_project(workspace_root)
+        return compile_project_adapters(workspace_root)
 
     from solomon_harness.host_adapters import compile_adapters
 
@@ -501,7 +513,7 @@ def scaffold_new_agent(
 ) -> None:
     """Scaffold a new agent directory from templates (create-only)."""
     import re
-    from solomon_harness.layout import HarnessPaths, confined_path
+    from solomon_harness.layout import HarnessPaths, confined_path, confined_read_path
 
     if not re.match(r"^[a-z0-9_]+$", name):
         raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
@@ -515,6 +527,10 @@ def scaffold_new_agent(
     if agent_path.exists():
         print(f"Agent '{name}' already exists. Skipping scaffolding.")
         return
+
+    doc_skills_script = confined_read_path(
+        paths.root, paths.resolve_scripts() / "document-skills.py"
+    )
 
     def project_reference(path: str) -> str:
         return os.path.relpath(path, os.fspath(paths.root)).replace(os.sep, "/")
@@ -673,14 +689,12 @@ This skill covers the {name} role's duties.
                 f.write(new_content)
 
     # Run document-skills script to compile the new agent's skills
-    doc_skills_script = os.path.join(
-        os.fspath(paths.resolve_scripts()), "document-skills.py"
-    )
-    if os.path.isfile(doc_skills_script):
+    doc_skills_script = confined_read_path(paths.root, doc_skills_script)
+    if doc_skills_script.is_file():
         import subprocess
         import sys
-        subprocess.run(
-            [sys.executable, doc_skills_script],
+        subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
+            [sys.executable, os.fspath(doc_skills_script)],
             cwd=os.path.dirname(agents_dir),
             check=True,
         )

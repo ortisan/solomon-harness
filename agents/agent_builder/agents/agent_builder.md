@@ -4,21 +4,30 @@ The Agent Builder specialist agent scaffolds new specialist agents.
 
 ## Delegation cue
 
-Use this agent when a new specialist agent needs to be scaffolded end to end — creating its persona, role profile, skills directory, and `.agent/config.json` under `agents/<name>/`, validating the name and target path for safety, and registering it in `agents/AGENTS.md`, `README.md`, and the compiled host-tool integrations.
+Use this agent when a new specialist agent needs to be scaffolded end to end — creating its persona, role profile, skills directory, and `.agent/config.json` in the canonical Solomon catalog, validating the name and target path for safety, and registering it in the canonical rules plus the compiled Claude, AGY, and Codex integrations. Source-checkout documentation is updated only while authoring solomon-harness itself.
 
 ## Core Duties
 - Scaffold new agent directories and configuration templates.
 - Register compiled agents in the agent index files.
 
 ## Outputs
-- A scaffolded agent directory tree (`persona.md`, `agents/<name>.md`, `skills/`,
-  `.agent/config.json`) populated with clean, cliche-free templates.
+- A scaffolded agent directory tree (`persona.md`, role profile, `skills/`, and
+  `.agent/config.json`) below `agents/<name>/` in this source checkout or below
+  `.agents/solomon/agents/<name>/` in an installed consumer. The role profile is
+  `agents/<name>/agents/<name>.md` in source and
+  `.agents/solomon/agents/<name>/agents/<name>.md` after installation. All templates
+  remain clean and cliche-free.
 - A confinement-verified filesystem write: canonical path resolution confirming the target
   stays inside `agents/`, and a validated snake_case agent name.
-- An updated `agents/AGENTS.md` index entry (alphabetical order, one-sentence summary) and
-  an updated `README.md` agent count and table row.
-- A successful compilation run that regenerates the host-tool integrations, such as the new
-  `.claude/agents/<name>.md` profile.
+- An updated canonical rules entry (alphabetical order, one-sentence summary):
+  `agents/AGENTS.md` in this source checkout or `.agents/solomon/AGENTS.md` in an
+  installed consumer.
+- Source checkout only: an updated harness `README.md` agent count/table and
+  `scripts/validate-agents.py` keyword registration. An installed consumer never
+  changes the product repository's `README.md` or validation scripts.
+- A successful compilation run that regenerates all three host integrations:
+  `.claude/agents/<name>.md`, `.agents/agents/<name>/agent.md`, and
+  `.codex/agents/<name>.toml`.
 
 ## Handoffs
 
@@ -29,7 +38,7 @@ Use this agent when a new specialist agent needs to be scaffolded end to end —
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents — the mandated agents/<name>/ directory layout, path-traversal and snake_case-name confinement checks, and the registry updates to agents/AGENTS.md, README.md, and the compiled host-tool integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, confinement, and registration of specialist agents in either a source checkout or an installed consumer, including the canonical rules and all three host integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
 
 ## External Skills
 
@@ -37,4 +46,3 @@ Additional skills can be fetched and integrated from external skill servers at a
 ```bash
 solomon-harness skills add <source> <skill> --agent agent_builder
 ```
-

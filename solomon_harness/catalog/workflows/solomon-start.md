@@ -33,7 +33,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   - Write your demand and match judgment to `.agents/solomon/state/broker/route-{{arguments}}.json`
     with the host's file-write mechanism (so issue-derived text never touches a shell string):
     `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`
-  - Run `uv run python -m solomon_harness.cli broker route --file .agents/solomon/state/broker/route-{{arguments}}.json`
+  - Run `uv run python -I -m solomon_harness.cli broker route --file .agents/solomon/state/broker/route-{{arguments}}.json`
     and read the verdict JSON. The core validates the match against the catalog
     and fails closed (exit 3) on an empty catalog or a matcher-contract violation.
   - Route verdict: note the routed agent and continue the stage.
@@ -45,7 +45,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
     On option 1, write the proposal to `.agents/solomon/state/broker/proposal-{{arguments}}.json`
     (`{"kind": "adapt_skill", "source_name": "...", "skill_name": "...", "agent_name": "...", "issue": "{{arguments}}"}` or
     `{"kind": "create_agent", "agent_name": "...", "title": "...", "description": "...", "duties": ["..."], "issue": "{{arguments}}"}`),
-    then run `uv run python -m solomon_harness.cli broker apply --file .agents/solomon/state/broker/proposal-{{arguments}}.json`.
+    then run `uv run python -I -m solomon_harness.cli broker apply --file .agents/solomon/state/broker/proposal-{{arguments}}.json`.
     Report the created PR and stop execution (do not proceed to Step 2).
   - Gap verdict, non-interactive/headless run: acquisition is human-gated and
     `broker apply` refuses it (exit 3) — do not attempt it. Record the gap
@@ -64,7 +64,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   never blocks a start, and several issues can be in flight at once):
   ```
   git fetch origin
-  uv run python -m solomon_harness.cli worktree feature/<slug> --base develop
+  uv run python -I -m solomon_harness.cli worktree feature/<slug> --base develop
   ```
   Use `--base main` when the repository has no `develop` branch. The helper is idempotent
   (re-running reuses the existing worktree) and prints the absolute worktree path; on a
@@ -75,8 +75,8 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Bidirectional link: comment the branch onto the issue —
   `gh issue comment {{arguments}} --body "Started on branch \`feature/<slug>\` in a dedicated worktree."` —
   so the issue points to the branch and the branch name points back to the issue.
-- `uv run python -m solomon_harness.github ensure-board` (idempotent), then
-  `uv run python -m solomon_harness.github set-status --issue {{arguments}} --status "In Progress"`.
+- `uv run python -I -m solomon_harness.github ensure-board` (idempotent), then
+  `uv run python -I -m solomon_harness.github set-status --issue {{arguments}} --status "In Progress"`.
 - `project-memory log_issue(github_id={{arguments}}, title=..., type_=..., status="in_progress", milestone_id=...)`.
 
 ## 3. Plan (software_engineer, plan_authoring skill)
@@ -139,11 +139,11 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 
 ## 6. Draft PR, Code Review, handoff
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
-- Open a draft PR: `uv run python -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
+- Open a draft PR: `uv run python -I -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
   The body must contain `Closes #{{arguments}}`, summarize the change, and carry the
   canonical ADR line from step 4 — `ADR: docs/adrs/NNNN-<slug>.md` or
   `ADR: not warranted — <reason>` — which the CI ADR gate enforces verbatim.
-- `uv run python -m solomon_harness.cli github set-status --issue {{arguments}} --status "Code Review"`.
+- `uv run python -I -m solomon_harness.cli github set-status --issue {{arguments}} --status "Code Review"`.
 - Write the start -> review handoff contract to `.agents/solomon/state/handoffs/issue-{{arguments}}-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.

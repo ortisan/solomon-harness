@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from solomon_harness.install_layout import (
     migrate_layout,
     uninstall_project,
 )
+from solomon_harness.install_transaction import record_install_mutation
 from solomon_harness.layout import HarnessPaths
 from solomon_harness.payload_inventory import payload_files
 
@@ -39,6 +41,8 @@ def _snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
     result: dict[str, tuple[bytes, int, int]] = {}
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         rel = path.relative_to(root).as_posix()
+        if rel == ".agents/solomon/state/install.lock":
+            continue
         info = path.stat()
         result[rel] = (path.read_bytes(), stat.S_IMODE(info.st_mode), info.st_mtime_ns)
     return result
@@ -203,7 +207,12 @@ class InstallLayoutTest(unittest.TestCase):
         self.assertIn(".agents/solomon/state/handoffs/", text)
         self.assertNotIn(".agents/solomon/handoffs/", text)
         self.assertIn(".agents/solomon/state/broker/", text)
-        self.assertIn(f"{run_prefix} python -m solomon_harness", text)
+        self.assertNotIn(f"{run_prefix} python -m solomon_harness", text)
+        self.assertNotIn(f"{run_prefix} python .agents/solomon/scripts/", text)
+        self.assertNotIn(f'{run_prefix} python -c "import solomon_harness"', text)
+        self.assertIn(f"{run_prefix} python -I -m solomon_harness", text)
+        self.assertIn(f"{run_prefix} python -I .agents/solomon/scripts/", text)
+        self.assertIn(f'{run_prefix} python -I -c "import solomon_harness"', text)
         for match in re.finditer(r"uv run --project \.agents/solomon", text):
             start = match.start() - len("UV_PROJECT_ENVIRONMENT=.agents/solomon/state/venv ")
             self.assertGreaterEqual(start, 0)
@@ -369,6 +378,161 @@ class InstallLayoutTest(unittest.TestCase):
         self.assertFalse((self.root / ".agent").exists())
         self.assertFalse((self.root / ".solomon").exists())
 
+    def test_legacy_sqlite_memory_migrates_to_canonical_state_without_loss(self) -> None:
+        legacy = self.root / "memory" / "long_term" / "harness.db"
+        legacy.parent.mkdir(parents=True)
+        connection = sqlite3.connect(legacy)
+        try:
+            self.assertEqual(
+                connection.execute("PRAGMA journal_mode=WAL").fetchone(),
+                ("wal",),
+            )
+            connection.execute("PRAGMA wal_autocheckpoint=0")
+            connection.execute("CREATE TABLE migration_probe (value TEXT NOT NULL)")
+            connection.execute(
+                "INSERT INTO migration_probe (value) VALUES (?)",
+                ("preserve-me",),
+            )
+            connection.commit()
+            self.assertTrue(Path(f"{legacy}-wal").is_file())
+
+            result = migrate_layout(self.root, source_root=SOURCE_ROOT)
+        finally:
+            connection.close()
+
+        canonical = (
+            HarnessPaths(self.root).state / "memory" / "long_term" / "harness.db"
+        )
+        self.assertTrue(result.changed)
+        self.assertTrue(canonical.is_file())
+        self.assertFalse(Path(f"{canonical}-wal").exists())
+        self.assertFalse(Path(f"{canonical}-shm").exists())
+        with sqlite3.connect(canonical) as connection:
+            row = connection.execute("SELECT value FROM migration_probe").fetchone()
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        self.assertEqual(row, ("preserve-me",))
+        self.assertEqual(integrity, ("ok",))
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(canonical.stat().st_mode), 0o600)
+            self.assertEqual(
+                stat.S_IMODE(HarnessPaths(self.root).state.stat().st_mode),
+                0o700,
+            )
+        self.assertFalse((self.root / "memory").exists())
+        self.assertIn("legacy-memory-state", load_manifest(self.root)["migrations"])
+
+    def test_corrupt_legacy_sqlite_is_preserved_and_aborts_migration(self) -> None:
+        paths = HarnessPaths(self.root)
+        legacy = paths.legacy_memory / "long_term" / "harness.db"
+        legacy.parent.mkdir(parents=True)
+        original = b"not a sqlite database\n"
+        legacy.write_bytes(original)
+
+        with self.assertRaisesRegex(InstallConflictError, "legacy SQLite|integrity"):
+            migrate_layout(self.root, source_root=SOURCE_ROOT)
+
+        self.assertEqual(legacy.read_bytes(), original)
+        self.assertFalse(
+            (paths.state / "memory" / "long_term" / "harness.db").exists()
+        )
+        self.assertFalse(paths.manifest.exists())
+
+    def test_logically_equal_sqlite_is_idempotent_despite_mode_difference(self) -> None:
+        paths = HarnessPaths(self.root)
+        legacy = paths.legacy_memory / "long_term" / "harness.db"
+        canonical = paths.state / "memory" / "long_term" / "harness.db"
+        for database in (legacy, canonical):
+            database.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "CREATE TABLE migration_probe (id INTEGER PRIMARY KEY, value TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO migration_probe (id, value) VALUES (?, ?)",
+                    (1, "same"),
+                )
+        if os.name != "nt":
+            os.chmod(legacy, 0o600)
+            os.chmod(canonical, 0o644)
+
+        result = migrate_layout(self.root, source_root=SOURCE_ROOT)
+
+        self.assertNotIn("memory/long_term/harness.db", result.conflicts)
+        self.assertFalse(paths.legacy_memory.exists())
+        with sqlite3.connect(canonical) as connection:
+            self.assertEqual(
+                connection.execute("SELECT id, value FROM migration_probe").fetchall(),
+                [(1, "same")],
+            )
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(canonical.stat().st_mode), 0o600)
+
+    def test_divergent_canonical_sqlite_is_preserved_as_conflict(self) -> None:
+        paths = HarnessPaths(self.root)
+        legacy = paths.legacy_memory / "long_term" / "harness.db"
+        canonical = paths.state / "memory" / "long_term" / "harness.db"
+        for database, value in ((legacy, "legacy"), (canonical, "canonical")):
+            database.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE migration_probe (value TEXT)")
+                connection.execute(
+                    "INSERT INTO migration_probe (value) VALUES (?)",
+                    (value,),
+                )
+
+        result = migrate_layout(self.root, source_root=SOURCE_ROOT)
+
+        self.assertIn("memory/long_term/harness.db", result.conflicts)
+        for database, expected in ((legacy, "legacy"), (canonical, "canonical")):
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT value FROM migration_probe").fetchone(),
+                    (expected,),
+                )
+
+    def test_unrelated_root_memory_files_are_not_claimed_by_migration(self) -> None:
+        product_memory = self.root / "memory" / "product-owned.bin"
+        product_memory.parent.mkdir()
+        product_memory.write_bytes(b"consumer data\n")
+
+        result = migrate_layout(self.root, source_root=SOURCE_ROOT)
+
+        self.assertNotIn("memory/product-owned.bin", result.conflicts)
+        self.assertEqual(product_memory.read_bytes(), b"consumer data\n")
+        self.assertFalse(
+            (HarnessPaths(self.root).state / "memory" / "product-owned.bin").exists()
+        )
+
+    def test_failed_install_restores_legacy_sqlite_after_verified_backup(self) -> None:
+        paths = HarnessPaths(self.root)
+        legacy = paths.legacy_sqlite_database
+        legacy.parent.mkdir(parents=True)
+        with sqlite3.connect(legacy) as connection:
+            connection.execute("CREATE TABLE migration_probe (value TEXT)")
+            connection.execute(
+                "INSERT INTO migration_probe (value) VALUES (?)",
+                ("preserve-after-failure",),
+            )
+
+        with patch(
+            "solomon_harness.host_adapters.compile_adapters",
+            side_effect=RuntimeError("renderer failed after SQLite migration"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "renderer failed after SQLite migration",
+            ):
+                migrate_layout(self.root, source_root=SOURCE_ROOT)
+
+        self.assertTrue(legacy.is_file())
+        with sqlite3.connect(legacy) as connection:
+            self.assertEqual(
+                connection.execute("SELECT value FROM migration_probe").fetchone(),
+                ("preserve-after-failure",),
+            )
+        self.assertFalse(paths.sqlite_database.exists())
+        self.assertFalse(paths.manifest.exists())
+
     def test_previous_canonical_handoffs_migrate_below_state(self) -> None:
         paths = HarnessPaths(self.root)
         previous = paths.previous_handoffs / "review" / "issue-240.md"
@@ -460,8 +624,10 @@ class InstallLayoutTest(unittest.TestCase):
         self,
     ) -> None:
         fixture = SOURCE_ROOT / "tests" / "fixtures" / "legacy-v0.11.0"
-        for directory in ("agents", "scripts", "solomon_harness"):
-            shutil.copytree(fixture / directory, self.root / directory)
+        shutil.rmtree(self.root / ".claude")
+        (self.root / "README.md").unlink()
+        (self.root / "pyproject.toml").unlink()
+        shutil.copytree(fixture, self.root, dirs_exist_ok=True)
         for path in (
             self.root / "agents" / "flutter" / "skills" / "navigation.md",
             self.root / "agents" / "quant_trader" / "skills" / "tooling.md",
@@ -475,19 +641,83 @@ class InstallLayoutTest(unittest.TestCase):
             modified.read_text(encoding="utf-8") + "\nLocal project change.\n",
             encoding="utf-8",
         )
-        adapter_result = SimpleNamespace(changed=False, conflicts=(), managed_paths=())
-
-        with patch(
-            "solomon_harness.host_adapters.compile_adapters",
-            return_value=adapter_result,
-        ):
-            result = install_project(self.root, source_root=SOURCE_ROOT)
+        result = install_project(self.root, source_root=SOURCE_ROOT)
 
         self.assertIn(modified.relative_to(self.root).as_posix(), result.conflicts)
         self.assertIn("Local project change.", modified.read_text(encoding="utf-8"))
         self.assertFalse((self.root / "agents" / "flutter" / "skills" / "navigation.md").exists())
         self.assertFalse(hook.exists())
         self.assertFalse((self.root / "solomon_harness" / "notify.py").exists())
+        self.assertFalse((self.root / ".gemini").exists())
+        self.assertFalse((self.root / "GEMINI.md").exists())
+        self.assertFalse((self.root / "CLAUDE.md").exists())
+        self.assertFalse((self.root / "README.md").exists())
+        self.assertFalse((self.root / "pyproject.toml").exists())
+        self.assertFalse((self.root / "skill-sources.json").exists())
+        self.assertTrue((self.root / "AGENTS.md").is_file())
+        self.assertIn(
+            ".agents/solomon/AGENTS.md",
+            (self.root / "AGENTS.md").read_text(encoding="utf-8"),
+        )
+        mcp = json.loads((self.root / ".mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            mcp["mcpServers"]["solomon-memory"]["args"][:4],
+            ["run", "--frozen", "--project", ".agents/solomon"],
+        )
+        self.assertIn(
+            ".agents/solomon/agents/qa",
+            (self.root / ".claude" / "agents" / "qa.md").read_text(
+                encoding="utf-8"
+            ),
+        )
+
+    def test_v011_modified_shared_json_adapters_migrate_only_legacy_nodes(self) -> None:
+        fixture = SOURCE_ROOT / "tests" / "fixtures" / "legacy-v0.11.0"
+        for directory in ("agents", "scripts", "solomon_harness"):
+            shutil.copytree(fixture / directory, self.root / directory)
+        for path in (
+            self.root / "agents" / "flutter" / "skills" / "navigation.md",
+            self.root / "agents" / "quant_trader" / "skills" / "tooling.md",
+            self.root / "solomon_harness" / "notify.py",
+        ):
+            os.chmod(path, 0o644)
+        os.chmod(self.root / "scripts" / "git-hooks" / "pre-commit", 0o755)
+
+        legacy_mcp = json.loads((fixture / ".mcp.json").read_text(encoding="utf-8"))
+        legacy_mcp["mcpServers"]["consumer-server"] = {
+            "command": "consumer-mcp",
+            "args": ["serve"],
+        }
+        (self.root / ".mcp.json").write_text(
+            json.dumps(legacy_mcp, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        legacy_settings = json.loads(
+            (fixture / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        legacy_settings["consumer-setting"] = True
+        (self.root / ".claude" / "settings.json").write_text(
+            json.dumps(legacy_settings, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        result = install_project(self.root, source_root=SOURCE_ROOT)
+
+        self.assertNotIn(".mcp.json", result.conflicts)
+        self.assertNotIn(".claude/settings.json", result.conflicts)
+        mcp = json.loads((self.root / ".mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual(mcp["mcpServers"]["consumer-server"]["command"], "consumer-mcp")
+        self.assertEqual(
+            mcp["mcpServers"]["solomon-memory"]["args"][:4],
+            ["run", "--frozen", "--project", ".agents/solomon"],
+        )
+        settings = json.loads(
+            (self.root / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        self.assertIs(settings["consumer-setting"], True)
+        serialized_hooks = json.dumps(settings["hooks"], sort_keys=True)
+        self.assertNotIn("uv run python -m solomon_harness.cli", serialized_hooks)
+        self.assertIn("solomon_harness.cli host-hook", serialized_hooks)
 
     def test_unowned_gemini_tree_is_preserved_and_reported_without_legacy_signature(self) -> None:
         gemini = self.root / ".gemini" / "commands" / "custom.md"
@@ -999,7 +1229,7 @@ class InstallLayoutTest(unittest.TestCase):
                 install_project(self.root, source_root=SOURCE_ROOT)
 
         self.assertEqual(_snapshot(self.root), before)
-        self.assertFalse((self.root / ".agents").exists())
+        self.assertFalse(HarnessPaths(self.root).rules.exists())
         self.assertFalse((self.root / "AGENTS.md").exists())
 
     def test_failed_install_rolls_back_both_sides_of_legacy_state_migration(self) -> None:
@@ -1021,7 +1251,7 @@ class InstallLayoutTest(unittest.TestCase):
         self.assertFalse(
             (HarnessPaths(self.root).state / "memory-mirror" / "decision" / "one.md").exists()
         )
-        self.assertFalse((self.root / ".agents").exists())
+        self.assertFalse(HarnessPaths(self.root).rules.exists())
 
     def test_failed_install_rolls_back_previous_handoff_migration(self) -> None:
         paths = HarnessPaths(self.root)
@@ -1062,6 +1292,7 @@ class InstallLayoutTest(unittest.TestCase):
             for path, content in outputs.items():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
+                record_install_mutation(path)
             raise RuntimeError("custom adapter failed")
 
         with patch(

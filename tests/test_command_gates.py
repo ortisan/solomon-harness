@@ -48,7 +48,7 @@ def test_release_command_wires_definition_of_done_gate():
 def test_release_command_generates_release_wiki_page():
     body = _read(os.path.join(".claude", "commands", "solomon-release.md"))
     # Exact command another workstream implements; referenced here only.
-    assert "uv run python -m solomon_harness.release wiki-page --release" in body
+    assert "uv run python -I -m solomon_harness.release wiki-page --release" in body
 
 
 # --- AC / DoR / DoD across the issue families -------------------------------

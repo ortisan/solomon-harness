@@ -14,6 +14,7 @@ run instead of skipping.
 """
 
 import os
+import shlex
 import unittest
 
 import yaml
@@ -30,7 +31,8 @@ def _validate_job():
 
 def _pytest_step(job):
     for step in job.get("steps", []):
-        if step.get("run", "").strip() == "uv run pytest":
+        command = shlex.split(step.get("run", ""))
+        if command[:3] == ["uv", "run", "pytest"]:
             return step
     return None
 

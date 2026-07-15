@@ -219,8 +219,27 @@ def check_host_adapters(workspace_root: str) -> List[Dict]:
     for host in HOSTS:
         record = matrix.get(host, {})
         available = set(record.get("capabilities", ()))
-        missing = sorted(required - available)
+        states = record.get("capability_states", {})
+        disabled = sorted(
+            capability
+            for capability, state in states.items()
+            if state == "disabled"
+        )
         name = f"{labels[host]} adapter"
+        if disabled:
+            checks.append(
+                _check(
+                    name,
+                    WARN,
+                    "capabilities disabled by native host configuration: "
+                    + ", ".join(disabled),
+                    "Enable Codex project hooks by removing `features.hooks = false` "
+                    "or setting `features.hooks = true`, then run "
+                    "'solomon-harness compile'.",
+                )
+            )
+            continue
+        missing = sorted(required - available)
         if missing:
             checks.append(
                 _check(
@@ -232,7 +251,6 @@ def check_host_adapters(workspace_root: str) -> List[Dict]:
             )
             continue
 
-        states = record.get("capability_states", {})
         pending = sorted(
             capability
             for capability, state in states.items()

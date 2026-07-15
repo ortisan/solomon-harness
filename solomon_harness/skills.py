@@ -12,6 +12,7 @@ from solomon_harness.layout import (
     HarnessPaths,
     PathConfinementError,
     confined_path,
+    confined_read_path,
     find_workspace_root,
 )
 
@@ -140,9 +141,9 @@ def _reconcile_host_adapters(root: str) -> Any:
     """Keep the install manifest and all three native adapters synchronized."""
     paths = HarnessPaths(root)
     if paths.manifest.is_file():
-        from solomon_harness.install_layout import install_project
+        from solomon_harness.install_layout import compile_project_adapters
 
-        return install_project(root)
+        return compile_project_adapters(root)
 
     from solomon_harness.host_adapters import compile_adapters
 
@@ -194,6 +195,9 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
         agents_dir = confined_path(paths.root, paths.resolve_agents())
         agent_dir = confined_path(paths.root, agents_dir / agent)
         skills_dir = confined_path(paths.root, agent_dir / "skills")
+        doc_script = confined_read_path(
+            paths.root, paths.resolve_scripts() / "document-skills.py"
+        )
     except (PathConfinementError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -225,17 +229,22 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
             print(f"Error: failed to install skill: {exc}", file=sys.stderr)
             return 1
 
-    doc_script = paths.resolve_scripts() / "document-skills.py"
     try:
+        doc_script = confined_read_path(paths.root, doc_script)
         if doc_script.is_file():
-            subprocess.run(
+            subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
                 [sys.executable, os.fspath(doc_script)],
                 cwd=os.fspath(paths.resolve_agents().parent),
                 check=True,
             )
 
         compile_result = _reconcile_host_adapters(root)
-    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+    except (
+        OSError,
+        PathConfinementError,
+        RuntimeError,
+        subprocess.SubprocessError,
+    ) as exc:
         print(f"Error: failed to reconcile host adapters: {exc}", file=sys.stderr)
         return 1
     if compile_result.conflicts:

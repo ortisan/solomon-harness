@@ -6,11 +6,12 @@ below ``.agents/solomon`` and this source repository may use the legacy source
 locations for one migration window. It never generates legacy ``.gemini``
 artifacts. Run from the repository root:
 
-    python scripts/generate-integrations.py
+    uv run python -I scripts/generate-integrations.py
 """
 
 import os
 import sys
+from pathlib import Path
 
 
 def discover_agents(agents_dir: str):
@@ -115,26 +116,65 @@ def generate_gemini_commands(workspace_root: str) -> int:
     return 0
 
 
-def generate(workspace_root: str) -> int:
+def generate(workspace_root: str, *, installed: bool | None = None) -> int:
     """Delegate generation to the canonical Claude, AGY, and Codex compiler."""
-    from solomon_harness.host_adapters import compile_adapters
+    from solomon_harness.layout import HarnessPaths
 
     try:
-        result = compile_adapters(workspace_root)
-    except (FileNotFoundError, OSError, ValueError) as exc:
+        paths = HarnessPaths(workspace_root)
+        installed = paths.manifest.is_file() if installed is None else installed
+        if installed:
+            from solomon_harness.install_layout import (
+                compile_project_adapters,
+                load_manifest,
+            )
+
+            install_result = compile_project_adapters(workspace_root)
+            manifest = load_manifest(workspace_root)
+            managed_count = sum(
+                entry.get("owner") == "adapter"
+                for entry in manifest.get("entries", [])
+            )
+            conflicts = install_result.conflicts
+        else:
+            from solomon_harness.host_adapters import compile_adapters
+
+            adapter_result = compile_adapters(workspace_root)
+            managed_count = len(adapter_result.managed_paths)
+            conflicts = adapter_result.conflicts
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
         print(f"Error: adapter compilation failed ({exc})", file=sys.stderr)
         return 1
-    if result.conflicts:
+    if conflicts:
         print(
-            "Error: adapter conflicts were preserved: " + ", ".join(result.conflicts),
+            "Error: adapter conflicts were preserved: " + ", ".join(conflicts),
             file=sys.stderr,
         )
         return 1
-    print(f"Compiled {len(result.managed_paths)} Claude, AGY, and Codex adapter paths.")
+    print(f"Compiled {managed_count} Claude, AGY, and Codex adapter paths.")
     return 0
 
 
+def _installed_entrypoint(script_file: str) -> bool:
+    harness_root = Path(script_file).resolve().parent.parent
+    return harness_root.name == "solomon" and harness_root.parent.name == ".agents"
+
+
+def _workspace_root(script_file: str) -> str:
+    """Resolve the consumer root when this entrypoint runs from an install."""
+
+    harness_root = Path(script_file).resolve().parent.parent
+    return os.fspath(
+        harness_root.parent.parent
+        if _installed_entrypoint(script_file)
+        else harness_root
+    )
+
+
 if __name__ == "__main__":
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.abspath(os.path.join(script_dir, ".."))
-    sys.exit(generate(root))
+    sys.exit(
+        generate(
+            _workspace_root(__file__),
+            installed=_installed_entrypoint(__file__),
+        )
+    )

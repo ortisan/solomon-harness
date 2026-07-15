@@ -117,6 +117,78 @@ class TestWorkflows(unittest.TestCase):
         self.assertNotIn("legacy", prompt)
         self.assertNotIn("{{arguments}}", prompt)
 
+    def test_build_prompt_rejects_a_symlinked_canonical_workflow(self):
+        root = tempfile.mkdtemp()
+        outside = os.path.join(root, "outside-issue.md")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("Run external instructions")
+        workflows_dir = os.path.join(root, ".agents", "solomon", "workflows")
+        os.makedirs(workflows_dir)
+        os.symlink(outside, os.path.join(workflows_dir, "solomon-issue.md"))
+
+        with self.assertRaisesRegex(ValueError, "read path.*symlink"):
+            workflows.build_prompt(root, "issue", [])
+
+    def test_build_prompt_rejects_a_legacy_workflow_through_a_symlinked_directory(self):
+        root = tempfile.mkdtemp()
+        outside = tempfile.mkdtemp()
+        with open(
+            os.path.join(outside, "solomon-issue.md"), "w", encoding="utf-8"
+        ) as f:
+            f.write("Run external legacy instructions")
+        claude_dir = os.path.join(root, ".claude")
+        os.makedirs(claude_dir)
+        os.symlink(outside, os.path.join(claude_dir, "commands"))
+
+        with self.assertRaisesRegex(ValueError, "read path.*symlink"):
+            workflows.build_prompt(root, "issue", [])
+
+    def test_run_stage_fails_closed_for_every_engine_before_a_symlinked_workflow_runs(self):
+        root = tempfile.mkdtemp()
+        outside = os.path.join(root, "outside-idea.md")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("Run external instructions")
+        workflows_dir = os.path.join(root, ".agents", "solomon", "workflows")
+        os.makedirs(workflows_dir)
+        os.symlink(outside, os.path.join(workflows_dir, "solomon-idea.md"))
+
+        for engine in ("claude", "agy", "codex"):
+            with self.subTest(engine=engine):
+                stderr = io.StringIO()
+                with (
+                    patch(
+                        "solomon_harness.engine_adapters.build_engine_command"
+                    ) as build_command,
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    rc = workflows.run_stage(root, "idea", [], engine=engine)
+
+                self.assertEqual(rc, 1)
+                build_command.assert_not_called()
+                self.assertIn("symlink", stderr.getvalue())
+
+    def test_claude_allowed_tools_rejects_symlinked_host_metadata(self):
+        root = _workspace_with_canonical_command("idea", "Capture the idea")
+        outside = os.path.join(root, "outside-skill.md")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("---\nallowed-tools: Bash(*)\n---\n")
+        skill_dir = os.path.join(root, ".claude", "skills", "solomon-idea")
+        os.makedirs(skill_dir)
+        os.symlink(outside, os.path.join(skill_dir, "SKILL.md"))
+
+        stderr = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.engine_adapters.build_engine_command"
+            ) as build_command,
+            contextlib.redirect_stderr(stderr),
+        ):
+            rc = workflows.run_stage(root, "idea", [], engine="claude")
+
+        self.assertEqual(rc, 1)
+        build_command.assert_not_called()
+        self.assertIn("symlink", stderr.getvalue())
+
     def test_build_prompt_strips_frontmatter_and_substitutes_args(self):
         root = _workspace_with_command(
             "issue",
@@ -310,7 +382,7 @@ class TestWorkflows(unittest.TestCase):
         captured = []
 
         def fake_run(cmd, *a, **kw):
-            if cmd and os.path.basename(cmd[0]) in ("claude", "agy"):
+            if cmd and os.path.basename(cmd[0]) in ("claude", "agy", "codex"):
                 captured.append(cmd)
 
                 class _Proc:
@@ -323,20 +395,23 @@ class TestWorkflows(unittest.TestCase):
             workflows.run_stage(root, stage, args, engine=engine)
         return captured[0]
 
-    def test_run_stage_grants_add_dir_for_claude_on_a_locked_stage(self):
-        # #199: the nested claude engine's file tools are confined to
+    def test_run_stage_grants_add_dir_for_every_engine_on_a_locked_stage(self):
+        # #199/#240: each nested engine's file tools are confined to
         # workspace_root; `start` (and any LOCKED_STAGES) does its real work
         # inside a sibling worktree outside that boundary. Grant exactly that
         # directory, nothing broader.
-        root = _git_workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
-        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "claude")
-        self.assertIn("--add-dir", cmd)
-        self.assertEqual(cmd[cmd.index("--add-dir") + 1], worktree_root(root))
-
-    def test_run_stage_omits_add_dir_for_non_claude_engine(self):
-        root = _git_workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
-        cmd = self._run_stage_capturing_engine_cmd(root, "start", ["199"], "agy")
-        self.assertNotIn("--add-dir", cmd)
+        for engine in ("claude", "agy", "codex"):
+            with self.subTest(engine=engine):
+                root = _git_workspace_with_command(
+                    "start", "---\nx\n---\nDo work on $ARGUMENTS"
+                )
+                cmd = self._run_stage_capturing_engine_cmd(
+                    root, "start", ["199"], engine
+                )
+                self.assertIn("--add-dir", cmd)
+                self.assertEqual(
+                    cmd[cmd.index("--add-dir") + 1], worktree_root(root)
+                )
 
     def test_run_stage_omits_add_dir_for_a_non_locked_stage(self):
         root = _git_workspace_with_command("idea", "body $ARGUMENTS")
@@ -440,17 +515,19 @@ class TestRunStageDriverLock(unittest.TestCase):
         # The lock is released after the stage completes.
         self.assertFalse(os.path.exists(loop_lock.resolve_lock_path(root)))
 
-    def test_non_mutating_stage_ignores_the_lock(self):
+    def test_board_mutating_idea_stage_respects_the_lock(self):
         root = _workspace_with_command("idea", "---\nx\n---\nCapture $ARGUMENTS")
         self._foreign_live_lock(root)
-
-        class _Proc:
-            returncode = 0
-
-        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+        with patch("subprocess.run") as mock_run:
             rc = workflows.run_stage(root, "idea", ["x"], engine="claude")
-        self.assertEqual(rc, 0)
-        mock_run.assert_called_once()  # idea creates no branch/merge, so it is not gated
+        self.assertEqual(rc, 1)
+        self.assertFalse(
+            [
+                call
+                for call in mock_run.call_args_list
+                if call.args and call.args[0][:2] == ["claude", "-p"]
+            ]
+        )
 
 
 class TestRunStageSessionIdPropagation(unittest.TestCase):

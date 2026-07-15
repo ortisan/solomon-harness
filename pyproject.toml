@@ -26,6 +26,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "pytest>=7.0",
+    "pytest-cov>=5.0",
     # Used by scripts/validate-workflows.py to structurally parse the GitHub
     # Actions YAML (a real parser replaced a hand-rolled bracket scanner that
     # false-positived on shell regexes). Dev/CI-only; not a runtime dependency.
@@ -54,6 +55,7 @@ include = ["solomon_harness*"]
 [tool.setuptools.package-data]
 solomon_harness = [
     "legacy_payloads/v0.11.0.tsv",
+    "legacy_payloads/v0.11.0-main.tsv",
     "catalog/workflows/solomon-bug.md",
     "catalog/workflows/solomon-idea.md",
     "catalog/workflows/solomon-issue.md",
@@ -85,3 +87,9 @@ solomon_harness = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "unit: fast tests isolated from external services and physical durability syscalls",
+    "integration: tests that exercise boundaries between repository components",
+    "e2e: tests that exercise a complete user-visible workflow",
+    "real_fsync: tests explicitly permitted to invoke the physical os.fsync syscall",
+]

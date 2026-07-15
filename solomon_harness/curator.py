@@ -42,9 +42,9 @@ def _reconcile_host_adapters(root: str) -> Any:
     """Keep managed consumers transactional and source dogfood direct."""
     paths = HarnessPaths(root)
     if paths.manifest.is_file():
-        from solomon_harness.install_layout import install_project
+        from solomon_harness.install_layout import compile_project_adapters
 
-        return install_project(root)
+        return compile_project_adapters(root)
 
     from solomon_harness.host_adapters import compile_adapters
 
@@ -210,7 +210,7 @@ def apply_proposal(
             )
         )
         if os.path.isfile(doc_script):
-            subprocess.run(
+            subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
                 [sys.executable, doc_script],
                 cwd=os.fspath(agents_root.parent),
                 env=env,

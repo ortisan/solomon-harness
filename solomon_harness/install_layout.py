@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import stat
 import tempfile
 import tomllib
@@ -19,6 +20,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from solomon_harness.adapter_ownership import (
+    AdapterOwnershipError,
+    TEXT_END as _TEXT_END,
+    TEXT_START as _TEXT_START,
+    TOML_END as _TOML_END,
+    TOML_START as _TOML_START,
+    contains_solomon_hook as _contains_solomon_hook,
+    managed_adapter_digest as _managed_adapter_digest,
+    strategy_for_adapter as _strategy_for_adapter,
+)
+from solomon_harness.install_lock import (
+    install_operation_lock,
+    non_materializing_operation_lock,
+    operation_lock_path,
+)
+from solomon_harness.install_transaction import (
+    UnsafeInstallDirectoryError,
+    current_install_root,
+    ensure_install_directory,
+    ensure_install_parent,
+    observe_install_mutations,
+    record_install_mutation,
+)
 from solomon_harness.layout import HarnessPaths
 from solomon_harness.payload_inventory import (
     PayloadInventoryError,
@@ -56,20 +80,48 @@ _DENIED_SUFFIXES = {".db", ".db-shm", ".db-wal", ".enc", ".pyc", ".pyo", ".sqlit
 _CORE_PREFIX = ".agents/solomon/"
 _STATE_PREFIX = ".agents/solomon/state/"
 _CONFIG_PATH = ".agents/solomon/config/project.json"
-_TEXT_START = "<!-- solomon-harness:start -->"
-_TEXT_END = "<!-- solomon-harness:end -->"
-_TOML_START = "# >>> solomon-harness managed adapter >>>"
-_TOML_END = "# <<< solomon-harness managed adapter <<<"
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+_SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm")
 _UV_ENVIRONMENT = "UV_PROJECT_ENVIRONMENT=.agents/solomon/state/venv"
 _UV_PROJECT = "uv run --project .agents/solomon"
 _HARNESS_RUN = f"{_UV_ENVIRONMENT} {_UV_PROJECT}"
 # Cleanup proofs intentionally cover only the immediately preceding release.
-_LEGACY_PROOF_FILES = (Path("solomon_harness/legacy_payloads/v0.11.0.tsv"),)
+_LEGACY_PROOF_FILES = (
+    Path("solomon_harness/legacy_payloads/v0.11.0.tsv"),
+    Path("solomon_harness/legacy_payloads/v0.11.0-main.tsv"),
+)
 _LEGACY_SIGNATURE_PATHS = (
     Path("agents/flutter/skills/navigation.md"),
     Path("scripts/git-hooks/pre-commit"),
     Path("solomon_harness/notify.py"),
 )
+_LEGACY_ROOT_PAYLOAD_PATHS = {
+    Path(".mcp.json"),
+    Path("pyproject.toml"),
+    Path("uv.lock"),
+    Path("AGENTS.md"),
+    Path("AGY.md"),
+    Path("CLAUDE.md"),
+    Path("GEMINI.md"),
+    Path("README.md"),
+    Path("skill-sources.json"),
+    Path(".github/copilot-instructions.md"),
+}
+_LEGACY_REQUIRED_FOOTPRINT_PATHS = {
+    *_LEGACY_SIGNATURE_PATHS,
+    Path(".mcp.json"),
+    Path("pyproject.toml"),
+    Path("uv.lock"),
+    Path("AGENTS.md"),
+    Path("CLAUDE.md"),
+    Path("skill-sources.json"),
+    Path(".claude/agents/qa.md"),
+    Path(".claude/commands/solomon-start.md"),
+    Path(".claude/settings.json"),
+    Path(".gemini/commands/solomon-start.toml"),
+    Path(".gemini/settings.json"),
+}
 
 
 class InstallConflictError(RuntimeError):
@@ -84,6 +136,7 @@ class InstallResult:
     conflicts: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
     manifest_path: Path | None = None
+    blocking_conflicts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,37 +162,78 @@ class _FileSnapshot:
     mtime_ns: int = 0
 
 
+def _capture_file_snapshot(path: Path) -> _FileSnapshot:
+    """Capture the state used by rollback compare-and-swap checks."""
+
+    if path.is_symlink():
+        return _FileSnapshot("symlink", os.readlink(path))
+    if path.is_file():
+        info = path.stat()
+        return _FileSnapshot(
+            "file",
+            path.read_bytes(),
+            stat.S_IMODE(info.st_mode),
+            info.st_atime_ns,
+            info.st_mtime_ns,
+        )
+    if path.is_dir():
+        info = path.stat()
+        return _FileSnapshot(
+            "directory",
+            mode=stat.S_IMODE(info.st_mode),
+            atime_ns=info.st_atime_ns,
+            mtime_ns=info.st_mtime_ns,
+        )
+    return _FileSnapshot("missing")
+
+
+def _same_file_state(left: _FileSnapshot, right: _FileSnapshot) -> bool:
+    """Compare durable state while ignoring read-driven access-time changes."""
+
+    return bool(
+        left.kind == right.kind
+        and left.content == right.content
+        and left.mode == right.mode
+        and left.mtime_ns == right.mtime_ns
+    )
+
+
 class _RollbackSnapshot:
-    """Capture only paths the installer may mutate and restore them on error."""
+    """Restore transaction writes only while their last observed state matches."""
 
     def __init__(self, root: Path, targets: Iterable[Path]) -> None:
         self.root = root
         self.files: dict[Path, _FileSnapshot] = {}
-        self.existing_directories: set[Path] = {root}
-        self.candidate_directories: set[Path] = set()
+        self.expected: dict[Path, _FileSnapshot] = {}
+        self.unknown_mutations: set[Path] = set()
+        self.directory_paths: set[Path] = {root}
+        tracked = {root}
         for path in sorted(set(targets)):
+            tracked.add(path)
             parent = path.parent
-            while parent != root and parent not in self.candidate_directories:
-                self.candidate_directories.add(parent)
-                if parent.is_dir() and not parent.is_symlink():
-                    self.existing_directories.add(parent)
+            while parent != root:
+                tracked.add(parent)
+                self.directory_paths.add(parent)
                 parent = parent.parent
-            if path.is_symlink():
-                self.files[path] = _FileSnapshot("symlink", os.readlink(path))
-            elif path.is_file():
-                info = path.stat()
-                self.files[path] = _FileSnapshot(
-                    "file",
-                    path.read_bytes(),
-                    stat.S_IMODE(info.st_mode),
-                    info.st_atime_ns,
-                    info.st_mtime_ns,
-                )
-            elif path.is_dir():
-                self.files[path] = _FileSnapshot("directory")
-                self.existing_directories.add(path)
-            else:
-                self.files[path] = _FileSnapshot("missing")
+        for path in sorted(tracked):
+            snapshot = _capture_file_snapshot(path)
+            self.files[path] = snapshot
+            if snapshot.kind == "directory":
+                self.directory_paths.add(path)
+
+    def checkpoint(self, path: Path) -> None:
+        """Remember the exact state immediately after a transaction mutation."""
+
+        target = path if path.is_absolute() else self.root / path
+        current = target
+        if current not in self.files:
+            self.unknown_mutations.add(current)
+        while True:
+            if current in self.files:
+                self.expected[current] = _capture_file_snapshot(current)
+            if current == self.root or self.root not in current.parents:
+                break
+            current = current.parent
 
     @staticmethod
     def _remove_current(path: Path) -> None:
@@ -151,32 +245,128 @@ class _RollbackSnapshot:
             except OSError:
                 pass
 
-    def rollback(self) -> None:
-        for path, snapshot in self.files.items():
+    def rollback(self) -> tuple[str, ...]:
+        """Restore matching transaction states and return divergent paths."""
+
+        conflict_paths = set(self.unknown_mutations)
+        matching: set[Path] = set()
+        for path, expected in self.expected.items():
+            if _same_file_state(_capture_file_snapshot(path), expected):
+                matching.add(path)
+            else:
+                conflict_paths.add(path)
+
+        # A tracked target or parent that changed without a checkpoint is not
+        # assumed to belong to this transaction. This catches missed observers
+        # and external files created in candidate directories.
+        for path, original in self.files.items():
+            if path in self.expected:
+                continue
+            if not _same_file_state(_capture_file_snapshot(path), original):
+                conflict_paths.add(path)
+
+        def most_specific(paths: set[Path]) -> set[Path]:
+            return {
+                path
+                for path in paths
+                if not any(
+                    path != candidate and path in candidate.parents
+                    for candidate in paths
+                )
+            }
+
+        conflict_paths = most_specific(conflict_paths)
+
+        divergent_directories = {
+            path for path in conflict_paths if path in self.directory_paths
+        }
+
+        def blocked_by_directory(path: Path) -> bool:
+            return any(
+                directory == path or directory in path.parents
+                for directory in divergent_directories
+            )
+
+        restorable = {
+            path for path in matching if not blocked_by_directory(path)
+        }
+
+        # Recreate original parents shallow-first so file restoration never uses
+        # an implicit mkdir with umask-derived permissions.
+        for directory in sorted(
+            (
+                path
+                for path in restorable
+                if self.files[path].kind == "directory"
+            ),
+            key=lambda item: len(item.parts),
+        ):
+            if not directory.exists():
+                snapshot = self.files[directory]
+                directory.mkdir(mode=snapshot.mode)
+                if os.name != "nt":
+                    os.chmod(directory, snapshot.mode)
+
+        for path in sorted(restorable):
+            snapshot = self.files[path]
+            if snapshot.kind == "directory":
+                continue
             if snapshot.kind == "missing":
                 self._remove_current(path)
                 continue
-            if snapshot.kind == "directory":
-                path.mkdir(parents=True, exist_ok=True)
+            if not path.parent.is_dir() or path.parent.is_symlink():
+                conflict_paths.add(path.parent)
                 continue
             self._remove_current(path)
-            path.parent.mkdir(parents=True, exist_ok=True)
             if snapshot.kind == "symlink":
                 path.symlink_to(str(snapshot.content))
                 continue
-            path.write_bytes(snapshot.content if isinstance(snapshot.content, bytes) else b"")
+            path.write_bytes(
+                snapshot.content if isinstance(snapshot.content, bytes) else b""
+            )
             os.chmod(path, snapshot.mode)
             os.utime(path, ns=(snapshot.atime_ns, snapshot.mtime_ns))
 
+        # Remove only directories whose post-mutation state matched a recorded
+        # checkpoint. An unobserved directory is never assumed to be ours.
         for directory in sorted(
-            self.candidate_directories - self.existing_directories,
+            (
+                path
+                for path in restorable
+                if path in self.directory_paths
+                and self.files[path].kind == "missing"
+            ),
             key=lambda item: len(item.parts),
             reverse=True,
         ):
             try:
                 directory.rmdir()
             except OSError:
-                pass
+                if not (directory.exists() or directory.is_symlink()):
+                    continue
+                if not any(
+                    conflict == directory or directory in conflict.parents
+                    for conflict in conflict_paths
+                ):
+                    conflict_paths.add(directory)
+
+        # Child restoration changes parent mtimes. Restore original directory
+        # metadata only after every file and directory structural operation.
+        for directory in sorted(
+            (
+                path
+                for path in restorable
+                if self.files[path].kind == "directory" and path.is_dir()
+            ),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            snapshot = self.files[directory]
+            if os.name != "nt":
+                os.chmod(directory, snapshot.mode)
+            os.utime(directory, ns=(snapshot.atime_ns, snapshot.mtime_ns))
+        conflict_paths = most_specific(conflict_paths)
+        return tuple(sorted(_relative(self.root, path) for path in conflict_paths))
 
 
 def _sha256(content: bytes) -> str:
@@ -253,13 +443,11 @@ def _neutral_text(content: bytes) -> bytes:
         return content
     replacements = (
         (".claude/commands/", ".agents/solomon/workflows/"),
-        (".claude/agents/", ".agents/solomon/agents/"),
         ("solomon_harness/catalog/workflows/", ".agents/solomon/workflows/"),
         ("docs/solomon-workflow.md", ".agents/solomon/conventions/solomon-workflow.md"),
         ("docs/release-policy.md", ".agents/solomon/conventions/release-policy.md"),
         ("docs/loop-engineering.md", ".agents/solomon/conventions/loop-engineering.md"),
         ("agents/AGENTS.md", ".agents/solomon/AGENTS.md"),
-        (".agent/config.json", ".agents/solomon/config/project.json"),
         (".agents/solomon/handoffs", ".agents/solomon/state/handoffs"),
         (".solomon/handoffs", ".agents/solomon/state/handoffs"),
         (".solomon/", ".agents/solomon/state/"),
@@ -284,16 +472,28 @@ def _neutral_text(content: bytes) -> bytes:
     text = direct_cli.sub(f"{_HARNESS_RUN} solomon-harness", text)
     text = text.replace("uv run solomon-harness", f"{_HARNESS_RUN} solomon-harness")
     text = text.replace(
+        "uv run python -I -m solomon_harness",
+        f"{_HARNESS_RUN} python -I -m solomon_harness",
+    )
+    text = text.replace(
         "uv run python -m solomon_harness",
-        f"{_HARNESS_RUN} python -m solomon_harness",
+        f"{_HARNESS_RUN} python -I -m solomon_harness",
+    )
+    text = text.replace(
+        "uv run python -I .agents/solomon/scripts/",
+        f"{_HARNESS_RUN} python -I .agents/solomon/scripts/",
     )
     text = text.replace(
         "uv run python .agents/solomon/scripts/",
-        f"{_HARNESS_RUN} python .agents/solomon/scripts/",
+        f"{_HARNESS_RUN} python -I .agents/solomon/scripts/",
+    )
+    text = text.replace(
+        'uv run python -I -c "import solomon_harness"',
+        f'{_HARNESS_RUN} python -I -c "import solomon_harness"',
     )
     text = text.replace(
         'uv run python -c "import solomon_harness"',
-        f'{_HARNESS_RUN} python -c "import solomon_harness"',
+        f'{_HARNESS_RUN} python -I -c "import solomon_harness"',
     )
     return text.encode("utf-8")
 
@@ -490,12 +690,29 @@ def _build_desired(source_root: Path) -> dict[str, _DesiredFile]:
     return desired
 
 
-def _atomic_write(path: Path, content: bytes, mode: int) -> bool:
+def _atomic_write(
+    path: Path,
+    content: bytes,
+    mode: int,
+    *,
+    allow_unsafe_existing_parent: bool = False,
+) -> bool:
     if path.is_symlink():
         raise InstallConflictError(f"Refusing to replace symlink: {path}")
+    transaction_root = current_install_root()
+    if transaction_root is not None:
+        ensure_install_parent(
+            transaction_root,
+            path,
+            private_root=HarnessPaths(transaction_root).state,
+            allow_unsafe_existing=allow_unsafe_existing_parent,
+        )
+    elif not path.parent.is_dir() or path.parent.is_symlink():
+        raise InstallConflictError(
+            f"Atomic install write requires an existing safe parent: {path.parent}"
+        )
     if path.is_file() and path.read_bytes() == content and _mode(path) == mode:
         return False
-    path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
     try:
@@ -505,8 +722,12 @@ def _atomic_write(path: Path, content: bytes, mode: int) -> bool:
             os.fsync(stream.fileno())
         os.chmod(temporary, mode)
         os.replace(temporary, path)
+        record_install_mutation(path)
     finally:
+        temporary_existed = temporary.exists()
         temporary.unlink(missing_ok=True)
+        if temporary_existed:
+            record_install_mutation(path.parent)
     return True
 
 
@@ -579,6 +800,12 @@ def _project_path_allowed(relative: str) -> bool:
         return True
     parts = Path(relative).parts
     return len(parts) == 3 and parts[:2] == (".github", "ISSUE_TEMPLATE")
+
+
+def _desired_conflict_is_blocking(relative: str) -> bool:
+    """Treat every conflict inside the canonical harness root as blocking."""
+
+    return relative.startswith(_CORE_PREFIX)
 
 
 def _validate_manifest_entry(entry: dict[str, Any]) -> None:
@@ -660,6 +887,68 @@ def load_manifest(root: str | Path) -> dict[str, Any]:
     return manifest
 
 
+def immutable_managed_paths(root: str | Path) -> tuple[str, ...]:
+    """Return installed paths an autonomous host hook must not modify.
+
+    The manifest itself and entries owned by the harness core or a native host
+    adapter form the runtime trust boundary. Project-owned scaffolds are
+    intentionally excluded so normal product development remains possible.
+    A malformed present manifest raises :class:`InstallConflictError`; callers
+    enforcing policy must fail closed rather than silently dropping protection.
+    """
+
+    paths = HarnessPaths(root)
+    mandatory = (
+        # Canonical immutable runtime and catalogs. These paths remain trusted
+        # while a fresh install is still assembling its manifest.
+        paths.rules,
+        paths.agents,
+        paths.workflows,
+        paths.conventions,
+        paths.solomon / "host-metadata",
+        paths.scripts,
+        paths.python_package,
+        paths.pyproject,
+        paths.solomon / "docker-compose.yml",
+        paths.lockfile,
+        paths.skill_sources,
+        paths.config,
+        paths.manifest,
+        paths.state / ".gitignore",
+        paths.state / "install.lock",
+        paths.state / "venv",
+        # Native discovery bridges can disable the guard that protects the
+        # canonical core, so they are trust roots even before a manifest exists.
+        paths.root_instructions,
+        paths.agents_root / "agents",
+        paths.shared_skills,
+        paths.agy_hooks,
+        paths.agy_plugins,
+        paths.claude_instructions,
+        paths.claude_agents,
+        paths.claude_skills,
+        paths.claude_settings,
+        paths.claude_mcp,
+        paths.codex_agents,
+        paths.codex_config,
+        paths.codex_hooks,
+        paths.legacy_config,
+    )
+    protected = {
+        target.relative_to(paths.root).as_posix()
+        for target in mandatory
+    }
+    manifest = load_manifest(paths.root)
+    if not manifest:
+        return tuple(sorted(protected))
+    protected.update(
+        relative
+        for relative, entry in _manifest_entries(manifest).items()
+        if entry.get("owner") in {"adapter", "core"}
+    )
+    return tuple(sorted(protected))
+
+
 def _remove_empty_parents(path: Path, root: Path, protected: set[Path]) -> None:
     parent = path.parent
     while parent != root and parent not in protected:
@@ -667,7 +956,219 @@ def _remove_empty_parents(path: Path, root: Path, protected: set[Path]) -> None:
             parent.rmdir()
         except OSError:
             return
+        record_install_mutation(parent)
         parent = parent.parent
+
+
+def _ensure_private_directory(path: Path) -> bool:
+    """Create one state directory and remove group/other access on POSIX."""
+
+    existed = path.is_dir()
+    previous_mode = _mode(path) if existed else None
+    transaction_root = current_install_root()
+    if transaction_root is None:
+        raise InstallConflictError(
+            f"Private state directory requires an install transaction: {path}"
+        )
+    try:
+        ensure_install_directory(
+            transaction_root,
+            path,
+            private_root=HarnessPaths(transaction_root).state,
+        )
+    except UnsafeInstallDirectoryError as exc:
+        raise InstallConflictError(str(exc)) from exc
+    changed = not existed or (
+        os.name != "nt" and previous_mode != _PRIVATE_DIRECTORY_MODE
+    )
+    return changed
+
+
+def _ensure_private_state_directories(state: Path, target: Path) -> bool:
+    """Privatize every directory from the canonical state root to ``target``."""
+
+    try:
+        relative = target.relative_to(state)
+    except ValueError as exc:
+        raise InstallConflictError(f"State path escapes the canonical root: {target}") from exc
+    changed = _ensure_private_directory(state)
+    current = state
+    for part in relative.parts:
+        current /= part
+        changed |= _ensure_private_directory(current)
+    return changed
+
+
+def _harden_existing_state_directories(state: Path) -> bool:
+    """Apply the private-directory contract to an existing state tree."""
+
+    if not state.exists():
+        return False
+    if state.is_symlink() or not state.is_dir():
+        raise InstallConflictError(f"Canonical state path is not a directory: {state}")
+    changed = _ensure_private_directory(state)
+    for directory in sorted(path for path in state.rglob("*") if path.is_dir()):
+        if directory.is_symlink():
+            raise InstallConflictError(f"Canonical state traverses a symlink: {directory}")
+        changed |= _ensure_private_directory(directory)
+    return changed
+
+
+def _sqlite_files(database: Path) -> tuple[Path, ...]:
+    return (database, *(Path(f"{database}{suffix}") for suffix in _SQLITE_SIDECAR_SUFFIXES))
+
+
+def _validated_sqlite_digest(connection: sqlite3.Connection, label: str) -> str:
+    """Hash a deterministic logical dump after SQLite's full integrity check."""
+
+    rows = tuple(str(row[0]) for row in connection.execute("PRAGMA integrity_check"))
+    if rows != ("ok",):
+        detail = "; ".join(rows) if rows else "no integrity result"
+        raise InstallConflictError(f"{label} failed integrity_check: {detail}")
+    digest = hashlib.sha256()
+    for statement in connection.iterdump():
+        encoded = statement.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _read_sqlite_digest(database: Path, label: str) -> str:
+    try:
+        connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            return _validated_sqlite_digest(connection, label)
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise InstallConflictError(f"Cannot validate {label} at {database}: {exc}") from exc
+
+
+def _fsync_file(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _backup_legacy_sqlite(source: Path, destination: Path) -> None:
+    """Create and verify a consolidated SQLite backup, including committed WAL."""
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.migration.",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    source_connection: sqlite3.Connection | None = None
+    target_connection: sqlite3.Connection | None = None
+    try:
+        source_connection = sqlite3.connect(
+            f"{source.resolve().as_uri()}?mode=ro",
+            uri=True,
+        )
+        source_connection.execute("BEGIN")
+        source_digest = _validated_sqlite_digest(
+            source_connection,
+            "legacy SQLite database",
+        )
+        target_connection = sqlite3.connect(temporary)
+        source_connection.backup(target_connection)
+        target_connection.commit()
+        target_connection.execute("PRAGMA journal_mode=DELETE")
+        target_digest = _validated_sqlite_digest(
+            target_connection,
+            "SQLite migration backup",
+        )
+        if target_digest != source_digest:
+            raise InstallConflictError(
+                "SQLite migration backup does not match the legacy database"
+            )
+        target_connection.close()
+        target_connection = None
+        source_connection.rollback()
+        source_connection.close()
+        source_connection = None
+        os.chmod(temporary, _PRIVATE_FILE_MODE)
+        _fsync_file(temporary)
+        os.replace(temporary, destination)
+        record_install_mutation(destination)
+        _fsync_directory(destination.parent)
+        if (
+            _read_sqlite_digest(destination, "canonical SQLite database")
+            != source_digest
+        ):
+            raise InstallConflictError(
+                "Canonical SQLite database does not match the verified migration backup"
+            )
+    except (OSError, sqlite3.Error) as exc:
+        raise InstallConflictError(f"Cannot migrate legacy SQLite database: {exc}") from exc
+    finally:
+        if target_connection is not None:
+            target_connection.close()
+        if source_connection is not None:
+            source_connection.close()
+        temporary_existed = temporary.exists()
+        temporary.unlink(missing_ok=True)
+        if temporary_existed:
+            record_install_mutation(destination.parent)
+
+
+def _remove_legacy_sqlite(database: Path) -> None:
+    for path in _sqlite_files(database):
+        if path.exists() or path.is_symlink():
+            path.unlink(missing_ok=True)
+            record_install_mutation(path)
+
+
+def _migrate_legacy_sqlite(paths: HarnessPaths) -> tuple[bool, tuple[str, ...]]:
+    """Move the pre-layout fallback database without losing committed WAL pages."""
+
+    source = paths.legacy_sqlite_database
+    destination = paths.sqlite_database
+    present_sidecars = tuple(path for path in _sqlite_files(source)[1:] if path.exists())
+    if not source.exists():
+        return False, tuple(_relative(paths.root, path) for path in present_sidecars)
+    if source.is_symlink() or not source.is_file():
+        raise InstallConflictError(f"Legacy SQLite path is not a regular file: {source}")
+
+    source_digest = _read_sqlite_digest(source, "legacy SQLite database")
+    changed = _ensure_private_state_directories(paths.state, destination.parent)
+    if destination.exists():
+        if destination.is_symlink() or not destination.is_file():
+            return changed, (_relative(paths.root, source),)
+        try:
+            destination_digest = _read_sqlite_digest(
+                destination,
+                "canonical SQLite database",
+            )
+        except InstallConflictError:
+            return changed, (_relative(paths.root, source),)
+        if destination_digest != source_digest:
+            return changed, (_relative(paths.root, source),)
+        if os.name != "nt":
+            for database_file in _sqlite_files(destination):
+                if database_file.exists() and _mode(database_file) != _PRIVATE_FILE_MODE:
+                    os.chmod(database_file, _PRIVATE_FILE_MODE)
+                    record_install_mutation(database_file)
+                    changed = True
+    else:
+        _backup_legacy_sqlite(source, destination)
+        changed = True
+
+    _remove_legacy_sqlite(source)
+    return True, ()
 
 
 def _validate_legacy_paths(paths: HarnessPaths) -> None:
@@ -675,11 +1176,16 @@ def _validate_legacy_paths(paths: HarnessPaths) -> None:
 
     if paths.legacy_config.exists() or paths.legacy_config.is_symlink():
         _confined_path(paths.root, paths.legacy_config.relative_to(paths.root).as_posix())
-    if not (paths.legacy_state.exists() or paths.legacy_state.is_symlink()):
-        return
-    _confined_path(paths.root, paths.legacy_state.relative_to(paths.root).as_posix())
-    if paths.legacy_state.is_dir():
-        for source in paths.legacy_state.rglob("*"):
+    if paths.legacy_state.exists() or paths.legacy_state.is_symlink():
+        _confined_path(
+            paths.root,
+            paths.legacy_state.relative_to(paths.root).as_posix(),
+        )
+        if paths.legacy_state.is_dir():
+            for source in paths.legacy_state.rglob("*"):
+                _confined_path(paths.root, source.relative_to(paths.root).as_posix())
+    for source in _sqlite_files(paths.legacy_sqlite_database):
+        if source.exists() or source.is_symlink():
             _confined_path(paths.root, source.relative_to(paths.root).as_posix())
 
 
@@ -744,9 +1250,11 @@ def _legacy_payload_sources(source_root: Path) -> dict[Path, Path]:
 def _legacy_proof_path_allowed(relative: Path) -> bool:
     if not relative.parts:
         return False
-    if relative.parts[0] in {"agents", "scripts", "solomon_harness"}:
+    if relative.parts[0] in {"agents", "docs", "scripts", "solomon_harness"}:
         return True
-    return relative.parts[:2] == (".claude", "commands")
+    if relative.parts[0] in {".claude", ".gemini"}:
+        return True
+    return relative in _LEGACY_ROOT_PAYLOAD_PATHS
 
 
 def _load_legacy_proof_catalog(
@@ -787,9 +1295,9 @@ def _load_legacy_proof_catalog(
                 f"Unsafe legacy payload proof entry in {catalog_relative}: {relative_text!r}"
             )
         proofs[relative] = _PayloadProof(digest, int(mode_text, 8))
-    if not set(_LEGACY_SIGNATURE_PATHS) <= set(proofs):
+    if not _LEGACY_REQUIRED_FOOTPRINT_PATHS <= set(proofs):
         raise InstallConflictError(
-            f"Legacy payload proof catalog lacks its signatures: {catalog_relative}"
+            f"Legacy payload proof catalog lacks its required footprint: {catalog_relative}"
         )
     return header[1], proofs
 
@@ -861,25 +1369,133 @@ def _unowned_gemini_paths(root: Path) -> set[str]:
     return paths or {".gemini"}
 
 
+_LEGACY_MCP_SERVER = {
+    "command": "uv",
+    "args": ["run", "python", "-m", "solomon_harness.mcp_server"],
+}
+_LEGACY_CLAUDE_HOOKS = {
+    "SessionStart": {
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    "uv run python -m solomon_harness.cli memory-up "
+                    "2>/dev/null || true"
+                ),
+            },
+            {
+                "type": "command",
+                "command": (
+                    "uv run python -m solomon_harness.cli run "
+                    "2>/dev/null || true"
+                ),
+            },
+        ]
+    },
+    "PreToolUse": {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+            {
+                "type": "command",
+                "command": "uv run python -m solomon_harness.cli loop-guard",
+            }
+        ],
+    },
+}
+
+
+def _matches_any_legacy_proof(
+    root: Path,
+    relative: Path,
+    proofs: dict[Path, set[_PayloadProof]],
+) -> bool:
+    return any(
+        _matches_payload_proof(root, relative, proof)
+        for proof in proofs.get(relative, set())
+    )
+
+
+def _remove_legacy_shared_adapter_nodes(
+    root: Path,
+    proofs: dict[Path, set[_PayloadProof]],
+) -> set[Path]:
+    """Remove exact v0.11 nodes from modified shared JSON adapters."""
+
+    migrated: set[Path] = set()
+    for relative in (Path(".mcp.json"), Path(".claude/settings.json")):
+        path = _confined_path(root, relative.as_posix())
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or _matches_any_legacy_proof(root, relative, proofs)
+        ):
+            continue
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        changed = False
+        if relative == Path(".mcp.json"):
+            servers = document.get("mcpServers")
+            if (
+                isinstance(servers, dict)
+                and servers.get("solomon-memory") == _LEGACY_MCP_SERVER
+            ):
+                servers.pop("solomon-memory")
+                if not servers:
+                    document.pop("mcpServers", None)
+                changed = True
+        else:
+            hooks = document.get("hooks")
+            if isinstance(hooks, dict):
+                for event, legacy_node in _LEGACY_CLAUDE_HOOKS.items():
+                    values = hooks.get(event)
+                    if not isinstance(values, list):
+                        continue
+                    retained = [value for value in values if value != legacy_node]
+                    if retained != values:
+                        changed = True
+                        if retained:
+                            hooks[event] = retained
+                        else:
+                            hooks.pop(event, None)
+                if not hooks:
+                    document.pop("hooks", None)
+        if not changed:
+            continue
+        _atomic_write(
+            path,
+            (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+            _mode(path),
+        )
+        migrated.add(relative)
+    return migrated
+
+
 def _cleanup_legacy_payload(root: Path, source_root: Path) -> tuple[bool, tuple[str, ...]]:
     """Remove only byte-and-mode-identical files from the former root layout."""
 
     if root.resolve() == source_root.resolve():
         return False, ()
-    conflicts = _unowned_gemini_paths(root)
+    conflicts: set[str] = set()
     proofs = _recognized_legacy_payload_proofs(root, source_root)
     if not proofs:
+        conflicts.update(_unowned_gemini_paths(root))
         for relative in _LEGACY_SIGNATURE_PATHS:
             if (root / relative).exists():
                 conflicts.add(relative.as_posix())
         return False, tuple(sorted(conflicts))
 
-    changed = False
+    semantically_migrated = _remove_legacy_shared_adapter_nodes(root, proofs)
+    changed = bool(semantically_migrated)
     cleanup_roots = (
         root / "agents",
         root / "scripts",
         root / "solomon_harness",
-        root / ".claude" / "commands",
+        root / ".claude",
+        root / ".gemini",
     )
     for cleanup_root in cleanup_roots:
         if cleanup_root.is_symlink():
@@ -891,13 +1507,17 @@ def _cleanup_legacy_payload(root: Path, source_root: Path) -> tuple[bool, tuple[
             if target.is_dir() and not target.is_symlink():
                 continue
             relative = target.relative_to(root)
-            candidates = proofs.get(relative, set())
-            if target.is_symlink() or not any(
-                _matches_payload_proof(root, relative, proof) for proof in candidates
+            if relative in semantically_migrated:
+                continue
+            if target.is_symlink() or not _matches_any_legacy_proof(
+                root,
+                relative,
+                proofs,
             ):
                 conflicts.add(relative.as_posix())
                 continue
             target.unlink()
+            record_install_mutation(target)
             changed = True
         for directory in sorted(
             (path for path in cleanup_root.rglob("*") if path.is_dir()),
@@ -908,15 +1528,37 @@ def _cleanup_legacy_payload(root: Path, source_root: Path) -> tuple[bool, tuple[
                 directory.rmdir()
             except OSError:
                 pass
+            else:
+                record_install_mutation(directory)
         try:
             cleanup_root.rmdir()
         except OSError:
             pass
+        else:
+            record_install_mutation(cleanup_root)
+
+    scanned_prefixes = {"agents", "scripts", "solomon_harness", ".claude", ".gemini"}
+    protected = {root, root / "docs", root / ".github"}
+    for relative in sorted(proofs):
+        if relative.parts[0] in scanned_prefixes or relative in semantically_migrated:
+            continue
+        target = _confined_path(root, relative.as_posix())
+        if not (target.exists() or target.is_symlink()):
+            continue
+        if target.is_symlink() or not _matches_any_legacy_proof(root, relative, proofs):
+            conflicts.add(relative.as_posix())
+            continue
+        target.unlink()
+        record_install_mutation(target)
+        _remove_empty_parents(target, root, protected)
+        changed = True
 
     return changed, tuple(sorted(conflicts))
 
 
-def _migrate_legacy(root: Path) -> tuple[bool, tuple[str, ...]]:
+def _migrate_legacy(
+    root: Path,
+) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
     paths = HarnessPaths(root)
     _validate_legacy_paths(paths)
     handoff_pairs = _handoff_migration_pairs(paths)
@@ -927,9 +1569,11 @@ def _migrate_legacy(root: Path) -> tuple[bool, tuple[str, ...]]:
         if not target.exists():
             changed |= _atomic_write(target, source.read_bytes(), _mode(source))
             source.unlink()
+            record_install_mutation(source)
             changed = True
         elif _same_payload_file(target, source):
             source.unlink()
+            record_install_mutation(source)
             changed = True
         else:
             conflicts.append(_relative(root, source))
@@ -939,9 +1583,11 @@ def _migrate_legacy(root: Path) -> tuple[bool, tuple[str, ...]]:
         if not paths.config.exists():
             changed |= _atomic_write(paths.config, content, _mode(paths.legacy_config))
             paths.legacy_config.unlink()
+            record_install_mutation(paths.legacy_config)
             changed = True
         elif paths.config.read_bytes() == content:
             paths.legacy_config.unlink()
+            record_install_mutation(paths.legacy_config)
             changed = True
         else:
             conflicts.append(_relative(root, paths.legacy_config))
@@ -958,19 +1604,35 @@ def _migrate_legacy(root: Path) -> tuple[bool, tuple[str, ...]]:
                 root,
                 (paths.state / relative).relative_to(root).as_posix(),
             )
+            changed |= _ensure_private_state_directories(paths.state, target.parent)
+            target_mode = (
+                _PRIVATE_FILE_MODE
+                if relative.parts and relative.parts[0] == "memory-mirror"
+                else _mode(source)
+            )
             if not target.exists():
-                changed |= _atomic_write(target, source.read_bytes(), _mode(source))
+                changed |= _atomic_write(target, source.read_bytes(), target_mode)
                 source.unlink()
+                record_install_mutation(source)
                 changed = True
-            elif _same_payload_file(target, source):
+            elif target.is_file() and target.read_bytes() == source.read_bytes():
+                if os.name != "nt" and _mode(target) != target_mode:
+                    os.chmod(target, target_mode)
+                    record_install_mutation(target)
                 source.unlink()
+                record_install_mutation(source)
                 changed = True
             else:
                 conflicts.append(_relative(root, source))
 
+    sqlite_changed, sqlite_conflicts = _migrate_legacy_sqlite(paths)
+    changed |= sqlite_changed
+    conflicts.extend(sqlite_conflicts)
+
     for legacy in (
         paths.legacy_config.parent,
         paths.legacy_state,
+        paths.legacy_memory,
         paths.previous_handoffs,
     ):
         if not legacy.exists():
@@ -984,13 +1646,21 @@ def _migrate_legacy(root: Path) -> tuple[bool, tuple[str, ...]]:
                 directory.rmdir()
             except OSError:
                 pass
+            else:
+                record_install_mutation(directory)
         try:
             legacy.rmdir()
             changed = True
         except OSError:
             pass
+        else:
+            record_install_mutation(legacy)
 
-    return changed, tuple(sorted(set(conflicts)))
+    return (
+        changed,
+        tuple(sorted(set(conflicts))),
+        tuple(sorted(set(sqlite_conflicts))),
+    )
 
 
 def _entry(relative: str, path: Path, owner: str, strategy: str) -> dict[str, Any]:
@@ -1018,97 +1688,41 @@ def _owned_entry_is_unchanged(path: Path, entry: dict[str, Any]) -> bool:
     )
 
 
-def _contains_solomon_hook(value: Any, *, host: str) -> bool:
-    text = json.dumps(value, sort_keys=True)
-    return "solomon_harness.cli host-hook" in text and f"--host {host}" in text
+def _compiled_adapter_entry(
+    relative: str,
+    target: Path,
+    previous_entries: dict[str, dict[str, Any]],
+    snapshot: _RollbackSnapshot,
+) -> dict[str, Any]:
+    """Build one adapter manifest entry without losing its creation proof."""
 
-
-def _marked_fragment(text: str, start: str, end: str) -> str:
-    if text.count(start) != 1 or text.count(end) != 1:
-        raise InstallConflictError("Managed adapter markers are missing or ambiguous")
-    _, remainder = text.split(start, 1)
-    managed, _ = remainder.split(end, 1)
-    return f"{start}{managed}{end}"
-
-
-def _managed_json_fragment(document: dict[str, Any], relative: str) -> Any:
-    if relative in {".claude/settings.json", ".codex/hooks.json"}:
-        host = "claude" if relative == ".claude/settings.json" else "codex"
-        hooks = document.get("hooks")
-        managed: dict[str, list[Any]] = {}
-        if isinstance(hooks, dict):
-            for event in sorted(hooks):
-                values = hooks[event]
-                if not isinstance(values, list):
-                    continue
-                nodes = [item for item in values if _contains_solomon_hook(item, host=host)]
-                if nodes:
-                    managed[event] = nodes
-        return {"hooks": managed}
-    if relative == ".agents/hooks.json":
-        names = ("solomon-loop-guard", "solomon-session-resume")
-        return {name: document[name] for name in names if name in document}
-    if relative in {
-        ".agents/mcp_config.json",
-        ".agents/plugins/solomon/mcp_config.json",
-        ".mcp.json",
+    adapter_entry = _entry(
+        relative,
+        target,
+        "adapter",
+        _strategy_for_adapter(relative),
+    )
+    if adapter_entry["strategy"] in {
+        "json-merge",
+        "marker-merge",
+        "toml-merge",
     }:
-        servers = document.get("mcpServers")
-        value = servers.get("solomon-memory") if isinstance(servers, dict) else None
-        return {"mcpServers": {"solomon-memory": value}}
-    raise InstallConflictError(f"Unsupported managed JSON adapter: {relative}")
+        adapter_entry["managed_sha256"] = _managed_adapter_digest(
+            target,
+            relative,
+        )
+    previous_adapter = previous_entries.get(relative, {})
+    if "created" in previous_adapter:
+        adapter_entry["created"] = bool(previous_adapter["created"])
+        if "base_sha256" in previous_adapter:
+            adapter_entry["base_sha256"] = previous_adapter["base_sha256"]
+        return adapter_entry
 
-
-def _managed_adapter_digest(path: Path, relative: str) -> str:
-    strategy = _strategy_for_adapter(relative)
-    try:
-        if strategy == "marker-merge":
-            fragment = _marked_fragment(
-                path.read_text(encoding="utf-8"),
-                _TEXT_START,
-                _TEXT_END,
-            )
-            content = fragment.encode()
-        elif strategy == "toml-merge":
-            fragment = _marked_fragment(
-                path.read_text(encoding="utf-8"),
-                _TOML_START,
-                _TOML_END,
-            )
-            content = fragment.encode()
-        elif strategy == "json-merge":
-            document = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(document, dict):
-                raise InstallConflictError(f"Managed JSON adapter is not an object: {path}")
-            fragment = _managed_json_fragment(document, relative)
-            content = json.dumps(
-                fragment,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode()
-        else:
-            raise InstallConflictError(f"Adapter is not merge-managed: {relative}")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise InstallConflictError(f"Cannot inspect managed adapter {path}") from exc
-    return _sha256(content)
-
-
-def _strategy_for_adapter(relative: str) -> str:
-    if relative in {
-        ".claude/settings.json",
-        ".mcp.json",
-        ".agents/hooks.json",
-        ".agents/mcp_config.json",
-        ".agents/plugins/solomon/mcp_config.json",
-        ".codex/hooks.json",
-    }:
-        return "json-merge"
-    if relative == ".codex/config.toml":
-        return "toml-merge"
-    if relative in {"AGENTS.md", ".claude/CLAUDE.md"}:
-        return "marker-merge"
-    return "replace"
+    original = snapshot.files.get(target, _FileSnapshot("missing"))
+    adapter_entry["created"] = original.kind == "missing"
+    if original.kind == "file" and isinstance(original.content, bytes):
+        adapter_entry["base_sha256"] = _sha256(original.content)
+    return adapter_entry
 
 
 def _transaction_targets(
@@ -1172,6 +1786,7 @@ def _transaction_targets(
         )
 
     targets = {_confined_path(workspace, relative) for relative in relative_targets}
+    targets.add(operation_lock_path(workspace))
     targets.add(paths.manifest)
     targets.add(paths.legacy_config)
     for previous_handoff, destination in _handoff_migration_pairs(paths):
@@ -1196,6 +1811,10 @@ def _transaction_targets(
                     destination.relative_to(workspace).as_posix(),
                 )
             )
+    legacy_sqlite_files = _sqlite_files(paths.legacy_sqlite_database)
+    if any(path.exists() or path.is_symlink() for path in legacy_sqlite_files):
+        targets.update(legacy_sqlite_files)
+        targets.update(_sqlite_files(paths.sqlite_database))
     return targets
 
 
@@ -1212,24 +1831,57 @@ def install_project(
     *,
     source_root: str | Path | None = None,
 ) -> InstallResult:
-    """Install or upgrade the harness in ``root`` without overwriting user edits."""
+    """Install or upgrade the harness in ``root`` without overwriting user edits.
+
+    Preconditions:
+        ``root`` is a writable consumer workspace and ``source_root`` resolves to
+        a valid allowlisted Solomon payload.
+    Postconditions:
+        Canonical content and verified mutable state live below
+        ``.agents/solomon``; the manifest describes every managed immutable file.
+    Invariants:
+        Project-owned files, modified adapters, tenant configuration, and memory
+        state are never overwritten without an ownership or parity proof.
+    Idempotency:
+        Repeating the operation with unchanged source and workspace state changes
+        no managed bytes, modes, or modification times.
+    Errors:
+        Raises :class:`InstallConflictError` for unsafe paths, invalid metadata,
+        or unverifiable state, and rolls back other failures before re-raising.
+    """
 
     workspace = Path(root).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
-    source = _resolve_source_root(source_root)
-    paths = HarnessPaths(workspace)
-    previous = load_manifest(workspace)
-    previous_entries = _manifest_entries(previous) if previous else {}
-    desired = _build_desired(source)
-    snapshot = _RollbackSnapshot(
-        workspace,
-        _transaction_targets(workspace, source, desired, previous_entries),
-    )
-    try:
-        return _apply_install(workspace, source, paths, previous_entries, desired, snapshot)
-    except BaseException:
-        snapshot.rollback()
-        raise
+    with non_materializing_operation_lock(workspace):
+        source = _resolve_source_root(source_root)
+        paths = HarnessPaths(workspace)
+        previous = load_manifest(workspace)
+        previous_entries = _manifest_entries(previous) if previous else {}
+        desired = _build_desired(source)
+        snapshot = _RollbackSnapshot(
+            workspace,
+            _transaction_targets(workspace, source, desired, previous_entries),
+        )
+        try:
+            with observe_install_mutations(snapshot.checkpoint, root=workspace):
+                with install_operation_lock(workspace):
+                    return _apply_install(
+                        workspace,
+                        source,
+                        paths,
+                        previous_entries,
+                        desired,
+                        snapshot,
+                    )
+        except BaseException as exc:
+            rollback_conflicts = snapshot.rollback()
+            if rollback_conflicts:
+                detail = ", ".join(rollback_conflicts)
+                raise InstallConflictError(
+                    "Rollback preserved paths changed outside the install "
+                    f"transaction: {detail}"
+                ) from exc
+            raise
 
 
 def _apply_install(
@@ -1240,18 +1892,32 @@ def _apply_install(
     desired: dict[str, _DesiredFile],
     snapshot: _RollbackSnapshot,
 ) -> InstallResult:
-    changed, migration_conflicts = _migrate_legacy(workspace)
+    changed, migration_conflicts, migration_blocking = _migrate_legacy(workspace)
     conflicts = set(migration_conflicts)
+    blocking_conflicts = set(migration_blocking)
     entries: dict[str, dict[str, Any]] = {}
 
     for relative, specification in sorted(desired.items()):
         target = _confined_path(workspace, relative)
+        project_parent = bool(
+            specification.owner == "project"
+            and relative != _CONFIG_PATH
+            and not relative.startswith(_STATE_PREFIX)
+        )
+        ensure_install_parent(
+            workspace,
+            target,
+            private_root=paths.state,
+            allow_unsafe_existing=project_parent,
+        )
         old = previous_entries.get(relative)
         desired_hash = _sha256(specification.content)
 
         if specification.strategy == "create-only" and target.exists():
             if target.is_symlink() or not target.is_file():
                 conflicts.add(relative)
+                if _desired_conflict_is_blocking(relative):
+                    blocking_conflicts.add(relative)
                 continue
             if old and (
                 target.read_bytes() == specification.content
@@ -1267,6 +1933,8 @@ def _apply_install(
 
         if target.exists() and (target.is_symlink() or not target.is_file()):
             conflicts.add(relative)
+            if _desired_conflict_is_blocking(relative):
+                blocking_conflicts.add(relative)
             if old:
                 entries[relative] = dict(old)
             continue
@@ -1277,15 +1945,24 @@ def _apply_install(
             )
             if not matches_desired and (old is None or not _owned_entry_is_unchanged(target, old)):
                 conflicts.add(relative)
+                if _desired_conflict_is_blocking(relative):
+                    blocking_conflicts.add(relative)
                 if old:
                     entries[relative] = dict(old)
                 continue
 
-        changed |= _atomic_write(target, specification.content, specification.mode)
+        changed |= _atomic_write(
+            target,
+            specification.content,
+            specification.mode,
+            allow_unsafe_existing_parent=project_parent,
+        )
         if not relative.startswith(_STATE_PREFIX) and relative != _CONFIG_PATH:
             entries[relative] = _entry(
                 relative, target, specification.owner, specification.strategy
             )
+
+    changed |= _harden_existing_state_directories(paths.state)
 
     cleanup_changed, cleanup_conflicts = _cleanup_legacy_payload(workspace, source)
     changed |= cleanup_changed
@@ -1299,38 +1976,19 @@ def _apply_install(
     adapter_result = compile_adapters(workspace)
     changed |= adapter_result.changed
     conflicts.update(adapter_result.conflicts)
+    blocking_conflicts.update(adapter_result.conflicts)
     for relative in adapter_result.conflicts:
         if relative in previous_entries:
             entries[relative] = dict(previous_entries[relative])
     for relative in adapter_result.managed_paths:
         target = _confined_path(workspace, relative)
         if target.is_file():
-            adapter_entry = _entry(
+            entries[relative] = _compiled_adapter_entry(
                 relative,
                 target,
-                "adapter",
-                _strategy_for_adapter(relative),
+                previous_entries,
+                snapshot,
             )
-            if adapter_entry["strategy"] in {
-                "json-merge",
-                "marker-merge",
-                "toml-merge",
-            }:
-                adapter_entry["managed_sha256"] = _managed_adapter_digest(
-                    target,
-                    relative,
-                )
-            previous_adapter = previous_entries.get(relative, {})
-            if "created" in previous_adapter:
-                adapter_entry["created"] = bool(previous_adapter["created"])
-                if "base_sha256" in previous_adapter:
-                    adapter_entry["base_sha256"] = previous_adapter["base_sha256"]
-            else:
-                original = snapshot.files.get(target, _FileSnapshot("missing"))
-                adapter_entry["created"] = original.kind == "missing"
-                if original.kind == "file" and isinstance(original.content, bytes):
-                    adapter_entry["base_sha256"] = _sha256(original.content)
-            entries[relative] = adapter_entry
 
     removed: list[str] = []
     protected = {paths.root, paths.agents_root, paths.solomon, paths.config_dir, paths.state}
@@ -1347,6 +2005,7 @@ def _apply_install(
             continue
         if _owned_entry_is_unchanged(target, old):
             target.unlink()
+            record_install_mutation(target)
             removed.append(relative)
             changed = True
             _remove_empty_parents(target, workspace, protected)
@@ -1362,6 +2021,7 @@ def _apply_install(
         "migrations": [
             "canonical-handoffs-to-state",
             "legacy-agent-config",
+            "legacy-memory-state",
             "legacy-solomon-state",
         ],
         "entries": [entries[name] for name in sorted(entries)],
@@ -1373,6 +2033,134 @@ def _apply_install(
         conflicts=tuple(sorted(conflicts)),
         removed=tuple(sorted(removed)),
         manifest_path=paths.manifest,
+        blocking_conflicts=tuple(sorted(blocking_conflicts)),
+    )
+
+
+def compile_project_adapters(root: str | Path) -> InstallResult:
+    """Reconcile an installed consumer's host adapters transactionally.
+
+    Unlike an install or upgrade, compilation treats the existing canonical
+    catalog as its input. It therefore updates only ``owner=adapter`` manifest
+    entries and preserves every core and project entry byte-for-byte.
+    """
+
+    workspace = Path(root).expanduser().resolve()
+    paths = HarnessPaths(workspace)
+    with non_materializing_operation_lock(workspace):
+        manifest = load_manifest(workspace)
+        if not manifest:
+            raise InstallConflictError(
+                "Adapter compilation requires a valid installed manifest"
+            )
+        previous_entries = _manifest_entries(manifest)
+        snapshot = _RollbackSnapshot(
+            workspace,
+            _transaction_targets(workspace, workspace, {}, previous_entries),
+        )
+        try:
+            with observe_install_mutations(snapshot.checkpoint, root=workspace):
+                with install_operation_lock(workspace):
+                    return _apply_adapter_compile(
+                        workspace,
+                        paths,
+                        manifest,
+                        previous_entries,
+                        snapshot,
+                    )
+        except BaseException as exc:
+            rollback_conflicts = snapshot.rollback()
+            if rollback_conflicts:
+                detail = ", ".join(rollback_conflicts)
+                raise InstallConflictError(
+                    "Rollback preserved paths changed outside the compile "
+                    f"transaction: {detail}"
+                ) from exc
+            raise
+
+
+def _apply_adapter_compile(
+    workspace: Path,
+    paths: HarnessPaths,
+    manifest: dict[str, Any],
+    previous_entries: dict[str, dict[str, Any]],
+    snapshot: _RollbackSnapshot,
+) -> InstallResult:
+    """Compile adapters and atomically refresh their ownership records."""
+
+    from solomon_harness.host_adapters import compile_adapters
+
+    adapter_result = compile_adapters(workspace)
+    entries = {relative: dict(entry) for relative, entry in previous_entries.items()}
+    conflicts = set(adapter_result.conflicts)
+    managed = set(adapter_result.managed_paths)
+
+    for relative in sorted(managed):
+        target = _confined_path(workspace, relative)
+        if target.is_symlink() or not target.is_file():
+            conflicts.add(relative)
+            continue
+        entries[relative] = _compiled_adapter_entry(
+            relative,
+            target,
+            previous_entries,
+            snapshot,
+        )
+
+    changed = adapter_result.changed
+    removed: list[str] = []
+    protected = {paths.root, paths.agents_root, paths.solomon, paths.config_dir, paths.state}
+    for relative, previous in sorted(previous_entries.items()):
+        if (
+            previous.get("owner") != "adapter"
+            or relative in managed
+            or relative in conflicts
+        ):
+            continue
+        target = _confined_path(workspace, relative)
+        if not target.exists():
+            entries.pop(relative, None)
+            continue
+        if target.is_symlink() or not target.is_file():
+            conflicts.add(relative)
+            continue
+
+        strategy = previous.get("strategy")
+        if strategy in {"json-merge", "toml-merge", "marker-merge"}:
+            if not _managed_adapter_is_unchanged(target, relative, previous):
+                conflicts.add(relative)
+                continue
+            adapter_changed, empty = _remove_merged_adapter(target, relative)
+            changed |= adapter_changed
+            if empty and previous.get("created"):
+                target.unlink(missing_ok=True)
+                record_install_mutation(target)
+                _remove_empty_parents(target, workspace, protected)
+                changed = True
+        else:
+            if not _owned_entry_is_unchanged(target, previous):
+                conflicts.add(relative)
+                continue
+            target.unlink()
+            record_install_mutation(target)
+            _remove_empty_parents(target, workspace, protected)
+            changed = True
+        entries.pop(relative, None)
+        removed.append(relative)
+
+    updated_manifest = dict(manifest)
+    updated_manifest["entries"] = [entries[name] for name in sorted(entries)]
+    manifest_bytes = (
+        json.dumps(updated_manifest, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    changed |= _atomic_write(paths.manifest, manifest_bytes, 0o644)
+    ordered_conflicts = tuple(sorted(conflicts))
+    return InstallResult(
+        changed=changed,
+        conflicts=ordered_conflicts,
+        removed=tuple(sorted(removed)),
+        manifest_path=paths.manifest,
+        blocking_conflicts=ordered_conflicts,
     )
 
 
@@ -1383,7 +2171,8 @@ def migrate_layout(
 ) -> InstallResult:
     """Migrate legacy paths and finish installation in the canonical layout."""
 
-    return install_project(root, source_root=source_root)
+    workspace = Path(root).expanduser().resolve()
+    return install_project(workspace, source_root=source_root)
 
 
 def _remove_marked_block(path: Path, start: str, end: str) -> tuple[bool, bool]:
@@ -1484,7 +2273,7 @@ def _managed_adapter_is_unchanged(
     if isinstance(expected, str):
         try:
             return _managed_adapter_digest(path, relative) == expected
-        except InstallConflictError:
+        except (AdapterOwnershipError, InstallConflictError):
             return False
     return _owned_entry_is_unchanged(path, entry)
 
@@ -1493,6 +2282,16 @@ def uninstall_project(root: str | Path) -> InstallResult:
     """Remove unchanged owned files while retaining state, config, and user edits."""
 
     paths = HarnessPaths(root)
+    with non_materializing_operation_lock(paths.root):
+        if not load_manifest(paths.root):
+            return InstallResult(False, manifest_path=paths.manifest)
+        with install_operation_lock(paths.root):
+            return _uninstall_project_locked(paths)
+
+
+def _uninstall_project_locked(paths: HarnessPaths) -> InstallResult:
+    """Apply one uninstall while the workspace operation lock is held."""
+
     manifest = load_manifest(paths.root)
     if not manifest:
         return InstallResult(False, manifest_path=paths.manifest)

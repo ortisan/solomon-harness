@@ -266,6 +266,25 @@ class TestApplyProposal(unittest.TestCase):
             rationale="we need this",
             decision_id="123"
         )
+
+        # These workflow tests exercise branching, edits, commits, PR creation,
+        # and broker follow-ups. Adapter routing has a dedicated test below; all
+        # other cases stub only that reconciliation boundary so their intentionally
+        # minimal repositories do not impersonate a valid install/source checkout.
+        if self._testMethodName != (
+            "test_apply_proposal_edits_canonical_catalog_in_one_install_transaction"
+        ):
+            reconcile = mock.patch.object(
+                curator,
+                "_reconcile_host_adapters",
+                return_value=mock.Mock(
+                    changed=False,
+                    conflicts=(),
+                    managed_paths=(),
+                ),
+            )
+            reconcile.start()
+            self.addCleanup(reconcile.stop)
         
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -350,9 +369,9 @@ class TestApplyProposal(unittest.TestCase):
         result = mock.Mock(changed=True, conflicts=(), managed_paths=())
         with (
             mock.patch(
-                "solomon_harness.install_layout.install_project",
+                "solomon_harness.install_layout.compile_project_adapters",
                 return_value=result,
-            ) as install,
+            ) as compile_project,
             mock.patch(
                 "solomon_harness.host_adapters.compile_adapters",
                 return_value=result,
@@ -367,7 +386,7 @@ class TestApplyProposal(unittest.TestCase):
 
         expected_agent_dir = os.path.abspath(os.path.join(core, "agents", "qa"))
         self.assertEqual(callback_paths, [expected_agent_dir])
-        install.assert_called_once_with(os.path.abspath(self.root))
+        compile_project.assert_called_once_with(os.path.abspath(self.root))
         compile_.assert_not_called()
         self.assertTrue(
             os.path.isfile(
@@ -769,6 +788,25 @@ class TestBrokerAcquisition(unittest.TestCase):
         }
         with open(os.path.join(self.root, "skill-sources.json"), "w", encoding="utf-8") as f:
             json.dump(self.sources_data, f)
+
+        reconcile_result = mock.Mock(
+            changed=False,
+            conflicts=(),
+            managed_paths=(),
+        )
+        curator_reconcile = mock.patch.object(
+            curator,
+            "_reconcile_host_adapters",
+            return_value=reconcile_result,
+        )
+        bootstrap_reconcile = mock.patch(
+            "solomon_harness.bootstrap._reconcile_host_adapters",
+            return_value=reconcile_result,
+        )
+        curator_reconcile.start()
+        bootstrap_reconcile.start()
+        self.addCleanup(curator_reconcile.stop)
+        self.addCleanup(bootstrap_reconcile.stop)
             
     def tearDown(self):
         self.tmp.cleanup()

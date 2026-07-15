@@ -31,11 +31,16 @@ mismatch means the pid was recycled and the lock is reclaimed.
 """
 
 import json
+import hashlib
+import hmac
 import os
 import re
+import secrets
+import shlex
 import socket
 import subprocess
 import time
+from fnmatch import fnmatchcase
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from solomon_harness.layout import HarnessPaths, confined_path
@@ -43,6 +48,7 @@ from solomon_harness.layout import HarnessPaths, confined_path
 DEFAULT_TTL_SECONDS = 1800.0
 LOCK_FILENAME_GIT = "solomon-loop.lock"
 LOCK_FILENAME_FALLBACK = "loop.lock"
+SHELL_CAPABILITY_ENV = "SOLOMON_SHELL_CAPABILITY"
 
 
 class LoopLockHeld(Exception):
@@ -205,6 +211,7 @@ class LoopLock:
         self._clock = clock
         self._pid_alive = pid_alive
         self._pid_start_time = pid_start_time
+        self._shell_capability: Dict[str, Any] = {}
         # Captured once, at construction: the start time of `self.pid` as this
         # instance would report it if it becomes the holder. Recorded in the
         # lock file so a later `is_stale` check can tell a still-running
@@ -277,22 +284,25 @@ class LoopLock:
     # -- mutation -----------------------------------------------------------
     def _body(self, now: float, acquired_at: Optional[float] = None) -> str:
         acq = acquired_at if acquired_at is not None else now
-        return json.dumps(
-            {
-                "session_id": self.session_id,
-                "pid": self.pid,
-                "pid_started_at": self.pid_started_at,
-                "host": self.host,
-                "stage": self.stage,
-                "acquired_at": _iso(acq),
-                "heartbeat_at": _iso(now),
-            }
-        )
+        body: Dict[str, Any] = {
+            "session_id": self.session_id,
+            "pid": self.pid,
+            "pid_started_at": self.pid_started_at,
+            "host": self.host,
+            "stage": self.stage,
+            "acquired_at": _iso(acq),
+            "heartbeat_at": _iso(now),
+        }
+        if self._shell_capability:
+            body["shell_capability"] = self._shell_capability
+        return json.dumps(body)
 
     def _write_atomically(self, now: float) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         tmp = f"{self.path}.{self.pid}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(self._body(now))
         os.replace(tmp, self.path)
 
@@ -304,7 +314,7 @@ class LoopLock:
         self._reentrant = False
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             info = self.read()
             if info and info.get("session_id") == self.session_id:
@@ -315,6 +325,9 @@ class LoopLock:
                 # holder: it must not remove the lock on release, since the
                 # outer call is still relying on it.
                 self._reentrant = True
+                capability = info.get("shell_capability")
+                if isinstance(capability, dict):
+                    self._shell_capability = capability
                 self._write_atomically(now)
                 return self
             if info and not self.is_stale(info):
@@ -332,6 +345,77 @@ class LoopLock:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(self._body(now))
             return self
+
+    def issue_shell_capability(
+        self,
+        *,
+        scopes: set[str],
+        branches: set[str],
+    ) -> str:
+        """Issue an ephemeral capability bound to this live lock and session.
+
+        The raw bearer token is returned to the trusted ``run_stage`` caller and
+        only its SHA-256 digest is persisted. Scope and branch patterns are
+        explicit, so possession never authorizes an unlisted operation or a
+        protected branch accidentally.
+        """
+
+        info = self.read()
+        if not info or info.get("session_id") != self.session_id or self.is_stale(info):
+            raise RuntimeError("cannot issue a shell capability without owning a live lock")
+        clean_scopes = sorted(
+            scope for scope in scopes if isinstance(scope, str) and scope.strip()
+        )
+        clean_branches = sorted(
+            branch for branch in branches if isinstance(branch, str) and branch.strip()
+        )
+        if not clean_scopes:
+            raise ValueError("a shell capability requires at least one scope")
+        token = secrets.token_urlsafe(32)
+        self._shell_capability = {
+            "session_id": self.session_id,
+            "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            "scopes": clean_scopes,
+            "branches": clean_branches,
+        }
+        self._write_atomically(self._clock())
+        return token
+
+    def shell_capability_allows(
+        self,
+        token: str,
+        *,
+        scope: str,
+        branch: str = "",
+    ) -> bool:
+        """Validate one requested scope against the current live lock record."""
+
+        if not token or not scope:
+            return False
+        info = self.read()
+        if not info or info.get("session_id") != self.session_id or self.is_stale(info):
+            return False
+        capability = info.get("shell_capability")
+        if not isinstance(capability, dict):
+            return False
+        if capability.get("session_id") != self.session_id:
+            return False
+        digest = capability.get("token_sha256")
+        if not isinstance(digest, str) or not hmac.compare_digest(
+            digest,
+            hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        ):
+            return False
+        scopes = capability.get("scopes")
+        if not isinstance(scopes, list) or scope not in scopes:
+            return False
+        if not branch:
+            return True
+        branches = capability.get("branches")
+        return isinstance(branches, list) and any(
+            isinstance(pattern, str) and fnmatchcase(branch, pattern)
+            for pattern in branches
+        )
 
     def heartbeat(self) -> None:
         """Refresh the heartbeat if this session still owns the lock."""
@@ -370,11 +454,66 @@ class LoopLock:
 
 
 _PUSH_OR_MERGE = re.compile(r"\b(git\s+push|gh\s+pr\s+merge|git\s+merge)\b")
+_SHELL_SEPARATORS = {"&", "&&", "(", ")", ";", "|", "||"}
+_GIT_OPTIONS_WITH_VALUES = {
+    "--config-env",
+    "--exec-path",
+    "--git-dir",
+    "--namespace",
+    "--super-prefix",
+    "--work-tree",
+    "-C",
+    "-c",
+}
+_GH_OPTIONS_WITH_VALUES = {"--config", "--hostname", "--repo", "-R"}
+
+
+def _shell_tokens(command: str) -> list[str]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+
+def _command_words(
+    tokens: list[str], start: int, options_with_values: set[str]
+) -> list[str]:
+    words: list[str] = []
+    index = start
+    while index < len(tokens) and tokens[index] not in _SHELL_SEPARATORS:
+        token = tokens[index]
+        if token in options_with_values:
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in options_with_values):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        words.append(token)
+        index += 1
+    return words
 
 
 def is_push_or_merge(command: str) -> bool:
     """True when a shell command pushes or merges (the irreversible operations)."""
-    return bool(_PUSH_OR_MERGE.search(command or ""))
+
+    try:
+        tokens = _shell_tokens(command or "")
+    except ValueError:
+        return bool(_PUSH_OR_MERGE.search(command or ""))
+    for index, token in enumerate(tokens):
+        executable = os.path.basename(token)
+        if executable == "git":
+            words = _command_words(tokens, index + 1, _GIT_OPTIONS_WITH_VALUES)
+            if words and words[0] in {"merge", "push"}:
+                return True
+        elif executable == "gh":
+            words = _command_words(tokens, index + 1, _GH_OPTIONS_WITH_VALUES)
+            if len(words) >= 2 and words[:2] == ["pr", "merge"]:
+                return True
+    return False
 
 
 def guard_verdict(payload: Dict[str, Any], lock: "LoopLock") -> Tuple[bool, str]:

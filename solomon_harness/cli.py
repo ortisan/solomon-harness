@@ -59,9 +59,9 @@ def _generate_integrations(workspace_root: str) -> int:
     from solomon_harness.layout import HarnessPaths
 
     if HarnessPaths(workspace_root).manifest.is_file():
-        from solomon_harness.install_layout import install_project
+        from solomon_harness.install_layout import compile_project_adapters
 
-        conflicts = install_project(workspace_root).conflicts
+        conflicts = compile_project_adapters(workspace_root).conflicts
     else:
         from solomon_harness.host_adapters import compile_adapters
 
@@ -422,8 +422,16 @@ def _session_resume_context(workspace_root: str) -> str:
 
 def _guard_hook_verdict(workspace_root: str, normalized):
     """Apply the existing lock and denylist policy to normalized host facts."""
-    from solomon_harness.host_hooks import HookVerdict
-    from solomon_harness.loop_lock import LoopLock, guard_verdict
+    from solomon_harness.host_hooks import (
+        HookVerdict,
+        analyze_shell_command,
+        current_git_branch,
+    )
+    from solomon_harness.loop_lock import (
+        SHELL_CAPABILITY_ENV,
+        LoopLock,
+        guard_verdict,
+    )
     from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
 
     from pathlib import Path
@@ -440,7 +448,17 @@ def _guard_hook_verdict(workspace_root: str, normalized):
         except ValueError:
             return None, HookVerdict(False, f"Target path escapes the workspace: {raw_path}")
 
-    lock = LoopLock(workspace_root, session_id=normalized.session_id or None)
+    lock_session_id = normalized.session_id or None
+    is_subprocess = os.environ.get("SOLOMON_SUBPROCESS") == "1"
+    if is_subprocess:
+        inherited_session_id = os.environ.get("SOLOMON_SESSION_ID", "").strip()
+        if not inherited_session_id:
+            return HookVerdict(
+                False,
+                "A Solomon subprocess hook is missing its inherited driver identity",
+            )
+        lock_session_id = inherited_session_id
+    lock = LoopLock(workspace_root, session_id=lock_session_id)
     if normalized.tool_kind == "shell":
         payload = {
             "session_id": normalized.session_id,
@@ -452,38 +470,93 @@ def _guard_hook_verdict(workspace_root: str, normalized):
             return HookVerdict(False, reason)
 
     policy = LoopPolicy.from_config(workspace_root)
+    try:
+        from solomon_harness.install_layout import immutable_managed_paths
+
+        protected_paths = set(immutable_managed_paths(root))
+    except RuntimeError as exc:
+        return HookVerdict(False, f"Cannot validate installed harness ownership: {exc}")
     target_paths = list(normalized.target_paths)
     if normalized.tool_kind == "shell":
-        import shlex
-
-        mutators = {
-            "chmod",
-            "chown",
-            "cp",
-            "install",
-            "mkdir",
-            "mv",
-            "rm",
-            "sed",
-            "tee",
-            "touch",
-            "truncate",
-        }
         try:
-            tokens = shlex.split(normalized.command)
-        except ValueError:
-            return HookVerdict(False, "Cannot safely parse shell command")
-        if any(os.path.basename(token) in mutators for token in tokens):
-            target_paths.extend(
-                token.strip(";,|&<>()")
-                for token in tokens
-                if "/" in token and not token.startswith("-")
+            analysis = analyze_shell_command(normalized.command)
+            target_paths.extend(analysis.write_paths)
+        except ValueError as exc:
+            return HookVerdict(
+                False,
+                "Cannot safely parse shell command against the mandatory loop denylist: "
+                f"{exc}",
             )
+        for request in analysis.capability_requests:
+            if request.scope == "human:merge":
+                if is_subprocess:
+                    return HookVerdict(
+                        False,
+                        "Merge remains a human confirmation gate and is denied in a "
+                        "Solomon subprocess",
+                    )
+                continue
+            if not is_subprocess:
+                continue
+            branch = request.branch
+            if branch == "@current":
+                try:
+                    branch = current_git_branch(workspace_root, request.cwd)
+                except ValueError as exc:
+                    return HookVerdict(False, str(exc))
+            if request.scope == "git:worktree":
+                target = Path(request.target_path)
+                if not target.is_absolute():
+                    base = Path(request.cwd)
+                    if not base.is_absolute():
+                        base = root / base
+                    target = base / target
+                expected = (
+                    root.parent
+                    / f"{root.name}-worktrees"
+                    / branch.replace("/", "-")
+                )
+                if target.resolve(strict=False) != expected.resolve(strict=False):
+                    return HookVerdict(
+                        False,
+                        "Git worktree target is denied outside the deterministic sibling layout",
+                    )
+            token = os.environ.get(SHELL_CAPABILITY_ENV, "")
+            if not lock.shell_capability_allows(
+                token,
+                scope=request.scope,
+                branch=branch,
+            ):
+                return HookVerdict(
+                    False,
+                    "The Solomon subprocess lacks a valid shell capability for "
+                    f"{request.scope}"
+                    + (f" on branch {branch}" if branch else ""),
+                )
+
+    if is_subprocess and policy.level == "L1" and target_paths:
+        return HookVerdict(
+            False,
+            "L1 is report-only and cannot write local files",
+        )
 
     for path in target_paths:
         relative, invalid = guarded_path(path)
         if invalid is not None:
             return invalid
+        assert relative is not None  # noqa: S101 - guarded_path established this invariant
+        if any(
+            relative in {"", "."}
+            or relative == protected
+            or relative.startswith(protected.rstrip("/") + "/")
+            or protected.startswith(relative.rstrip("/") + "/")
+            for protected in protected_paths
+        ):
+            return HookVerdict(
+                False,
+                "Managed harness path is immutable under the mandatory loop "
+                f"denylist during a run: {relative}",
+            )
         payload = {
             "session_id": normalized.session_id,
             "tool_name": "Write",
@@ -608,36 +681,28 @@ def handle_uninstall(workspace_root: str, *, dry_run: bool) -> int:
 
 
 def handle_loop_guard(workspace_root: str) -> None:
-    """PreToolUse hook: block unsafe tool calls under the loop's guardrails.
-
-    Blocks a `git push` / `gh pr merge` issued while another live driver holds the
-    lock, and a file-write tool (Edit/Write/MultiEdit) that targets a denylisted
-    path, including project config. This legacy entrypoint reads a Claude-format
-    payload; new Claude, AGY, and Codex adapters use ``host-hook`` for normalized
-    input and native verdict serialization. It fails open because ``run_stage`` is
-    the portable enforcement of record.
-    """
+    """Apply the shared fail-closed policy to the legacy Claude hook payload."""
     import json as _json
 
     try:
         raw = sys.stdin.read()
         payload = _json.loads(raw) if raw.strip() else {}
-    except Exception:
-        sys.exit(0)
+        if not isinstance(payload, dict):
+            raise TypeError("hook payload must be an object")
+    except (TypeError, ValueError, _json.JSONDecodeError) as exc:
+        print(f"Invalid hook payload: {type(exc).__name__}", file=sys.stderr)
+        sys.exit(2)
 
     try:
-        from solomon_harness.loop_lock import LoopLock, guard_verdict
-        from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
+        from solomon_harness.host_hooks import normalize_hook_input
 
-        lock = LoopLock(workspace_root, session_id=payload.get("session_id"))
-        block, reason = guard_verdict(payload, lock)
-        if not block:
-            block, reason = denied_write_verdict(payload, LoopPolicy.from_config(workspace_root))
-    except Exception:
-        sys.exit(0)
-
-    if block:
-        print(reason, file=sys.stderr)
+        normalized = normalize_hook_input("claude", payload)
+        verdict = _guard_hook_verdict(workspace_root, normalized)
+    except Exception as exc:
+        print(f"Hook policy evaluation failed: {type(exc).__name__}", file=sys.stderr)
+        sys.exit(2)
+    if not verdict.allow:
+        print(verdict.reason or "Blocked by Solomon policy", file=sys.stderr)
         sys.exit(2)
     sys.exit(0)
 

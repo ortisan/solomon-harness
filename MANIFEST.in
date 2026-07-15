@@ -4,6 +4,7 @@ include docker-compose.yml
 include uv.lock
 include skill-sources.json
 include solomon_harness/legacy_payloads/v0.11.0.tsv
+include solomon_harness/legacy_payloads/v0.11.0-main.tsv
 
 include solomon_harness/catalog/workflows/solomon-bug.md
 include solomon_harness/catalog/workflows/solomon-idea.md

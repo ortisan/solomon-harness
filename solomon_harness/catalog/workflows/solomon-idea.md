@@ -34,7 +34,7 @@ If `{{arguments}}` is empty, ask the user for the idea in one line and stop.
    refine and re-show.
 
 3. **Create the issue** using the Idea body template from the workflow doc. Ensure the
-   standard labels exist first with `uv run python -m solomon_harness.github ensure-labels`:
+   standard labels exist first with `uv run python -I -m solomon_harness.github ensure-labels`:
    ```bash
    gh issue create --title "Idea: <concise title>" --label "type:idea" \
      --body "<JTBD / Opportunity / Riskiest assumption / Evidence to promote>"
@@ -43,8 +43,8 @@ If `{{arguments}}` is empty, ask the user for the idea in one line and stop.
 
 4. **Place it on the board** in the Ideas column:
    ```bash
-   uv run python -m solomon_harness.github ensure-board
-   uv run python -m solomon_harness.github set-status --issue <n> --status "Ideas"
+   uv run python -I -m solomon_harness.github ensure-board
+   uv run python -I -m solomon_harness.github set-status --issue <n> --status "Ideas"
    ```
 
 5. **Persist to memory** per the handoff contract:

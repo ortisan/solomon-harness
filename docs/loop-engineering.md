@@ -90,7 +90,7 @@ auditable record are guaranteed.
 | Single-driver lock (git-common-dir anchor, O_EXCL, heartbeat TTL, reclaim) | `solomon_harness/loop_lock.py` |
 | Per-issue claim/lease (git-ref CAS, TTL + heartbeat, fail-closed reclaim) | `solomon_harness/claim.py` |
 | Portable gate for mutating stages | `run_stage` in `solomon_harness/workflows.py` |
-| Native pre-tool guards (defense-in-depth, fail-open) | `host-hook pre-tool-use` + `.claude/settings.json`, `.agents/hooks.json`, inline hooks in `.codex/config.toml` |
+| Native pre-tool guards (classified shell forms, scoped Git capability, fail-closed evaluation) | `host-hook pre-tool-use` + `.claude/settings.json`, `.agents/hooks.json`, inline hooks in `.codex/config.toml` |
 | Lock inspection / recovery | `solomon-harness loop-lock status` / `release` |
 | Run-log ledger | `loop_runs` table + `save_loop_run` / `list_loop_runs` |
 | Read-only activity feed | `solomon_harness/loop_log.py` + `solomon-harness log` |

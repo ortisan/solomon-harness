@@ -176,9 +176,9 @@ class TestFetchSkills(unittest.TestCase):
         with (
             mock.patch.object(self.mod, "_clone", side_effect=fake_clone),
             mock.patch(
-                "solomon_harness.install_layout.install_project",
+                "solomon_harness.install_layout.compile_project_adapters",
                 return_value=result,
-            ) as install,
+            ) as compile_project,
             mock.patch(
                 "solomon_harness.host_adapters.compile_adapters",
                 return_value=result,
@@ -195,7 +195,7 @@ class TestFetchSkills(unittest.TestCase):
             )
         )
         self.assertFalse(os.path.exists(os.path.join(self.root, "agents")))
-        install.assert_called_once_with(self.root)
+        compile_project.assert_called_once_with(self.root)
         compile_.assert_not_called()
 
     def test_add_rejects_a_symlinked_canonical_agent_catalog(self):
@@ -214,6 +214,57 @@ class TestFetchSkills(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         clone.assert_not_called()
         self.assertEqual(os.listdir(os.path.join(outside, "qa")), [])
+
+    def test_add_does_not_execute_a_symlinked_document_skills_script(self):
+        core = os.path.join(self.root, ".agents", "solomon")
+        agent_dir = os.path.join(core, "agents", "qa")
+        os.makedirs(agent_dir)
+        with open(
+            os.path.join(core, "skill-sources.json"), "w", encoding="utf-8"
+        ) as f:
+            f.write(
+                '{"sources":[{"name":"local","url":"file:///skills"}]}'
+            )
+        scripts = os.path.join(core, "scripts")
+        os.makedirs(scripts)
+        outside = os.path.join(self.root, "outside-document-skills.py")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("raise RuntimeError('must not execute')\n")
+        os.symlink(outside, os.path.join(scripts, "document-skills.py"))
+
+        def fake_clone(_source, destination):
+            source_skills = os.path.join(destination, "skills")
+            os.makedirs(source_skills)
+            with open(
+                os.path.join(source_skills, "contract-check.md"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write("# Contract check\n")
+
+        with (
+            mock.patch.object(
+                self.mod, "_clone", side_effect=fake_clone
+            ) as clone,
+            mock.patch.object(self.mod.subprocess, "run") as run,
+            mock.patch.object(
+                self.mod,
+                "_reconcile_host_adapters",
+                return_value=SimpleNamespace(conflicts=()),
+            ),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            exit_code = self.mod.cmd_add(
+                self.root, "local", "contract-check", "qa"
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("symlink", stderr.getvalue())
+        clone.assert_not_called()
+        run.assert_not_called()
+        self.assertFalse(
+            os.path.exists(os.path.join(agent_dir, "skills", "contract-check.md"))
+        )
 
 
 if __name__ == "__main__":

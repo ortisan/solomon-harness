@@ -83,10 +83,14 @@ _TEMPLATE_FILES = (
     "solomon_harness/templates/wiki/Technical-Documentation.md.template",
     "solomon_harness/templates/wiki/_Sidebar.md.template",
 )
-_LEGACY_PAYLOAD_PROOF_FILES = ("solomon_harness/legacy_payloads/v0.11.0.tsv",)
+_LEGACY_PAYLOAD_PROOF_FILES = (
+    "solomon_harness/legacy_payloads/v0.11.0.tsv",
+    "solomon_harness/legacy_payloads/v0.11.0-main.tsv",
+)
 _PACKAGE_PYTHON_FILES = (
     "solomon_harness/__init__.py",
     "solomon_harness/__main__.py",
+    "solomon_harness/adapter_ownership.py",
     "solomon_harness/agent_builder.py",
     "solomon_harness/agent_selection.py",
     "solomon_harness/bootstrap.py",
@@ -103,11 +107,18 @@ _PACKAGE_PYTHON_FILES = (
     "solomon_harness/frontmatter.py",
     "solomon_harness/github.py",
     "solomon_harness/healthcheck.py",
+    "solomon_harness/host_adapter_agy.py",
+    "solomon_harness/host_adapter_claude.py",
+    "solomon_harness/host_adapter_codex.py",
+    "solomon_harness/host_adapter_common.py",
+    "solomon_harness/host_adapter_contract.py",
     "solomon_harness/home.py",
     "solomon_harness/host_adapters.py",
     "solomon_harness/host_hooks.py",
     "solomon_harness/install_global.py",
     "solomon_harness/install_layout.py",
+    "solomon_harness/install_lock.py",
+    "solomon_harness/install_transaction.py",
     "solomon_harness/layout.py",
     "solomon_harness/loop_budget.py",
     "solomon_harness/loop_lock.py",

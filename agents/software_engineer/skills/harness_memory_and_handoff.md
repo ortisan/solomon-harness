@@ -9,7 +9,7 @@ Persist the reasoning and state of your work to the project memory so the next a
 
 ## Where memory lives and how you reach it
 
-The store is SurrealDB-primary with a SQLite fallback (`solomon_harness/tools/database_client.py`); backend and credentials come from the agent's `.agent/config.json`. Reach it two ways: the `solomon-memory` MCP server (registered in `.mcp.json`), which exposes each operation as a tool you call directly, or `DatabaseClient(harness_dir=...)` from code. Prefer the MCP tools during a work session; reserve `DatabaseClient` for scripts and tests. The write tools are append-or-upsert and never block your task on failure of the store, so treat a write error as a logged warning, not a crash, but do verify the write landed before you rely on it for resume.
+The store is SurrealDB-primary with a SQLite fallback (`solomon_harness/tools/database_client.py`); backend and credentials come from `.agents/solomon/config/project.json`. Reach it two ways: the `solomon-memory` MCP server (registered in `.mcp.json`), which exposes each operation as a tool you call directly, or `DatabaseClient(harness_dir=...)` from code. Prefer the MCP tools during a work session; reserve `DatabaseClient` for scripts and tests. The write tools are append-or-upsert and never block your task on failure of the store, so treat a write error as a logged warning, not a crash, but do verify the write landed before you rely on it for resume.
 
 ## save_decision — the non-obvious choices
 

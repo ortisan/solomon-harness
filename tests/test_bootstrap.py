@@ -27,6 +27,77 @@ def test_scaffold_agents_rejects_a_symlinked_canonical_catalog(tmp_path):
     assert not (outside / "qa" / "main.py").exists()
 
 
+def test_scaffold_agents_rejects_a_payload_template_through_a_symlink(
+    tmp_path, monkeypatch
+):
+    from solomon_harness import bootstrap
+
+    workspace = tmp_path / "workspace"
+    role = workspace / "agents" / "qa" / "agents" / "qa.md"
+    role.parent.mkdir(parents=True)
+    role.write_text("# QA\n", encoding="utf-8")
+
+    package = tmp_path / "payload" / "solomon_harness"
+    templates = package / "templates"
+    templates.mkdir(parents=True)
+    outside = tmp_path / "outside-templates"
+    (outside / ".agent").mkdir(parents=True)
+    (outside / "main.py").write_text("print('outside')\n", encoding="utf-8")
+    (outside / ".agent" / "config.json").write_text(
+        '{"agent_name":"{{AGENT_NAME}}"}\n', encoding="utf-8"
+    )
+    (templates / "harness").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(bootstrap, "__file__", str(package / "bootstrap.py"))
+
+    with pytest.raises(ValueError, match="read path.*symlink"):
+        bootstrap.scaffold_agents(str(workspace))
+
+    assert not (workspace / "agents" / "qa" / "main.py").exists()
+    assert not (workspace / "agents" / "qa" / ".agent" / "config.json").exists()
+
+
+def test_scaffold_new_agent_does_not_execute_document_skills_through_a_symlink(
+    tmp_path, monkeypatch
+):
+    from solomon_harness import bootstrap
+
+    workspace = tmp_path / "workspace"
+    agents = workspace / "agents"
+    agents.mkdir(parents=True)
+    (agents / "AGENTS.md").write_text(
+        "# Rules\n\n## The specialist agents\n\n", encoding="utf-8"
+    )
+    outside_scripts = tmp_path / "outside-scripts"
+    outside_scripts.mkdir()
+    (outside_scripts / "document-skills.py").write_text(
+        "raise RuntimeError('must not execute')\n", encoding="utf-8"
+    )
+    (workspace / "scripts").symlink_to(
+        outside_scripts, target_is_directory=True
+    )
+    launched = []
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "run",
+        lambda *args, **kwargs: launched.append((args, kwargs)),
+    )
+
+    class _CompileResult:
+        conflicts = ()
+
+    monkeypatch.setattr(
+        bootstrap, "_reconcile_host_adapters", lambda _root: _CompileResult()
+    )
+
+    with pytest.raises(ValueError, match="read path.*symlink"):
+        bootstrap.scaffold_new_agent(
+            str(workspace), "escaped_agent", "Must stay confined"
+        )
+
+    assert launched == []
+    assert not (agents / "escaped_agent").exists()
+
+
 class TestBootstrapAgent(unittest.TestCase):
     def setUp(self):
         # Resolve real workspace root dynamically
@@ -209,6 +280,15 @@ class TestBootstrapAgent(unittest.TestCase):
 
     def test_bootstrap_uses_native_three_host_adapters_and_never_gemini(self):
         from solomon_harness.bootstrap import bootstrap_project
+
+        # This scenario is a fresh consumer install. The shared shell-bootstrap
+        # fixture copies the current source tree for its subprocess cases; those
+        # files are not a proven legacy payload and must not be mistaken for one.
+        for legacy_source_tree in ("agents", "scripts", "solomon_harness"):
+            shutil.rmtree(
+                os.path.join(self.workspace_dir, legacy_source_tree),
+                ignore_errors=True,
+            )
 
         bootstrap_project(self.workspace_dir, non_interactive=True)
 
@@ -577,6 +657,46 @@ class TestFreshInstallScaffoldsGithubTemplates(unittest.TestCase):
         self.assertFalse(
             os.path.exists(os.path.join(self.workspace, ".github", "copilot-instructions.md"))
         )
+
+
+def test_bootstrap_fails_closed_when_managed_adapter_conflicts_are_preserved(
+    tmp_path, monkeypatch, capsys
+):
+    from solomon_harness import bootstrap, install_layout, prereqs
+
+    class _ConflictResult:
+        conflicts = (".mcp.json", ".codex/config.toml")
+        blocking_conflicts = conflicts
+
+    monkeypatch.setattr(prereqs, "check_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(install_layout, "install_project", lambda _root: _ConflictResult())
+
+    with pytest.raises(install_layout.InstallConflictError, match=r"\.mcp\.json"):
+        bootstrap.bootstrap_project(str(tmp_path), non_interactive=True)
+
+    output = capsys.readouterr().out
+    assert "Preserved 2" in output
+    assert "Bootstrap Completed Successfully" not in output
+
+
+def test_bootstrap_reports_nonblocking_legacy_conflicts_and_completes(
+    tmp_path, monkeypatch, capsys
+):
+    from solomon_harness import bootstrap, install_layout, prereqs
+
+    class _WarningResult:
+        conflicts = ("agents/project-owned.md",)
+        blocking_conflicts = ()
+
+    monkeypatch.setattr(prereqs, "check_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(install_layout, "install_project", lambda _root: _WarningResult())
+
+    bootstrap.bootstrap_project(str(tmp_path), non_interactive=True)
+
+    output = capsys.readouterr().out
+    assert "Preserved 1" in output
+    assert "Harness files installed" in output
+    assert "Bootstrap Completed Successfully" in output
 
 
 if __name__ == "__main__":

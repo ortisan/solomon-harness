@@ -1,6 +1,7 @@
 import os
-import tempfile
 import shutil
+import subprocess
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -37,6 +38,30 @@ class TestScaffoldAgent(unittest.TestCase):
             encoding="utf-8",
         ) as f:
             f.write("# Workflow\n\nRun the delivery workflow.\n")
+        # The direct adapter compiler accepts only an installed consumer or a
+        # Git-proven Solomon source checkout. Keep this integration fixture
+        # honest instead of weakening that production trust boundary.
+        with open(
+            os.path.join(self.tmp_dir, "pyproject.toml"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write('[project]\nname = "solomon-harness"\nversion = "0.0.0"\n')
+        subprocess.run(["git", "init", "-q", self.tmp_dir], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                self.tmp_dir,
+                "add",
+                "pyproject.toml",
+                "agents/AGENTS.md",
+                "solomon_harness/__init__.py",
+                "solomon_harness/mcp_server.py",
+                "scripts/generate-integrations.py",
+            ],
+            check=True,
+        )
 
     def tearDown(self):
         shutil.rmtree(self.tmp_dir)
@@ -223,9 +248,9 @@ class TestScaffoldAgent(unittest.TestCase):
         result = SimpleNamespace(changed=True, conflicts=(), managed_paths=())
         with (
             mock.patch(
-                "solomon_harness.install_layout.install_project",
+                "solomon_harness.install_layout.compile_project_adapters",
                 return_value=result,
-            ) as install,
+            ) as compile_project,
             mock.patch(
                 "solomon_harness.host_adapters.compile_adapters",
                 return_value=result,
@@ -270,7 +295,7 @@ class TestScaffoldAgent(unittest.TestCase):
             persona_content,
         )
         self.assertIn("`.agents/solomon/skill-sources.json`", role_content)
-        install.assert_called_once_with(consumer)
+        compile_project.assert_called_once_with(consumer)
         compile_.assert_not_called()
 
     def test_scaffold_rejects_a_symlinked_canonical_agent_catalog(self):

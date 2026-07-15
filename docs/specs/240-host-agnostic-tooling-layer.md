@@ -124,18 +124,27 @@ or cutting a release.
 
 - Issue: #240
 - ADR: docs/adrs/0034-host-neutral-installed-harness.md
-- PR: pending
+- PR: #288
 
 ## Implementation Evidence
 
-- Full suite: 1,436 passed, 1 skipped, and 145 subtests passed.
-- Static gates: Ruff, mypy, spec lint, workflow validation, skill documentation,
-  and `git diff --check` passed.
+- Full suite: 2,095 passed, 1 skipped, with 81.30% branch coverage against an
+  80% repository gate. The host-neutral core reports 98% focused branch coverage
+  against its 90% gate.
+- Static gates: Ruff, mypy across 142 source files, ADR/spec/workflow/agent/template/
+  skill validation, `uv lock --check`, `bash -n`, and `git diff --check` passed.
+  The incremental SAST gate found no new Ruff security findings across 10,401
+  changed production lines.
 - Repeated source compilation: zero changed files, zero conflicts, 114 managed
   adapter paths.
+- Real consumer install audit: 646 manifest entries (522 core, 114 adapter, and
+  10 project-owned scaffolds), 28 specialists, 11 workflows, and zero ownership
+  conflicts.
 - Native consumer smoke: Claude 2.1.210, AGY 1.1.2, and Codex 0.144.4 expose
   28 specialists and 11 workflows; all three register the same MCP runtime and
   two lifecycle/guard hooks, subject to their native approval or trust prompts.
+- UI compatibility gate: lint completed with zero errors, the production build
+  completed, and all 51 UI tests passed.
 - Known host limitation: Codex 0.144.4 omits project hooks in linked Git
   worktrees while loading MCP from the same trusted config. Normal repositories
   load both hooks. No global-hook or trust-bypass workaround is installed.

@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import stat
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from solomon_harness.engine_adapters import build_engine_command
+from solomon_harness.adapter_ownership import AdapterOwnershipError
 from solomon_harness.host_adapters import HOSTS, compile_adapters, inspect_capabilities
 from solomon_harness.host_hooks import normalize_hook_input
 from solomon_harness.install_layout import install_project
@@ -16,6 +18,20 @@ from solomon_harness.layout import HarnessPaths
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_host_adapter_ownership_never_depends_on_the_installer() -> None:
+    """Keep the installer-to-adapter dependency directional."""
+
+    source = SOURCE_ROOT / "solomon_harness" / "host_adapters.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "solomon_harness.install_layout" not in imported_modules
 
 
 class McpDocument(TypedDict, total=False):
@@ -343,6 +359,35 @@ class HostAdaptersTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("allowed-tools: Read, Grep", claude)
 
+    def test_claude_metadata_uses_the_normalized_workflow_name(self) -> None:
+        workflows = self.root / ".agents" / "solomon" / "workflows"
+        prefixed = workflows / "solomon-bug.md"
+        bare = workflows / "bug.md"
+        bare.write_text(prefixed.read_text(encoding="utf-8"), encoding="utf-8")
+        prefixed.unlink()
+        metadata = (
+            self.root
+            / ".agents"
+            / "solomon"
+            / "host-metadata"
+            / "claude"
+            / "commands"
+            / "solomon-bug.md"
+        )
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        metadata.write_text(
+            "---\nallowed-tools: Read, Grep\n---\n\nHost-only metadata.\n",
+            encoding="utf-8",
+        )
+
+        result = compile_adapters(self.root)
+
+        self.assertNotIn(".claude/skills/solomon-bug/SKILL.md", result.conflicts)
+        claude = (
+            self.root / ".claude" / "skills" / "solomon-bug" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("allowed-tools: Read, Grep", claude)
+
     def test_installed_specialists_do_not_pin_any_host_model(self) -> None:
         configs = sorted(
             (self.root / ".agents" / "solomon" / "agents").glob("*/.agent/config.json")
@@ -379,6 +424,7 @@ class HostAdaptersTest(unittest.TestCase):
                 "--project",
                 ".agents/solomon",
                 "python",
+                "-I",
                 "-m",
                 "solomon_harness.mcp_server",
             ],
@@ -392,6 +438,9 @@ class HostAdaptersTest(unittest.TestCase):
         json.loads((self.root / ".claude" / "settings.json").read_text(encoding="utf-8"))
         json.loads((self.root / ".agents" / "hooks.json").read_text(encoding="utf-8"))
         tomllib.loads((self.root / ".codex" / "config.toml").read_text(encoding="utf-8"))
+        for host, command in self._hook_commands(self.root).items():
+            with self.subTest(surface="isolated-hook", host=host):
+                self.assertIn("python -I -m solomon_harness.cli", command)
 
     def test_consumer_mcp_and_hooks_are_executable_for_every_host(self) -> None:
         _, environment = self._fake_uv(self.root)
@@ -490,6 +539,7 @@ class HostAdaptersTest(unittest.TestCase):
                         "--project",
                         ".",
                         "python",
+                        "-I",
                         "-m",
                         "solomon_harness.mcp_server",
                     ],
@@ -652,19 +702,14 @@ class HostAdaptersTest(unittest.TestCase):
 
         self.assertEqual(ignored.returncode, 0)
 
-    def test_unproven_source_shape_keeps_consumer_runtime_layout(self) -> None:
+    def test_unproven_source_shape_is_rejected_before_adapter_writes(self) -> None:
         source = self._make_source_checkout()
         (source / ".git").rename(source / ".git-disabled")
 
-        compile_adapters(source)
+        with self.assertRaisesRegex(FileNotFoundError, "Git-proven"):
+            compile_adapters(source)
 
-        for host, config in self._mcp_documents(source).items():
-            with self.subTest(host=host):
-                self.assertEqual(config["args"][3], ".agents/solomon")
-                self.assertEqual(
-                    config["env"], {"UV_PROJECT_ENVIRONMENT": "state/venv"}
-                )
-        self.assertIs(self._mcp_documents(source)["codex"]["required"], False)
+        self.assertFalse((source / ".agents" / "solomon" / "state").exists())
 
     def test_required_codex_mcp_is_unavailable_when_source_command_is_wrong(self) -> None:
         source = self._make_source_checkout()
@@ -704,6 +749,28 @@ class HostAdaptersTest(unittest.TestCase):
         self.assertFalse(first.changed)
         self.assertFalse(second.changed)
         self.assertEqual(before, after)
+
+    def test_compile_fails_closed_without_mutation_for_a_malformed_manifest(self) -> None:
+        target = self.root / ".codex" / "agents" / "qa.toml"
+        target.unlink()
+        manifest = HarnessPaths(self.root).manifest
+        manifest.write_text("{malformed\n", encoding="utf-8")
+        before = {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+
+        with self.assertRaisesRegex(AdapterOwnershipError, "manifest"):
+            compile_adapters(self.root)
+
+        after = {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        self.assertFalse(target.exists())
 
     def test_compile_preserves_symlinked_adapter_target(self) -> None:
         outside = self.root.parent / "outside-host-adapter.json"
@@ -774,13 +841,13 @@ class HostAdaptersTest(unittest.TestCase):
         self.assertIn(".claude/agents/qa.md", result.conflicts)
         self.assertEqual(target.read_text(encoding="utf-8"), modified)
 
-    def test_clean_tracked_consumer_bridge_is_not_overwritten_without_manifest(self) -> None:
+    def test_consumer_without_manifest_is_rejected_without_overwrite(self) -> None:
         target = self._make_tracked_legacy_generated_bridge(source_checkout=False)
         original = target.read_text(encoding="utf-8")
 
-        result = compile_adapters(self.root)
+        with self.assertRaisesRegex(FileNotFoundError, "installed manifest"):
+            compile_adapters(self.root)
 
-        self.assertIn(".claude/agents/qa.md", result.conflicts)
         self.assertEqual(target.read_text(encoding="utf-8"), original)
 
     def test_removing_a_managed_hook_is_a_conflict_for_every_host(self) -> None:

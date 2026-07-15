@@ -843,6 +843,7 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
     """Invokes Slice 1's audit on the delivered artifact and files the gap report.
     Degrade-safe: any failure logs 'audit skipped: sourcing unavailable' and exits 0.
     """
+    lock = None
     try:
         if not version:
             pyproject = os.path.join(workspace_root, "pyproject.toml")
@@ -870,7 +871,38 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
 
         engine = (os.environ.get("SOLOMON_ENGINE") or "claude").lower()
         cmd = build_engine_command(engine, root)
-        env = build_engine_environment(os.environ)
+        from solomon_harness.loop_lock import (
+            SHELL_CAPABILITY_ENV,
+            LoopLock,
+        )
+
+        lock = LoopLock(root, stage="release-audit")
+        existing = lock.read()
+        reentrant = bool(
+            existing
+            and existing.get("session_id") == lock.session_id
+            and not lock.is_stale(existing)
+        )
+        lock.acquire()
+        inherited_capability = os.environ.get(SHELL_CAPABILITY_ENV, "")
+        if inherited_capability and lock.shell_capability_allows(
+            inherited_capability,
+            scope="harness:read",
+        ):
+            shell_capability = inherited_capability
+        elif reentrant:
+            # A nested audit cannot recover the outer holder's raw bearer token.
+            # Reissuing would invalidate that holder mid-run, so fail closed and
+            # preserve the release command's degrade-safe contract.
+            print("audit skipped: sourcing unavailable")
+            return 0
+        else:
+            shell_capability = lock.issue_shell_capability(
+                scopes={"harness:read"},
+                branches=set(),
+            )
+        env = build_engine_environment(os.environ, session_id=lock.session_id)
+        env[SHELL_CAPABILITY_ENV] = shell_capability
         env["PYTHONPATH"] = os.pathsep.join(
             value
             for value in (str(paths.solomon), root, env.get("PYTHONPATH", ""))
@@ -898,6 +930,9 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
     except Exception:
         print("audit skipped: sourcing unavailable")
         return 0
+    finally:
+        if lock is not None:
+            lock.release()
 
 
 def run(workspace_root: str, args: List[str]) -> int:

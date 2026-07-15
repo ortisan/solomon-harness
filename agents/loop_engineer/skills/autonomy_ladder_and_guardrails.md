@@ -28,7 +28,7 @@ The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop ma
 
 ## Denylist and the maker/checker split
 
-`is_denied_path` names the paths the loop must not modify. `DEFAULT_DENYLIST` includes `.git/*`, `.agents/solomon/config/project.json`, the legacy `.agent/config.json`, environment files, keys, encrypted material, secrets, migrations, and dependency trees. A `denylist` in the config's `loop` block replaces the defaults rather than extending them, so restate the defaults when adding a pattern. The adapter compiler registers the same normalized `host-hook pre-tool-use` guard for Claude (`.claude/settings.json`), AGY (`.agents/hooks.json`), and Codex (inline in `.codex/config.toml`). `denied_write_verdict` blocks a write to a denied path using each host's native verdict protocol, so an autonomous run cannot edit project config to widen its own level or defeat its cost ceiling. `checker_split_ok` requires the verifier to run on a different model than the maker; it complements, never replaces, the human review gate.
+`is_denied_path` names the configurable paths the loop must not modify. `DEFAULT_DENYLIST` includes `.git/*`, environment files, keys, encrypted material, secrets, migrations, and dependency trees. A `denylist` in the config's `loop` block replaces those configurable defaults rather than extending them, so restate them when adding a pattern. It can never remove the mandatory trust roots: canonical and legacy project config, the install manifest, manifest-owned core/adapters, and the runtime venv remain immutable during a run. The adapter compiler registers the same normalized `host-hook pre-tool-use` guard for Claude (`.claude/settings.json`), AGY (`.agents/hooks.json`), and Codex (inline in `.codex/config.toml`). The guard blocks a write using each host's native verdict protocol, so an autonomous run cannot edit project config to widen its own level or defeat its cost ceiling. `checker_split_ok` requires the verifier to run on a different model than the maker; it complements, never replaces, the human review gate.
 
 ## The kill-switch
 
@@ -41,7 +41,7 @@ Worked scenario for a runaway cadence: run `solomon-harness loop-stop`; the next
 - Coercing an invalid level to `human` — that fails open; keep it failing closed.
 - Letting L3 act without the lock, or letting any level merge/release autonomously.
 - Assuming the three hosts use the same hook payload or response format — normalize input and serialize the verdict through the host adapter.
-- Adding one pattern to `loop.denylist` and silently dropping the defaults — the config list replaces `DEFAULT_DENYLIST`, it does not extend it.
+- Adding one pattern to `loop.denylist` and silently dropping the configurable defaults — the config list replaces `DEFAULT_DENYLIST`, although mandatory trust roots still cannot be removed.
 - Putting a webhook URL or model secret in the committed `loop`/`notify` block — secrets come from the environment.
 
 ## Definition of done

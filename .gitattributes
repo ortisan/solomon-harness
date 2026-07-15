@@ -1,0 +1,2 @@
+# Byte-exact historical upgrade fixtures retain their released formatting.
+tests/fixtures/legacy-*/** whitespace=-blank-at-eof

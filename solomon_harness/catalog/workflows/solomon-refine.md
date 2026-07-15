@@ -28,7 +28,7 @@ Steps:
     - Write your demand and match judgment to `.agents/solomon/state/broker/route-<issue_number>.json`
       with the host's file-write mechanism (so issue-derived text never touches a shell string):
       `{"demand": "<one-line capability demand>", "match": {"agent": <name or null>, "rationale": "<why>", "alternatives": [], "missing_capability": <text or null>, "nearest_agent": <name or null>}}`
-    - Run `uv run python -m solomon_harness.cli broker route --file .agents/solomon/state/broker/route-<issue_number>.json`
+    - Run `uv run python -I -m solomon_harness.cli broker route --file .agents/solomon/state/broker/route-<issue_number>.json`
       and read the verdict JSON. The core validates the match against the
       catalog and fails closed (exit 3) on an empty catalog or a
       matcher-contract violation.
@@ -41,7 +41,7 @@ Steps:
       On option 1, write the proposal to `.agents/solomon/state/broker/proposal-<issue_number>.json`
       (`{"kind": "adapt_skill", "source_name": "...", "skill_name": "...", "agent_name": "...", "issue": "<issue_number>"}` or
       `{"kind": "create_agent", "agent_name": "...", "title": "...", "description": "...", "duties": ["..."], "issue": "<issue_number>"}`),
-      then run `uv run python -m solomon_harness.cli broker apply --file .agents/solomon/state/broker/proposal-<issue_number>.json`.
+      then run `uv run python -I -m solomon_harness.cli broker apply --file .agents/solomon/state/broker/proposal-<issue_number>.json`.
       Report the created PR and stop execution (do not proceed to Step 2).
     - Gap verdict, non-interactive/headless run: acquisition is human-gated and
       `broker apply` refuses it (exit 3) — do not attempt it. Record the gap
@@ -66,7 +66,7 @@ Steps:
       test invocation, a manual repro, the check to eyeball).
     - Fill any other section still on a placeholder, then flip the header to
       `Status: ready`.
-    - Run `uv run python scripts/spec-lint.py docs/specs/<n>-<slug>.md` and fix
+    - Run `uv run python -I scripts/spec-lint.py docs/specs/<n>-<slug>.md` and fix
       until it exits 0. Once `Status: ready`, the linter rejects any remaining
       `TBD (refine)` line — this is the mechanical Ready gate; do not move the
       board card to Ready while it fails.
@@ -105,8 +105,8 @@ Steps:
    and milestone are correct.
 
 7. Move the board card `Backlog` → `Ready`:
-   - `uv run python -m solomon_harness.github ensure-board`
-   - `uv run python -m solomon_harness.github set-status --issue <n> --status "Ready"`
+   - `uv run python -I -m solomon_harness.github ensure-board`
+   - `uv run python -I -m solomon_harness.github set-status --issue <n> --status "Ready"`
 
 8. Persist the handoff contract:
    - `project-memory log_issue` to update the refined issue's status.

@@ -14,7 +14,7 @@ Ask the user through the host's native enumerable input mechanism (or a numbered
 
 Once you have the limit (default to 3 if not specified), run the parallel loop orchestrator with the host's shell-execution mechanism:
 ```bash
-uv run python -m solomon_harness.cli dev loop --concurrency <limit> {{arguments}}
+uv run python -I -m solomon_harness.cli dev loop --concurrency <limit> {{arguments}}
 ```
 
 Capability gaps: the start/refine stages the loop drives run a Capability

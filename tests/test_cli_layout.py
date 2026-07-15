@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from solomon_harness import cli
+from solomon_harness.loop_lock import LoopLock
 from solomon_harness.loop_policy import LoopPolicy
 
 
@@ -83,14 +84,17 @@ def test_compile_reconciles_an_installed_consumer_transactionally(tmp_path):
     manifest.write_text("{}\n", encoding="utf-8")
     result = SimpleNamespace(changed=True, conflicts=(), managed_paths=("AGENTS.md",))
     with (
-        patch("solomon_harness.install_layout.install_project", return_value=result) as install,
+        patch(
+            "solomon_harness.install_layout.compile_project_adapters",
+            return_value=result,
+        ) as compile_project,
         patch("solomon_harness.host_adapters.compile_adapters") as compile_,
         pytest.raises(SystemExit) as raised,
     ):
         cli.main(harness_dir=str(tmp_path), argv=["compile"])
 
     assert raised.value.code == 0
-    install.assert_called_once_with(str(tmp_path))
+    compile_project.assert_called_once_with(str(tmp_path))
     compile_.assert_not_called()
 
 
@@ -119,14 +123,17 @@ def test_cli_finds_non_git_consumer_root_from_inside_installed_package(tmp_path)
     result = SimpleNamespace(changed=False, conflicts=(), managed_paths=())
 
     with (
-        patch("solomon_harness.install_layout.install_project", return_value=result) as install,
+        patch(
+            "solomon_harness.install_layout.compile_project_adapters",
+            return_value=result,
+        ) as compile_project,
         patch("solomon_harness.host_adapters.compile_adapters") as compile_,
         pytest.raises(SystemExit) as raised,
     ):
         cli.main(harness_dir=str(nested), argv=["compile"])
 
     assert raised.value.code == 0
-    install.assert_called_once_with(str(tmp_path))
+    compile_project.assert_called_once_with(str(tmp_path))
     compile_.assert_not_called()
 
 
@@ -348,6 +355,366 @@ def test_shell_hook_blocks_mutation_of_protected_config_for_every_host(
             host,
             "pre-tool-use",
             stdin=io.StringIO(json.dumps(payload)),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    if host == "agy":
+        assert exit_code == 0
+        assert json.loads(stdout.getvalue())["decision"] == "deny"
+    else:
+        assert exit_code == 2
+        assert "denylist" in stderr.getvalue().lower()
+
+
+def _shell_payload(host: str, command: str) -> dict[str, object]:
+    if host == "claude":
+        return {
+            "session_id": "driver-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+    if host == "agy":
+        return {
+            "conversationId": "driver-1",
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": command},
+            },
+        }
+    return {
+        "sessionId": "driver-1",
+        "tool": "Bash",
+        "input": {"command": command},
+    }
+
+
+def _shell_payload_with_session(
+    host: str, command: str, session_id: str
+) -> dict[str, object]:
+    payload = _shell_payload(host, command)
+    if host == "agy":
+        payload["conversationId"] = session_id
+    elif host == "claude":
+        payload["session_id"] = session_id
+    else:
+        payload["sessionId"] = session_id
+    return payload
+
+
+@pytest.mark.parametrize("host", ["claude", "agy", "codex"])
+def test_subprocess_hook_requires_capability_in_addition_to_outer_driver_identity(
+    tmp_path, host, monkeypatch
+):
+    lock = LoopLock(str(tmp_path), session_id="outer-driver")
+    lock.acquire()
+    try:
+        monkeypatch.setenv("SOLOMON_SUBPROCESS", "1")
+        monkeypatch.setenv("SOLOMON_SESSION_ID", "outer-driver")
+        stdout = io.StringIO()
+
+        exit_code = cli.handle_host_hook(
+            str(tmp_path),
+            host,
+            "pre-tool-use",
+            stdin=io.StringIO(
+                    json.dumps(
+                        _shell_payload_with_session(
+                            host,
+                            "git push origin feature/safe",
+                            "host-driver",
+                        )
+                    )
+            ),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+        if host == "agy":
+            assert exit_code == 0
+            output = json.loads(stdout.getvalue())
+            assert output["decision"] == "deny"
+            assert "capability" in output["reason"].lower()
+        else:
+            assert exit_code == 2
+    finally:
+        lock.release()
+
+
+@pytest.mark.parametrize("host", ["claude", "agy", "codex"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push",
+        "git -C . push",
+        "git -c core.sshCommand=x push",
+        "gh --repo org/repo pr merge 288",
+    ],
+)
+def test_foreign_driver_lock_blocks_option_bearing_push_and_merge_commands(
+    tmp_path, host, command, monkeypatch
+):
+    lock = LoopLock(str(tmp_path), session_id="outer-driver")
+    lock.acquire()
+    try:
+        monkeypatch.delenv("SOLOMON_SUBPROCESS", raising=False)
+        monkeypatch.delenv("SOLOMON_SESSION_ID", raising=False)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = cli.handle_host_hook(
+            str(tmp_path),
+            host,
+            "pre-tool-use",
+            stdin=io.StringIO(
+                json.dumps(
+                    _shell_payload_with_session(host, command, "foreign-driver")
+                )
+            ),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        if host == "agy":
+            assert json.loads(stdout.getvalue())["decision"] == "deny"
+        else:
+            assert exit_code == 2
+            assert "single-driver lock" in stderr.getvalue()
+    finally:
+        lock.release()
+
+
+def _write_payload(host: str, path: str) -> dict[str, object]:
+    if host == "claude":
+        return {
+            "session_id": "driver-1",
+            "tool_name": "Write",
+            "tool_input": {"file_path": path},
+        }
+    if host == "agy":
+        return {
+            "conversationId": "driver-1",
+            "toolCall": {
+                "name": "write_to_file",
+                "args": {"TargetFile": path},
+            },
+        }
+    return {
+        "sessionId": "driver-1",
+        "tool": "Write",
+        "input": {"file_path": path},
+    }
+
+
+def _patch_payload(host: str, path: str) -> dict[str, object]:
+    patch_text = (
+        "*** Begin Patch\n"
+        f"*** Update File: {path}\n"
+        "*** End Patch\n"
+    )
+    if host == "claude":
+        return {
+            "session_id": "driver-1",
+            "tool_name": "apply_patch",
+            "tool_input": {"patch": patch_text},
+        }
+    if host == "agy":
+        return {
+            "conversationId": "driver-1",
+            "toolCall": {
+                "name": "apply_patch",
+                "args": {"patch": patch_text},
+            },
+        }
+    return {
+        "sessionId": "driver-1",
+        "tool": "apply_patch",
+        "input": {"patch": patch_text},
+    }
+
+
+def _write_install_manifest(root: Path) -> None:
+    manifest = root / ".agents" / "solomon" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "path": ".agents/solomon/solomon_harness/loop_policy.py",
+                        "owner": "core",
+                        "strategy": "replace",
+                        "sha256": "0" * 64,
+                        "mode": "0644",
+                    },
+                    {
+                        "path": ".codex/config.toml",
+                        "owner": "adapter",
+                        "strategy": "toml-merge",
+                        "sha256": "0" * 64,
+                        "mode": "0644",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("host", ["claude", "agy", "codex"])
+@pytest.mark.parametrize(
+    ("path", "payload_factory"),
+    [
+        (
+            ".agents/solomon/solomon_harness/loop_policy.py",
+            _write_payload,
+        ),
+        (".codex/config.toml", _patch_payload),
+        (
+            ".agents/solomon/manifest.json",
+            lambda host, path: _shell_payload(host, f"rm {path}"),
+        ),
+        (
+            ".agents/solomon/state/venv/lib/sitecustomize.py",
+            _write_payload,
+        ),
+        (".agents/solomon/config/project.json", _write_payload),
+        (".agent/config.json", _write_payload),
+    ],
+)
+def test_pre_tool_hook_protects_installed_core_and_adapters(
+    tmp_path, host, path, payload_factory
+):
+    _write_install_manifest(tmp_path)
+    policy = LoopPolicy(str(tmp_path), denylist=[])
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    with patch.object(LoopPolicy, "from_config", return_value=policy):
+        exit_code = cli.handle_host_hook(
+            str(tmp_path),
+            host,
+            "pre-tool-use",
+            stdin=io.StringIO(json.dumps(payload_factory(host, path))),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    if host == "agy":
+        assert json.loads(stdout.getvalue())["decision"] == "deny"
+    else:
+        assert exit_code == 2
+
+
+@pytest.mark.parametrize(
+    ("host", "path"),
+    [
+        ("agy", ".agents/hooks.json"),
+        ("claude", ".claude/settings.json"),
+        ("codex", ".codex/config.toml"),
+    ],
+)
+def test_pre_tool_hook_protects_each_native_guard_before_manifest(
+    tmp_path, host, path
+):
+    policy = LoopPolicy(str(tmp_path), denylist=[])
+    stdout = io.StringIO()
+
+    with patch.object(LoopPolicy, "from_config", return_value=policy):
+        exit_code = cli.handle_host_hook(
+            str(tmp_path),
+            host,
+            "pre-tool-use",
+            stdin=io.StringIO(json.dumps(_write_payload(host, path))),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+    if host == "agy":
+        assert json.loads(stdout.getvalue())["decision"] == "deny"
+    else:
+        assert exit_code == 2
+
+
+@pytest.mark.parametrize("host", ["claude", "agy", "codex"])
+@pytest.mark.parametrize(
+    "path",
+    ["src/app.py", ".agents/solomon/state/handoffs/review-to-release.md"],
+)
+def test_pre_tool_hook_allows_unmanaged_product_and_state_files(tmp_path, host, path):
+    _write_install_manifest(tmp_path)
+    policy = LoopPolicy(str(tmp_path), denylist=[])
+    stdout = io.StringIO()
+
+    with patch.object(LoopPolicy, "from_config", return_value=policy):
+        exit_code = cli.handle_host_hook(
+            str(tmp_path),
+            host,
+            "pre-tool-use",
+            stdin=io.StringIO(json.dumps(_write_payload(host, path))),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+    assert exit_code == 0
+    if host == "agy":
+        assert json.loads(stdout.getvalue())["decision"] == "allow"
+
+
+@pytest.mark.parametrize("host", ["claude", "agy", "codex"])
+@pytest.mark.parametrize(
+    ("command", "denylist"),
+    [
+        ("rm .env", [".env"]),
+        ("printf secret > .env", [".env"]),
+        (
+            "cd .agents/solomon/config && rm project.json",
+            [".agents/solomon/config/project.json"],
+        ),
+        ("python -c \"open('.env', 'w').write('secret')\"", [".env"]),
+        ("sudo -u nobody rm .env", [".env"]),
+        ("env MODE=x rm .env", [".env"]),
+        (
+            "python -c \"import sys; open(sys.argv[1], 'w').write('x')\" .env",
+            [".env"],
+        ),
+        ("git checkout -- .env", [".env"]),
+        ("eval 'rm .env'", [".env"]),
+        ("dd if=/dev/zero of=.env", [".env"]),
+        (
+            "cd .agents/solomon/config\nrm project.json",
+            [".agents/solomon/config/project.json"],
+        ),
+        ("(rm .env)", [".env"]),
+        ("find .env -delete", [".env"]),
+        ("unlink .env", [".env"]),
+        ('cmd=rm; "$cmd" .env', [".env"]),
+        (
+            "python -c \"p='.'+'env';open(p,'w').write('x')\"",
+            [".env"],
+        ),
+        ("ruby -e \"File.write('.'+'env','x')\"", [".env"]),
+        ("curl -o .env https://example.invalid", [".env"]),
+        (
+            "cp --target-directory=.agents/solomon/config project.json",
+            [],
+        ),
+    ],
+)
+def test_shell_hook_blocks_denylisted_mutation_without_slash_bypasses(
+    tmp_path, host, command, denylist
+):
+    policy = LoopPolicy(str(tmp_path), denylist=denylist)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    with patch.object(LoopPolicy, "from_config", return_value=policy):
+        exit_code = cli.handle_host_hook(
+            str(tmp_path),
+            host,
+            "pre-tool-use",
+            stdin=io.StringIO(json.dumps(_shell_payload(host, command))),
             stdout=stdout,
             stderr=stderr,
         )

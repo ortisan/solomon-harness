@@ -165,8 +165,9 @@ the memory handoff contract, the ADR trigger) live in
 ### Specialist agents
 
 Twenty-eight role-specific agents, each defined in this source checkout under
-`agents/<name>/` (`persona.md`, the role profile `agents/<name>.md`, `skills/`,
-and source metadata in `.agent/config.json`). `init` installs the neutral catalog
+`agents/<name>/` (`persona.md`, the role profile
+`agents/<name>/agents/<name>.md`, `skills/`, and source metadata in
+`agents/<name>/.agent/config.json`). `init` installs the neutral catalog
 under `.agents/solomon/agents`; `compile` exposes the same set through Claude
 subagents, AGY agents, and Codex agent TOML files. The count above is the number
 of `agents/*/agents/*.md` role profiles; `tests/test_readme_sync.py` fails if this
@@ -377,7 +378,7 @@ manages the board directly.
 ```
 solomon-harness/
 ├── agents/                  # Source-of-truth specialist agents + AGENTS.md (the rules)
-│   └── <name>/              #   persona.md, agents/<name>.md, skills/, .agent/config.json
+│   └── <name>/              #   persona.md, agents/<name>/agents/<name>.md, skills/, agents/<name>/.agent/config.json
 ├── .claude/                 # Source workflow catalog and source-checkout Claude adapters
 ├── docs/                    # adr/ (ADRs) and solomon-workflow.md (conventions)
 ├── solomon_harness/         # Core package

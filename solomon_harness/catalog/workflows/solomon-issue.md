@@ -68,14 +68,14 @@ Steps:
    an outward-facing action.
 
 6. Create the issue:
-   - Ensure the standard labels exist first: `uv run python -m solomon_harness.github ensure-labels`.
+   - Ensure the standard labels exist first: `uv run python -I -m solomon_harness.github ensure-labels`.
      If you use a new `area:<domain>`, create it: `gh label create "area:<domain>" --color BFD4F2 --force`.
    - `gh issue create --title "<title>" --body "<body>" --label type:feature --label priority:pN --label area:<domain>`.
    Capture the returned issue number and URL.
 
 7. Place it on the board Backlog:
-   - `uv run python -m solomon_harness.github ensure-board`
-   - `uv run python -m solomon_harness.github set-status --issue <n> --status "Backlog"`
+   - `uv run python -I -m solomon_harness.github ensure-board`
+   - `uv run python -I -m solomon_harness.github set-status --issue <n> --status "Backlog"`
 
 8. Generate the spec document (#221 S1; see "Spec generation" in
    `docs/solomon-workflow.md`). Copy `docs/specs/0000-spec-template.md` to
@@ -95,7 +95,7 @@ Steps:
    explicit placeholder `TBD (refine)` unless the demand already pins them down;
    `/solomon-refine` resolves them before the issue is Ready. Any other section
    without content carries the same placeholder. Run
-   `uv run python scripts/spec-lint.py docs/specs/<N>-<slug>.md` and fix until
+   `uv run python -I scripts/spec-lint.py docs/specs/<N>-<slug>.md` and fix until
    it exits 0. The spec ships with the issue's first implementation PR —
    never pushed to a protected branch directly.
 

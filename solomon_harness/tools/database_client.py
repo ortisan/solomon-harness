@@ -9,8 +9,10 @@ import datetime
 import glob
 import hashlib
 import re
+import tempfile
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import (
     Generator,
     Any,
@@ -33,6 +35,8 @@ from solomon_harness.layout import (
 # Dimensionality of the default memory embedding. Must match the HNSW vector
 # index DEFINEd on the ``memory`` table (DIMENSION 256) and the HashingEmbedder.
 EMBEDDING_DIM = 256
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
 
 
 @runtime_checkable
@@ -473,6 +477,53 @@ def _resolve_mirror_root_path(
     if for_write:
         target = confined_path(project_root, target)
     return os.fspath(target)
+
+
+def _ensure_private_directory_tree(root: Path, target: Path) -> None:
+    """Create a canonical state path with no group/other access on POSIX."""
+
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise PathConfinementError(f"private state path escapes {root}: {target}") from exc
+    directories = [root]
+    current = root
+    for part in relative.parts:
+        current /= part
+        directories.append(current)
+    for current in directories:
+        os.makedirs(current, exist_ok=True, mode=_PRIVATE_DIRECTORY_MODE)
+        if os.name != "nt" and current.exists():
+            current.chmod(_PRIVATE_DIRECTORY_MODE)
+
+
+def _ensure_private_file(path: Path) -> None:
+    """Precreate a sensitive state file privately without truncating existing data."""
+
+    if not path.parent.exists():
+        return
+    try:
+        descriptor = os.open(
+            path,
+            os.O_CREAT | os.O_EXCL | os.O_RDWR,
+            _PRIVATE_FILE_MODE,
+        )
+    except FileExistsError:
+        pass
+    else:
+        os.close(descriptor)
+    if os.name != "nt":
+        path.chmod(_PRIVATE_FILE_MODE)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _surreal_connection_exception_types() -> tuple:
@@ -935,7 +986,11 @@ class DatabaseClient:
             raise ValueError("Database path must be set for SQLite backend")
         db_path = self.db_path
         if self._db_path_is_project_state:
-            db_path = os.fspath(confined_path(self._project_root, db_path))
+            private_path = confined_path(self._project_root, db_path)
+            paths = HarnessPaths(self._project_root)
+            _ensure_private_directory_tree(paths.state, private_path.parent)
+            _ensure_private_file(private_path)
+            db_path = os.fspath(private_path)
         conn = sqlite3.connect(db_path, timeout=self.busy_timeout_seconds)
         conn.row_factory = sqlite3.Row
         # WAL plus a busy timeout keeps the shared store safe when several agents write
@@ -1343,14 +1398,13 @@ class DatabaseClient:
             os.makedirs(os.path.dirname(os.path.abspath(env_db)), exist_ok=True)
             return env_db
         self._db_path_is_project_state = True
+        paths = HarnessPaths(self._project_root)
         db_path = confined_path(
             self._project_root,
-            HarnessPaths(self._project_root).state
-            / "memory"
-            / "long_term"
-            / "harness.db",
+            paths.sqlite_database,
         )
-        os.makedirs(db_path.parent, exist_ok=True)
+        _ensure_private_directory_tree(paths.state, db_path.parent)
+        _ensure_private_file(db_path)
         return os.fspath(db_path)
 
     def _connect_surreal(self) -> bool:
@@ -1774,13 +1828,35 @@ class DatabaseClient:
         if self._mirror_root_is_project_state:
             directory = os.fspath(confined_path(self._project_root, directory))
             path = os.fspath(confined_path(self._project_root, path))
+            _ensure_private_directory_tree(
+                HarnessPaths(self._project_root).state,
+                Path(directory),
+            )
         content = self._render_mirror(record_id, kind, created_at, synced, fields)
+        temporary: Optional[str] = None
         try:
-            os.makedirs(directory, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as handle:
+            if not self._mirror_root_is_project_state:
+                os.makedirs(directory, exist_ok=True)
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=f".{Path(path).name}.",
+                dir=directory,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, _PRIVATE_FILE_MODE)
+            os.replace(temporary, path)
+            temporary = None
+            _fsync_directory(Path(directory))
         except OSError as exc:
             raise RuntimeError(f"memory mirror write failed at {path}: {exc}") from exc
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
         return path
 
     def _is_synced(self) -> bool:

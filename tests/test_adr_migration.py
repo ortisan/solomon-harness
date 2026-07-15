@@ -55,6 +55,14 @@ def test_no_reference_to_the_old_adr_path_remains():
         if SCAN_EXCLUDE_PARTS.intersection(path.parts):
             continue
         rel = path.relative_to(REPO)
+        if (
+            rel.parts[:2] == ("tests", "fixtures")
+            and len(rel.parts) >= 3
+            and rel.parts[2].startswith("legacy-")
+        ):
+            # Historical payloads are immutable upgrade inputs. Their legacy
+            # paths prove migration compatibility and are not live references.
+            continue
         # Legitimate mentions of the old form: this test file (it defines the
         # scan), PLAN.md (untracked per-branch state that may describe the
         # migration), and the migration ADR itself (it records the rename).

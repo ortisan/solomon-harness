@@ -43,7 +43,7 @@ def _read_db_url(workspace_root: str) -> Tuple[str, str]:
                 db = (json.load(f) or {}).get("database", {}) or {}
             provider = db.get("provider", provider)
             url = db.get("url", url)
-    except Exception:
+    except Exception:  # noqa: S110 - optional config falls back to safe local defaults
         pass
     return provider, os.environ.get("SURREAL_URL", url)
 

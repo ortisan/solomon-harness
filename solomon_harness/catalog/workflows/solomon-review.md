@@ -21,8 +21,8 @@ subagents); do not review with a single generic pass.
   "merge immediately").
 - `gh pr view {{arguments}}` and `gh pr diff {{arguments}}` to read the change and its
   linked issue. Identify the issue number from the `Closes #<issue>` line.
-- Check the board card is `Code Review`; if not, `uv run python -m solomon_harness.github ensure-board`
-  then `uv run python -m solomon_harness.github set-status --issue <issue> --status "Code Review"`.
+- Check the board card is `Code Review`; if not, `uv run python -I -m solomon_harness.github ensure-board`
+  then `uv run python -I -m solomon_harness.github set-status --issue <issue> --status "Code Review"`.
 - Pull prior context: `project-memory get_latest_activity` first — read the
   latest incoming handoff contract at its `contract_path` (the start -> review
   contract) and treat it as the bounded input, reviewing the diff through the
@@ -45,10 +45,10 @@ subagents); do not review with a single generic pass.
   the design contracts, the fitness functions, and any ADR the change touches.
   If the change is architecturally significant but no ADR exists, that is a blocker.
   Run the mechanical body gate first — `gh pr view <n> --json body --jq .body > <tmp> &&
-  uv run python scripts/check-adr-gate.py --body-file <tmp>` — a violation is a blocker;
+  uv run python -I scripts/check-adr-gate.py --body-file <tmp>` — a violation is a blocker;
   then judge whether the line's CONTENT is honest (a skip reason that hides a
   significant change is still a blocker).
-- Domain lenses (conditional): `gh pr diff {{arguments}} --name-only | uv run python -m solomon_harness.review_roster`
+- Domain lenses (conditional): `gh pr diff {{arguments}} --name-only | uv run python -I -m solomon_harness.review_roster`
   prints up to two extra specialists (auth_engineer, dba, sre, loop_engineer, frontend,
   observability, practice_curator, documenter) selected deterministically
   from the changed paths. Spawn each returned lens as an additional reviewer scoped to
@@ -58,7 +58,7 @@ subagents); do not review with a single generic pass.
 
 Board: the software_architect's code review is the `Code Review` gate. Once it
 passes with no blockers, move the card to `QA`
-(`uv run python -m solomon_harness.github set-status --issue <issue> --status "QA"`)
+(`uv run python -I -m solomon_harness.github set-status --issue <issue> --status "QA"`)
 and run the qa and security lenses there. A blocker at either gate keeps the card
 in its current column and requests changes.
 
@@ -109,7 +109,7 @@ milestone's issues are already `Done` — see `docs/release-policy.md`).
 - On approval, in an interactive session: ask the human, via the enumerated
   decision convention (never an open prose question), whether to merge now —
   recommended option first, "Other" last. On yes, run
-  `uv run python -m solomon_harness.github merge --pr {{arguments}} --issue <issue>`.
+  `uv run python -I -m solomon_harness.github merge --pr {{arguments}} --issue <issue>`.
   This squash-merges the PR and, only on success, moves the board card to
   `Done` and writes the terminal status through to memory in the same call
   (the existing ADR-0006 write-through) — no separate `reconcile` step. On a
@@ -118,7 +118,7 @@ milestone's issues are already `Done` — see `docs/release-policy.md`).
 - In a headless run (`solomon-harness dev review`): never attempt to merge and
   never ask — there is no one to answer. Report that the PR is approved and
   ready, and that a human must complete the merge, either directly
-  (`gh pr merge` plus `uv run python -m solomon_harness.github merge --pr
+  (`gh pr merge` plus `uv run python -I -m solomon_harness.github merge --pr
   <n> --issue <issue>` to converge the board/memory) or by re-running
   `/solomon-review {{arguments}}` interactively. This mirrors the same
   interactive/headless branching `/solomon-start` already uses for its own
