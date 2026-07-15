@@ -444,6 +444,45 @@ class TestInitWikiHint(unittest.TestCase):
         self.assertIn("https://github.com/o/r/wiki/_new", out)
 
 
+class TestScaffoldTemplatesReferenceDocsConventions(unittest.TestCase):
+    """CLAUDE.md.template and AGENTS.md.template are what a freshly scaffolded
+    project's instruction files are interpolated from; they must carry the
+    docs/specs and docs/adrs references so a new install starts wired (#236)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.templates_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "solomon_harness", "templates",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _interpolate(self, template_name):
+        from solomon_harness.bootstrap import interpolate_and_write
+
+        dest = os.path.join(self.tmp.name, template_name)
+        interpolate_and_write(
+            os.path.join(self.templates_dir, template_name),
+            dest,
+            {"PROJECT_NAME": "acme", "TECH_STACK": "Python", "GIT_REMOTE": "none"},
+            "",
+        )
+        with open(dest, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_claude_md_template_references_specs_and_adrs(self):
+        content = self._interpolate("CLAUDE.md.template")
+        self.assertIn("docs/specs/", content)
+        self.assertIn("docs/adrs/", content)
+
+    def test_agents_md_template_references_specs_and_adrs(self):
+        content = self._interpolate("AGENTS.md.template")
+        self.assertIn("docs/specs/", content)
+        self.assertIn("docs/adrs/", content)
+
+
 if __name__ == "__main__":
     unittest.main()
 
