@@ -1163,6 +1163,14 @@ class TestDatabaseClient(unittest.TestCase):
         self.assertEqual(normalize_status("Done"), "closed")
         self.assertEqual(normalize_status("open"), "open")
         self.assertIsNone(normalize_status(None))
+        # The review/QA end of the vocabulary: unreachable in practice until #173
+        # ungated the write-through, so assert the tokens explicitly.
+        self.assertEqual(normalize_status("QA"), "qa")
+        self.assertEqual(normalize_status("qa"), "qa")
+        self.assertEqual(normalize_status("code_review"), "code_review")
+        # The legacy word an early stage wrote, retired by the #173 pass.
+        self.assertEqual(normalize_status("review"), "code_review")
+        self.assertEqual(normalize_status("backlog"), "Backlog")
         self.assertTrue(is_terminal("closed"))
         self.assertTrue(is_terminal("done"))
         self.assertTrue(is_terminal("Done"))

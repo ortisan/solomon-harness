@@ -573,6 +573,60 @@ def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
     return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
 
 
+def normalize_memory_statuses(db, dry_run: bool = False) -> dict:
+    """Canonicalize any non-canonical status still stored on a non-terminal row.
+
+    ``log_issue`` has normalized on write since ADR-0006, so this is a one-shot
+    repair for rows written before that (or by a path that bypassed it): display
+    names ("Code Review"), casing variants ("backlog") and legacy words ("review")
+    that leave consumers unable to read the row's stage. Each differing row is
+    read-modify-written through the unchanged ``log_issue`` UPSERT, preserving
+    title/type/milestone/assignee -- only the status token changes.
+
+    This is a deliberately narrow exception to ADR-0006 decision point 1, which
+    rejected option 1c (a destructive bulk rewrite of stored rows): nothing is
+    deleted, no field is lost, and no contract changes, so the "reversible,
+    non-destructive migration" constraint still holds (ADR-0033).
+
+    Terminal rows are out of scope by construction: the pass walks
+    ``get_open_issues`` (the non-terminal predicate), and the legacy terminal
+    literals "done"/"Done" are already excluded by it. Idempotent: a second run
+    finds every row canonical and writes nothing. With ``dry_run`` the ids are
+    collected and nothing is written.
+
+    Returns ``{"normalized", "would_normalize", "scanned"}``.
+    """
+    from solomon_harness.tools.database_client import normalize_status
+
+    would_normalize: List[str] = []
+    normalized = 0
+    scanned = 0
+    for row in db.get_open_issues():
+        scanned += 1
+        current = row.get("status")
+        canonical = normalize_status(current)
+        if current == canonical:
+            continue
+        github_id = row.get("github_id")
+        would_normalize.append(github_id)
+        if dry_run:
+            continue
+        db.log_issue(
+            github_id,
+            row.get("title"),
+            row.get("type_"),
+            canonical,
+            row.get("milestone_id"),
+            row.get("assignee"),
+        )
+        normalized += 1
+    return {
+        "normalized": normalized,
+        "would_normalize": would_normalize,
+        "scanned": scanned,
+    }
+
+
 def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = False) -> dict:
     """Set each tracking row whose parent number is RESOLVED to the terminal "done".
 
@@ -661,6 +715,9 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
         result = reconcile_memory(db, issue_states, dry_run=dry_run)
         resolved_map = _build_resolved_map(issue_states, pr_states)
         tracking = reconcile_tracking_rows(db, resolved_map, dry_run=dry_run)
+        # Runs last: the two passes above may have just made rows terminal, and a
+        # terminal row needs no status normalization (#173).
+        statuses = normalize_memory_statuses(db, dry_run=dry_run)
 
     if dry_run:
         ids = ", ".join(f"#{n}" for n in result["would_repair"])
@@ -676,6 +733,13 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             f"would be set to done ({tracking['scanned_tracking']} tracking rows "
             f"scanned){track_suffix}"
         )
+        status_ids = ", ".join(f"#{n}" for n in statuses["would_normalize"])
+        status_suffix = f": {status_ids}" if status_ids else ""
+        print(
+            f"reconcile --dry-run: {len(statuses['would_normalize'])} row(s) would "
+            f"have their status normalized ({statuses['scanned']} non-terminal rows "
+            f"scanned){status_suffix}"
+        )
     else:
         print(
             f"reconcile: {result['repaired']} issue(s) set to closed "
@@ -684,6 +748,10 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile: {tracking['closed']} tracking row(s) set to done "
             f"({tracking['scanned_tracking']} tracking rows scanned)"
+        )
+        print(
+            f"reconcile: {statuses['normalized']} row(s) status-normalized "
+            f"({statuses['scanned']} non-terminal rows scanned)"
         )
 
 

@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -118,6 +119,86 @@ class TestReconcileMemory(unittest.TestCase):
         result = cli.reconcile_memory(client, [{"number": "999", "state": "CLOSED"}])
         self.assertEqual(result["repaired"], 0)
         self.assertIsNone(client.get_issue("999"))
+        client.close()
+
+
+class TestNormalizeMemoryStatuses(unittest.TestCase):
+    """The one-shot status normalization pass (#173 AC3).
+
+    log_issue has normalized on write since ADR-0006, so only rows written before
+    that (or by a path that bypassed it) can still hold a display-cased or legacy
+    token. This pass canonicalizes those in place. It is a deliberately narrow
+    exception to ADR-0006 decision point 1, which rejected option 1c (a destructive
+    bulk rewrite): it touches only the status token, read-modify-writing through
+    the unchanged log_issue, so no field is lost and no contract changes
+    (ADR-0033).
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _seed_legacy(self, rows):
+        """Seed rows whose status bypasses log_issue's normalize-on-write.
+
+        The raw sqlite UPDATE is the point: a legacy value cannot be written
+        through log_issue any more, so it must be forced in to reproduce the bug.
+        """
+        client = DatabaseClient(db_path=self.db_path)
+        for github_id, title, type_, status in rows:
+            client.log_issue(github_id, title, type_, "open", None)
+        conn = sqlite3.connect(self.db_path)
+        for github_id, _title, _type, status in rows:
+            conn.execute(
+                "UPDATE issues SET status = ? WHERE github_id = ?", (status, github_id)
+            )
+        conn.commit()
+        conn.close()
+        return client
+
+    def test_normalizes_legacy_rows_preserving_fields_and_is_idempotent(self):
+        client = self._seed_legacy([
+            ("102", "Display cased", "chore", "Code Review"),
+            ("133", "Lower cased", "bug", "backlog"),
+            ("21", "Legacy word", "feature", "review"),
+            ("140", "Spaced", "bug", "In Progress"),
+        ])
+        # Precondition: the store really does hold the non-canonical values.
+        self.assertEqual(client.get_issue("102")["status"], "Code Review")
+
+        first = cli.normalize_memory_statuses(client)
+        self.assertEqual(first["normalized"], 4)
+
+        self.assertEqual(client.get_issue("102")["status"], "code_review")
+        self.assertEqual(client.get_issue("133")["status"], "Backlog")
+        self.assertEqual(client.get_issue("21")["status"], "code_review")
+        self.assertEqual(client.get_issue("140")["status"], "in_progress")
+        # Other fields survive the rewrite.
+        self.assertEqual(client.get_issue("102")["title"], "Display cased")
+        self.assertEqual(client.get_issue("102")["type_"], "chore")
+
+        # A second run writes nothing: no non-canonical value remains (AC3).
+        second = cli.normalize_memory_statuses(client)
+        self.assertEqual(second["normalized"], 0)
+        client.close()
+
+    def test_already_canonical_rows_are_not_rewritten(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue("200", "Canonical", "feature", "in_progress", None)
+        result = cli.normalize_memory_statuses(client)
+        self.assertEqual(result["normalized"], 0)
+        self.assertEqual(client.get_issue("200")["status"], "in_progress")
+        client.close()
+
+    def test_dry_run_reports_without_writing(self):
+        client = self._seed_legacy([("102", "Display cased", "chore", "Code Review")])
+        result = cli.normalize_memory_statuses(client, dry_run=True)
+        self.assertEqual(result["would_normalize"], ["102"])
+        self.assertEqual(result["normalized"], 0)
+        self.assertEqual(client.get_issue("102")["status"], "Code Review")
         client.close()
 
 

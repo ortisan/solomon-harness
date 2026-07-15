@@ -640,6 +640,9 @@ def record_status_write_through(issue_number, column) -> None:
 
         github_id = str(issue_number)
         status = normalize_status(column)
+        if status is None:
+            # No column means no status to assert; never invent one.
+            return
         # Targets whatever backend DatabaseClient resolves (the shared SurrealDB in
         # normal operation; the SQLite fallback only when SurrealDB is unreachable).
         # Unlike reconcile, this single best-effort mirror write does not gate on the
