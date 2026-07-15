@@ -107,6 +107,21 @@ class TestDocumentSkills(unittest.TestCase):
         title, _ = self.mod.extract_metadata(path)
         self.assertEqual(title, "OAuth Flows")
 
+    def test_document_agent_renders_the_installed_skill_source_reference(self):
+        agents_dir = os.path.join(self.dir, "agents")
+        profile_dir = os.path.join(agents_dir, "qa", "agents")
+        os.makedirs(profile_dir)
+        with open(os.path.join(profile_dir, "qa.md"), "w", encoding="utf-8") as f:
+            f.write("# QA Profile\n")
+
+        self.mod.document_agent(
+            "qa", agents_dir, ".agents/solomon/skill-sources.json"
+        )
+
+        with open(os.path.join(profile_dir, "qa.md"), encoding="utf-8") as f:
+            profile = f.read()
+        self.assertIn("`.agents/solomon/skill-sources.json`", profile)
+
 
 if __name__ == "__main__":
     unittest.main()

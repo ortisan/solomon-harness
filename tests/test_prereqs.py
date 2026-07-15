@@ -52,6 +52,21 @@ class TestPrereqs(unittest.TestCase):
         mock_install.assert_called_once()
         self.assertIn("uv (installed)", out.getvalue())
 
+    def test_each_supported_host_satisfies_the_optional_host_check(self):
+        for installed in ("claude", "agy", "codex"):
+            with self.subTest(installed=installed):
+                out = io.StringIO()
+
+                def exists(command):
+                    return command in {"uv", "git", installed}
+
+                with patch.object(prereqs, "command_exists", side_effect=exists):
+                    prereqs.check_prerequisites(auto_install=False, out=out)
+
+                report = out.getvalue()
+                self.assertIn(f"host tool ({installed})", report)
+                self.assertNotIn("Gemini", report)
+
 
 if __name__ == "__main__":
     unittest.main()

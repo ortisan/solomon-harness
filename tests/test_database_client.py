@@ -22,6 +22,7 @@ from solomon_harness.tools.database_client import (  # noqa: E402
     normalize_status,
     person_key_or_unassigned,
 )
+from solomon_harness.layout import PathConfinementError  # noqa: E402
 
 
 class TestIsGithubIssue(unittest.TestCase):
@@ -597,7 +598,10 @@ class TestDatabaseClient(unittest.TestCase):
             mock_isfile.return_value = False
 
             client = DatabaseClient(harness_dir="/mock/repo/templates/harness")
-            self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
+            self.assertEqual(
+                client.db_path,
+                "/mock/repo/.agents/solomon/state/memory/long_term/harness.db",
+            )
             client.close()
 
     def test_project_root_resolution_fallback(self):
@@ -614,7 +618,7 @@ class TestDatabaseClient(unittest.TestCase):
             client = DatabaseClient(harness_dir="/mock/repo/templates/harness")
             self.assertEqual(
                 client.db_path,
-                "/mock/repo/templates/harness/memory/long_term/harness.db",
+                "/mock/repo/templates/harness/.agents/solomon/state/memory/long_term/harness.db",
             )
             client.close()
 
@@ -639,7 +643,114 @@ class TestDatabaseClient(unittest.TestCase):
             mock_isfile.return_value = False
 
             client = DatabaseClient(harness_dir="/mock/repo/agents/documenter")
-            self.assertEqual(client.db_path, "/mock/repo/memory/long_term/harness.db")
+            self.assertEqual(
+                client.db_path,
+                "/mock/repo/.agents/solomon/state/memory/long_term/harness.db",
+            )
+            client.close()
+
+    def test_default_state_symlink_is_rejected_before_sqlite_writes(self):
+        workspace = os.path.join(self.temp_dir.name, "workspace")
+        outside = os.path.join(self.temp_dir.name, "outside")
+        os.makedirs(os.path.join(workspace, ".git"))
+        os.makedirs(os.path.join(workspace, ".agents", "solomon", "config"))
+        os.makedirs(outside)
+        with open(
+            os.path.join(workspace, ".agents", "solomon", "config", "project.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump({"database": {"provider": "sqlite"}}, handle)
+        os.symlink(
+            outside,
+            os.path.join(workspace, ".agents", "solomon", "state"),
+            target_is_directory=True,
+        )
+
+        with (
+            patch.dict(os.environ, {"HARNESS_MIRROR_ROOT": ""}),
+            self.assertRaises(PathConfinementError),
+        ):
+            DatabaseClient(harness_dir=workspace)
+
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_default_mirror_revalidates_confinement_before_each_write(self):
+        workspace = os.path.join(self.temp_dir.name, "workspace")
+        outside = os.path.join(self.temp_dir.name, "outside")
+        os.makedirs(os.path.join(workspace, ".git"))
+        os.makedirs(os.path.join(workspace, ".agents", "solomon", "config"))
+        os.makedirs(outside)
+        with open(
+            os.path.join(workspace, ".agents", "solomon", "config", "project.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump({"database": {"provider": "sqlite"}}, handle)
+
+        with patch.dict(os.environ, {"HARNESS_MIRROR_ROOT": ""}):
+            client = DatabaseClient(harness_dir=workspace)
+            mirror = os.path.join(
+                workspace, ".agents", "solomon", "state", "memory-mirror"
+            )
+            os.symlink(outside, mirror, target_is_directory=True)
+            try:
+                with self.assertRaises(PathConfinementError):
+                    client.log_decision(
+                        "Layout", "confined", "accepted", "qa", "main", ""
+                    )
+            finally:
+                client.close()
+
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_default_sqlite_path_revalidates_confinement_before_each_connection(self):
+        workspace = os.path.join(self.temp_dir.name, "workspace")
+        outside_db = os.path.join(self.temp_dir.name, "outside.db")
+        os.makedirs(os.path.join(workspace, ".git"))
+        os.makedirs(os.path.join(workspace, ".agents", "solomon", "config"))
+        with open(
+            os.path.join(workspace, ".agents", "solomon", "config", "project.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump({"database": {"provider": "sqlite"}}, handle)
+        with open(outside_db, "wb") as handle:
+            handle.write(b"unchanged")
+
+        with patch.dict(os.environ, {"HARNESS_MIRROR_ROOT": ""}):
+            client = DatabaseClient(harness_dir=workspace)
+            db_path = client.db_path
+            self.assertIsNotNone(db_path)
+            assert db_path is not None
+            os.unlink(db_path)
+            os.symlink(outside_db, db_path)
+            try:
+                with self.assertRaises(PathConfinementError):
+                    client.get_open_issues()
+            finally:
+                client.close()
+
+        with open(outside_db, "rb") as handle:
+            self.assertEqual(handle.read(), b"unchanged")
+
+    def test_canonical_config_symlink_is_not_loaded(self):
+        workspace = os.path.join(self.temp_dir.name, "workspace")
+        outside_config = os.path.join(self.temp_dir.name, "outside-config.json")
+        config_dir = os.path.join(workspace, ".agents", "solomon", "config")
+        os.makedirs(os.path.join(workspace, ".git"))
+        os.makedirs(config_dir)
+        with open(outside_config, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"database": {"provider": "sqlite", "busy_timeout_seconds": 91}},
+                handle,
+            )
+        os.symlink(outside_config, os.path.join(config_dir, "project.json"))
+
+        client = DatabaseClient(db_path=self.sqlite_db_path, harness_dir=workspace)
+        try:
+            self.assertEqual(client.busy_timeout_seconds, 5.0)
+        finally:
             client.close()
 
     def test_reads_harness_local_config_not_repo_root(self):

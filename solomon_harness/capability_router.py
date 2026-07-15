@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple, Union
 
 from solomon_harness.agent_selection import discover_agents
+from solomon_harness.layout import HarnessPaths, find_workspace_root
 
 ADAPT_SKILL = "adapt_skill"
 CREATE_AGENT = "create_agent"
@@ -79,7 +80,7 @@ Matcher = Callable[[str, List[Agent]], Match]
 
 
 def _default_workspace_root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.fspath(find_workspace_root(__file__))
 
 
 def _role_description(role_path: str) -> str:
@@ -119,10 +120,10 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     """
     root = workspace_root or _default_workspace_root()
     real_root = os.path.realpath(root)
-    agents_dir = os.path.realpath(os.path.join(real_root, "agents"))
+    agents_dir = os.path.realpath(HarnessPaths(real_root).resolve_agents())
     names = discover_agents(real_root)
     if not names:
-        raise CatalogError(f"no agents discovered under {os.path.join(real_root, 'agents')}")
+        raise CatalogError(f"no agents discovered under {agents_dir}")
     catalog = []
     for name in sorted(names):
         role = os.path.join(agents_dir, name, "agents", f"{name}.md")

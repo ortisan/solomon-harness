@@ -23,6 +23,12 @@ from typing import (
     runtime_checkable,
 )
 
+from solomon_harness.layout import (
+    HarnessPaths,
+    PathConfinementError,
+    confined_path,
+)
+
 
 # Dimensionality of the default memory embedding. Must match the HNSW vector
 # index DEFINEd on the ``memory`` table (DIMENSION 256) and the HashingEmbedder.
@@ -435,15 +441,19 @@ def _resolve_mirror_root_path(
     project_root: str,
     db_path: Optional[str] = None,
     override: Optional[str] = None,
+    *,
+    for_write: bool = True,
 ) -> str:
     """Resolve the write-through mirror root from a single precedence rule.
 
     Shared by :class:`DatabaseClient` and the healthcheck so a pending-reconcile
     count is never read from a different directory than the one writes land in
     (issue #35). Precedence: an explicit ``override``, then ``HARNESS_MIRROR_ROOT``,
-    then a ``memory-mirror`` sibling of an explicit ``db_path`` or ``HARNESS_DB_PATH``
-    (the test/sandbox isolation convention), then
-    ``<project_root>/.solomon/memory-mirror``.
+    then a ``memory-mirror`` sibling of an explicit ``db_path`` or
+    ``HARNESS_DB_PATH`` (the test/sandbox isolation convention). The default
+    write target is ``.agents/solomon/state/memory-mirror``. Read-only callers
+    may request the legacy ``.solomon`` fallback while the canonical state
+    directory is absent.
     """
     if override:
         return override
@@ -457,7 +467,12 @@ def _resolve_mirror_root_path(
     if env_db:
         base = os.path.dirname(os.path.abspath(env_db))
         return os.path.join(base, "memory-mirror")
-    return os.path.join(project_root, ".solomon", "memory-mirror")
+    paths = HarnessPaths(project_root)
+    state = paths.state if for_write else paths.resolve_state()
+    target = state / "memory-mirror"
+    if for_write:
+        target = confined_path(project_root, target)
+    return os.fspath(target)
 
 
 def _surreal_connection_exception_types() -> tuple:
@@ -624,12 +639,12 @@ class DatabaseClient:
 
         Args:
             db_path: Optional custom path to the SQLite database file (if using SQLite).
-            harness_dir: The agent (or template) directory that owns .agent/config.json
-                and the memory store. Passed explicitly by the thin agent entrypoint;
-                when omitted it falls back to this file's package location.
+            harness_dir: The consumer repository or a directory inside its harness.
+                Passed explicitly by thin agent entrypoints; when omitted it falls
+                back to this file's package location.
             mirror_root: Optional override for the write-through Markdown mirror root
-                (issue #35). Defaults to ``<repo>/.solomon/memory-mirror``; tests point
-                it at a temp directory so they never touch the real project's state.
+                (issue #35). Defaults to the canonical project state directory; tests
+                point it at a temp directory so they never touch real project state.
             embedder: Optional text embedder used to vectorize memory entries for
                 semantic search. Defaults to :class:`HashingEmbedder`, a dependency-free
                 lexical embedder; pass a model-backed embedder for true semantic search.
@@ -662,6 +677,8 @@ class DatabaseClient:
         # The explicit db_path argument (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
         self._db_path_param = db_path
+        self._db_path_is_project_state = False
+        self._mirror_root_is_project_state = False
 
         # SurrealDB connection params captured so the connection can be rebuilt
         # mid-session after a drop, not only at construction (issue #37).
@@ -690,10 +707,15 @@ class DatabaseClient:
         self.harness_dir = harness_dir
 
         # Locate the repository root by walking up from the harness directory.
+        # The canonical marker works from installed package and agent paths;
+        # source checkouts retain the legacy marker for one compatibility window.
         project_root: str = harness_dir
         found_root: bool = False
         while project_root and project_root != os.path.dirname(project_root):
             if os.path.exists(os.path.join(project_root, ".git")):
+                found_root = True
+                break
+            if os.path.exists(os.path.join(project_root, ".agents", "solomon")):
                 found_root = True
                 break
             if (
@@ -714,22 +736,32 @@ class DatabaseClient:
         self._project_root = project_root
 
     def _load_config(self) -> Dict[str, Any]:
-        """Read .agent/config.json and capture the database block's fields."""
-        # Load configuration. Prefer the harness-local .agent/config.json, which carries
-        # the per-agent `database` block, and fall back to the project-root config.
+        """Read project configuration and capture the database block's fields."""
+        # An installed project has one host-neutral config. Source checkouts and
+        # pre-migration installs retain harness-local/project legacy fallbacks.
         config: Dict[str, Any] = {}
-        candidate_config_paths = [
-            os.path.join(self.harness_dir, ".agent", "config.json"),
-            os.path.join(self._project_root, ".agent", "config.json"),
-        ]
+        paths = HarnessPaths(self._project_root)
+        if paths.config.exists():
+            candidate_config_paths = [os.fspath(paths.config)]
+        else:
+            candidate_config_paths = [
+                os.path.join(self.harness_dir, ".agent", "config.json"),
+                os.fspath(paths.legacy_config),
+            ]
+        candidate_config_paths = list(dict.fromkeys(candidate_config_paths))
         for candidate in candidate_config_paths:
             if os.path.isfile(candidate):
                 try:
-                    with open(candidate, "r", encoding="utf-8") as f:
+                    safe_candidate = confined_path(
+                        self._project_root,
+                        os.path.abspath(candidate),
+                    )
+                    with open(safe_candidate, "r", encoding="utf-8") as f:
                         config = json.load(f)
                     break
-                except (OSError, json.JSONDecodeError) as exc:
+                except (OSError, json.JSONDecodeError, PathConfinementError) as exc:
                     logging.error(f"Failed to read configuration at {candidate}: {exc}")
+                    break
 
         db_config = config.get("database", {})
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
@@ -901,7 +933,10 @@ class DatabaseClient:
         """Establishes and returns a SQLite connection context and ensures it is closed on exit."""
         if self.db_path is None:
             raise ValueError("Database path must be set for SQLite backend")
-        conn = sqlite3.connect(self.db_path, timeout=self.busy_timeout_seconds)
+        db_path = self.db_path
+        if self._db_path_is_project_state:
+            db_path = os.fspath(confined_path(self._project_root, db_path))
+        conn = sqlite3.connect(db_path, timeout=self.busy_timeout_seconds)
         conn.row_factory = sqlite3.Row
         # WAL plus a busy timeout keeps the shared store safe when several agents write
         # concurrently instead of failing with "database is locked".
@@ -1307,9 +1342,16 @@ class DatabaseClient:
         if env_db:
             os.makedirs(os.path.dirname(os.path.abspath(env_db)), exist_ok=True)
             return env_db
-        db_dir = os.path.join(self._project_root, "memory", "long_term")
-        os.makedirs(db_dir, exist_ok=True)
-        return os.path.join(db_dir, "harness.db")
+        self._db_path_is_project_state = True
+        db_path = confined_path(
+            self._project_root,
+            HarnessPaths(self._project_root).state
+            / "memory"
+            / "long_term"
+            / "harness.db",
+        )
+        os.makedirs(db_path.parent, exist_ok=True)
+        return os.fspath(db_path)
 
     def _connect_surreal(self) -> bool:
         """(Re)build ``self.db`` and sign in, returning True on success.
@@ -1547,7 +1589,7 @@ class DatabaseClient:
     # Write-through Markdown mirror + reconcile-on-recovery (issue #35).
     #
     # Every write also lands in a human-readable Markdown file under
-    # ``.solomon/memory-mirror/<kind>/<id>.md`` so a mid-session backend outage
+    # ``.agents/solomon/state/memory-mirror/<kind>/<id>.md`` so a backend outage
     # never silently drops an audit-trail record: a write that only reaches the
     # SQLite fallback is stamped ``synced: false`` and replayed to the SurrealDB
     # primary on recovery via :meth:`reconcile`. The id is client-minted and used
@@ -1596,16 +1638,27 @@ class DatabaseClient:
         An explicit ``mirror_root`` (or ``HARNESS_MIRROR_ROOT``) wins. When the
         SQLite store is redirected to a temp file for a test or sandbox (an
         explicit ``db_path`` or ``HARNESS_DB_PATH``), the mirror lives beside it so
-        a test never touches the real project's ``.solomon/`` -- the same isolation
-        convention :meth:`_resolve_sqlite_path` uses for the DB. Otherwise it is the
-        gitignored ``.solomon/memory-mirror`` at the repository root.
+        a test never touches the real project's state -- the same isolation convention
+        :meth:`_resolve_sqlite_path` uses for the DB. Otherwise it is the canonical
+        project state directory.
 
         Delegates to the module-level :func:`_resolve_mirror_root_path` so the
         healthcheck resolves the very same root and can never count pending records
         in a different directory than the one writes land in.
         """
+        self._mirror_root_is_project_state = not any(
+            (
+                override,
+                os.environ.get("HARNESS_MIRROR_ROOT"),
+                self._db_path_param,
+                os.environ.get("HARNESS_DB_PATH"),
+            )
+        )
         return _resolve_mirror_root_path(
-            self._project_root, db_path=self._db_path_param, override=override
+            self._project_root,
+            db_path=self._db_path_param,
+            override=override,
+            for_write=True,
         )
 
     @staticmethod
@@ -1718,6 +1771,9 @@ class DatabaseClient:
             created_at = self._utc_iso()
         directory = os.path.join(self._mirror_root, kind)
         path = os.path.join(directory, self._safe_name(record_id) + ".md")
+        if self._mirror_root_is_project_state:
+            directory = os.fspath(confined_path(self._project_root, directory))
+            path = os.fspath(confined_path(self._project_root, path))
         content = self._render_mirror(record_id, kind, created_at, synced, fields)
         try:
             os.makedirs(directory, exist_ok=True)

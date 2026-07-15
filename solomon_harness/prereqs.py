@@ -24,7 +24,7 @@ _HINTS = {
         "linux": "sudo apt-get install -y python3",
         "win32": "https://www.python.org/downloads/",
     },
-    "host": {"all": "install Claude Code (https://claude.com/claude-code) or the Gemini CLI"},
+    "host": {"all": "install at least one supported host: Claude Code, AGY, or Codex"},
 }
 
 
@@ -106,8 +106,11 @@ def check_prerequisites(auto_install: bool = True, out=None) -> bool:
     else:
         line(f"  !   GitHub CLI (gh) - needed for the delivery workflows  ->  {_hint('gh')}")
 
-    if command_exists("claude") or command_exists("gemini"):
-        line("  ok  host tool (claude or gemini)")
+    installed_hosts = [
+        host for host in ("claude", "agy", "codex") if command_exists(host)
+    ]
+    if installed_hosts:
+        line(f"  ok  host tool ({', '.join(installed_hosts)})")
     else:
         line(f"  !   host tool - {_hint('host')}")
 

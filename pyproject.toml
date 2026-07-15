@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "solomon-harness"
 version = "0.11.0"
@@ -15,8 +19,7 @@ dependencies = [
 ]
 [project.scripts]
 solomon-harness = "solomon_harness.cli:main"
-
-
+solomon-harness-mcp = "solomon_harness.mcp_server:main"
 
 [dependency-groups]
 dev = [
@@ -28,10 +31,6 @@ dev = [
     # false-positived on shell regexes). Dev/CI-only; not a runtime dependency.
     "pyyaml>=6.0",
 ]
-
-[tool.uv]
-# This repository is an application and a template tree, not an installable package.
-package = false
 
 [tool.ruff]
 line-length = 100
@@ -47,9 +46,42 @@ explicit_package_bases = true
 namespace_packages = true
 
 [tool.setuptools]
-packages = ["solomon_harness"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["solomon_harness*"]
+
+[tool.setuptools.package-data]
+solomon_harness = [
+    "legacy_payloads/v0.11.0.tsv",
+    "catalog/workflows/solomon-bug.md",
+    "catalog/workflows/solomon-idea.md",
+    "catalog/workflows/solomon-issue.md",
+    "catalog/workflows/solomon-loop.md",
+    "catalog/workflows/solomon-refine.md",
+    "catalog/workflows/solomon-release.md",
+    "catalog/workflows/solomon-review.md",
+    "catalog/workflows/solomon-scan-arch.md",
+    "catalog/workflows/solomon-scan-dedup.md",
+    "catalog/workflows/solomon-start.md",
+    "catalog/workflows/solomon-workflow.md",
+    "templates/AGENTS.md.template",
+    "templates/CLAUDE.md.template",
+    "templates/KANBAN.md.template",
+    "templates/harness/.agent/config.json",
+    "templates/harness/main.py",
+    "templates/wiki/Business-Requirements.md.template",
+    "templates/wiki/Commands-Reference.md.template",
+    "templates/wiki/Design-System.md.template",
+    "templates/wiki/Features.md.template",
+    "templates/wiki/Home.md.template",
+    "templates/wiki/Quick-Start.md.template",
+    "templates/wiki/Release-Notes.md.template",
+    "templates/wiki/Release.md.template",
+    "templates/wiki/Technical-Documentation.md.template",
+    "templates/wiki/_Sidebar.md.template",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-

@@ -32,6 +32,32 @@ def _workspace_with_command(stage: str, body: str) -> str:
     return tmp
 
 
+def _workspace_with_canonical_command(stage: str, body: str) -> str:
+    tmp = tempfile.mkdtemp()
+    cmd_dir = os.path.join(tmp, ".agents", "solomon", "workflows")
+    os.makedirs(cmd_dir)
+    with open(os.path.join(cmd_dir, f"solomon-{stage}.md"), "w", encoding="utf-8") as f:
+        f.write(body)
+    return tmp
+
+
+def _source_workspace_with_catalog_and_bridge(
+    stage: str,
+    catalog_body: str,
+    bridge_body: str,
+) -> str:
+    tmp = tempfile.mkdtemp()
+    catalog = os.path.join(tmp, "solomon_harness", "catalog", "workflows")
+    bridge = os.path.join(tmp, ".claude", "commands")
+    os.makedirs(catalog)
+    os.makedirs(bridge)
+    with open(os.path.join(catalog, f"solomon-{stage}.md"), "w", encoding="utf-8") as f:
+        f.write(catalog_body)
+    with open(os.path.join(bridge, f"solomon-{stage}.md"), "w", encoding="utf-8") as f:
+        f.write(bridge_body)
+    return tmp
+
+
 def _git_workspace_with_command(stage: str, body: str) -> str:
     # worktree_root() shells out to git to resolve the main worktree, so the
     # --add-dir tests (#199) need a real (minimal) repo, unlike the plain
@@ -55,6 +81,42 @@ def _git_workspace_with_loop(stage: str, body: str, loop_block: dict) -> str:
 
 
 class TestWorkflows(unittest.TestCase):
+    def test_source_checkout_executes_catalog_body_instead_of_thin_claude_bridge(self):
+        root = _source_workspace_with_catalog_and_bridge(
+            "issue",
+            "---\ndescription: canonical\n---\nCreate the issue for {{arguments}}.",
+            "---\nallowed-tools: Bash(gh:*), AskUserQuestion\n---\nRead the catalog for $ARGUMENTS.",
+        )
+
+        prompt = workflows.build_prompt(root, "issue", ["portable", "install"])
+
+        self.assertEqual(prompt, "Create the issue for portable install.")
+
+    def test_allowed_tools_come_from_claude_bridge_not_neutral_catalog(self):
+        root = _source_workspace_with_catalog_and_bridge(
+            "issue",
+            "---\ndescription: canonical\n---\nCreate {{arguments}}.",
+            "---\nallowed-tools: Bash(gh:*), AskUserQuestion\n---\nRead the catalog.",
+        )
+
+        self.assertEqual(workflows._allowed_tools(root, "issue"), "Bash(gh:*)")
+
+    def test_build_prompt_prefers_canonical_catalog_and_substitutes_neutral_args(self):
+        root = _workspace_with_canonical_command(
+            "issue",
+            "---\ndescription: x\n---\n\nShape {{arguments}} through the canonical workflow.",
+        )
+        legacy = os.path.join(root, ".claude", "commands")
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, "solomon-issue.md"), "w", encoding="utf-8") as f:
+            f.write("legacy $ARGUMENTS")
+
+        prompt = workflows.build_prompt(root, "issue", ["host", "neutral"])
+
+        self.assertIn("host neutral through the canonical workflow", prompt)
+        self.assertNotIn("legacy", prompt)
+        self.assertNotIn("{{arguments}}", prompt)
+
     def test_build_prompt_strips_frontmatter_and_substitutes_args(self):
         root = _workspace_with_command(
             "issue",
@@ -108,6 +170,36 @@ class TestWorkflows(unittest.TestCase):
         root = _workspace_with_command("idea", "body $ARGUMENTS")
         self.assertEqual(workflows.run_stage(root, "idea", ["x"], engine="bogus"), 1)
 
+    def test_run_stage_supports_codex_with_native_trust_preserving_command(self):
+        root = _workspace_with_canonical_command("idea", "Capture {{arguments}}")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "idea", ["x"], engine="codex")
+
+        self.assertEqual(rc, 0)
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[:4], ["codex", "exec", "--sandbox", "workspace-write"])
+        self.assertEqual(command[-1], "-")
+        self.assertNotIn("--dangerously-bypass-hook-trust", command)
+
+    def test_run_stage_uses_supported_agy_flags(self):
+        root = _workspace_with_canonical_command("idea", "Capture {{arguments}}")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "idea", ["x"], engine="agy")
+
+        self.assertEqual(rc, 0)
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[:3], ["agy", "-p", "-"])
+        self.assertNotIn("-o", command)
+        self.assertNotIn("--dangerously-skip-permissions", command)
+
     def test_run_stage_invokes_engine_with_prompt_on_stdin(self):
         root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
 
@@ -120,6 +212,7 @@ class TestWorkflows(unittest.TestCase):
         args, kwargs = mock_run.call_args
         self.assertEqual(args[0], ["claude", "-p"])
         self.assertIn("Do work on 42", kwargs["input"])
+        self.assertEqual(kwargs["cwd"], root)
 
     def test_run_stage_passes_allowed_tools_frontmatter_to_claude_engine(self):
         # #179: the headless engine has no TTY, so any tool outside the ambient

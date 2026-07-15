@@ -3,6 +3,11 @@ import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
+from solomon_harness.layout import (
+    HarnessPaths,
+    PathConfinementError,
+    confined_path,
+)
 
 # Proposal kind for a skill acquired through the external broker. Brokered
 # proposals carry single-source provenance instead of the two-source evidence
@@ -32,6 +37,19 @@ class SweepResult:
 
 SweepAnalyzer = Callable[[str, str, str], Optional[DriftMatch]]
 
+
+def _reconcile_host_adapters(root: str) -> Any:
+    """Keep managed consumers transactional and source dogfood direct."""
+    paths = HarnessPaths(root)
+    if paths.manifest.is_file():
+        from solomon_harness.install_layout import install_project
+
+        return install_project(root)
+
+    from solomon_harness.host_adapters import compile_adapters
+
+    return compile_adapters(root)
+
 def sweep_fleet(
     baseline: str,
     analyzer: SweepAnalyzer,
@@ -40,13 +58,15 @@ def sweep_fleet(
 ) -> SweepResult:
     """Sweep all agents in the fleet, identify drift against the baseline, and emit proposals."""
     root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    paths = HarnessPaths(root)
+    agents_dir = os.fspath(confined_path(paths.root, paths.resolve_agents()))
     agent_names = discover_agents(root)
     
     proposals: List[Proposal] = []
     needs_evidence: List[Dict[str, Any]] = []
     
     for agent_name in sorted(agent_names):
-        agent_dir = os.path.join(root, "agents", agent_name)
+        agent_dir = os.path.join(agents_dir, agent_name)
         
         # Read profile
         profile_path = os.path.join(agent_dir, "agents", f"{agent_name}.md")
@@ -112,7 +132,12 @@ def apply_proposal(
 ) -> str:
     """Apply an accepted proposal to an agent by branching, editing, compiling, committing, and opening a draft PR."""
     import re
-    root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    requested_root = workspace_root or os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
+    paths = HarnessPaths(requested_root)
+    root = os.fspath(paths.root)
+    agents_root = confined_path(paths.root, paths.resolve_agents())
 
     # Validation 1: provenance floor. Brokered adapt_skill proposals carry
     # genuine single-source provenance (<source>@<full-sha>) instead of the
@@ -138,7 +163,7 @@ def apply_proposal(
             raise ValueError("targets multiple or invalid agent")
         
     # Validation 3: rule duplicate detection
-    agents_md_path = os.path.join(root, "agents", "AGENTS.md")
+    agents_md_path = os.fspath(confined_path(paths.root, paths.resolve_rules()))
     if os.path.isfile(agents_md_path):
         with open(agents_md_path, "r", encoding="utf-8") as f:
             agents_rules = f.read().lower()
@@ -174,16 +199,32 @@ def apply_proposal(
     
     try:
         # edit agent files
-        agent_dir = os.path.join(root, "agents", proposal.agent)
-        edit_callback(agent_dir)
+        agent_dir = confined_path(paths.root, agents_root / proposal.agent)
+        edit_callback(os.fspath(agent_dir))
         
         # document-skills.py
-        doc_script = os.path.join(root, "scripts", "document-skills.py")
+        doc_script = os.fspath(
+            confined_path(
+                paths.root,
+                paths.resolve_scripts() / "document-skills.py",
+            )
+        )
         if os.path.isfile(doc_script):
-            subprocess.run([sys.executable, doc_script], cwd=root, env=env, check=True)
+            subprocess.run(
+                [sys.executable, doc_script],
+                cwd=os.fspath(agents_root.parent),
+                env=env,
+                check=True,
+            )
             
-        # solomon compile
-        subprocess.run([sys.executable, "-m", "solomon_harness.cli", "compile"], cwd=root, env=env, check=True)
+        # Reconcile Claude, AGY, and Codex. Installed consumers run through the
+        # manifest transaction; the source checkout compiles dogfood directly.
+        compile_result = _reconcile_host_adapters(root)
+        if compile_result.conflicts:
+            print(
+                "Preserved conflicting host adapter files: "
+                + ", ".join(compile_result.conflicts)
+            )
         
         # add and commit. On an idempotent re-run the reinstall produces no
         # diff, so skip the commit rather than fail on an empty commit.
@@ -267,9 +308,19 @@ def apply_proposal(
                 
                 if proposal.decision_id:
                     date_str = datetime.date.today().isoformat()
-                    contract_dir = os.path.join(root, ".solomon", "handoffs")
+                    contract_dir = os.fspath(
+                        confined_path(paths.root, paths.handoffs)
+                    )
                     os.makedirs(contract_dir, exist_ok=True)
-                    contract_path = os.path.join(contract_dir, f"issue-{proposal.decision_id}-start-to-review.md")
+                    contract_path = os.fspath(
+                        confined_path(
+                            paths.root,
+                            os.path.join(
+                                contract_dir,
+                                f"issue-{proposal.decision_id}-start-to-review.md",
+                            ),
+                        )
+                    )
                     
                     content = f"""# Handoff: start -> review · issue #{proposal.decision_id}
 - Date: {date_str} · Author: practice_curator
@@ -298,10 +349,14 @@ None.
                         sender="practice_curator",
                         recipient="qa",
                         contract_type="pull_request",
-                        contract_path=f".solomon/handoffs/issue-{proposal.decision_id}-start-to-review.md",
+                        contract_path=os.path.relpath(contract_path, root).replace(
+                            os.sep, "/"
+                        ),
                         status="ready",
                         summary=f"Acquired capability: {proposal.drift_description}",
                     )
+        except PathConfinementError:
+            raise
         except Exception as db_exc:
             import logging
             logging.warning(f"Could not log broker decisions to database: {db_exc}")
@@ -401,8 +456,15 @@ def _quarantine_skill(src_dir: str, workspace_root: str, name: str, reason: str)
     dereferences a link out of the source tree.
     """
     import shutil
-    quarantine_root = os.path.join(workspace_root, ".solomon", "quarantine")
-    quarantine_path = os.path.join(quarantine_root, name)
+    if not name or os.path.isabs(name) or os.sep in name or "/" in name or ".." in name:
+        raise ValueError("invalid skill name")
+    paths = HarnessPaths(workspace_root)
+    quarantine_root = os.fspath(
+        confined_path(paths.root, paths.state / "quarantine")
+    )
+    quarantine_path = os.fspath(
+        confined_path(paths.root, os.path.join(quarantine_root, name))
+    )
     if os.path.isdir(quarantine_path):
         shutil.rmtree(quarantine_path)
     os.makedirs(quarantine_root, exist_ok=True)
@@ -449,15 +511,25 @@ def validate_and_install_skill(src_path: str, agent_skills_dir: str, name: str, 
         raise ValueError("invalid skill name")
 
     is_packaged = os.path.basename(src_path) == "SKILL.md"
-    if is_packaged:
-        target_path = os.path.join(agent_skills_dir, name)
-    else:
-        target_path = os.path.join(agent_skills_dir, f"{name}.md")
-
-    target_realpath = os.path.realpath(target_path)
-    agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
-    if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
-        raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
+    paths = HarnessPaths(workspace_root)
+    agents_path = confined_path(paths.root, paths.resolve_agents())
+    try:
+        skills_path = confined_path(paths.root, agent_skills_dir)
+    except PathConfinementError as exc:
+        raise ValueError(f"Confinement violation: {exc}") from exc
+    try:
+        skills_path.relative_to(agents_path)
+    except ValueError as exc:
+        raise ValueError(
+            f"Confinement violation: target path {skills_path} "
+            f"is outside {agents_path}"
+        ) from exc
+    target = confined_path(
+        paths.root,
+        skills_path / (name if is_packaged else f"{name}.md"),
+    )
+    agent_skills_dir = os.fspath(skills_path)
+    target_path = os.fspath(target)
 
     if os.path.islink(src_path) or os.path.islink(target_path):
         raise ValueError("Symlinks are rejected")
@@ -559,7 +631,6 @@ def broker_agent(
 
     registering it, compiling the integrations, and opening a draft PR via apply_proposal.
     """
-    import os
     import re
 
     # Validate agent name strictly to prevent path traversal/confinement escape
@@ -573,10 +644,16 @@ def broker_agent(
 
     def edit_callback(agent_dir: str) -> None:
         # Confinement check
-        target_realpath = os.path.realpath(agent_dir)
-        agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
-        if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
-            raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
+        paths = HarnessPaths(workspace_root)
+        agents_path = confined_path(paths.root, paths.resolve_agents())
+        target_path = confined_path(paths.root, agent_dir)
+        try:
+            target_path.relative_to(agents_path)
+        except ValueError as exc:
+            raise ValueError(
+                f"Confinement violation: target path {target_path} "
+                f"is outside {agents_path}"
+            ) from exc
 
         from solomon_harness.agent_builder import build_agent
         build_agent(
@@ -596,5 +673,3 @@ def broker_agent(
         kind="create_agent",
     )
     return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
-
-

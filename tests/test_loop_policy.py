@@ -94,6 +94,31 @@ class TestKillSwitch(unittest.TestCase):
         loop_policy.write_stop(root)
         self.assertFalse(LoopPolicy(root, level="human").decide_stage("start").allowed)
 
+    def test_stop_rejects_a_symlinked_harness_state(self):
+        root = tempfile.mkdtemp()
+        outside = tempfile.mkdtemp()
+        core = os.path.join(root, ".agents", "solomon")
+        os.makedirs(core)
+        os.symlink(outside, os.path.join(core, "state"))
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            loop_policy.write_stop(root)
+
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_clear_does_not_follow_a_symlinked_legacy_state(self):
+        root = tempfile.mkdtemp()
+        outside = tempfile.mkdtemp()
+        sentinel = os.path.join(outside, "loop.stop")
+        with open(sentinel, "w", encoding="utf-8") as f:
+            f.write("external\n")
+        os.symlink(outside, os.path.join(root, ".solomon"))
+
+        self.assertFalse(loop_policy.clear_stop(root))
+
+        with open(sentinel, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "external\n")
+
 
 class TestDenylist(unittest.TestCase):
     def test_denied_paths(self):

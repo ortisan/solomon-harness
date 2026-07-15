@@ -16,6 +16,8 @@ from typing import Dict, List, Optional
 
 from solomon_harness import memory
 from solomon_harness.home import assigned_memory_port, derive_tenant, harness_home
+from solomon_harness.host_adapters import CAPABILITIES, HOSTS, inspect_capabilities
+from solomon_harness.layout import HarnessPaths
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -48,8 +50,8 @@ def check_docker() -> Dict:
 
 
 def _db_config(workspace_root: str) -> Dict:
-    path = os.path.join(workspace_root, ".agent", "config.json")
-    if os.path.isfile(path):
+    path = HarnessPaths(workspace_root).resolve_config()
+    if path.is_file():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return (json.load(f) or {}).get("database", {}) or {}
@@ -94,7 +96,7 @@ def pending_reconcile_count(workspace_root: str) -> int:
     """
     from solomon_harness.tools.database_client import _resolve_mirror_root_path
 
-    root = _resolve_mirror_root_path(workspace_root)
+    root = _resolve_mirror_root_path(workspace_root, for_write=False)
     if not os.path.isdir(root):
         return 0
     count = 0
@@ -207,6 +209,57 @@ def check_git_config(workspace_root: str) -> Dict:
     return _check("Git config", OK, "clean (no stray core.worktree or core.bare=true)")
 
 
+def check_host_adapters(workspace_root: str) -> List[Dict]:
+    """Report functional parity and activation state for every supported LLM host."""
+
+    matrix = inspect_capabilities(workspace_root)
+    labels = {"agy": "AGY", "claude": "Claude", "codex": "Codex"}
+    required = set(CAPABILITIES)
+    checks: List[Dict] = []
+    for host in HOSTS:
+        record = matrix.get(host, {})
+        available = set(record.get("capabilities", ()))
+        missing = sorted(required - available)
+        name = f"{labels[host]} adapter"
+        if missing:
+            checks.append(
+                _check(
+                    name,
+                    WARN,
+                    "missing capabilities: " + ", ".join(missing),
+                    "Run 'solomon-harness compile' to reconcile native adapters.",
+                )
+            )
+            continue
+
+        states = record.get("capability_states", {})
+        pending = sorted(
+            capability
+            for capability, state in states.items()
+            if state == "pending_trust"
+        )
+        if pending:
+            checks.append(
+                _check(
+                    name,
+                    WARN,
+                    f"{len(required)}/{len(required)} capabilities configured; "
+                    "project trust pending for " + ", ".join(pending),
+                    "Open this repository in Codex, trust the project, and approve "
+                    "the generated hook hash when prompted.",
+                )
+            )
+            continue
+        checks.append(
+            _check(
+                name,
+                OK,
+                f"{len(required)}/{len(required)} capabilities configured",
+            )
+        )
+    return checks
+
+
 def run_checks(workspace_root: Optional[str] = None) -> List[Dict]:
     workspace_root = workspace_root or os.getcwd()
     specs = [
@@ -224,6 +277,13 @@ def run_checks(workspace_root: Optional[str] = None) -> List[Dict]:
             checks.append(fn())
         except Exception as exc:  # never let a check break the report
             checks.append(_check(label, WARN, f"check failed: {exc}"))
+    try:
+        checks.extend(check_host_adapters(workspace_root))
+    except Exception as exc:  # preserve one report row per promised host
+        checks.extend(
+            _check(f"{host.title()} adapter", WARN, f"check failed: {exc}")
+            for host in HOSTS
+        )
     return checks
 
 

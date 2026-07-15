@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate tool-specific agent entrypoints from the central source in agents/.
+"""Compatibility entrypoint for the neutral three-host adapter compiler.
 
-Right now this emits one Claude Code subagent (.claude/agents/<name>.md) per
-specialist agent. Each subagent is thin: it points back to that agent's
-definition under agents/<name>/ and to the shared rules in agents/AGENTS.md, so
-the agent content is never duplicated. Run from the repository root:
+The compiler reads through ``HarnessPaths``: installed projects use the catalog
+below ``.agents/solomon`` and this source repository may use the legacy source
+locations for one migration window. It never generates legacy ``.gemini``
+artifacts. Run from the repository root:
 
     python scripts/generate-integrations.py
 """
@@ -110,46 +110,27 @@ def gemini_command_toml(description: str, body: str) -> str:
 
 
 def generate_gemini_commands(workspace_root: str) -> int:
-    """Mirror the .claude/commands/*.md commands into .gemini/commands/*.toml."""
-    src_dir = os.path.join(workspace_root, ".claude", "commands")
-    if not os.path.isdir(src_dir):
-        return 0
-    out_dir = os.path.join(workspace_root, ".gemini", "commands")
-    os.makedirs(out_dir, exist_ok=True)
-    count = 0
-    for name in sorted(os.listdir(src_dir)):
-        if not name.endswith(".md"):
-            continue
-        description, body = _parse_command_file(os.path.join(src_dir, name))
-        toml = gemini_command_toml(description, body)
-        with open(os.path.join(out_dir, name[:-3] + ".toml"), "w", encoding="utf-8") as f:
-            f.write(toml)
-        count += 1
-    if count:
-        print(f"Generated {count} Gemini commands in {out_dir}")
-    return count
+    """Deprecated compatibility shim; current AGY discovers ``.agents``."""
+    del workspace_root
+    return 0
 
 
 def generate(workspace_root: str) -> int:
-    agents_dir = os.path.join(workspace_root, "agents")
-    if not os.path.isdir(agents_dir):
-        print(f"Error: agents directory not found at {agents_dir}", file=sys.stderr)
+    """Delegate generation to the canonical Claude, AGY, and Codex compiler."""
+    from solomon_harness.host_adapters import compile_adapters
+
+    try:
+        result = compile_adapters(workspace_root)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"Error: adapter compilation failed ({exc})", file=sys.stderr)
         return 1
-
-    out_dir = os.path.join(workspace_root, ".claude", "agents")
-    os.makedirs(out_dir, exist_ok=True)
-
-    names = discover_agents(agents_dir)
-    for name in names:
-        role = os.path.join(agents_dir, name, "agents", f"{name}.md")
-        description = role_description(role, name)
-        with open(os.path.join(out_dir, f"{name}.md"), "w", encoding="utf-8") as f:
-            f.write(subagent_markdown(name, description))
-
-    print(f"Generated {len(names)} Claude Code subagents in {out_dir}: {', '.join(names)}")
-
-    # Mirror the slash commands into Gemini CLI custom commands.
-    generate_gemini_commands(workspace_root)
+    if result.conflicts:
+        print(
+            "Error: adapter conflicts were preserved: " + ", ".join(result.conflicts),
+            file=sys.stderr,
+        )
+        return 1
+    print(f"Compiled {len(result.managed_paths)} Claude, AGY, and Codex adapter paths.")
     return 0
 
 

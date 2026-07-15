@@ -1,8 +1,8 @@
 """Governed autonomy: the L1/L2/L3 maturity ladder, denylist, and kill-switch.
 
 Phase 2 of the loop-engineering adaptation. The policy is the one autonomy dial,
-enforced in portable Python (so it holds on both Claude Code and the Gemini CLI),
-not only in a Claude-only hook. Three hard rules it can never widen:
+enforced in portable Python and exposed through native Claude, AGY, and Codex
+hooks. Three hard rules it can never widen:
 
 - merge, release, and moving a card to Done are PERMANENTLY human-gated at every
   level — the autonomous path may draft work and route it to the review gate, but
@@ -11,8 +11,8 @@ not only in a Claude-only hook. Three hard rules it can never widen:
 - the kill-switch halts every stage immediately, in one command.
 
 The default level is ``human`` (no restriction), so a repository with no ``loop``
-block in ``.agent/config.json`` behaves exactly as before. L1/L2/L3 are opt-in for
-automation and cadence.
+block in project configuration behaves exactly as before. L1/L2/L3 are opt-in
+for automation and cadence.
 """
 
 import fnmatch
@@ -20,6 +20,11 @@ import json
 import os
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
+from solomon_harness.layout import (
+    HarnessPaths,
+    PathConfinementError,
+    confined_path,
+)
 from solomon_harness.loop_lock import resolve_common_file
 
 LEVELS = ("human", "L1", "L2", "L3")
@@ -41,6 +46,7 @@ LEGACY_STAGE_ALIASES = {"loop-auto": "loop"}
 
 DEFAULT_DENYLIST = [
     ".git/*",
+    ".agents/solomon/config/project.json",
     ".agent/config.json",
     "*/.env",
     ".env",
@@ -97,10 +103,27 @@ class LoopPolicy:
 
     # -- kill-switch --------------------------------------------------------
     def stop_path(self) -> str:
-        return resolve_common_file(self.workspace_root, "solomon-loop.stop", "loop.stop")
+        common_path = resolve_common_file(
+            self.workspace_root, "solomon-loop.stop", "loop.stop"
+        )
+        legacy_fallback = HarnessPaths(self.workspace_root).legacy_state / "loop.stop"
+        if os.path.realpath(common_path) == os.path.realpath(legacy_fallback):
+            return os.fspath(HarnessPaths(self.workspace_root).state / "loop.stop")
+        return common_path
+
+    def _stop_candidates(self) -> Tuple[str, ...]:
+        canonical = self.stop_path()
+        paths = HarnessPaths(self.workspace_root)
+        try:
+            legacy = os.fspath(
+                confined_path(paths.root, paths.legacy_state / "loop.stop")
+            )
+        except PathConfinementError:
+            return (canonical,)
+        return (canonical,) if canonical == legacy else (canonical, legacy)
 
     def is_halted(self) -> bool:
-        return os.path.exists(self.stop_path())
+        return any(os.path.exists(path) for path in self._stop_candidates())
 
     # -- decisions ----------------------------------------------------------
     def decide_stage(self, stage: str) -> Decision:
@@ -132,7 +155,7 @@ class LoopPolicy:
         """True when the loop is forbidden from modifying ``path``.
 
         An absolute path is relativized against the workspace root first, so
-        slash-bearing patterns (``.agent/config.json``, ``*secrets/*``) match
+        slash-bearing patterns (project config, ``*secrets/*``) match
         regardless of how the path was rooted — otherwise an absolute path would
         slip past them on the basename alone.
         """
@@ -155,19 +178,16 @@ class LoopPolicy:
 
 
 def _read_loop_config(workspace_root: str) -> Dict[str, Any]:
-    """Read the ``loop`` block from the project's .agent/config.json (best-effort)."""
-    candidates = [
-        os.path.join(workspace_root, ".agent", "config.json"),
-    ]
-    for path in candidates:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            block = data.get("loop")
-            if isinstance(block, dict):
-                return block
-        except (OSError, json.JSONDecodeError):
-            continue
+    """Read the ``loop`` block from project config, with legacy fallback."""
+    path = HarnessPaths(workspace_root).resolve_config()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        block = data.get("loop")
+        if isinstance(block, dict):
+            return block
+    except (OSError, json.JSONDecodeError):
+        pass
     return {}
 
 
@@ -181,13 +201,15 @@ def write_stop(workspace_root: str) -> str:
 
 
 def clear_stop(workspace_root: str) -> bool:
-    """Disengage the kill-switch; return True if a sentinel was removed."""
-    path = LoopPolicy(workspace_root).stop_path()
-    try:
-        os.remove(path)
-        return True
-    except FileNotFoundError:
-        return False
+    """Disengage the kill-switch; return True if any sentinel was removed."""
+    removed = False
+    for path in LoopPolicy(workspace_root)._stop_candidates():
+        try:
+            os.remove(path)
+            removed = True
+        except FileNotFoundError:
+            continue
+    return removed
 
 
 # File-modifying host tools whose target path the denylist guards.
@@ -198,12 +220,10 @@ def denied_write_verdict(payload: Dict[str, Any], policy: "LoopPolicy") -> Tuple
     """Block a file-write tool call that targets a denylisted path.
 
     This is the enforcement the denylist needs to be more than advisory: it stops
-    an autonomous (or prompt-injected) run from editing ``.agent/config.json`` to
+    an autonomous (or prompt-injected) run from editing project configuration to
     widen its own autonomy level, empty the denylist, or defeat the cost ceiling.
-    It runs in the PreToolUse `loop-guard` hook, so it is a Claude-side hard block;
-    on the Gemini host (no PreToolUse) the denylist stays model-honored, and an
-    unattended L3 cadence should pin the level with ``SOLOMON_LOOP_AUTONOMY`` so a
-    config edit cannot raise it.
+    The host adapter normalizes Claude, AGY, and Codex pre-tool payloads before
+    calling this policy, then serializes the verdict in the native host format.
     """
     tool = payload.get("tool_name") or payload.get("tool") or ""
     if tool not in WRITE_TOOLS:

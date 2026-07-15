@@ -1,8 +1,172 @@
 #!/usr/bin/env python3
-import sys
 import os
 import re
+import sys
 import unicodedata
+from pathlib import Path
+
+
+SOLOMON_WORKFLOW_NAMES = (
+    "bug",
+    "idea",
+    "issue",
+    "loop",
+    "refine",
+    "release",
+    "review",
+    "scan-arch",
+    "scan-dedup",
+    "start",
+    "workflow",
+)
+_CANONICAL_METADATA = ("description", "argument-hint")
+_CLAUDE_METADATA = (*_CANONICAL_METADATA, "allowed-tools")
+_HOST_SPECIFIC_WORKFLOW_PROTOCOLS = (
+    ".claude/agents",
+    ".claude/commands",
+    "$ARGUMENTS",
+    "Antigravity CLI",
+    "AskUserQuestion",
+    "Claude Code",
+    "Gemini CLI",
+    "Task tool",
+    "mcp__solomon-memory__",
+)
+_MAX_CLAUDE_BRIDGE_BYTES = 2048
+
+
+def _split_frontmatter(content, filepath):
+    lines = content.splitlines()
+    if not lines or lines[0] != "---":
+        print(f"Error [{filepath}]: Missing frontmatter.")
+        return None
+    try:
+        closing = lines.index("---", 1)
+    except ValueError:
+        print(f"Error [{filepath}]: Unterminated frontmatter.")
+        return None
+
+    metadata = {}
+    for line in lines[1:closing]:
+        if ":" not in line:
+            print(f"Error [{filepath}]: Invalid frontmatter entry: {line!r}")
+            return None
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value or key in metadata:
+            print(f"Error [{filepath}]: Invalid frontmatter key: {key!r}")
+            return None
+        metadata[key] = value
+    return metadata, "\n".join(lines[closing + 1 :]).strip()
+
+
+def _workflow_files(directory):
+    if not directory.is_dir():
+        return set()
+    return {path.name for path in directory.glob("solomon-*.md") if path.is_file()}
+
+
+def validate_solomon_workflow_catalog(project_root):
+    """Validate the neutral workflow sources and their thin Claude bridges."""
+
+    root = Path(project_root)
+    catalog = root / "solomon_harness" / "catalog" / "workflows"
+    bridges = root / ".claude" / "commands"
+    expected = {f"solomon-{name}.md" for name in SOLOMON_WORKFLOW_NAMES}
+    success = True
+
+    for label, directory in (("catalog", catalog), ("Claude bridge", bridges)):
+        actual = _workflow_files(directory)
+        if actual != expected:
+            missing = ", ".join(sorted(expected - actual)) or "none"
+            extra = ", ".join(sorted(actual - expected)) or "none"
+            print(
+                f"Error [{directory}]: {label} workflow set differs; "
+                f"missing: {missing}; extra: {extra}."
+            )
+            success = False
+
+    for filename in sorted(expected):
+        source_path = catalog / filename
+        bridge_path = bridges / filename
+        if not source_path.is_file() or not bridge_path.is_file():
+            continue
+
+        source_content = source_path.read_text(encoding="utf-8")
+        bridge_content = bridge_path.read_text(encoding="utf-8")
+        source_parts = _split_frontmatter(source_content, source_path)
+        bridge_parts = _split_frontmatter(bridge_content, bridge_path)
+        if source_parts is None or bridge_parts is None:
+            success = False
+            continue
+        source_metadata, source_body = source_parts
+        bridge_metadata, bridge_body = bridge_parts
+
+        for key in _CANONICAL_METADATA:
+            if not source_metadata.get(key):
+                print(f"Error [{source_path}]: Missing canonical metadata '{key}'.")
+                success = False
+        if "allowed-tools" in source_metadata:
+            print(
+                f"Error [{source_path}]: Claude-only 'allowed-tools' belongs in the bridge."
+            )
+            success = False
+        for key in _CLAUDE_METADATA:
+            if not bridge_metadata.get(key):
+                print(f"Error [{bridge_path}]: Missing Claude metadata '{key}'.")
+                success = False
+        for key in _CANONICAL_METADATA:
+            if source_metadata.get(key) != bridge_metadata.get(key):
+                print(f"Error [{bridge_path}]: Metadata '{key}' differs from the catalog.")
+                success = False
+
+        allowed_tools = bridge_metadata.get("allowed-tools", "")
+        memory_operations = set(
+            re.findall(r"project-memory ([a-z][a-z0-9_]*)", source_body)
+        )
+        required_claude_tools = {
+            f"mcp__solomon-memory__{operation}" for operation in memory_operations
+        }
+        if "host's native enumerable input mechanism" in source_body:
+            required_claude_tools.add("AskUserQuestion")
+        if "host's native specialist-delegation mechanism" in source_body:
+            required_claude_tools.add("Task")
+        for tool in sorted(required_claude_tools):
+            if tool not in allowed_tools:
+                print(
+                    f"Error [{bridge_path}]: Claude metadata does not allow "
+                    f"required host tool '{tool}'."
+                )
+                success = False
+
+        if not source_body:
+            print(f"Error [{source_path}]: Canonical workflow body is empty.")
+            success = False
+        if "{{arguments}}" not in source_body:
+            print(f"Error [{source_path}]: Missing neutral '{{{{arguments}}}}' placeholder.")
+            success = False
+        for protocol in _HOST_SPECIFIC_WORKFLOW_PROTOCOLS:
+            if protocol in source_body:
+                print(
+                    f"Error [{source_path}]: Host-specific protocol {protocol!r} "
+                    "appears in the canonical workflow."
+                )
+                success = False
+
+        expected_reference = f"`solomon_harness/catalog/workflows/{filename}`"
+        bridge_lines = [line for line in bridge_body.splitlines() if line.strip()]
+        if len(bridge_lines) != 2:
+            print(f"Error [{bridge_path}]: Claude bridge must contain exactly two lines.")
+            success = False
+        if expected_reference not in bridge_body or "$ARGUMENTS" not in bridge_body:
+            print(f"Error [{bridge_path}]: Claude bridge does not point to its catalog source.")
+            success = False
+        if len(bridge_content.encode("utf-8")) > _MAX_CLAUDE_BRIDGE_BYTES:
+            print(f"Error [{bridge_path}]: Claude bridge exceeds the thin-bridge limit.")
+            success = False
+
+    return success
 
 
 def has_emoji(text):
@@ -198,6 +362,12 @@ def main():
     print("\nValidating Release Workflow...")
     if validate_workflow_file(release_path, "release", release_required):
         print("Release Workflow is valid.")
+    else:
+        success = False
+
+    print("\nValidating Solomon Workflow Catalog...")
+    if validate_solomon_workflow_catalog(Path.cwd()):
+        print("Solomon workflow catalog is valid.")
     else:
         success = False
 

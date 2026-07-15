@@ -6,14 +6,14 @@ merges that bypassed the review gate, and worktree tooling flipping
 (``solomon-harness dev``): every headless driver acquires one advisory lockfile
 before a mutating stage touches git or the board, and a second is refused, so that
 path is race-free by construction. Interactive ``/solomon-*`` sessions do not
-acquire the lock; they are bounded by the human merge gate and the Claude-side
-``loop-guard`` hook, and operators run one interactive driver at a time.
+acquire the lock; they are bounded by the human merge gate and the normalized
+Claude, AGY, and Codex ``loop-guard`` hooks.
 
 The lock is anchored at the git *common* directory (resolved by reading ``.git``
 directly, not by shelling out to ``git`` — which would be intercepted by tests
 that patch ``subprocess.run``), so all linked worktrees of a repository contend
 on the same file. When the directory is not a git repository the lock falls back
-to ``<root>/.solomon/loop.lock``.
+to ``<root>/.agents/solomon/state/loop.lock``.
 
 The lock is a plain JSON file on disk, so the holder is itself auditable —
 "every decision traces back to a file on disk". Staleness favors safety: a live
@@ -37,6 +37,8 @@ import socket
 import subprocess
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
+
+from solomon_harness.layout import HarnessPaths, confined_path
 
 DEFAULT_TTL_SECONDS = 1800.0
 LOCK_FILENAME_GIT = "solomon-loop.lock"
@@ -84,7 +86,7 @@ def _read_gitdir(dotgit_file: str, worktree_root: str) -> Optional[str]:
 
 
 def _common_anchor(workspace_root: str):
-    """Return ``(dir, is_git)``: the git common dir, or a ``.solomon`` fallback.
+    """Return ``(dir, is_git)``: Git common dir or canonical state fallback.
 
     Anchoring shared loop state (the lock and the kill-switch sentinel) at the git
     common directory is what makes every linked worktree contend on one file.
@@ -102,19 +104,27 @@ def _common_anchor(workspace_root: str):
             if gitdir:
                 return gitdir, True
             return dotgit, True
-    return os.path.join(os.path.abspath(workspace_root), ".solomon"), False
+    return os.fspath(HarnessPaths(workspace_root).state), False
 
 
 def resolve_lock_path(workspace_root: str) -> str:
     """Resolve the lockfile path, anchored at the git common dir when possible."""
     anchor, is_git = _common_anchor(workspace_root)
-    return os.path.join(anchor, LOCK_FILENAME_GIT if is_git else LOCK_FILENAME_FALLBACK)
+    target = os.path.join(
+        anchor, LOCK_FILENAME_GIT if is_git else LOCK_FILENAME_FALLBACK
+    )
+    if not is_git:
+        target = os.fspath(confined_path(workspace_root, target))
+    return target
 
 
 def resolve_common_file(workspace_root: str, git_name: str, fallback_name: str) -> str:
     """Resolve a shared loop-state file beside the lock (same git-common anchor)."""
     anchor, is_git = _common_anchor(workspace_root)
-    return os.path.join(anchor, git_name if is_git else fallback_name)
+    target = os.path.join(anchor, git_name if is_git else fallback_name)
+    if not is_git:
+        target = os.fspath(confined_path(workspace_root, target))
+    return target
 
 
 def _pid_alive(pid: int) -> bool:
@@ -371,8 +381,9 @@ def guard_verdict(payload: Dict[str, Any], lock: "LoopLock") -> Tuple[bool, str]
     """Decide whether a PreToolUse Bash command must be blocked.
 
     Block only a push/merge issued while another live driver holds the loop lock.
-    This is the Claude-only defense-in-depth layer; the portable enforcement that
-    works on both hosts is the gate inside ``run_stage``. Fail-open by default:
+    Native Claude, AGY, and Codex adapters feed their payloads into this
+    defense-in-depth layer. The portable enforcement of record is the gate inside
+    ``run_stage``. Fail-open by default:
     anything not clearly a push/merge under a live foreign lock is allowed.
     """
     if (payload.get("tool_name") or payload.get("tool") or "") != "Bash":

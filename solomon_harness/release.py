@@ -34,6 +34,11 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from solomon_harness.dates import today_iso
+from solomon_harness.engine_adapters import (
+    build_engine_command,
+    build_engine_environment,
+)
+from solomon_harness.layout import HarnessPaths, PathConfinementError, confined_path
 
 # Bump levels, ordered so ``max`` selects the strongest signal in a commit window.
 _NONE, _PATCH, _MINOR, _MAJOR = 0, 1, 2, 3
@@ -534,19 +539,35 @@ def verify_release_window(workspace_root: str) -> List[str]:
     )
 
 
-def set_pyproject_version(path: str, new_version: str) -> None:
-    with open(path, "r", encoding="utf-8") as f:
+def set_pyproject_version(
+    path: str,
+    new_version: str,
+    workspace_root: Optional[str] = None,
+) -> None:
+    safe_path = confined_path(
+        workspace_root or os.path.dirname(os.path.abspath(path)),
+        path,
+    )
+    with open(safe_path, "r", encoding="utf-8") as f:
         text = f.read()
     new_text, n = _PYPROJECT_VERSION_RE.subn(f'version = "{new_version}"', text, count=1)
     if n != 1:
         raise ValueError(f"could not rewrite version in {path}")
-    with open(path, "w", encoding="utf-8") as f:
+    with open(safe_path, "w", encoding="utf-8") as f:
         f.write(new_text)
 
 
-def prepend_changelog_section(path: str, section: str) -> None:
+def prepend_changelog_section(
+    path: str,
+    section: str,
+    workspace_root: Optional[str] = None,
+) -> None:
     """Insert ``section`` above the first existing version heading."""
-    with open(path, "r", encoding="utf-8") as f:
+    safe_path = confined_path(
+        workspace_root or os.path.dirname(os.path.abspath(path)),
+        path,
+    )
+    with open(safe_path, "r", encoding="utf-8") as f:
         text = f.read()
     lines = text.splitlines(keepends=True)
     insert_at = len(lines)
@@ -556,7 +577,7 @@ def prepend_changelog_section(path: str, section: str) -> None:
             break
     block = section.rstrip() + "\n\n"
     new_text = "".join(lines[:insert_at]) + block + "".join(lines[insert_at:])
-    with open(path, "w", encoding="utf-8") as f:
+    with open(safe_path, "w", encoding="utf-8") as f:
         f.write(new_text)
 
 
@@ -715,6 +736,12 @@ def cmd_verify_window(workspace_root: str) -> int:
 def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     """Open the ephemeral chore/release-vX.Y.Z prep PR. Never merges."""
     try:
+        pyproject = os.fspath(confined_path(workspace_root, "pyproject.toml"))
+        changelog = os.fspath(confined_path(workspace_root, "CHANGELOG.md"))
+    except PathConfinementError as exc:
+        print(f"release prep: {exc}", file=sys.stderr)
+        return 1
+    try:
         info = plan(workspace_root)
     except ValueError as exc:
         print(f"release prep: {exc}", file=sys.stderr)
@@ -729,8 +756,6 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
         print(f"release prep: {exc}", file=sys.stderr)
         return 1
     branch = f"chore/release-v{new_version}"
-    pyproject = os.path.join(workspace_root, "pyproject.toml")
-    changelog = os.path.join(workspace_root, "CHANGELOG.md")
     # The date is stamped by the caller's environment at prep time.
     today = subprocess.run(
         ["date", "+%Y-%m-%d"], text=True, capture_output=True, check=True
@@ -738,8 +763,8 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     section = render_changelog_section(new_version, today, info["commits"])
     try:
         _git(["switch", "-c", branch, "main"], workspace_root)
-        set_pyproject_version(pyproject, new_version)
-        prepend_changelog_section(changelog, section)
+        set_pyproject_version(pyproject, new_version, workspace_root)
+        prepend_changelog_section(changelog, section, workspace_root)
         _git(["add", "pyproject.toml", "CHANGELOG.md"], workspace_root)
         _git(["commit", "-m", f"chore(release): v{new_version}"], workspace_root)
         _git(["push", "-u", "origin", branch], workspace_root)
@@ -799,9 +824,15 @@ def cmd_wiki_page(
         milestone=ctx["milestone"],
         issues=ctx["issues"],
     )
-    wiki_dir = os.path.join(workspace_root, "docs", "wiki")
-    os.makedirs(wiki_dir, exist_ok=True)
-    path = os.path.join(wiki_dir, f"Release-{clean}.md")
+    try:
+        path = confined_path(
+            workspace_root,
+            os.path.join("docs", "wiki", f"Release-{clean}.md"),
+        )
+    except PathConfinementError as exc:
+        print(f"release wiki-page: {exc}", file=sys.stderr)
+        return 1
+    os.makedirs(path.parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
     print(f"Wrote release wiki page: {os.path.relpath(path, workspace_root)}")
@@ -830,31 +861,27 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
             f"Do not modify any code files."
         )
 
-        engine = (os.environ.get("SOLOMON_ENGINE") or "claude").lower()
-        if engine == "agy":
-            exec_path = os.path.expanduser("~/.local/bin/agy")
-            if not os.path.isfile(exec_path):
-                exec_path = "agy"
-            import uuid
-            cmd = [exec_path, "-p", "-", "--conversation", str(uuid.uuid4()), "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
-        elif engine == "claude":
-            cmd = [engine, "-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
-        else:
-            cmd = [engine, "-p"]
-
-        curator_dir = os.path.join(workspace_root, "agents", "practice_curator")
-        if not os.path.isdir(curator_dir):
+        root = os.path.abspath(workspace_root)
+        paths = HarnessPaths(root)
+        curator_dir = paths.resolve_agents() / "practice_curator"
+        if not curator_dir.is_dir():
             print("audit skipped: curator agent directory not found")
             return 0
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = workspace_root
+        engine = (os.environ.get("SOLOMON_ENGINE") or "claude").lower()
+        cmd = build_engine_command(engine, root)
+        env = build_engine_environment(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            value
+            for value in (str(paths.solomon), root, env.get("PYTHONPATH", ""))
+            if value
+        )
 
         proc = subprocess.run(
             cmd,
             input=prompt,
             text=True,
-            cwd=curator_dir,
+            cwd=root,
             env=env,
             capture_output=True,
             check=False,

@@ -10,6 +10,11 @@ if WORKSPACE not in sys.path:
 
 
 def _read(rel_path):
+    parts = rel_path.split(os.sep)
+    if parts[:2] == [".claude", "commands"] and parts[-1].startswith("solomon-"):
+        rel_path = os.path.join(
+            "solomon_harness", "catalog", "workflows", parts[-1]
+        )
     with open(os.path.join(WORKSPACE, rel_path), "r", encoding="utf-8") as f:
         return f.read()
 
@@ -201,12 +206,10 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
 
         from solomon_harness import cli
 
-        with (
-            patch("solomon_harness.bootstrap.scaffold_agents") as mock_scaffold,
-            patch.object(cli, "_generate_integrations") as mock_gen,
-        ):
-            cli.main(harness_dir=WORKSPACE, argv=["compile"])
-        mock_scaffold.assert_called_once()
+        with patch.object(cli, "_generate_integrations", return_value=0) as mock_gen:
+            with self.assertRaises(SystemExit) as raised:
+                cli.main(harness_dir=WORKSPACE, argv=["compile"])
+        self.assertEqual(raised.exception.code, 0)
         mock_gen.assert_called_once()
 
 
@@ -225,7 +228,7 @@ class TestStartWorktree(unittest.TestCase):
         self.assertIn("solomon_harness.cli worktree", toml)
 
 
-class TestGeminiDrift(unittest.TestCase):
+class TestDeprecatedGeminiGeneration(unittest.TestCase):
     def _generator(self):
         path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
         spec = importlib.util.spec_from_file_location("gen_integrations_drift", path)
@@ -233,21 +236,23 @@ class TestGeminiDrift(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_gemini_commands_match_regenerated_source(self):
-        # A true fitness function: every .gemini/commands/*.toml must equal what the
-        # generator produces from its .claude/commands/*.md source. A hand-edit to a
-        # command without recompiling fails here.
+    def test_deprecated_gemini_generator_is_inert(self):
         gen = self._generator()
-        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
-        for name in sorted(os.listdir(cmd_dir)):
-            if not name.endswith(".md"):
-                continue
-            description, body = gen._parse_command_file(os.path.join(cmd_dir, name))
-            expected = gen.gemini_command_toml(description, body)
-            actual = _read(os.path.join(".gemini", "commands", name[:-3] + ".toml"))
-            self.assertEqual(
-                actual, expected, f"{name[:-3]}.toml is out of sync; run the generator"
-            )
+        gemini = os.path.join(WORKSPACE, ".gemini")
+        before = {
+            path: os.stat(os.path.join(root, path)).st_mtime_ns
+            for root, _, files in os.walk(gemini)
+            for path in files
+        }
+
+        self.assertEqual(gen.generate_gemini_commands(WORKSPACE), 0)
+
+        after = {
+            path: os.stat(os.path.join(root, path)).st_mtime_ns
+            for root, _, files in os.walk(gemini)
+            for path in files
+        }
+        self.assertEqual(after, before)
 
 
 class TestStartAdr(unittest.TestCase):

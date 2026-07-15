@@ -5,25 +5,25 @@ description: Governs driving a feature through the product_owner, software_archi
 
 # Handoff and Memory Orchestration
 
-Drive a feature through the lifecycle as an explicit, auditable state machine in project memory, so that `product_owner -> software_architect -> software_engineer -> qa -> sre` is a chain of recorded handoffs and not tribal knowledge. Every stage boundary is one `log_handoff` entry pointing at a committed contract artifact, every work session is checkpointed with `save_session`, every resume begins with `get_latest_activity`, and every ceremony verdict is an immutable `save_decision`. You are the orchestrator: you do not do the engineering, you make sure each stage hands the next exactly what it needs and that the trail survives a context loss.
+Drive a feature through the lifecycle as an explicit, auditable state machine in project memory, so that `product_owner -> software_architect -> software_engineer -> qa -> sre` is a chain of recorded handoffs and not tribal knowledge. Every stage boundary is one `log_handoff` entry pointing at a contract under the harness state directory, every work session is checkpointed with `save_session`, every resume begins with `get_latest_activity`, and every ceremony verdict is an immutable `save_decision`. You are the orchestrator: you do not do the engineering, you make sure each stage hands the next exactly what it needs and that the trail survives a context loss.
 
 ## The pipeline as a state machine
 
 The lifecycle (see `quality_gates_you_enforce_across_specialists` and the workflow in `agents/AGENTS.md`) has five stage boundaries. Each boundary is crossed exactly once per feature and recorded by `log_handoff(sender, recipient, contract_type, contract_path, status)`:
 
-| Boundary | sender -> recipient | contract_type | contract_path (committed) |
+| Boundary | sender -> recipient | contract_type | contract_path (harness state) |
 | --- | --- | --- | --- |
-| Scope -> Design | `product_owner` -> `software_architect` | `prd` | `.solomon/handoffs/issue-<N>-product_owner-to-software_architect.md` |
-| Design -> Build | `software_architect` -> `software_engineer` | `design` | `.solomon/handoffs/issue-<N>-software_architect-to-software_engineer.md` + linked ADR ids |
-| Build -> Verify | `software_engineer` -> `qa` | `code` | `.solomon/handoffs/issue-<N>-software_engineer-to-qa.md` (references branch + shas) |
-| Verify -> Operate | `qa` -> `sre` | `qa_report` | `.solomon/handoffs/issue-<N>-qa-to-sre.md` |
-| Operate -> Release | `sre` -> `scrum_master` | `runbook` | `.solomon/handoffs/issue-<N>-sre-to-scrum_master.md` |
+| Scope -> Design | `product_owner` -> `software_architect` | `prd` | `.agents/solomon/state/handoffs/issue-<N>-product_owner-to-software_architect.md` |
+| Design -> Build | `software_architect` -> `software_engineer` | `design` | `.agents/solomon/state/handoffs/issue-<N>-software_architect-to-software_engineer.md` + linked ADR ids |
+| Build -> Verify | `software_engineer` -> `qa` | `code` | `.agents/solomon/state/handoffs/issue-<N>-software_engineer-to-qa.md` (references branch + shas) |
+| Verify -> Operate | `qa` -> `sre` | `qa_report` | `.agents/solomon/state/handoffs/issue-<N>-qa-to-sre.md` |
+| Operate -> Release | `sre` -> `scrum_master` | `runbook` | `.agents/solomon/state/handoffs/issue-<N>-sre-to-scrum_master.md` |
 
-`contract_path` must be a file under version control, never a local scratch path. The handoff record is a pointer; the artifact is the payload, and it has to be reproducible from git for the audit to mean anything. Bind every feature to a milestone (`milestones` skill) and tie its work items to issues so the chain is queryable from both ends.
+`contract_path` must be confined to `.agents/solomon/state/handoffs`, never an arbitrary scratch path. The file is gitignored harness state; the durable audit index is its `log_handoff` memory row, while branches, commits, issues, PRs, ADRs, and plans remain reproducible project artifacts. Bind every feature to a milestone (`milestones` skill) and tie its work items to issues so the chain is queryable from both ends.
 
-## The `.solomon/handoffs/` contract artifact
+## The `.agents/solomon/state/handoffs/` contract artifact
 
-Every boundary writes one Markdown file under `.solomon/handoffs/`, named `issue-<N>-<from>-to-<to>.md` where `<N>` is the GitHub issue number and `<from>`/`<to>` are the specialist role names. The name alone tells a reader which issue, which boundary, and which direction, so a directory listing reconstructs the pipeline state without opening a file. The file is committed on the feature branch, so the artifact and the code it describes share one history and one review.
+Every boundary writes one Markdown file under `.agents/solomon/state/handoffs/`, named `issue-<N>-<from>-to-<to>.md` where `<N>` is the GitHub issue number and `<from>`/`<to>` are the specialist role names. The name alone tells a reader which issue, which boundary, and which direction, so a directory listing reconstructs local pipeline state without opening a file. The file stays outside tracked project content; its pointers identify the reviewed branch, commits, PR, and decisions.
 
 The artifact is the contract, structured so the receiving stage can start with zero questions. Keep a fixed front-matter block and a body:
 
@@ -78,12 +78,12 @@ client.log_handoff(
     sender="software_engineer",
     recipient="qa",
     contract_type="code",
-    contract_path=".solomon/handoffs/issue-142-software_engineer-to-qa.md",
+    contract_path=".agents/solomon/state/handoffs/issue-142-software_engineer-to-qa.md",
     status="pending",
 )
 # ... after you verify coverage, green build, conventional commits, closed issues:
 client.log_handoff("software_engineer", "qa", "code",
-                   ".solomon/handoffs/issue-142-software_engineer-to-qa.md",
+                   ".agents/solomon/state/handoffs/issue-142-software_engineer-to-qa.md",
                    status="approved")
 ```
 
@@ -93,10 +93,10 @@ A rejection is itself a recorded event: log the return handoff (`qa -> software_
 
 Feature #142 reaches the Build -> Verify boundary. The sequence you orchestrate:
 
-1. `software_engineer` commits `.solomon/handoffs/issue-142-software_engineer-to-qa.md` on `feature/opa-policy-cache`, with the front matter and entry-gate body above, `status: pending`.
-2. They call `log_handoff(..., status="pending")` pointing at that committed path.
+1. `software_engineer` writes `.agents/solomon/state/handoffs/issue-142-software_engineer-to-qa.md`, with the front matter and entry-gate body above, `status: pending`, pointing to `feature/opa-policy-cache` and its commits.
+2. They call `log_handoff(..., status="pending")` pointing at that confined state path.
 3. You verify the entry gate: `get_open_issues()` shows no open P0/P1 on milestone 1.4, the artifact's coverage (91%) clears the 85% threshold, and the TDD red/green shas resolve. RAID R-09 is a tracked risk, not a blocker, so it does not hold the gate.
-4. You flip the handoff to `approved` and update the artifact front matter `status: approved` in a commit. QA can now start with everything it needs and nothing to ask.
+4. You flip the handoff to `approved` and update the local artifact front matter to `status: approved`. QA can now start with everything it needs and nothing to ask.
 5. If instead coverage were 80%, you log `qa -> software_engineer` `rejected`, `log_issue` "coverage below threshold on policy cache", and the card stays in Review (see `quality_gates_you_enforce_across_specialists`).
 
 ## Checkpointing and resuming
@@ -136,20 +136,20 @@ Record a decision for: the sprint commitment (scope frozen for the sprint), each
 ## Common pitfalls
 
 - A stage starts work without an `approved` handoff for its boundary. The contract was never verified; reject and require the missing handoff first.
-- `contract_path` points at a local or untracked file instead of a committed `.solomon/handoffs/issue-<N>-<from>-to-<to>.md`. The audit trail breaks the moment the workspace is reset; require a committed path.
+- `contract_path` points outside `.agents/solomon/state/handoffs/`. That can mix harness state with project content or escape the workspace; reject it.
 - The artifact file name does not match the boundary it records (wrong issue number or reversed direction), so a directory listing reconstructs the pipeline wrong.
 - Resuming a feature by reading a guessed session id instead of `get_latest_activity` first, acting on a checkpoint that a later handoff already superseded.
 - Two `approved` handoffs for the same boundary, or a handoff that skips a stage (architect straight to qa). The pipeline forked or jumped a gate; both invalidate the history.
 - A rejection handled as a quiet re-assignment with no `rejected` handoff and no `log_issue`. The bounce vanishes from the backlog and velocity is misread.
 - Handoff marked `approved` while `get_open_issues` still shows P0/P1 on the milestone. The gate in `quality_gates_you_enforce_across_specialists` was not actually met.
-- The artifact front-matter `status` and the `log_handoff` status disagree, so the committed contract and the memory record tell different stories.
+- The artifact front-matter `status` and the `log_handoff` status disagree, so local state and the memory record tell different stories.
 - `save_session` used as long-term memory, or `save_memory` used for per-feature flow state. Sessions are checkpoints; memory is durable facts; mixing them rots both.
 - Stale checkpoint: a handoff is logged but the last `save_session` predates the work it describes, so resume replays an old state.
 
 ## Definition of done
 
 - [ ] Every stage boundary the feature crossed has exactly one `approved` `log_handoff`, in pipeline order, with no skipped stage.
-- [ ] Each handoff's `contract_path` is a committed `.solomon/handoffs/issue-<N>-<from>-to-<to>.md` whose name matches the boundary and that carries the full contract for the receiving stage.
+- [ ] Each handoff's `contract_path` is a confined `.agents/solomon/state/handoffs/issue-<N>-<from>-to-<to>.md` whose name matches the boundary and that carries the full contract for the receiving stage.
 - [ ] Each artifact has the fixed front matter (issue, boundary, contract_type, milestone, branch, shas, status, decision_refs) and an explicit entry-gate section.
 - [ ] No handoff was approved while the milestone had an open P0/P1 issue (`get_open_issues`), and every rejection is recorded as a `rejected` handoff plus a `log_issue`.
 - [ ] Each stage has `save_session` checkpoints at least per standup and immediately before its handoff, under a stable `<feature>/<stage>` `session_id`.

@@ -1,4 +1,4 @@
-"""Gate-and-honesty fitness checks for the /solomon-* command prompts and docs.
+"""Gate-and-honesty fitness checks for the canonical Solomon workflows and docs.
 
 These assert that the Definition of Done is wired as a real gate (not an orphan
 per-agent skill), that every issue family states its Acceptance Criteria /
@@ -13,7 +13,18 @@ WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(rel_path):
+    parts = rel_path.split(os.sep)
+    if parts[:2] == [".claude", "commands"] and parts[-1].startswith("solomon-"):
+        rel_path = os.path.join(
+            "solomon_harness", "catalog", "workflows", parts[-1]
+        )
     with open(os.path.join(WORKSPACE, rel_path), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _read_claude_bridge(name):
+    path = os.path.join(WORKSPACE, ".claude", "commands", f"solomon-{name}.md")
+    with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -127,13 +138,13 @@ def test_docs_reframe_loop_as_host_orchestrated_human_gated():
 def test_commands_wire_worked_on_and_produced_edges():
     """The stages that write sessions and handoffs must also write the graph:
     issues=[...] on save_session (the worked_on edge) and
-    link_session_handoff (the produced edge), in both hosts' command files."""
+    link_session_handoff (the produced edge), in the canonical workflows."""
     for name in ("start", "review", "release", "bug", "issue"):
         body = _read(os.path.join(".claude", "commands", f"solomon-{name}.md"))
         assert "link_session_handoff" in body, name
         assert "issues=[" in body, name
         # The tool must be callable, not just mentioned: it is allowlisted.
-        frontmatter = body.split("---")[1]
+        frontmatter = _read_claude_bridge(name).split("---")[1]
         assert "mcp__solomon-memory__link_session_handoff" in frontmatter, name
         assert "mcp__solomon-memory__save_session" in frontmatter, name
 
@@ -155,7 +166,7 @@ def test_review_command_owns_the_merge_on_approval():
     # The old contradiction ("do not merge here") must be gone.
     assert "do not push, merge" not in body.lower()
     # AskUserQuestion must actually be callable for the interactive confirm step.
-    frontmatter = body.split("---")[1]
+    frontmatter = _read_claude_bridge("review").split("---")[1]
     assert "AskUserQuestion" in frontmatter
 
 
@@ -288,7 +299,8 @@ def test_start_and_refine_wire_the_broker_through_the_cli():
         assert "human-gated" in low, rel
         assert "fails closed" in low, rel
         # The enumerated gate must be answerable: the tool is allowlisted.
-        frontmatter = body.split("---")[1]
+        name = os.path.basename(rel).removeprefix("solomon-").removesuffix(".md")
+        frontmatter = _read_claude_bridge(name).split("---")[1]
         assert "AskUserQuestion" in frontmatter, rel
 
 

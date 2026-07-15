@@ -17,7 +17,15 @@ OLD = REPO / "docs" / "adr"
 MIN_RECORDS = 26
 
 DANGLING = re.compile(r"docs/adr(?!s)")
-SCAN_EXCLUDE_PARTS = {".git", "node_modules", "__pycache__", ".venv", "scratch", ".solomon"}
+SCAN_EXCLUDE_PARTS = {
+    ".git",
+    ".solomon",
+    ".venv",
+    "__pycache__",
+    "build",
+    "node_modules",
+    "scratch",
+}
 SCAN_SUFFIXES = {".md", ".py", ".toml", ".ts", ".tsx", ".yml", ".yaml", ".json", ".sh"}
 
 

@@ -20,27 +20,31 @@ import urllib.request
 from typing import List, Optional, Tuple
 
 from solomon_harness.home import assigned_memory_port, harness_home
+from solomon_harness.layout import HarnessPaths, confined_path
 
 DEFAULT_URL = "ws://localhost:8099/rpc"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
 
 
 def _read_db_url(workspace_root: str) -> Tuple[str, str]:
-    """Return (provider, url) from the workspace .agent/config.json, with defaults.
+    """Return ``(provider, url)`` from project config, with legacy fallback.
 
     Environment overrides (SURREAL_URL) win, matching the database client.
     """
     provider = "surrealdb"
     url = DEFAULT_URL
-    config_path = os.path.join(workspace_root, ".agent", "config.json")
-    if os.path.isfile(config_path):
-        try:
+    try:
+        config_path = confined_path(
+            workspace_root,
+            HarnessPaths(workspace_root).resolve_config(),
+        )
+        if config_path.is_file():
             with open(config_path, "r", encoding="utf-8") as f:
                 db = (json.load(f) or {}).get("database", {}) or {}
             provider = db.get("provider", provider)
             url = db.get("url", url)
-        except Exception:
-            pass
+    except Exception:
+        pass
     return provider, os.environ.get("SURREAL_URL", url)
 
 
@@ -105,10 +109,13 @@ def _compose_command() -> Optional[List[str]]:
 
 
 def _packaged_compose() -> Optional[str]:
-    """Path to the docker-compose.yml bundled with this package's repo, or None."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidate = os.path.join(repo_root, "docker-compose.yml")
-    return candidate if os.path.isfile(candidate) else None
+    """Return the compose template from a source, installed, or wheel payload."""
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(os.path.dirname(package_dir), "docker-compose.yml"),
+        os.path.join(package_dir, "_payload", "docker-compose.yml"),
+    )
+    return next((candidate for candidate in candidates if os.path.isfile(candidate)), None)
 
 
 def _set_published_port(compose_text: str, port: int) -> str:

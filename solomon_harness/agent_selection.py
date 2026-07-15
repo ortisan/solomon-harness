@@ -16,6 +16,8 @@ import os
 import sys
 from typing import List, Optional, Set
 
+from solomon_harness.layout import HarnessPaths
+
 # Always enabled: planning, build, quality, delivery and documentation roles.
 CORE_AGENTS = [
     "product_owner",
@@ -38,7 +40,7 @@ AUTH_DEPS = ("authlib", "python-jose", "passport", "next-auth", "@auth/core", "p
 
 
 def discover_agents(workspace_root: str) -> Set[str]:
-    agents_dir = os.path.join(workspace_root, "agents")
+    agents_dir = os.fspath(HarnessPaths(workspace_root).resolve_agents())
     found: Set[str] = set()
     if not os.path.isdir(agents_dir):
         return found
@@ -57,7 +59,17 @@ def _scan(workspace_root: str, max_depth: int = 4) -> tuple:
     """Return (set of file extensions, set of basenames) up to max_depth."""
     exts: Set[str] = set()
     names: Set[str] = set()
-    skip = {".git", "node_modules", ".venv", "__pycache__", "build", "dist"}
+    skip = {
+        ".git",
+        ".agents",
+        ".claude",
+        ".codex",
+        "node_modules",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+    }
     root_depth = workspace_root.rstrip(os.sep).count(os.sep)
     for dirpath, dirnames, filenames in os.walk(workspace_root):
         dirnames[:] = [d for d in dirnames if d not in skip]

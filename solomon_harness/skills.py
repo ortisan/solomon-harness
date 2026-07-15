@@ -1,25 +1,29 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from typing import List, Optional
+from typing import Any, List, Optional
+
+from solomon_harness.layout import (
+    HarnessPaths,
+    PathConfinementError,
+    confined_path,
+    find_workspace_root,
+)
+
 
 def get_workspace_root(start_dir: Optional[str] = None) -> str:
     """Locate workspace root from start_dir or current working directory."""
-    current = start_dir or os.getcwd()
-    while current and current != os.path.dirname(current):
-        if os.path.isdir(os.path.join(current, "solomon_harness")) or os.path.isdir(os.path.join(current, "agents")):
-            return current
-        current = os.path.dirname(current)
-    return start_dir or os.getcwd()
+    return os.fspath(find_workspace_root(start_dir))
 
 
 def load_sources(root: str) -> dict:
     """Returns {name: source_dict} from skill-sources.json."""
-    path = os.path.join(root, "skill-sources.json")
+    path = os.fspath(HarnessPaths(root).resolve_skill_sources())
     if not os.path.isfile(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
@@ -64,7 +68,32 @@ def discover_skill_files(tree_root: str) -> dict:
     return found
 
 
-def install_skill(src_path: str, agent_skills_dir: str, name: str) -> str:
+def _validate_skill_name(name: str) -> None:
+    """Reject names that can address anything but one skills child."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or ".." in name:
+        raise ValueError("invalid skill name")
+
+
+def _reject_tree_symlinks(path: str) -> None:
+    """Reject links before copying external instruction content."""
+    if os.path.islink(path):
+        raise ValueError("Symlinks are rejected in imported skills")
+    if not os.path.isdir(path):
+        return
+    with os.scandir(path) as entries:
+        for entry in entries:
+            if entry.is_symlink():
+                raise ValueError("Symlinks are rejected in imported skills")
+            if entry.is_dir(follow_symlinks=False):
+                _reject_tree_symlinks(entry.path)
+
+
+def install_skill(
+    src_path: str,
+    agent_skills_dir: str,
+    name: str,
+    workspace_root: Optional[str] = None,
+) -> str:
     """Installs a skill into an agent's skills directory.
 
     A standalone ``<name>.md`` is copied to ``<agent_skills_dir>/<name>.md``.
@@ -72,14 +101,28 @@ def install_skill(src_path: str, agent_skills_dir: str, name: str) -> str:
     directory is copied to ``<agent_skills_dir>/<name>/`` so sibling assets and
     scripts are preserved. Returns the path that was written.
     """
+    _validate_skill_name(name)
+    _reject_tree_symlinks(src_path)
+    skills_path = (
+        confined_path(workspace_root, agent_skills_dir)
+        if workspace_root is not None
+        else os.path.abspath(agent_skills_dir)
+    )
+    agent_skills_dir = os.fspath(skills_path)
     os.makedirs(agent_skills_dir, exist_ok=True)
     if os.path.basename(src_path) == "SKILL.md":
+        source_dir = os.path.dirname(src_path)
+        _reject_tree_symlinks(source_dir)
         target_dir = os.path.join(agent_skills_dir, name)
+        if workspace_root is not None:
+            target_dir = os.fspath(confined_path(workspace_root, target_dir))
         if os.path.isdir(target_dir):
             shutil.rmtree(target_dir)
-        shutil.copytree(os.path.dirname(src_path), target_dir)
+        shutil.copytree(source_dir, target_dir)
         return target_dir
     target = os.path.join(agent_skills_dir, f"{name}.md")
+    if workspace_root is not None:
+        target = os.fspath(confined_path(workspace_root, target))
     shutil.copy2(src_path, target)
     return target
 
@@ -91,6 +134,19 @@ def _clone(source: dict, dest: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def _reconcile_host_adapters(root: str) -> Any:
+    """Keep the install manifest and all three native adapters synchronized."""
+    paths = HarnessPaths(root)
+    if paths.manifest.is_file():
+        from solomon_harness.install_layout import install_project
+
+        return install_project(root)
+
+    from solomon_harness.host_adapters import compile_adapters
+
+    return compile_adapters(root)
 
 
 def cmd_sources(root: str) -> int:
@@ -130,9 +186,23 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
     if not source:
         print(f"Error: unknown source '{source_name}'. Run 'sources' to list them.", file=sys.stderr)
         return 1
-    agent_dir = os.path.join(root, "agents", agent)
+    paths = HarnessPaths(root)
+    try:
+        _validate_skill_name(skill)
+        if not re.fullmatch(r"[a-z0-9_]+", agent):
+            raise ValueError("invalid agent name")
+        agents_dir = confined_path(paths.root, paths.resolve_agents())
+        agent_dir = confined_path(paths.root, agents_dir / agent)
+        skills_dir = confined_path(paths.root, agent_dir / "skills")
+    except (PathConfinementError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     if not os.path.isdir(agent_dir):
-        print(f"Error: unknown agent '{agent}' (no agents/{agent}).", file=sys.stderr)
+        print(
+            f"Error: unknown agent '{agent}' "
+            f"(no {os.path.relpath(os.fspath(agent_dir), root)}).",
+            file=sys.stderr,
+        )
         return 1
     with tempfile.TemporaryDirectory() as tmp:
         try:
@@ -144,7 +214,36 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
         if skill not in skills:
             print(f"Error: skill '{skill}' not found in {source_name}. Run 'list {source_name}'.", file=sys.stderr)
             return 1
-        target = install_skill(skills[skill], os.path.join(agent_dir, "skills"), skill)
+        try:
+            target = install_skill(
+                skills[skill],
+                os.fspath(skills_dir),
+                skill,
+                workspace_root=root,
+            )
+        except (PathConfinementError, ValueError, OSError) as exc:
+            print(f"Error: failed to install skill: {exc}", file=sys.stderr)
+            return 1
+
+    doc_script = paths.resolve_scripts() / "document-skills.py"
+    try:
+        if doc_script.is_file():
+            subprocess.run(
+                [sys.executable, os.fspath(doc_script)],
+                cwd=os.fspath(paths.resolve_agents().parent),
+                check=True,
+            )
+
+        compile_result = _reconcile_host_adapters(root)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f"Error: failed to reconcile host adapters: {exc}", file=sys.stderr)
+        return 1
+    if compile_result.conflicts:
+        print(
+            "Warning: preserved conflicting host adapter files: "
+            + ", ".join(compile_result.conflicts),
+            file=sys.stderr,
+        )
     print(f"Installed '{skill}' from {source_name} into {os.path.relpath(target, root)}")
     return 0
 

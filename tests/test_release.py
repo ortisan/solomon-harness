@@ -275,6 +275,34 @@ def test_prepend_changelog_section_inserts_above_first_heading(tmp_path):
     assert "## [0.3.1] - 2026-06-27" in c.read_text(encoding="utf-8")
 
 
+def test_set_pyproject_version_rejects_a_symlinked_target(tmp_path):
+    outside = tmp_path / "outside.toml"
+    outside.write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
+    linked = tmp_path / "pyproject.toml"
+    linked.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlink"):
+        release.set_pyproject_version(str(linked), "1.0.0")
+
+    assert 'version = "9.9.9"' in outside.read_text(encoding="utf-8")
+
+
+def test_cmd_wiki_page_rejects_a_symlinked_output_directory(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "wiki").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        release,
+        "_gather_release_context",
+        lambda _root, _version: {"commits": [], "milestone": None, "issues": []},
+    )
+
+    assert release.cmd_wiki_page(str(tmp_path), version="1.0.0") == 1
+    assert list(outside.iterdir()) == []
+
+
 # --- run() dispatch ---------------------------------------------------------
 
 def test_run_rejects_unknown_subcommand(capsys):
@@ -368,12 +396,28 @@ def test_cmd_prep_rejects_a_malformed_explicit_version(repo, capsys):
     assert "not a SemVer" in capsys.readouterr().err
 
 
+def test_cmd_prep_rejects_symlinked_release_inputs_before_branching(
+    tmp_path, monkeypatch, capsys
+):
+    outside = tmp_path / "outside.toml"
+    outside.write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").symlink_to(outside)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
+    git_calls = []
+    monkeypatch.setattr(release, "_git", lambda *args, **kwargs: git_calls.append(args))
+
+    assert release.cmd_prep(str(tmp_path), version="1.0.0") == 1
+    assert "symlink" in capsys.readouterr().err
+    assert git_calls == []
+    assert 'version = "9.9.9"' in outside.read_text(encoding="utf-8")
+
+
 def test_cmd_audit_trigger_success(repo, capsys):
     from unittest.mock import patch, MagicMock
     import subprocess
     
-    # Create the curator directory and a dummy pyproject.toml
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+    # Consumer installs keep the curator in the canonical host-neutral catalog.
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
     
     with patch("subprocess.run") as mock_run:
@@ -387,14 +431,16 @@ def test_cmd_audit_trigger_success(repo, capsys):
         mock_run.assert_called_once()
         args, kwargs = mock_run.call_args
         assert "v1.0.0" in kwargs["input"]
-        assert kwargs["cwd"] == str(curator_dir)
+        assert kwargs["cwd"] == str(Path(repo).resolve())
+        assert args[0] == ["claude", "-p"]
+        assert not any("dangerously" in token for token in args[0])
         assert "audit skipped" not in capsys.readouterr().out
 
 
 def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
     from unittest.mock import patch
     
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
     
     with patch("subprocess.run", side_effect=Exception("Sourcing tool is down")):
@@ -404,6 +450,34 @@ def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
         out_err = capsys.readouterr()
         combined = out_err.out + out_err.err
         assert "audit skipped: sourcing unavailable" in combined
+
+
+@pytest.mark.parametrize(
+    ("engine", "prefix"),
+    [
+        ("claude", ["claude", "-p"]),
+        ("agy", ["agy", "-p", "-"]),
+        ("codex", ["codex", "exec", "--sandbox", "workspace-write"]),
+    ],
+)
+def test_cmd_audit_trigger_uses_safe_common_engine_adapter(repo, engine, prefix):
+    from unittest.mock import MagicMock, patch
+    import subprocess
+
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+    completed = MagicMock(spec=subprocess.CompletedProcess)
+    completed.returncode = 0
+
+    with (
+        patch.dict(os.environ, {"SOLOMON_ENGINE": engine}),
+        patch("subprocess.run", return_value=completed) as run,
+    ):
+        assert release.cmd_audit_trigger(repo, version="1.0.0") == 0
+
+    command = run.call_args.args[0]
+    assert command[: len(prefix)] == prefix
+    assert not any("dangerously" in token for token in command)
 
 
 # --- Merge-time release-window recompute (catches a prep PR going stale) ----

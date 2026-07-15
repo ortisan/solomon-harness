@@ -1,6 +1,6 @@
 """MCP server exposing the project memory.
 
-Gives the host tools (Claude Code, Codex, Gemini CLI, Copilot) tools to read and
+Gives Claude, AGY, and Codex tools to read and
 write decisions, memory, issues, milestones, backtests, sessions and handoffs,
 all backed by solomon_harness/tools/database_client.py.
 

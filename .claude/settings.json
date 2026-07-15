@@ -1,6 +1,30 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropic-cookbook/claude-code/main/schema/settings.schema.json",
-  "watch": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "{ SOLOMON_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null)\" && [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } || { SOLOMON_ROOT=\"$PWD\"; while [ \"$SOLOMON_ROOT\" != \"/\" ]; do [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ] && break; SOLOMON_ROOT=\"$(dirname \"$SOLOMON_ROOT\")\"; done; [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } && UV_PROJECT_ENVIRONMENT=\"$SOLOMON_ROOT/.agents/solomon/state/venv\" uv run --frozen --project \"$SOLOMON_ROOT\" python -m solomon_harness.cli host-hook pre-tool-use --host claude",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "{ SOLOMON_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null)\" && [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } || { SOLOMON_ROOT=\"$PWD\"; while [ \"$SOLOMON_ROOT\" != \"/\" ]; do [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ] && break; SOLOMON_ROOT=\"$(dirname \"$SOLOMON_ROOT\")\"; done; [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } && UV_PROJECT_ENVIRONMENT=\"$SOLOMON_ROOT/.agents/solomon/state/venv\" uv run --frozen --project \"$SOLOMON_ROOT\" python -m solomon_harness.cli host-hook session-start --host claude",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(git status:*)",
@@ -12,31 +36,5 @@
       "Bash(git push:*)"
     ]
   },
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"
-          },
-          {
-            "type": "command",
-            "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv run python -m solomon_harness.cli loop-guard"
-          }
-        ]
-      }
-    ]
-  }
+  "watch": true
 }

@@ -28,7 +28,8 @@ These are non-negotiable and bound every option below.
 - **C1 — The host tool is the model loop.** A self-hosted Python LLM loop was
   built and reverted; it must not return. Cadence comes from host-tool primitives
   (Claude Code scheduled tasks, the `/loop` skill, the shipped `ralph-wiggum`
-  plugin; Gemini equivalents). The harness supplies loop design, not a runner.
+  plugin, and the equivalent AGY or Codex scheduling surface). The harness
+  supplies loop design and policy, not a replacement model runner.
 - **C2 — The review gate is sacred.** Concurrent drivers once caused premature
   merges that bypassed review. Any autonomy preserves human approval before merge
   or release and serializes drivers with a single-driver lock. The loop is therefore
@@ -40,9 +41,9 @@ These are non-negotiable and bound every option below.
   choices ending in "Other"; no emojis or AI cliches in artifacts.
 - **C4 — Architecture.** Modular agents, single-concern skills, hexagonal by
   default, strict TDD.
-- **C5 — Dual host.** Claude Code artifacts mirror to Gemini via
-  `scripts/generate-integrations.py`. PreToolUse hooks are Claude-only, so any
-  hard gate must also exist in portable Python.
+- **C5 — Three-host parity.** Claude, AGY, and Codex adapters compile from the
+  same `.agents/solomon` catalog. Native lifecycle hooks differ in syntax and
+  trust behavior, so every hard gate also exists in portable Python.
 
 ## What each creator adds beyond Osmani
 
@@ -63,8 +64,8 @@ Sequenced safety-first: nothing schedules itself until a single driver and an
 auditable record are guaranteed.
 
 - **Phase 0 — Safety floor (shipped).** Single-driver lock, portable gate in
-  `run_stage`, PreToolUse `loop-guard`, the `loop_runs` run-log, and the
-  `solomon-harness log` feed. See below.
+  `run_stage`, normalized native pre-tool guards, the `loop_runs` run-log, and
+  the `solomon-harness log` feed. See below.
 - **Phase 1 — Day-to-day UX.** Board digest folded into `cli run`; a one-keystroke
   resume decision card (enumerated options) in `/solomon-workflow`.
 - **Phase 2 — Governed autonomy (shipped).** An L1/L2/L3 maturity policy
@@ -89,7 +90,7 @@ auditable record are guaranteed.
 | Single-driver lock (git-common-dir anchor, O_EXCL, heartbeat TTL, reclaim) | `solomon_harness/loop_lock.py` |
 | Per-issue claim/lease (git-ref CAS, TTL + heartbeat, fail-closed reclaim) | `solomon_harness/claim.py` |
 | Portable gate for mutating stages | `run_stage` in `solomon_harness/workflows.py` |
-| PreToolUse guard (Claude-only, fail-open) | `loop-guard` + `.claude/settings.json` |
+| Native pre-tool guards (defense-in-depth, fail-open) | `host-hook pre-tool-use` + `.claude/settings.json`, `.agents/hooks.json`, inline hooks in `.codex/config.toml` |
 | Lock inspection / recovery | `solomon-harness loop-lock status` / `release` |
 | Run-log ledger | `loop_runs` table + `save_loop_run` / `list_loop_runs` |
 | Read-only activity feed | `solomon_harness/loop_log.py` + `solomon-harness log` |
@@ -98,25 +99,32 @@ The lock is the precondition for every later phase: it converts the documented
 concurrent-driver race into impossible-by-construction, in code rather than in
 advisory prose.
 
+Codex 0.144.4 may omit project hooks in a linked Git worktree even when it loads
+the MCP section from the same trusted `.codex/config.toml`; normal repositories
+load both generated hooks. No global hook or trust bypass is installed as a
+workaround. The Python policy and single-driver lock remain the enforcement of
+record.
+
 ## Phase 1, as shipped
 
 `solomon_harness/digest.py` renders the board digest and next step options into
-`solomon-harness run` (the SessionStart hook): resume point, open issues, the last
-loop run, and PRs awaiting review. It checks memory for pending tasks (or shows open
-issues if empty) and automatically prints the enumerated options. The agent reads this
-on start and immediately prompts the user with the options.
+`solomon-harness run` (the normalized start/first-invocation hook): resume point,
+open issues, the last loop run, and PRs awaiting review. It checks memory for
+pending tasks (or shows open issues if empty) and automatically prints the
+enumerated options. Claude, AGY, and Codex consume the same card through their
+native lifecycle adapters.
 
 ## Phase 2, as shipped
 
 | Piece | Where |
 | --- | --- |
 | L1/L2/L3 ladder + `human` default, fail-closed on a bad level | `solomon_harness/loop_policy.py` |
-| Portable enforcement (both hosts), exit 3 on deny | `run_stage` in `solomon_harness/workflows.py` |
+| Portable enforcement (all three hosts), exit 3 on deny | `run_stage` in `solomon_harness/workflows.py` |
 | Permanent human gate for merge / release / Done | `HUMAN_GATED_STAGES` |
 | Path denylist + maker/checker split surfaced | `is_denied_path`, `checker_split_ok` |
 | Kill-switch (sentinel beside the lock) | `solomon-harness loop-stop` / `loop-policy` |
 
-Set the level in the project's `.agent/config.json` `loop` block (or
+Set the level in the project's `.agents/solomon/config/project.json` `loop` block (or
 `SOLOMON_LOOP_AUTONOMY`); see `docs/solomon-workflow.md`.
 
 ## Phase 3, as shipped

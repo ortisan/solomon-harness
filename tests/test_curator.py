@@ -16,6 +16,17 @@ def _write_agent(root, name, description):
     with open(os.path.join(role_dir, f"{name}.md"), "w", encoding="utf-8") as f:
         f.write(f"# {name}\n\n{description}\n")
 
+
+def _write_workflow(root):
+    commands_dir = os.path.join(root, ".claude", "commands")
+    os.makedirs(commands_dir, exist_ok=True)
+    with open(
+        os.path.join(commands_dir, "solomon-workflow.md"),
+        "w",
+        encoding="utf-8",
+    ) as f:
+        f.write("# Workflow\n\nRun the delivery workflow.\n")
+
 def _tree_digest(path):
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(path):
@@ -110,6 +121,38 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(len(result.proposals), 0)
         self.assertEqual(len(result.needs_evidence), 0)
 
+    def test_sweep_reads_profiles_personas_and_skills_from_canonical_catalog(self):
+        consumer = tempfile.mkdtemp(prefix="curator-consumer-")
+        self.addCleanup(shutil.rmtree, consumer, True)
+        agent_dir = os.path.join(
+            consumer, ".agents", "solomon", "agents", "qa"
+        )
+        os.makedirs(os.path.join(agent_dir, "agents"), exist_ok=True)
+        os.makedirs(os.path.join(agent_dir, "skills"), exist_ok=True)
+        with open(
+            os.path.join(agent_dir, "agents", "qa.md"), "w", encoding="utf-8"
+        ) as f:
+            f.write("canonical profile")
+        with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+            f.write("canonical persona")
+        with open(
+            os.path.join(agent_dir, "skills", "contract.md"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write("canonical skill")
+        observed = {}
+
+        def analyzer(agent_name, catalog_desc, baseline):
+            observed[agent_name] = catalog_desc
+            return None
+
+        curator.sweep_fleet("baseline", analyzer, self.db, consumer)
+
+        self.assertIn("canonical profile", observed["qa"])
+        self.assertIn("canonical persona", observed["qa"])
+        self.assertIn("canonical skill", observed["qa"])
+
     def test_sweep_reads_persona_and_skills(self):
         # Create persona.md and skills for the qa agent
         qa_dir = os.path.join(self.root, "agents", "qa")
@@ -202,6 +245,7 @@ class TestApplyProposal(unittest.TestCase):
         
         # Create agents directory and qa agent
         _write_agent(self.root, "qa", "The QA Specialist.")
+        _write_workflow(self.root)
         
         # Create a dummy AGENTS.md
         agents_dir = os.path.join(self.root, "agents")
@@ -255,6 +299,86 @@ class TestApplyProposal(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "restates shared rules"):
             curator.apply_proposal(p, lambda ad: None, self.root)
+
+    def test_apply_proposal_rejects_a_symlinked_canonical_agent_catalog(self):
+        outside = tempfile.mkdtemp(prefix="curator-agents-outside-")
+        self.addCleanup(shutil.rmtree, outside, True)
+        role_dir = os.path.join(outside, "qa", "agents")
+        os.makedirs(role_dir)
+        with open(os.path.join(role_dir, "qa.md"), "w", encoding="utf-8") as f:
+            f.write("# QA Profile\n")
+        core = os.path.join(self.root, ".agents", "solomon")
+        os.makedirs(core)
+        os.symlink(outside, os.path.join(core, "agents"))
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            curator.apply_proposal(
+                self.proposal,
+                lambda _agent_dir: self.fail("callback must not run"),
+                self.root,
+            )
+
+        self.assertEqual(os.listdir(os.path.join(outside, "qa")), ["agents"])
+
+    def test_apply_proposal_edits_canonical_catalog_in_one_install_transaction(self):
+        core = os.path.join(self.root, ".agents", "solomon")
+        role_dir = os.path.join(core, "agents", "qa", "agents")
+        os.makedirs(role_dir, exist_ok=True)
+        with open(os.path.join(role_dir, "qa.md"), "w", encoding="utf-8") as f:
+            f.write("# QA Profile\n")
+        with open(os.path.join(core, "AGENTS.md"), "w", encoding="utf-8") as f:
+            f.write("# Canonical shared rules\n")
+        with open(os.path.join(core, "manifest.json"), "w", encoding="utf-8") as f:
+            f.write("{}\n")
+
+        callback_paths = []
+
+        def edit_callback(agent_dir):
+            callback_paths.append(agent_dir)
+            skills_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skills_dir, exist_ok=True)
+            with open(
+                os.path.join(skills_dir, "canonical.md"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write("canonical skill")
+
+        class MockCompletedProcess:
+            stdout = "https://github.com/ortisan/solomon-harness/pull/123\n"
+
+        result = mock.Mock(changed=True, conflicts=(), managed_paths=())
+        with (
+            mock.patch(
+                "solomon_harness.install_layout.install_project",
+                return_value=result,
+            ) as install,
+            mock.patch(
+                "solomon_harness.host_adapters.compile_adapters",
+                return_value=result,
+            ) as compile_,
+        ):
+            curator.apply_proposal(
+                self.proposal,
+                edit_callback,
+                self.root,
+                gh_runner=lambda _args: MockCompletedProcess(),
+            )
+
+        expected_agent_dir = os.path.abspath(os.path.join(core, "agents", "qa"))
+        self.assertEqual(callback_paths, [expected_agent_dir])
+        install.assert_called_once_with(os.path.abspath(self.root))
+        compile_.assert_not_called()
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(expected_agent_dir, "skills", "canonical.md")
+            )
+        )
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(self.root, "agents", "qa", "skills", "canonical.md")
+            )
+        )
             
     def test_apply_proposal_executes_branching_and_committing(self):
         class MockCompletedProcess:
@@ -515,6 +639,69 @@ class TestValidateAndInstallSkill(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Confinement"):
             curator.validate_and_install_skill(self.src, outside, "x", self.root)
 
+    def test_installs_inside_the_canonical_consumer_catalog(self):
+        canonical_skills = os.path.join(
+            self.root,
+            ".agents",
+            "solomon",
+            "agents",
+            "qa",
+            "skills",
+        )
+        os.makedirs(canonical_skills)
+
+        target = curator.validate_and_install_skill(
+            self.src, canonical_skills, "canonical", self.root
+        )
+
+        self.assertEqual(
+            target, os.path.join(canonical_skills, "canonical.md")
+        )
+        self.assertTrue(os.path.isfile(target))
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(
+                    self.root, "agents", "qa", "skills", "canonical.md"
+                )
+            )
+        )
+
+    def test_rejects_a_symlinked_canonical_consumer_catalog(self):
+        outside = tempfile.mkdtemp(prefix="vis-catalog-outside-")
+        self.addCleanup(shutil.rmtree, outside, True)
+        os.makedirs(os.path.join(outside, "qa", "skills"))
+        core = os.path.join(self.root, ".agents", "solomon")
+        os.makedirs(core)
+        os.symlink(outside, os.path.join(core, "agents"))
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            curator.validate_and_install_skill(
+                self.src,
+                os.path.join(core, "agents", "qa", "skills"),
+                "escaped",
+                self.root,
+            )
+
+        self.assertFalse(
+            os.path.exists(os.path.join(outside, "qa", "skills", "escaped.md"))
+        )
+
+    def test_quarantine_rejects_a_symlinked_state_directory(self):
+        packaged = os.path.join(self.root, "packaged")
+        outside = tempfile.mkdtemp(prefix="vis-state-outside-")
+        self.addCleanup(shutil.rmtree, outside, True)
+        os.makedirs(packaged)
+        with open(os.path.join(packaged, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("# Packaged\n")
+        core = os.path.join(self.root, ".agents", "solomon")
+        os.makedirs(core)
+        os.symlink(outside, os.path.join(core, "state"))
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            curator._quarantine_skill(packaged, self.root, "packaged", "rejected")
+
+        self.assertEqual(os.listdir(outside), [])
+
 
 class TestBrokerAcquisition(unittest.TestCase):
     def setUp(self):
@@ -528,6 +715,7 @@ class TestBrokerAcquisition(unittest.TestCase):
         
         # Create agents directory and qa agent
         _write_agent(self.root, "qa", "The QA Specialist.")
+        _write_workflow(self.root)
         
         # Create a dummy AGENTS.md
         agents_dir = os.path.join(self.root, "agents")
@@ -637,9 +825,16 @@ class TestBrokerAcquisition(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Security risk: skill contains scripts/executables"):
             curator.broker_skill(self.root, "mock-source", "packaged", "qa")
             
-        quarantine_path = os.path.join(self.root, ".solomon", "quarantine", "packaged")
+        quarantine_path = os.path.join(
+            self.root, ".agents", "solomon", "state", "quarantine", "packaged"
+        )
         self.assertTrue(os.path.isdir(quarantine_path))
         self.assertTrue(os.path.isfile(os.path.join(quarantine_path, "scripts", "run.sh")))
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(self.root, ".solomon", "quarantine", "packaged")
+            )
+        )
         
     def test_broker_skill_successful_adapt_and_install(self):
         class MockCompletedProcess:
@@ -759,7 +954,18 @@ class TestBrokerAcquisition(unittest.TestCase):
             curator.broker_skill(self.root, "mock-source", "packaged", "qa")
 
         self.assertFalse(os.path.exists(os.path.join(self.root, "agents", "qa", "skills", "packaged")))
-        self.assertFalse(os.path.exists(os.path.join(self.root, ".solomon", "quarantine", "packaged")))
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(
+                    self.root,
+                    ".agents",
+                    "solomon",
+                    "state",
+                    "quarantine",
+                    "packaged",
+                )
+            )
+        )
 
     def test_broker_skill_symlink_outside_source_tree_is_rejected(self):
         # Fix 1: a symlink (even with an allowed .md extension) pointing outside
@@ -789,7 +995,9 @@ class TestBrokerAcquisition(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scripts/executables|disallowed file type"):
             curator.broker_skill(self.root, "mock-source", "packaged", "qa")
 
-        quarantine_path = os.path.join(self.root, ".solomon", "quarantine", "packaged")
+        quarantine_path = os.path.join(
+            self.root, ".agents", "solomon", "state", "quarantine", "packaged"
+        )
         self.assertTrue(os.path.isdir(quarantine_path))
         self.assertTrue(os.path.isfile(os.path.join(quarantine_path, "evil.py")))
 
@@ -1015,7 +1223,14 @@ class TestBrokerAcquisitionMemory(TestBrokerAcquisition):
         self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/123")
         
         # Verify contract file was written
-        contract_path = os.path.join(self.root, ".solomon", "handoffs", "issue-50-start-to-review.md")
+        contract_path = os.path.join(
+            self.root,
+            ".agents",
+            "solomon",
+            "state",
+            "handoffs",
+            "issue-50-start-to-review.md",
+        )
         self.assertTrue(os.path.isfile(contract_path))
         with open(contract_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -1031,6 +1246,14 @@ class TestBrokerAcquisitionMemory(TestBrokerAcquisition):
             # Check handoffs
             handoffs = db.list_handoffs()
             self.assertTrue(any(h.get("contract_type") == "pull_request" and h.get("sender") == "practice_curator" for h in handoffs))
+            self.assertTrue(
+                any(
+                    h.get("contract_path")
+                    == ".agents/solomon/state/handoffs/issue-50-start-to-review.md"
+                    for h in handoffs
+                ),
+                handoffs,
+            )
 
     def test_broker_agent_records_decision_and_handoff(self):
         class MockCompletedProcess:
@@ -1072,7 +1295,14 @@ class TestBrokerAcquisitionMemory(TestBrokerAcquisition):
         )
         self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/999")
 
-        contract_path = os.path.join(self.root, ".solomon", "handoffs", "issue-51-start-to-review.md")
+        contract_path = os.path.join(
+            self.root,
+            ".agents",
+            "solomon",
+            "state",
+            "handoffs",
+            "issue-51-start-to-review.md",
+        )
         self.assertTrue(os.path.isfile(contract_path))
         
         with DatabaseClient(harness_dir=self.root) as db:
@@ -1166,7 +1396,9 @@ class TestBrokerReviewFollowups(TestBrokerAcquisition):
             self.root, "mock-source", "standalone", "qa", gh_runner=runner,
         )
         self.assertEqual(pr_url, "https://github.com/ortisan/solomon-harness/pull/123")
-        handoffs_dir = os.path.join(self.root, ".solomon", "handoffs")
+        handoffs_dir = os.path.join(
+            self.root, ".agents", "solomon", "state", "handoffs"
+        )
         self.assertFalse(
             os.path.isdir(handoffs_dir) and os.listdir(handoffs_dir),
             "no handoff contract may be written without an issue_id",
@@ -1179,6 +1411,26 @@ class TestBrokerReviewFollowups(TestBrokerAcquisition):
             self.assertFalse(
                 any(h.get("sender") == "practice_curator" for h in handoffs)
             )
+
+    def test_handoff_write_rejects_a_symlinked_state_target(self):
+        outside = tempfile.mkdtemp(prefix="curator-handoff-outside-")
+        self.addCleanup(shutil.rmtree, outside, True)
+        state = os.path.join(self.root, ".agents", "solomon", "state")
+        os.makedirs(state, exist_ok=True)
+        os.symlink(outside, os.path.join(state, "handoffs"))
+        _calls, runner = self._gh_capture()
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            curator.broker_skill(
+                self.root,
+                "mock-source",
+                "standalone",
+                "qa",
+                gh_runner=runner,
+                issue_id="50",
+            )
+
+        self.assertEqual(os.listdir(outside), [])
 
     def test_decision_records_the_head_commit_sha(self):
         calls, runner = self._gh_capture()
@@ -1233,4 +1485,3 @@ class TestBrokerReviewFollowups(TestBrokerAcquisition):
 
 if __name__ == "__main__":
     unittest.main()
-
