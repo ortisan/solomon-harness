@@ -442,7 +442,7 @@ class TestRecordTerminalStatus(unittest.TestCase):
         ):
             with self.assertLogs(level="WARNING") as cm:
                 github.record_terminal_status(1)  # must not raise
-        self.assertTrue(any("terminal write-through" in m for m in cm.output))
+        self.assertTrue(any("status write-through" in m for m in cm.output))
 
         # Write failure: log_issue is reached (the row is non-terminal), and its
         # error is caught, not raised, and logged at warning by exception type.
@@ -466,6 +466,113 @@ class TestRecordTerminalStatus(unittest.TestCase):
         joined = "\n".join(cm.output)
         self.assertIn("RuntimeError", joined)  # the exception type is logged
         self.assertNotIn("write failed", joined)  # the message is not
+
+
+class TestRecordStatusWriteThrough(unittest.TestCase):
+    """Every board transition — not only Done — writes its canonical token through
+    to the issue row, so code_review and qa are reachable states (ADR-0033 amending
+    ADR-0006 decision point 2). record_terminal_status stays the Done-shaped alias
+    the merge path (ADR-0020) calls.
+    """
+
+    def _row(self, status="in_progress"):
+        return {
+            "github_id": "34",
+            "title": "Deliver the thing",
+            "type_": "bug",
+            "status": status,
+            "milestone_id": "m1",
+            "assignee": "alice@example.com",
+        }
+
+    def test_code_review_column_writes_canonical_token(self):
+        """The Code Review display column is stored as the canonical code_review
+        token, preserving title/type/milestone/assignee (AC1)."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row()
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_status_write_through(34, "Code Review")
+        fake_db.log_issue.assert_called_once_with(
+            "34", "Deliver the thing", "bug", "code_review", "m1", assignee="alice@example.com"
+        )
+
+    def test_qa_column_writes_canonical_token(self):
+        """The QA display column is stored as the canonical qa token (AC1)."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row()
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_status_write_through(34, "QA")
+        fake_db.log_issue.assert_called_once_with(
+            "34", "Deliver the thing", "bug", "qa", "m1", assignee="alice@example.com"
+        )
+
+    def test_done_column_still_writes_closed(self):
+        """The ADR-0006 Done path is unchanged: Done normalizes to closed."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(status="code_review")
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_status_write_through(34, "Done")
+        fake_db.log_issue.assert_called_once_with(
+            "34", "Deliver the thing", "bug", "closed", "m1", assignee="alice@example.com"
+        )
+
+    def test_terminal_row_is_never_resurrected_by_a_backwards_transition(self):
+        """A delivered row stays closed even if its card is dragged back to an
+        earlier column: the is_terminal short-circuit is what stops a board edit
+        from un-delivering an issue in memory."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(status="closed")
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_status_write_through(34, "Code Review")
+        fake_db.log_issue.assert_not_called()
+
+    def test_unchanged_status_triggers_no_write(self):
+        """Re-applying the column a row already holds writes nothing (idempotent)."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = self._row(status="code_review")
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_status_write_through(34, "Code Review")
+        fake_db.log_issue.assert_not_called()
+
+    def test_missing_row_triggers_no_write(self):
+        """No memory row means nothing to update; no row is invented."""
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        fake_db.get_issue.return_value = None
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            return_value=_fake_db_cm(fake_db),
+        ):
+            github.record_status_write_through(404, "QA")
+        fake_db.log_issue.assert_not_called()
+
+    def test_backend_failure_never_raises_and_logs_type_only(self):
+        """Best-effort holds for every column, not just Done: a backend failure is
+        caught and logged by exception type, never str(exc) (STRIDE: information
+        disclosure), so a board move never fails on a memory outage."""
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient",
+            side_effect=RuntimeError("backend down"),
+        ):
+            with self.assertLogs(level="WARNING") as cm:
+                github.record_status_write_through(1, "Code Review")  # must not raise
+        joined = "\n".join(cm.output)
+        self.assertIn("RuntimeError", joined)
+        self.assertNotIn("backend down", joined)
 
 
 class TestCaptureIssueAssignee(unittest.TestCase):
@@ -632,30 +739,49 @@ class TestRecordTerminalStatusRealStore(unittest.TestCase):
 
 
 class TestSetStatusWriteThroughGate(unittest.TestCase):
+    """The dispatch is the single seam every caller funnels through, so ungating it
+    here (ADR-0033) is what makes code_review/qa reachable for start, review, and any
+    future caller — no command markdown file needs its own log_issue call.
+    """
+
     def test_done_transition_triggers_write_through(self):
-        """The CLI set-status dispatch fires the terminal write-through only on Done,
-        alongside the existing record_transition."""
+        """The Done transition still writes through, alongside record_transition."""
         with (
             patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
             patch("solomon_harness.github.record_transition") as rt,
-            patch("solomon_harness.github.record_terminal_status") as rts,
+            patch("solomon_harness.github.record_status_write_through") as rsw,
         ):
             rc = github.main(["set-status", "--issue", "5", "--status", "Done"])
         self.assertEqual(rc, 0)
         rt.assert_called_once_with(5, "Done")
-        rts.assert_called_once_with(5)
+        rsw.assert_called_once_with(5, "Done")
 
-    def test_non_done_transition_does_not_trigger_write_through(self):
-        """A non-Done transition records the transition but never the terminal write."""
+    def test_non_done_transition_also_triggers_write_through(self):
+        """Supersedes the pre-ADR-0033 assertion that a non-Done transition must NOT
+        write through — that gate is exactly what made code_review/qa unreachable
+        (#173). Every column now writes its canonical token to the issue row."""
+        for column in ("In Progress", "Code Review", "QA"):
+            with self.subTest(column=column):
+                with (
+                    patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
+                    patch("solomon_harness.github.record_transition") as rt,
+                    patch("solomon_harness.github.record_status_write_through") as rsw,
+                ):
+                    rc = github.main(["set-status", "--issue", "5", "--status", column])
+                self.assertEqual(rc, 0)
+                rt.assert_called_once_with(5, column)
+                rsw.assert_called_once_with(5, column)
+
+    def test_failed_board_move_writes_nothing_through(self):
+        """Memory must not claim a transition the board rejected."""
         with (
-            patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
+            patch("solomon_harness.github.set_issue_status", return_value={"ok": False}),
             patch("solomon_harness.github.record_transition") as rt,
-            patch("solomon_harness.github.record_terminal_status") as rts,
+            patch("solomon_harness.github.record_status_write_through") as rsw,
         ):
-            rc = github.main(["set-status", "--issue", "5", "--status", "Code Review"])
-        self.assertEqual(rc, 0)
-        rt.assert_called_once_with(5, "Code Review")
-        rts.assert_not_called()
+            github.main(["set-status", "--issue", "5", "--status", "QA"])
+        rt.assert_not_called()
+        rsw.assert_not_called()
 
 
 class TestBoardTitleAndLink(unittest.TestCase):
