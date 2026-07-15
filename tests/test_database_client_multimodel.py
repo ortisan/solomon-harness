@@ -26,6 +26,7 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
+from conftest import close_surreal_quietly  # noqa: E402
 from solomon_harness.tools.database_client import (  # noqa: E402
     DatabaseClient,
     Embedder,
@@ -373,6 +374,7 @@ class TestMultiModelLive(unittest.TestCase):
         self.client.db = self.raw
 
     def tearDown(self):
+        close_surreal_quietly(self.raw)
         os.environ.pop("HARNESS_MIRROR_ROOT", None)
         self.temp_dir.cleanup()
 

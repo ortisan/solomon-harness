@@ -10,6 +10,7 @@ WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if WORKSPACE not in sys.path:
     sys.path.insert(0, WORKSPACE)
 
+from conftest import close_surreal_quietly  # noqa: E402
 from solomon_harness.memory_service import MemoryService, resolve_harness_dir  # noqa: E402
 
 SURREAL_URL = os.environ.get("SURREAL_URL", "ws://localhost:8099/rpc")
@@ -259,6 +260,7 @@ class TestMemoryServiceMultiModelLive(unittest.TestCase):
         self.svc.client.db = self.raw
 
     def tearDown(self):
+        close_surreal_quietly(self.raw)
         self.patcher.stop()
         os.environ.pop("HARNESS_MIRROR_ROOT", None)
         self.tmp.cleanup()

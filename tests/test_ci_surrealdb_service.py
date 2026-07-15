@@ -37,6 +37,12 @@ LIVE_TEST_CLASSES = (
     ),
 )
 NETWORK_TEARDOWN_CALLS = {"close", "connect", "query", "signin", "use"}
+# Classes that hold their live connection on ``self.raw`` must release it via
+# the bounded conftest helper (a daemon thread, joined with a timeout) so the
+# connection's keepalive/recv background threads don't leak for the rest of
+# the pytest process; TestMcpServerGraphAndVectorTools never exposes its
+# connection this way, so it is intentionally excluded.
+CLASSES_REQUIRING_BOUNDED_CLOSE = {"TestMultiModelLive", "TestMemoryServiceMultiModelLive"}
 
 
 def _validate_job():
@@ -171,6 +177,22 @@ class TestCiRunsLiveSurrealDB(unittest.TestCase):
                         set(),
                         "live-test tearDown must not perform blocking network I/O",
                     )
+                    if class_name in CLASSES_REQUIRING_BOUNDED_CLOSE:
+                        bounded_close_calls = [
+                            call
+                            for call in ast.walk(teardown)
+                            if isinstance(call, ast.Call)
+                            and isinstance(call.func, ast.Name)
+                            and call.func.id == "close_surreal_quietly"
+                        ]
+                        self.assertTrue(
+                            bounded_close_calls,
+                            "tearDown must release its live connection via "
+                            "close_surreal_quietly (bounded daemon-thread close), "
+                            "or every test run leaks that connection's "
+                            "keepalive/recv background threads for the rest of "
+                            "the pytest process",
+                        )
 
 
 if __name__ == "__main__":

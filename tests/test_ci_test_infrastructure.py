@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 import tomllib
 from pathlib import Path
 
 import pytest
 
 from solomon_harness.install_layout import _atomic_write
+
+from conftest import close_surreal_quietly
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +81,34 @@ def test_ci_enforces_host_neutral_core_coverage_floor() -> None:
 def test_default_test_fixture_replaces_only_physical_fsync() -> None:
     assert os.fsync is not _PHYSICAL_FSYNC
     assert os.replace is _PHYSICAL_REPLACE
+
+
+@pytest.mark.unit
+def test_close_surreal_quietly_closes_a_fast_connection() -> None:
+    closed = threading.Event()
+
+    class _FastRaw:
+        def close(self) -> None:
+            closed.set()
+
+    close_surreal_quietly(_FastRaw(), timeout=2.0)
+
+    assert closed.is_set()
+
+
+@pytest.mark.unit
+def test_close_surreal_quietly_never_blocks_past_its_timeout() -> None:
+    class _WedgedRaw:
+        def close(self) -> None:
+            # Simulate the SurrealDB/websockets SDK's close handshake never
+            # returning; the caller must not be held up by it.
+            threading.Event().wait()
+
+    started = time.monotonic()
+    close_surreal_quietly(_WedgedRaw(), timeout=0.2)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0
 
 
 @pytest.mark.integration
