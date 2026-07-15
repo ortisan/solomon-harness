@@ -221,6 +221,15 @@ def run_stage(
     engine: Optional[str] = None,
 ) -> int:
     """Run one workflow stage headless through the selected engine."""
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
+        from solomon_harness.bootstrap import scan_project_structure
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            scan_project_structure(workspace_root, db)
+    except Exception as exc:
+        import logging
+        logging.warning(f"Project structure scan failed at loop/stage start: {type(exc).__name__}")
+
     if stage in DEPRECATED_STAGE_ALIASES:
         replacement = DEPRECATED_STAGE_ALIASES[stage]
         print(
