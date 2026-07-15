@@ -351,6 +351,56 @@ def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
                 shutil.copy2(src, dest)
 
 
+# Idempotent upsert targets for the docs/specs and docs/adrs references (#236):
+# an already-installed project's instruction files predate the convention and
+# need it inserted once, never duplicated. Retrofit never creates a file that
+# doesn't already exist -- that stays the scaffold/copy path's job.
+INSTRUCTION_DOC_REFERENCE_BLOCKS = {
+    "CLAUDE.md": (
+        "\n## Documentation Conventions\n"
+        "- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).\n"
+        "- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).\n"
+    ),
+    os.path.join("agents", "AGENTS.md"): (
+        "\n## Documentation Conventions\n"
+        "- `docs/specs/` — Specification documents defining requirements and design constraints for feature issues.\n"
+        "- `docs/adrs/` — Architectural Decision Records (ADRs) tracking architecture and technology selections.\n"
+    ),
+    "AGY.md": (
+        "\n## Documentation Conventions\n"
+        "- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).\n"
+        "- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).\n"
+    ),
+    os.path.join(".github", "copilot-instructions.md"): (
+        "\n## Documentation Conventions\n"
+        "- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).\n"
+        "- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).\n"
+    ),
+}
+
+
+def retrofit_instruction_docs(workspace_root: str) -> None:
+    """Upsert docs/specs and docs/adrs references into existing instruction files.
+
+    Only acts on a file that already exists in workspace_root; a project
+    missing one of these files gets nothing created here. Detection is a
+    plain substring check for both `docs/specs/` and `docs/adrs/`, so a
+    second run on an already-wired file is a no-op -- 0 duplicate lines.
+    """
+    for rel_path, block in INSTRUCTION_DOC_REFERENCE_BLOCKS.items():
+        path = os.path.join(workspace_root, rel_path)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if "docs/specs/" in content and "docs/adrs/" in content:
+            continue
+        if not content.endswith("\n"):
+            content += "\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content + block)
+
+
 def scaffold_agents(workspace_root: str) -> None:
     """Ensure each agent has main.py and .agent/config.json (create-only).
 
@@ -941,6 +991,11 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
         )
     else:
         print("Keeping existing agents/AGENTS.md.")
+
+    # Retrofit the docs/specs and docs/adrs references into whichever
+    # instruction files already existed before this convention (#236);
+    # idempotent, so a repeat init never duplicates a reference.
+    retrofit_instruction_docs(workspace_root)
 
     # 6. Install Git commit-msg hook
     print("Installing Git commit-msg hook...")

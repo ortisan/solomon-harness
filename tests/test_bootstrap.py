@@ -483,6 +483,75 @@ class TestScaffoldTemplatesReferenceDocsConventions(unittest.TestCase):
         self.assertIn("docs/adrs/", content)
 
 
+class TestRetrofitInstructionDocs(unittest.TestCase):
+    """retrofit_instruction_docs upserts the docs/specs and docs/adrs
+    references into an ALREADY-INSTALLED project's instruction files that
+    predate the convention (#236 R4: no bootstrap.py precedent for this
+    retrofit case). It never creates a file that doesn't already exist —
+    that stays the scaffold/copy path's job, not the retrofit's."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = self.tmp.name
+        os.makedirs(os.path.join(self.workspace, "agents"), exist_ok=True)
+        os.makedirs(os.path.join(self.workspace, ".github"), exist_ok=True)
+        self.claude_md = os.path.join(self.workspace, "CLAUDE.md")
+        self.agents_md = os.path.join(self.workspace, "agents", "AGENTS.md")
+        self.agy_md = os.path.join(self.workspace, "AGY.md")
+        self.copilot_md = os.path.join(self.workspace, ".github", "copilot-instructions.md")
+        for path in (self.claude_md, self.agents_md, self.agy_md, self.copilot_md):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("# Pre-existing instructions\n\nNo mention of the record trees here.\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_inserts_missing_references_into_every_existing_file(self):
+        from solomon_harness.bootstrap import retrofit_instruction_docs
+
+        retrofit_instruction_docs(self.workspace)
+
+        for path in (self.claude_md, self.agents_md, self.agy_md, self.copilot_md):
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("docs/specs/", content, f"{path} missing docs/specs/ reference")
+            self.assertIn("docs/adrs/", content, f"{path} missing docs/adrs/ reference")
+
+    def test_rerun_adds_zero_duplicate_references(self):
+        from solomon_harness.bootstrap import retrofit_instruction_docs
+
+        retrofit_instruction_docs(self.workspace)
+        with open(self.claude_md, "r", encoding="utf-8") as f:
+            after_first_run = f.read()
+
+        retrofit_instruction_docs(self.workspace)
+        with open(self.claude_md, "r", encoding="utf-8") as f:
+            after_second_run = f.read()
+
+        self.assertEqual(after_first_run, after_second_run)
+        self.assertEqual(after_second_run.count("docs/specs/"), 1)
+        self.assertEqual(after_second_run.count("docs/adrs/"), 1)
+
+    def test_does_not_create_a_missing_file(self):
+        from solomon_harness.bootstrap import retrofit_instruction_docs
+
+        os.remove(self.copilot_md)
+        retrofit_instruction_docs(self.workspace)
+        self.assertFalse(os.path.isfile(self.copilot_md))
+
+    def test_leaves_a_file_already_carrying_both_references_untouched(self):
+        from solomon_harness.bootstrap import retrofit_instruction_docs
+
+        with open(self.claude_md, "w", encoding="utf-8") as f:
+            f.write("# Already wired\n\ndocs/specs/ and docs/adrs/ are both mentioned.\n")
+        before = open(self.claude_md, "r", encoding="utf-8").read()
+
+        retrofit_instruction_docs(self.workspace)
+
+        after = open(self.claude_md, "r", encoding="utf-8").read()
+        self.assertEqual(before, after)
+
+
 if __name__ == "__main__":
     unittest.main()
 
