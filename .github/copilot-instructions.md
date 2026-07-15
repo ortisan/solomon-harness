@@ -11,6 +11,8 @@ Core rules (full detail in `agents/AGENTS.md`):
   in any output, including commit messages and comments. Write in a direct,
   professional, senior-engineer tone.
 - Plan in `PLAN.md` before non-trivial changes; mock external services in tests.
+- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).
+- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).
 
 Each specialist agent is defined under `agents/<name>/` (persona, the role in
 `agents/<name>.md`, and skills). The shared memory client lives in

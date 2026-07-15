@@ -9,6 +9,9 @@ Each specialist agent is modularly defined under `agents/<name>/`:
 - **Profile:** `agents/<name>/agents/<name>.md` (defines duties, active local skills, and external skills access).
 - **Local Skills:** `agents/<name>/skills/` (short, single-concern markdown files).
 - **Configuration:** `agents/<name>/.agent/config.json` (model selection and dynamic pattern switches).
+- **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).
+- **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).
+
 
 ## How to Create a New Agent
 
