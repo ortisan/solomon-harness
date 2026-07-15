@@ -259,14 +259,9 @@ class TestMemoryServiceMultiModelLive(unittest.TestCase):
         self.svc.client.db = self.raw
 
     def tearDown(self):
-        try:
-            self.raw.close()
-        except Exception:
-            pass
-        finally:
-            self.patcher.stop()
-            os.environ.pop("HARNESS_MIRROR_ROOT", None)
-            self.tmp.cleanup()
+        self.patcher.stop()
+        os.environ.pop("HARNESS_MIRROR_ROOT", None)
+        self.tmp.cleanup()
 
     def test_block_issue_round_trip_and_traversal(self):
         self.svc.log_issue("1", "first", "feature", "open")

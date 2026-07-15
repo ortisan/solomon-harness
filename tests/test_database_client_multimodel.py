@@ -373,13 +373,8 @@ class TestMultiModelLive(unittest.TestCase):
         self.client.db = self.raw
 
     def tearDown(self):
-        try:
-            self.raw.close()
-        except Exception:
-            pass
-        finally:
-            os.environ.pop("HARNESS_MIRROR_ROOT", None)
-            self.temp_dir.cleanup()
+        os.environ.pop("HARNESS_MIRROR_ROOT", None)
+        self.temp_dir.cleanup()
 
     # --- get-by-id round-trips (regression: complex-id delimiter strip) ---
 

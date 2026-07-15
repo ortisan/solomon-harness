@@ -218,8 +218,9 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
     ``relate``/``block_issue`` (graph) and ``semantic_search`` (vector) raise
     on the SQLite fallback by design, so exercising them for real needs a live
     SurrealDB; this runs against one when reachable (see SURREAL_LIVE_AVAILABLE)
-    in a disposable per-test tenant that is removed in tearDown, so it never
-    touches the real project's tenant.
+    in a disposable per-test tenant derived from a unique temp directory, so it
+    never touches the real project's tenant. tearDown restores env vars only;
+    the disposable CI SurrealDB service (tmpfs-backed) owns state cleanup.
     """
 
     def setUp(self):
@@ -241,23 +242,6 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         self.server = build_server()
 
     def tearDown(self):
-        from solomon_harness.home import derive_tenant
-
-        tenant = derive_tenant(self.temp_dir.name)
-        try:
-            import surrealdb
-
-            raw = surrealdb.Surreal(SURREAL_LIVE_URL)
-            if hasattr(raw, "connect"):
-                raw.connect()
-            raw.signin({"username": "root", "password": "root"})
-            # REMOVE DATABASE requires a bound namespace on the connection.
-            raw.use("solomon", tenant)
-            raw.query(f"REMOVE DATABASE `{tenant}`;")
-            raw.close()
-        except Exception:
-            pass
-
         if self._prior_url is None:
             os.environ.pop("SURREAL_URL", None)
         else:

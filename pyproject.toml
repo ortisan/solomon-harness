@@ -25,7 +25,7 @@ solomon-harness-mcp = "solomon_harness.mcp_server:main"
 dev = [
     "ruff>=0.5",
     "mypy>=1.10",
-    "pytest>=7.0",
+    "pytest>=9.1",
     "pytest-cov>=5.0",
     # Used by scripts/validate-workflows.py to structurally parse the GitHub
     # Actions YAML (a real parser replaced a hand-rolled bracket scanner that
@@ -87,6 +87,8 @@ solomon_harness = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+faulthandler_timeout = 120
+faulthandler_exit_on_timeout = true
 markers = [
     "unit: fast tests isolated from external services and physical durability syscalls",
     "integration: tests that exercise boundaries between repository components",

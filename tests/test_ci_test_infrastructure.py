@@ -36,6 +36,17 @@ def test_pytest_registers_quality_markers() -> None:
 
 
 @pytest.mark.unit
+def test_pytest_watchdog_terminates_blocked_tests() -> None:
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = configuration["dependency-groups"]["dev"]
+    options = configuration["tool"]["pytest"]["ini_options"]
+
+    assert any(dependency.startswith("pytest>=9.1") for dependency in dependencies)
+    assert options["faulthandler_timeout"] == 120
+    assert options["faulthandler_exit_on_timeout"] is True
+
+
+@pytest.mark.unit
 def test_ci_enforces_package_branch_coverage_floor() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
