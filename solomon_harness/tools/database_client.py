@@ -104,6 +104,10 @@ _STATUS_ALIASES = {
     "in_progress": "in_progress",
     "code review": "code_review",
     "code_review": "code_review",
+    # "review" is a legacy word written by an early stage before the vocabulary
+    # existed; it maps to code_review so the one-shot normalization pass can
+    # actually retire it (#173).
+    "review": "code_review",
     "qa": "qa",
     "done": "closed",
     "closed": "closed",

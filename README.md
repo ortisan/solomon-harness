@@ -306,7 +306,7 @@ table.
 | `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
 | `memory-down` | Stop the shared memory backend |
 | `memory sync` | Replay pending mirror records to SurrealDB and report the counts |
-| `reconcile [--dry-run]` | Repair memory issue rows from GitHub state (set GitHub-closed issues to closed in memory) |
+| `reconcile [--dry-run]` | Repair shared-memory issue/tracking rows from GitHub and canonicalize non-terminal status tokens |
 | `install-global [--no-mcp]` | Install agents + `/solomon-*` commands into `~/.claude`/`~/.gemini`, the MCP server, and the shared memory home |
 | `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
 | `healthcheck` | Report runtime readiness and pending init items (Docker, memory, board, global install) |
