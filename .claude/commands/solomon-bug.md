@@ -26,9 +26,15 @@ Steps:
    - **Expected vs actual** — what should happen against what does.
    - **Environment** — OS, runtime/version, branch or commit, config relevant to
      the defect.
+   - **Suspected location** — the `file:line`(s) most likely at fault, from a
+     quick read of the code, and where the fix will land. This is the bug's
+     implementation-ready pointer, so the implementer does not start from a blank
+     page; write `TBD` only when triage genuinely cannot narrow it.
    - **Severity** — classify and map to a priority: `p0` data loss / outage /
      security, `p1` broken core flow with no workaround, `p2` degraded or
      cosmetic with a workaround.
+   - **Verification** — the exact command(s) that reproduce the defect now and
+     prove the fix later: the failing test to add, or a manual repro to run.
    - **Regression test required** — an explicit note that the fix is not closeable
      until a failing test reproducing this bug exists and then passes
      (TDD: red before green).

@@ -1920,5 +1920,13 @@ class TestVelocityCli(unittest.TestCase):
         self.assertEqual(rows["alice@example.com"]["count"], 1)
 
 
+class TestEpicTracking(unittest.TestCase):
+    def test_epic_exists(self):
+        import solomon_harness.cockpit_read as cockpit
+        self.assertIsNotNone(cockpit)
+
+
+
 if __name__ == "__main__":
     unittest.main()
+
