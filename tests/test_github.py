@@ -525,6 +525,29 @@ class TestRecordStatusWriteThrough(unittest.TestCase):
             "34", "Deliver the thing", "bug", "closed", "m1", assignee="alice@example.com"
         )
 
+    def test_non_terminal_transition_does_not_capture_missing_assignee(self):
+        """Only delivery may query GitHub for a missing assignee.
+
+        Earlier board transitions preserve a missing value without adding a new
+        ``gh issue view`` call to the status write-through path (ADR-0033).
+        """
+        fake_db = create_autospec(DatabaseClient, instance=True)
+        row = self._row()
+        row["assignee"] = None
+        fake_db.get_issue.return_value = row
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=_fake_db_cm(fake_db),
+            ),
+            patch("solomon_harness.github.capture_issue_assignee") as capture,
+        ):
+            github.record_status_write_through(34, "Code Review")
+        capture.assert_not_called()
+        fake_db.log_issue.assert_called_once_with(
+            "34", "Deliver the thing", "bug", "code_review", "m1", assignee=None
+        )
+
     def test_terminal_row_is_never_resurrected_by_a_backwards_transition(self):
         """A delivered row stays closed even if its card is dragged back to an
         earlier column: the is_terminal short-circuit is what stops a board edit

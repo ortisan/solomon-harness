@@ -654,10 +654,13 @@ def record_status_write_through(issue_number, column) -> None:
                 return
             if normalize_status(row.get("status")) == status:
                 return
-            # Preserve an assignee already captured on the row; only when it is
-            # absent capture it fresh from GitHub (the person key, ADR-0012). The
-            # capture is best-effort and never raises, so it cannot break the merge.
-            assignee = row.get("assignee") or capture_issue_assignee(issue_number)
+            # Preserve an assignee already captured on the row. Only delivery may
+            # capture a missing value from GitHub (the person key, ADR-0012), which
+            # keeps intermediate status writes free of an added GitHub API call.
+            # The capture is best-effort and never raises, so it cannot break merge.
+            assignee = row.get("assignee")
+            if not assignee and is_terminal(status):
+                assignee = capture_issue_assignee(issue_number)
             db.log_issue(
                 github_id,
                 row.get("title"),
