@@ -3,7 +3,8 @@
 - Status: accepted
 - Date: 2026-06-29
 - Amended: 2026-07-15 — decision points 1 and 2 (the one-shot-migration
-  rejection and the Done-only write-through gate) amended by ADR-0033; see
+  rejection and the Done-only write-through gate), plus the CLI orchestration
+  of decision point 3, amended by ADR-0033; see
   docs/adrs/0033-status-write-through-every-transition.md.
 - Deciders: software_architect, software_engineer, product_owner
 - Issue: #101

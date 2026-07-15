@@ -616,12 +616,14 @@ def record_status_write_through(issue_number, column) -> None:
     CLI set-status dispatch seam, so start, review and any future caller are covered
     without each one issuing its own log_issue.
 
-    It read-modify-writes through the unchanged 5-arg log_issue (UPSERT on
+    It read-modify-writes through the unchanged log_issue contract (UPSERT on
     github_id): it reads the current row and, only when that row exists, is not
     already terminal, and would actually change, re-writes it with the column's
     canonical token while preserving the title, type, milestone and assignee.
     log_issue normalizes on write, but the token is normalized here too so the
     no-op comparison below is made against the value that will actually be stored.
+    A missing assignee is fetched from GitHub only for a terminal destination;
+    intermediate transitions preserve the missing value without an API call.
 
     The is_terminal short-circuit is load-bearing beyond idempotence: it stops a
     card dragged back from Done to an earlier column from un-delivering the issue

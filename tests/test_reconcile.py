@@ -193,6 +193,32 @@ class TestNormalizeMemoryStatuses(unittest.TestCase):
         self.assertEqual(client.get_issue("200")["status"], "in_progress")
         client.close()
 
+    def test_preserves_non_null_milestone_and_assignee(self):
+        """The full-replace UPSERT must not erase ownership metadata."""
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue(
+            "201",
+            "Owned legacy row",
+            "bug",
+            "open",
+            "milestone-7",
+            assignee="gh:alice",
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE issues SET status = ? WHERE github_id = ?",
+                ("Code Review", "201"),
+            )
+
+        result = cli.normalize_memory_statuses(client)
+
+        self.assertEqual(result["normalized"], 1)
+        row = client.get_issue("201")
+        self.assertEqual(row["status"], "code_review")
+        self.assertEqual(row["milestone_id"], "milestone-7")
+        self.assertEqual(row["assignee"], "gh:alice")
+        client.close()
+
     def test_dry_run_reports_without_writing(self):
         client = self._seed_legacy([("102", "Display cased", "chore", "Code Review")])
         result = cli.normalize_memory_statuses(client, dry_run=True)

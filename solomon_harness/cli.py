@@ -796,10 +796,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     reconcile_parser = subparsers.add_parser(
         "reconcile",
-        help="Repair memory issue rows from GitHub state (set GitHub-closed issues to closed in memory). Run from a fresh process against the shared SurrealDB.",
+        help=(
+            "Repair shared-memory issue/tracking rows from GitHub and canonicalize "
+            "non-terminal status tokens. Run from a fresh process against the shared "
+            "SurrealDB."
+        ),
     )
     reconcile_parser.add_argument(
-        "--dry-run", action="store_true", help="Report the stale rows without writing"
+        "--dry-run", action="store_true", help="Report proposed repairs without writing"
     )
 
     ig_parser = subparsers.add_parser(
@@ -1172,5 +1176,4 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
 
 if __name__ == "__main__":
     main()
-
 
