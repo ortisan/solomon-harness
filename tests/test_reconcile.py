@@ -923,6 +923,37 @@ class TestHandleRunStandingReconcile(unittest.TestCase):
         self.assertIn("digest line", out)
         self.assertNotIn("reconcile:", out)
 
+    def test_hanging_standing_reconcile_does_not_block_past_the_budget(self):
+        """A standing reconcile stuck past its timeout budget (e.g. a wedged
+        `gh` subprocess) must not block handle_run's caller for anywhere near
+        the full hang -- the #264 Design Constraints / RAID R2 mitigation
+        ("time-boxed/backgrounded with a hard timeout") must genuinely bound
+        wall-clock time, not just nominally wrap the call in a try/except."""
+        import time
+
+        hang_seconds = 0.6
+        bound_seconds = 0.1
+
+        def _hang(_workspace_root):
+            time.sleep(hang_seconds)
+
+        start = time.monotonic()
+        with self.assertLogs(level="WARNING") as log_ctx:
+            out = self._run_handle_run_with(
+                patch.object(cli, "_run_standing_reconcile", side_effect=_hang),
+                patch.object(cli, "_STANDING_RECONCILE_TIMEOUT_SECONDS", bound_seconds),
+            )
+        elapsed = time.monotonic() - start
+
+        # Bounded, not equal to the full hang: comfortably under half of it,
+        # proving the timeout actually applies rather than being decorative.
+        self.assertLess(elapsed, hang_seconds / 2)
+        self.assertIn("digest line", out)
+        self.assertTrue(
+            any("did not finish" in msg for msg in log_ctx.output),
+            log_ctx.output,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

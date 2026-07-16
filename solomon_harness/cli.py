@@ -130,11 +130,7 @@ def handle_run(harness_dir: str, task=None) -> None:
             import logging
             logging.warning(f"Project structure scan failed at session start: {type(exc).__name__}")
 
-        try:
-            _run_standing_reconcile(workspace_root)
-        except Exception as exc:
-            import logging
-            logging.warning(f"Standing reconcile failed at session start: {type(exc).__name__}")
+        _run_standing_reconcile_bounded(workspace_root)
 
         print(say("project status"))
 
@@ -882,6 +878,62 @@ def _run_standing_reconcile(workspace_root: str) -> None:
             f"reconcile: board move failed for #{failure['issue']}: "
             f"{failure['error']}",
             file=sys.stderr,
+        )
+
+
+# Wall-clock ceiling for _run_standing_reconcile_bounded's join (#264 Design
+# Constraints / RAID R2). _fetch_gh_issue_states/_fetch_gh_pr_states and each
+# per-issue set_issue_status board write shell out to `gh`, and each such call
+# carries its own ~15s ceiling (GH_TIMEOUT_SECONDS in github.py). 5.0s is
+# generous enough for a couple of real `gh` round trips yet well below that
+# per-call ceiling, so a slow network bounds the session-start delay instead
+# of chaining toward it. A module-level constant (mirroring GH_TIMEOUT_SECONDS)
+# rather than a function default so tests can override it without waiting out
+# the real budget.
+_STANDING_RECONCILE_TIMEOUT_SECONDS = 5.0
+
+
+def _run_standing_reconcile_bounded(workspace_root: str) -> None:
+    """Run the standing reconcile pass with a wall-clock timeout bound.
+
+    ``_run_standing_reconcile`` shells out to ``gh`` (via
+    ``_fetch_gh_issue_states``/``_fetch_gh_pr_states``) and, for each closed
+    issue, writes its board status -- on a slow network or with many closed
+    issues this can genuinely take several seconds, and a plain try/except
+    around the call (the prior implementation) has no wall-clock bound at
+    all: a hung `gh` subprocess would only be capped by its own internal
+    ~15s timeout, which is not "no perceptible delay" (the #264 Design
+    Constraints and RAID R2: "never block or perceptibly slow SessionStart").
+
+    This deliberately does not reuse ``digest.py``'s ``_run_with_timeout``:
+    that helper silently swallows any exception raised in its worker thread,
+    which would regress the warning-on-exception behavior this call site
+    already had. Instead, the pass runs in a background daemon thread; any
+    exception it raises is caught and logged here (matching the previous
+    try/except behavior), and the thread is joined for at most
+    ``_STANDING_RECONCILE_TIMEOUT_SECONDS``. If it is still running once the
+    join times out, it is left to finish in the background (a daemon thread,
+    so it never blocks process exit) and a second warning notes that it
+    is continuing there; either way, this function returns within the
+    timeout budget and never blocks ``handle_run``'s caller past it.
+    """
+    import logging
+    import threading
+
+    def _worker() -> None:
+        try:
+            _run_standing_reconcile(workspace_root)
+        except Exception as exc:
+            logging.warning(f"Standing reconcile failed at session start: {type(exc).__name__}")
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(_STANDING_RECONCILE_TIMEOUT_SECONDS)
+    if thread.is_alive():
+        logging.warning(
+            "Standing reconcile did not finish within the "
+            f"{_STANDING_RECONCILE_TIMEOUT_SECONDS}s session-start budget; "
+            "continuing in the background."
         )
 
 
