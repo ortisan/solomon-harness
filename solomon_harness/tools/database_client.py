@@ -760,9 +760,17 @@ class DatabaseClient:
         # Locate the repository root by walking up from the harness directory.
         # The canonical marker works from installed package and agent paths;
         # source checkouts retain the legacy marker for one compatibility window.
+        # The walk never treats the filesystem root or the shared system temp
+        # directory as a project root: a marker there belongs to some other
+        # process (or an unrelated test's leftover state), and index_codebase
+        # walking the whole system temp directory can hang forever opening a
+        # socket or named pipe another process left behind (issue #240).
+        system_tmp = os.path.abspath(tempfile.gettempdir())
         project_root: str = harness_dir
         found_root: bool = False
         while project_root and project_root != os.path.dirname(project_root):
+            if os.path.abspath(project_root) in (system_tmp, os.path.sep):
+                break
             if os.path.exists(os.path.join(project_root, ".git")):
                 found_root = True
                 break

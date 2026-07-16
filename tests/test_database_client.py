@@ -622,6 +622,41 @@ class TestDatabaseClient(unittest.TestCase):
             )
             client.close()
 
+    def test_project_root_resolution_never_lands_on_system_tmp(self):
+        """A marker at the shared system temp directory must not be adopted.
+
+        A stray .git (or .agents/solomon, or an agents+memory+solomon_harness
+        triple) sitting directly at tempfile.gettempdir() belongs to some
+        other process or an unrelated test's leftover state, not this
+        project. Adopting it as project_root makes index_codebase walk the
+        entire shared temp directory later, which can hang forever opening a
+        socket or named pipe another process left behind (issue #240).
+        """
+        system_tmp = os.path.abspath(tempfile.gettempdir())
+        harness_dir = os.path.join(system_tmp, "tmpXXXXXXXX")
+        with (
+            patch("os.path.exists") as mock_exists,
+            patch("os.path.isfile") as mock_isfile,
+            patch("os.makedirs"),
+            patch("sqlite3.connect"),
+        ):
+
+            def side_effect_exists(path):
+                return path == os.path.join(system_tmp, ".git")
+
+            mock_exists.side_effect = side_effect_exists
+            mock_isfile.return_value = False
+
+            client = DatabaseClient(harness_dir=harness_dir)
+            self.assertEqual(
+                client.db_path,
+                os.path.join(
+                    harness_dir,
+                    ".agents", "solomon", "state", "memory", "long_term", "harness.db",
+                ),
+            )
+            client.close()
+
     def test_project_root_resolution_inside_agent_without_git(self):
         """Project root resolves via workspace markers when run from an agent dir."""
         with (
