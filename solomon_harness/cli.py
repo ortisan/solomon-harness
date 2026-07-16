@@ -552,42 +552,85 @@ def _build_resolved_map(
     return resolved
 
 
-def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
-    """Set each GitHub-CLOSED issue's non-terminal memory row to "closed".
+def reconcile_memory(
+    db,
+    gh_states: List[dict],
+    dry_run: bool = False,
+    set_issue_status_fn=None,
+) -> dict:
+    """Set each GitHub-CLOSED issue's non-terminal memory row to "closed", and
+    move its board card to "Done".
 
-    GitHub is the source of truth (ADR-0006): a row is repaired only when GitHub
-    reports the issue CLOSED and the memory row exists and is not already
+    GitHub is the source of truth (ADR-0006): a memory row is repaired only when
+    GitHub reports the issue CLOSED and the row exists and is not already
     terminal; GitHub-open rows are left untouched. The write is a read-modify-
     write through the unchanged 5-arg ``log_issue`` (UPSERT on github_id),
     preserving the title, type and milestone. Idempotent: a second run finds the
-    rows terminal and writes nothing. With ``dry_run`` the stale ids are collected
-    and reported, and nothing is written.
+    rows terminal and writes nothing.
 
-    Returns ``{"repaired", "would_repair", "scanned"}``.
+    The board-card move is deliberately decoupled from the memory-repair gate
+    (#264, #280): it is attempted for every GitHub-CLOSED entry regardless of
+    whether that entry's memory row needed repair, already existed, or is
+    terminal already -- a live case showed memory already "closed" while the
+    board card was still stuck in "Code Review", which the memory gate alone
+    would never touch. ``set_issue_status_fn`` defaults to
+    ``solomon_harness.github.set_issue_status`` (mirroring this codebase's
+    ``claim_store``/``GitClaimStore`` default-construction convention); a caller
+    may inject a fake to avoid a live gh call. A board-move failure is recorded
+    per-issue in ``board_failures`` and never rolls back or blocks the memory
+    repair for that same issue, which may already have landed independently.
+    With ``dry_run`` no write and no board move is attempted: the stale memory
+    ids are collected in ``would_repair`` and the would-be board moves in
+    ``would_move_board``.
+
+    Returns ``{"repaired", "would_repair", "scanned", "board_moved",
+    "board_failures", "would_move_board"}``.
     """
     from solomon_harness.tools.database_client import is_terminal
 
+    if set_issue_status_fn is None:
+        from solomon_harness.github import set_issue_status as set_issue_status_fn
+
     would_repair: List[str] = []
     repaired = 0
+    board_moved = 0
+    board_failures: List[dict] = []
+    would_move_board: List[str] = []
     for entry in gh_states:
         if entry.get("state") != "CLOSED":
             continue
         number = entry["number"]
+
         row = db.get_issue(number)
-        if row is None or is_terminal(row.get("status")):
-            continue
-        would_repair.append(number)
+        if row is not None and not is_terminal(row.get("status")):
+            would_repair.append(number)
+            if not dry_run:
+                db.log_issue(
+                    number,
+                    row.get("title"),
+                    row.get("type_"),
+                    "closed",
+                    row.get("milestone_id"),
+                )
+                repaired += 1
+
         if dry_run:
+            would_move_board.append(number)
             continue
-        db.log_issue(
-            number,
-            row.get("title"),
-            row.get("type_"),
-            "closed",
-            row.get("milestone_id"),
-        )
-        repaired += 1
-    return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
+
+        move_result = set_issue_status_fn(int(number), "Done")
+        if move_result.get("ok"):
+            board_moved += 1
+        else:
+            board_failures.append({"issue": number, "error": move_result.get("error")})
+    return {
+        "repaired": repaired,
+        "would_repair": would_repair,
+        "scanned": len(gh_states),
+        "board_moved": board_moved,
+        "board_failures": board_failures,
+        "would_move_board": would_move_board,
+    }
 
 
 def normalize_memory_statuses(db, dry_run: bool = False) -> dict:

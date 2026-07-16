@@ -74,6 +74,12 @@ class TestReconcileMemory(unittest.TestCase):
         client.log_issue("100", "Still open", "feature", "in_progress", None)
         return client
 
+    @staticmethod
+    def _noop_status_fn(number, status):
+        """A no-op fake standing in for the real board-status-move call, so these
+        memory-side tests never shell out to gh (#264)."""
+        return {"ok": True}
+
     def test_repairs_closed_leaves_open_and_is_idempotent(self):
         client = self._seed()
         states = [
@@ -82,7 +88,9 @@ class TestReconcileMemory(unittest.TestCase):
             {"number": "100", "state": "OPEN"},
         ]
 
-        first = cli.reconcile_memory(client, states)
+        first = cli.reconcile_memory(
+            client, states, set_issue_status_fn=self._noop_status_fn
+        )
         self.assertEqual(first["repaired"], 2)
 
         # CLOSED rows are now terminal, with their other fields preserved.
@@ -97,7 +105,9 @@ class TestReconcileMemory(unittest.TestCase):
         )
 
         # A second run repairs nothing (idempotent).
-        second = cli.reconcile_memory(client, states)
+        second = cli.reconcile_memory(
+            client, states, set_issue_status_fn=self._noop_status_fn
+        )
         self.assertEqual(second["repaired"], 0)
         client.close()
 
@@ -107,7 +117,9 @@ class TestReconcileMemory(unittest.TestCase):
             {"number": "6", "state": "CLOSED"},
             {"number": "100", "state": "OPEN"},
         ]
-        result = cli.reconcile_memory(client, states, dry_run=True)
+        result = cli.reconcile_memory(
+            client, states, dry_run=True, set_issue_status_fn=self._noop_status_fn
+        )
         self.assertEqual(result["would_repair"], ["6"])
         self.assertEqual(result["repaired"], 0)
         # Nothing is written on a dry run.
@@ -116,9 +128,76 @@ class TestReconcileMemory(unittest.TestCase):
 
     def test_closed_issue_without_memory_row_is_skipped(self):
         client = self._seed()
-        result = cli.reconcile_memory(client, [{"number": "999", "state": "CLOSED"}])
+        result = cli.reconcile_memory(
+            client,
+            [{"number": "999", "state": "CLOSED"}],
+            set_issue_status_fn=self._noop_status_fn,
+        )
         self.assertEqual(result["repaired"], 0)
         self.assertIsNone(client.get_issue("999"))
+        client.close()
+
+    def test_board_card_moves_to_done_even_when_memory_already_closed(self):
+        """The #280 case: a GitHub-closed issue whose memory row is already
+        terminal must still get its board card moved, proving the board move is
+        decoupled from whether memory needed repair."""
+        client = self._seed()
+        client.log_issue("280", "Already closed in memory", "bug", "closed", None)
+        states = [{"number": "280", "state": "CLOSED"}]
+        calls = []
+
+        def spy_status_fn(number, status):
+            calls.append((number, status))
+            return {"ok": True}
+
+        result = cli.reconcile_memory(client, states, set_issue_status_fn=spy_status_fn)
+
+        self.assertEqual(result["repaired"], 0)
+        self.assertEqual(calls, [(280, "Done")])
+        self.assertEqual(result["board_moved"], 1)
+        self.assertEqual(result["board_failures"], [])
+        client.close()
+
+    def test_board_move_failure_is_reported_without_losing_memory_repair(self):
+        client = self._seed()
+        states = [{"number": "6", "state": "CLOSED"}]
+
+        def failing_status_fn(number, status):
+            return {"ok": False, "error": "missing Status option"}
+
+        result = cli.reconcile_memory(client, states, set_issue_status_fn=failing_status_fn)
+
+        # The memory write already landed and is unaffected by the board failure.
+        self.assertEqual(result["repaired"], 1)
+        self.assertEqual(client.get_issue("6")["status"], "closed")
+        self.assertEqual(result["board_moved"], 0)
+        self.assertEqual(
+            result["board_failures"], [{"issue": "6", "error": "missing Status option"}]
+        )
+        client.close()
+
+    def test_dry_run_never_attempts_board_move(self):
+        client = self._seed()
+        client.log_issue("280", "Already closed in memory", "bug", "closed", None)
+        states = [
+            {"number": "6", "state": "CLOSED"},
+            {"number": "280", "state": "CLOSED"},
+            {"number": "100", "state": "OPEN"},
+        ]
+        calls = []
+
+        def spy_status_fn(number, status):
+            calls.append((number, status))
+            return {"ok": True}
+
+        result = cli.reconcile_memory(
+            client, states, dry_run=True, set_issue_status_fn=spy_status_fn
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["would_move_board"], ["6", "280"])
+        self.assertEqual(result["board_moved"], 0)
+        self.assertEqual(result["board_failures"], [])
         client.close()
 
 
@@ -607,7 +686,9 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
 
     def test_real_run_repairs_then_second_run_reports_zero(self):
         """A real run sets the GitHub-CLOSED row to closed and leaves the open row
-        untouched; an immediate second run repairs nothing (idempotent)."""
+        untouched; an immediate second run repairs nothing (idempotent). The board
+        move now attempted for every CLOSED entry (#264) is faked here, matching
+        this file's own precedent that the gh subprocess is always mocked."""
         out = io.StringIO()
         with (
             patch(
@@ -615,6 +696,7 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 return_value=self.proxy,
             ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
             contextlib.redirect_stdout(out),
         ):
             cli.handle_reconcile(self.temp_dir.name, dry_run=False)
@@ -629,6 +711,7 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 return_value=self.proxy,
             ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
             contextlib.redirect_stdout(out2),
         ):
             cli.handle_reconcile(self.temp_dir.name, dry_run=False)
