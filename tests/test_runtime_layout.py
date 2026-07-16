@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +15,12 @@ from solomon_harness import capability_router, healthcheck, memory, notify
 from solomon_harness import layout
 from solomon_harness.agent_selection import discover_agents, select_agents
 from solomon_harness.bootstrap import ensure_database_config
-from solomon_harness.layout import HarnessPaths, PathConfinementError, confined_path
+from solomon_harness.layout import (
+    HarnessPaths,
+    PathConfinementError,
+    confined_path,
+    find_workspace_root,
+)
 from solomon_harness.loop_policy import LoopPolicy, clear_stop, write_stop
 from solomon_harness.memory_service import resolve_harness_dir
 from solomon_harness.tools.database_client import DatabaseClient
@@ -43,6 +49,29 @@ def _write_pending_mirror(state_dir: Path, name: str = "one") -> None:
         "---\n",
         encoding="utf-8",
     )
+
+
+def test_find_workspace_root_never_adopts_the_system_temp_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marker sitting at the shared system temp directory must be ignored.
+
+    A ``.agents/solomon`` (or ``.git``) directly at tempfile.gettempdir()
+    belongs to another process or leftover test state, not this project.
+    Adopting it as the workspace root makes later filesystem walks (e.g.
+    codebase indexing) scan the whole shared temp directory instead of an
+    isolated one, which can hang forever opening a socket or named pipe
+    another process left behind (issue #240).
+    """
+    fake_system_tmp = tmp_path / "fake_system_tmp"
+    (fake_system_tmp / ".agents" / "solomon").mkdir(parents=True)
+    isolated = fake_system_tmp / "isolated-project-dir"
+    isolated.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_system_tmp))
+
+    resolved = find_workspace_root(isolated)
+
+    assert resolved == isolated
 
 
 def test_confined_path_rejects_an_intermediate_symlink(tmp_path: Path) -> None:

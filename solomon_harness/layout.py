@@ -10,6 +10,7 @@ window; their default, and every new write target, is the canonical path.
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Union
@@ -450,15 +451,20 @@ def find_workspace_root(start: Optional[PathLike] = None) -> Path:
     Discovery recognizes Git worktrees, the canonical installed layout, and
     the legacy two-tree payload.  It respects ``GIT_CEILING_DIRECTORIES`` and
     returns the normalized starting directory when no marker is found, matching
-    the CLI's historical standalone behavior.
+    the CLI's historical standalone behavior. The shared system temp directory
+    is always an implicit ceiling: a marker there belongs to another process
+    or leftover test state, not this project, and adopting it as the
+    workspace root would make later filesystem walks (e.g. codebase indexing)
+    scan the whole shared temp directory instead of an isolated one.
     """
 
     origin = _starting_directory(start)
     ceilings = _ceiling_directories()
+    system_tmp = _absolute(tempfile.gettempdir())
     current = origin
 
     while True:
-        if current in ceilings:
+        if current in ceilings or current == system_tmp or current == current.parent:
             break
         if _is_workspace_root(current):
             return current
