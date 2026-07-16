@@ -54,7 +54,8 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
      `.solomon/handoffs/issue-<n>-idea-to-refine.md` using the template in
      `docs/solomon-workflow.md`, then call `log_handoff(sender="product_owner",
      recipient="refine", contract_type="idea",
-     contract_path=".solomon/handoffs/issue-<n>-idea-to-refine.md", status="open")`.
+     contract_path=".solomon/handoffs/issue-<n>-idea-to-refine.md", status="open",
+     summary="<2-5 line synopsis of the captured idea's JTBD and riskiest assumption>")`.
 
 6. **Output the issue URL** and a one-line recap (JTBD + riskiest assumption).
    State explicitly that no implementation was planned and that promotion to the

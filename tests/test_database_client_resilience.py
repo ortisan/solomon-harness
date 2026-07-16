@@ -270,6 +270,38 @@ class TestGetLatestActivityPreservesContractPath(ResilienceTestBase):
         )
         self.assertEqual(activity["contract_path"], "/some/path/plan.md")
 
+    def test_handoff_summary_survives_contract_file_deletion(self):
+        # Issue #295: summary is the documented fallback for when contract_path
+        # no longer resolves (its worktree torn down after merge). A resume via
+        # get_latest_activity must still surface the non-empty summary, and
+        # must not raise just because the file the path points to is gone.
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        contract_path = os.path.join(
+            self.temp_dir.name, "issue-214-start-to-review.md"
+        )
+        with open(contract_path, "w", encoding="utf-8") as f:
+            f.write("# Handoff: start -> review - issue #214\n")
+
+        client.log_handoff(
+            sender="software_engineer",
+            recipient="qa",
+            contract_type="pull_request",
+            contract_path=contract_path,
+            status="open",
+            summary="qa approved PR #214, merged to main",
+        )
+
+        os.remove(contract_path)
+        self.assertFalse(os.path.exists(contract_path))
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity)
+        self.assertEqual(
+            activity.get("summary"), "qa approved PR #214, merged to main"
+        )
+        self.assertEqual(activity.get("contract_path"), contract_path)
+
 
 class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
     def test_run_surreal_classifies_transport_versus_query_error(self):
