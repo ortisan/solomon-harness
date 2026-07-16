@@ -616,7 +616,7 @@ This skill covers the {name} role's duties.
         import sys
         subprocess.run([sys.executable, doc_skills_script], cwd=workspace_root, check=True)
 
-    # Run generate-integrations script to compile Claude agents and Gemini commands
+    # Compile Claude agents, Gemini commands, and Codex skills.
     gen_integrations_script = os.path.join(workspace_root, "scripts", "generate-integrations.py")
     if os.path.isfile(gen_integrations_script):
         import subprocess
@@ -1040,7 +1040,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     print("Scaffolding agent entrypoints...")
     scaffold_agents(workspace_root)
 
-    # 8. Generate the host-tool subagent definitions from the central agents/ source.
+    # 8. Generate all host-tool integrations from their canonical sources.
     gi_path = os.path.join(workspace_root, "scripts", "generate-integrations.py")
     if os.path.isfile(gi_path):
         print("Generating host-tool integrations...")
@@ -1480,4 +1480,3 @@ def scan_project_structure(workspace_root: str, db) -> dict:
             "test_layout": [],
             "patterns": {"adrs": [], "agents": [], "commands": []}
         }
-

@@ -26,6 +26,10 @@ def _make_source(root):
     os.makedirs(os.path.join(root, ".gemini", "commands"))
     with open(os.path.join(root, ".gemini", "commands", "solomon-workflow.toml"), "w") as f:
         f.write("prompt = 'x'")
+    codex_skill = os.path.join(root, ".agents", "skills", "solomon-workflow")
+    os.makedirs(codex_skill)
+    with open(os.path.join(codex_skill, "SKILL.md"), "w") as f:
+        f.write("---\nname: solomon-workflow\ndescription: Run the workflow.\n---\n")
 
 
 class TestInstallGlobal(unittest.TestCase):
@@ -35,6 +39,7 @@ class TestInstallGlobal(unittest.TestCase):
         _make_source(self.src.name)
         self.claude = os.path.join(self.dst.name, ".claude")
         self.gemini = os.path.join(self.dst.name, ".gemini")
+        self.codex_skills = os.path.join(self.dst.name, ".agents", "skills")
         self.home = os.path.join(self.dst.name, ".solomon-harness")
 
     def tearDown(self):
@@ -46,6 +51,7 @@ class TestInstallGlobal(unittest.TestCase):
             source_root=self.src.name,
             claude_dir=self.claude,
             gemini_dir=self.gemini,
+            codex_skills_dir=self.codex_skills,
             home_dir=self.home,
             register_mcp=False,
             **kw,
@@ -58,8 +64,10 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertEqual(sorted(res["claude_agents"]), ["qa.md", "sre.md"])
         self.assertIn("solomon-workflow.md", res["claude_commands"])
         self.assertIn("solomon-workflow.toml", res["gemini_commands"])
+        self.assertEqual(res["codex_skills"], ["solomon-workflow"])
         self.assertTrue(os.path.isfile(os.path.join(self.claude, "agents", "sre.md")))
         self.assertTrue(os.path.isfile(os.path.join(self.gemini, "commands", "solomon-workflow.toml")))
+        self.assertTrue(os.path.isfile(os.path.join(self.codex_skills, "solomon-workflow", "SKILL.md")))
 
     def test_home_compose_templates_assigned_port(self):
         # The bundled compose has the default 8000 mapping; the install must
@@ -130,6 +138,7 @@ class TestInstallGlobal(unittest.TestCase):
                 source_root=self.src.name,
                 claude_dir=self.claude,
                 gemini_dir=self.gemini,
+                codex_skills_dir=self.codex_skills,
                 home_dir=self.home,
                 register_mcp=True,
             )
@@ -161,6 +170,7 @@ class TestInstallGlobal(unittest.TestCase):
                 source_root=self.src.name,
                 claude_dir=self.claude,
                 gemini_dir=self.gemini,
+                codex_skills_dir=self.codex_skills,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -182,6 +192,7 @@ class TestInstallGlobal(unittest.TestCase):
                 source_root=self.src.name,
                 claude_dir=self.claude,
                 gemini_dir=self.gemini,
+                codex_skills_dir=self.codex_skills,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -197,11 +208,13 @@ class TestInstallGlobal(unittest.TestCase):
             "claude_agents": ["qa.md"],
             "claude_commands": ["cmd1"],
             "gemini_commands": ["cmd2"],
+            "codex_skills": ["solomon-workflow"],
             "gemini_extension": True,
             "agy_imported": True,
             "hook_installed": True,
             "gemini_hook_installed": True,
             "mcp_claude": True,
+            "mcp_codex": True,
         }
         summary = ig.describe(res_val)
         self.assertIn("SurrealDB host port 8099", summary)
@@ -209,6 +222,8 @@ class TestInstallGlobal(unittest.TestCase):
         self.assertIn("session hook (claude): installed", summary)
         self.assertIn("session hook (gemini): installed", summary)
         self.assertIn("MCP (claude, user scope): registered", summary)
+        self.assertIn("~/.agents/skills: 1 Codex skills", summary)
+        self.assertIn("MCP (codex): registered", summary)
 
         # Case 2: MCPs missing (None) and agy failed
         res_val2 = {
@@ -217,11 +232,13 @@ class TestInstallGlobal(unittest.TestCase):
             "hook_installed": False,
             "gemini_hook_installed": False,
             "mcp_claude": None,
+            "mcp_codex": None,
         }
         summary2 = ig.describe(res_val2)
         self.assertIn("import run failed", summary2)
         self.assertIn("session hook (claude): already present", summary2)
         self.assertIn("MCP (claude): claude CLI not found", summary2)
+        self.assertIn("MCP (codex): codex CLI not found", summary2)
 
         # Case 3: agy_imported is None and gemini_extension is True
         res_val3 = {
@@ -275,6 +292,27 @@ class TestInstallGlobal(unittest.TestCase):
             res = ig._register_mcp(["args"], "claude")
             self.assertFalse(res)
 
+    def test_register_codex_mcp_uses_codex_cli_syntax(self):
+        with (
+            patch("solomon_harness.install_global.shutil.which", return_value="/usr/bin/codex"),
+            patch("solomon_harness.install_global.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            result = ig._register_codex_mcp(["python", "-m", "solomon_harness.mcp_server"])
+
+        self.assertTrue(result)
+        self.assertEqual(
+            mock_run.call_args_list[0].args[0],
+            ["codex", "mcp", "remove", "solomon-memory"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[1].args[0],
+            [
+                "codex", "mcp", "add", "solomon-memory", "--",
+                "python", "-m", "solomon_harness.mcp_server",
+            ],
+        )
+
     def test_install_global_agy_fallback_and_exception(self):
         from os.path import isfile as real_isfile
         def custom_isfile(path):
@@ -294,6 +332,7 @@ class TestInstallGlobal(unittest.TestCase):
                 source_root=self.src.name,
                 claude_dir=self.claude,
                 gemini_dir=self.gemini,
+                codex_skills_dir=self.codex_skills,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -305,6 +344,7 @@ class TestInstallGlobal(unittest.TestCase):
                 source_root=self.src.name,
                 claude_dir=self.claude,
                 gemini_dir=self.gemini,
+                codex_skills_dir=self.codex_skills,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -359,6 +399,7 @@ class TestInstallGlobal(unittest.TestCase):
                 source_root=self.src.name,
                 claude_dir=self.claude,
                 gemini_dir=self.gemini,
+                codex_skills_dir=self.codex_skills,
                 home_dir=self.home,
                 register_mcp=False,
             )
@@ -367,6 +408,26 @@ class TestInstallGlobal(unittest.TestCase):
             self.assertFalse(os.path.exists(stale_skill_dir))
             # Valid skill folder should remain
             self.assertTrue(os.path.exists(valid_skill_dir))
+
+    def test_reinstall_removes_only_stale_solomon_codex_skills(self):
+        stale = os.path.join(self.codex_skills, "solomon-stale")
+        unrelated = os.path.join(self.codex_skills, "team-skill")
+        os.makedirs(stale)
+        os.makedirs(unrelated)
+        with open(os.path.join(stale, "SKILL.md"), "w") as f:
+            f.write("stale")
+        with open(os.path.join(unrelated, "SKILL.md"), "w") as f:
+            f.write("keep")
+
+        self._install()
+
+        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.isfile(os.path.join(unrelated, "SKILL.md")))
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(self.codex_skills, "solomon-workflow", "SKILL.md")
+            )
+        )
 
 
 if __name__ == "__main__":

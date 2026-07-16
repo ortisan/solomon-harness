@@ -2,7 +2,7 @@
 
 This is the central knowledge base and business documentation portal for **{{PROJECT_NAME}}**. 
 
-Rather than a simple AI chat interface, this project is configured as a **complete software development and automation harness**. By integrating a coordinated fleet of 24 specialized AI agents, interactive CLI commands (`/solomon-*`), stateful memory databases, and automated release gates, the harness manages the entire software development lifecycle (SDLC) while preserving strict architectural guidelines, security policies, and institutional memory.
+Rather than a simple AI chat interface, this project is configured as a **complete software development and automation harness**. By integrating a coordinated fleet of specialized agents, interactive workflows (`/solomon-*` in Claude/Gemini and `$solomon-*` in Codex), stateful memory databases, and automated release gates, the harness manages the entire software development lifecycle (SDLC) while preserving strict architectural guidelines, security policies, and institutional memory.
 
 ---
 

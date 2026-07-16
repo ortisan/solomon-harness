@@ -1,8 +1,9 @@
 # solomon workflow conventions
 
-Shared conventions for the `/solomon-*` workflows. Every workflow command
+Shared conventions for the `/solomon-*` Claude/Gemini workflows and their
+`$solomon-*` Codex skill counterparts. Every workflow
 reads this file and follows it so the lifecycle is consistent, auditable, and
-backed by the project memory. The host tool (Claude Code or Antigravity CLI) provides
+backed by the project memory. The host tool (Claude Code, Codex, or Antigravity CLI) provides
 the model; these workflows orchestrate the specialist agents, the GitHub project,
 and the memory layer.
 
@@ -53,11 +54,11 @@ invocation: when work is in flight it proposes development, review, or release;
 when nothing is in progress it proposes creating a feature, bug, or refinement.
 
 The loop is host-orchestrated and human-gated, not fully autonomous: no code
-decides the next stage — the host tool (Claude Code or the Antigravity CLI) runs
-these markdown prompts — and a human always originates merge, release, and the
-normal move-to-`Done` decision. ADR-0034 permits one narrower automated action:
-repairing a derived board projection after GitHub already reports the issue
-`CLOSED`; it cannot close, merge, release, or act on an open issue.
+decides the next stage — the host tool (Claude Code, Codex, or the Antigravity
+CLI) runs these markdown prompts — and a human always originates merge, release,
+and the normal move-to-`Done` decision. ADR-0034 permits one narrower automated
+action: repairing a derived board projection after GitHub already reports the
+issue `CLOSED`; it cannot close, merge, release, or act on an open issue.
 
 At the start of every Claude Code or Antigravity CLI session, the harness surfaces the
 project status (latest activity and open issues) through a SessionStart hook that
@@ -72,8 +73,9 @@ enumerated choices.
 When a workflow needs a decision or confirmation from the user — which next step,
 which option, which target — present the choices as an enumerated list (1, 2, 3, …),
 with the final option always being "Other", where the user types a free-form answer.
-In Claude Code this is the AskUserQuestion tool; in the Antigravity CLI, present a numbered
-list and invite a free-text reply. Lead with the recommended option first and keep the
+In Claude Code this is the AskUserQuestion tool; in Codex use structured user
+input when available; in the Antigravity CLI, present a numbered list and invite
+a free-text reply. Lead with the recommended option first and keep the
 options mutually exclusive. This is mandatory, not a preference (the non-negotiable
 Enumerable decisions rule in `agents/AGENTS.md`): never end a turn with an open prose
 question, and never hand the user a command to copy ("run `/solomon-start 55` when you
