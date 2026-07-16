@@ -733,6 +733,38 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("reconcile failed", err.getvalue())
 
+    def test_handle_reconcile_prints_board_move_summary(self):
+        """The release-path handle_reconcile gains a line reporting board moves,
+        additively alongside the existing repaired/tracking/normalized lines
+        (#264)."""
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+        self.assertIn("1 board card(s) moved to Done", out.getvalue())
+
+    def test_handle_reconcile_dry_run_reports_would_move_board(self):
+        """The dry-run branch reports the would-move-board count additively,
+        writing nothing."""
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=True)
+        self.assertIn("1 board card(s) would move to Done", out.getvalue())
+
 
 class TestHandleReconcileTracking(unittest.TestCase):
     """The reconcile command's tracking-row pass, wired end to end against a real

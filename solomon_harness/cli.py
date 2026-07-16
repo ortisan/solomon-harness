@@ -786,6 +786,12 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             f"reconcile --dry-run: {len(result['would_repair'])} issue(s) would be "
             f"set to closed ({result['scanned']} GitHub issues scanned){suffix}"
         )
+        board_ids = ", ".join(f"#{n}" for n in result["would_move_board"])
+        board_suffix = f": {board_ids}" if board_ids else ""
+        print(
+            f"reconcile --dry-run: {len(result['would_move_board'])} board card(s) "
+            f"would move to Done{board_suffix}"
+        )
         slugs = ", ".join(tracking["would_close"])
         track_suffix = f": {slugs}" if slugs else ""
         print(
@@ -805,6 +811,13 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             f"reconcile: {result['repaired']} issue(s) set to closed "
             f"({result['scanned']} GitHub issues scanned)"
         )
+        print(f"reconcile: {result['board_moved']} board card(s) moved to Done")
+        for failure in result["board_failures"]:
+            print(
+                f"reconcile: board move failed for #{failure['issue']}: "
+                f"{failure['error']}",
+                file=sys.stderr,
+            )
         print(
             f"reconcile: {tracking['closed']} tracking row(s) set to done "
             f"({tracking['scanned_tracking']} tracking rows scanned)"
