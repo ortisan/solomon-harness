@@ -2,6 +2,11 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+- `init` now propagates the per-branch planning-artifact ignore rule into every project: `bootstrap` ensures `.gitignore` excludes `PLAN.md` and `.solomon/`, and untracks `PLAN.md` when a prior commit already tracked it. Projects bootstrapped before this kept a stale `.gitignore`, so `/solomon-start`'s per-branch `PLAN.md` got committed and collided across concurrent branches.
+
 ## [0.11.0] - 2026-06-29
 
 ### Added

@@ -355,6 +355,86 @@ def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
                 shutil.copy2(src, dest)
 
 
+# Per-branch planning artifacts: /solomon-start writes PLAN.md at the repo root
+# and working state under .solomon/ for the branch in flight. These are local,
+# per-branch artifacts, not shared source. The harness's own .gitignore already
+# excludes them; the block below propagates that rule into every project, because
+# tracking PLAN.md makes concurrent branches rewrite and collide on it.
+_PLAN_GITIGNORE_ENTRIES = ("PLAN.md", ".solomon/")
+_PLAN_GITIGNORE_BLOCK = (
+    "# Local lifecycle state: handoff contract artifacts written between workflow stages\n"
+    ".solomon/\n"
+    "\n"
+    "# Per-branch planning artifact: PLAN.md is written locally by /solomon-start for\n"
+    "# the branch in flight, not shared source. Tracking it made every concurrent\n"
+    "# branch rewrite and collide on it, so it is local state, never committed.\n"
+    "PLAN.md\n"
+)
+
+
+def _ensure_project_gitignore(workspace_root: str) -> None:
+    """Ensure the project ignores the per-branch planning artifacts.
+
+    Appends ``PLAN.md`` and ``.solomon/`` to the project's ``.gitignore`` when
+    missing, and untracks ``PLAN.md`` when a prior commit already tracked it (the
+    ignore rule alone does not stop tracking an already-committed file). Runs on
+    every ``init`` -- including already-installed projects, which is exactly where
+    a stale ``.gitignore`` let PLAN.md get committed and collide across branches.
+    Idempotent: only missing entries are appended.
+    """
+    if not os.path.isdir(workspace_root):
+        return  # nothing to configure (a real init always has a workspace dir)
+    gitignore_path = os.path.join(workspace_root, ".gitignore")
+    existing = ""
+    if os.path.isfile(gitignore_path):
+        with open(gitignore_path, "r", encoding="utf-8") as f:
+            existing = f.read()
+
+    present = {
+        line.strip()
+        for line in existing.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    missing = [entry for entry in _PLAN_GITIGNORE_ENTRIES if entry not in present]
+    if missing:
+        if set(missing) == set(_PLAN_GITIGNORE_ENTRIES):
+            addition = _PLAN_GITIGNORE_BLOCK
+        else:
+            addition = "\n".join(missing) + "\n"
+        prefix = ""
+        if existing and not existing.endswith("\n"):
+            prefix += "\n"
+        if existing:
+            prefix += "\n"
+        with open(gitignore_path, "a", encoding="utf-8") as f:
+            f.write(prefix + addition)
+        print("  - .gitignore: excluded per-branch planning artifacts (PLAN.md, .solomon/).")
+
+    # A .gitignore entry does not untrack an already-committed file; do that here
+    # so a project that predates this rule (PLAN.md already in git) self-heals.
+    if os.path.exists(os.path.join(workspace_root, ".git")):
+        try:
+            tracked = (
+                subprocess.run(
+                    ["git", "ls-files", "--error-unmatch", "PLAN.md"],
+                    cwd=workspace_root,
+                    capture_output=True,
+                    text=True,
+                ).returncode
+                == 0
+            )
+            if tracked:
+                subprocess.run(
+                    ["git", "rm", "--cached", "--quiet", "PLAN.md"],
+                    cwd=workspace_root,
+                    capture_output=True,
+                    text=True,
+                )
+                print("  - Untracked PLAN.md (now local per-branch state; commit the removal).")
+        except Exception:
+            pass
+
+
 # Idempotent upsert targets for the docs/specs and docs/adrs references (#236):
 # an already-installed project's instruction files predate the convention and
 # need it inserted once, never duplicated. Retrofit never creates a file that
@@ -652,6 +732,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # When run in a fresh project (no agents/ yet), install the harness files from
     # this package's repository into the workspace before configuring it.
     _install_harness_files(workspace_root)
+    # Runs for existing projects too (_install_harness_files early-returns once
+    # agents/ exists): a project bootstrapped before this rule kept a .gitignore
+    # that let PLAN.md get committed and collide across branches.
+    _ensure_project_gitignore(workspace_root)
     print(f"  - Project Name: {project_name}")
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")
