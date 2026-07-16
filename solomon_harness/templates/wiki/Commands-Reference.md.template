@@ -1,6 +1,9 @@
 # Harness Commands Reference
 
-This document provides a detailed reference of all custom slash commands (`/solomon-*`) available in the **{{PROJECT_NAME}}** harness. These commands automate SDLC transitions, move board cards, manage Git worktrees, and trigger specialized AI agents.
+This document provides a detailed reference of the Solomon workflows available
+in the **{{PROJECT_NAME}}** harness. Invoke each workflow as `/solomon-*` in
+Claude Code or Gemini CLI and as `$solomon-*` in Codex. These workflows automate
+SDLC transitions, move board cards, manage Git worktrees, and trigger specialized agents.
 
 ---
 

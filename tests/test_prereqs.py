@@ -52,6 +52,19 @@ class TestPrereqs(unittest.TestCase):
         mock_install.assert_called_once()
         self.assertIn("uv (installed)", out.getvalue())
 
+    def test_codex_counts_as_an_available_host_tool(self):
+        out = io.StringIO()
+
+        def exists(cmd):
+            if cmd in {"python", "uv", "git", "gh"}:
+                return True
+            return cmd == "codex"
+
+        with patch.object(prereqs, "command_exists", side_effect=exists):
+            prereqs.check_prerequisites(auto_install=False, out=out)
+
+        self.assertIn("host tool (claude, gemini, or codex)", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

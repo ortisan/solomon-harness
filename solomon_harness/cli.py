@@ -49,11 +49,11 @@ def _subagent_description(filepath: str) -> str:
 
 
 def _generate_integrations(workspace_root: str) -> None:
-    """Regenerate the host-tool integrations (.claude/agents, .gemini/commands).
+    """Regenerate Claude agents, Gemini commands, and Codex skills.
 
     Loaded from scripts/generate-integrations.py so the compile step keeps the
-    Claude subagents and Gemini commands in sync with the agents/ and
-    .claude/commands/ sources. A no-op when the script is absent.
+    host integrations in sync with the agents/ and .claude/commands/ sources. A
+    no-op when the script is absent.
     """
     import importlib.util
 
@@ -97,10 +97,10 @@ def handle_eval(harness_dir: str) -> None:
 def handle_run(harness_dir: str, task=None) -> None:
     """Show where the team stopped and point to the delivery workflows.
 
-    The harness does not run a model itself; the host tool (Claude Code or the
-    Gemini CLI) provides the execution loop and the /solomon-* workflows.
-    This command resumes context from the project memory and lists those
-    workflows. It no longer simulates task execution.
+    The harness does not run a model itself; Claude Code and Gemini expose the
+    workflows as /solomon-* commands, while Codex exposes them as $solomon-*
+    skills. This command resumes context from project memory and lists both
+    invocation forms. It no longer simulates task execution.
     """
     from solomon_harness.tools.database_client import DatabaseClient
 
@@ -157,23 +157,23 @@ def handle_run(harness_dir: str, task=None) -> None:
         if task:
             print(
                 "\nTasks are not auto-run here. Start this one with a workflow, "
-                f'e.g.  /solomon-issue "{task}"'
+                f'e.g. /solomon-issue "{task}", or $solomon-issue in Codex.'
             )
 
-        print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
+        print("\nDelivery workflows (Claude/Gemini | Codex):")
         workflows = [
-            ("/solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
-            ("/solomon-loop", "autonomous parallel loop over Ready issues"),
-            ("/solomon-idea", "capture a product idea"),
-            ("/solomon-issue", "create a feature or story issue"),
-            ("/solomon-bug", "create a bug report"),
-            ("/solomon-refine", "refine an issue to Ready"),
-            ("/solomon-start", "start development: branch, plan, TDD, draft PR"),
-            ("/solomon-review", "review a pull request"),
-            ("/solomon-release", "deliver and release"),
+            ("solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
+            ("solomon-loop", "autonomous parallel loop over Ready issues"),
+            ("solomon-idea", "capture a product idea"),
+            ("solomon-issue", "create a feature or story issue"),
+            ("solomon-bug", "create a bug report"),
+            ("solomon-refine", "refine an issue to Ready"),
+            ("solomon-start", "start development: branch, plan, TDD, draft PR"),
+            ("solomon-review", "review a pull request"),
+            ("solomon-release", "deliver and release"),
         ]
         for name, desc in workflows:
-            print(f"  {name:<21} {desc}")
+            print(f"  /{name:<20} ${name:<20} {desc}")
         print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
 
 
