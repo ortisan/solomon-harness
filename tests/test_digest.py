@@ -153,6 +153,98 @@ class TestBuildDigest(unittest.TestCase):
         self.assertNotIn("#50", text)
         self.assertNotIn("Taken issue", text)
 
+    def test_gather_digest_parity_when_nothing_claimed(self):
+        """No regression when nothing is claimed: a pass-through claim store
+        must render the identical digest to the no-claim_store call path."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Free issue", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class PassThroughClaimStore:
+            def filter_unclaimed(self, issue_numbers):
+                return list(issue_numbers)
+
+        baseline = digest.build_digest(
+            resume=None,
+            open_issues=FakeDB().get_open_issues(),
+            last_loop_run=None,
+            prs=None,
+        )
+        text = digest.gather_digest(
+            ".", FakeDB(), fetch_github=False, claim_store=PassThroughClaimStore()
+        )
+        self.assertEqual(text, baseline)
+
+    def test_gather_digest_everything_claimed_renders_cleanly(self):
+        """Boundary: every open issue claimed by another session still
+        renders a complete digest, with zero 'Start development' suggestions."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Also taken", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class AllClaimedStore:
+            def filter_unclaimed(self, issue_numbers):
+                return []
+
+        text = "\n".join(
+            digest.gather_digest(
+                ".", FakeDB(), fetch_github=False, claim_store=AllClaimedStore()
+            )
+        )
+        self.assertIn("No pending tasks found in memory.", text)
+        self.assertNotIn("Start development", text)
+        self.assertNotIn("#50", text)
+        self.assertNotIn("#51", text)
+
+    def test_gather_digest_degrades_on_claim_store_failure(self):
+        """Failure path: a claim store that raises must degrade to the
+        unfiltered issue list rather than blocking or crashing SessionStart."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Free issue", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class BrokenClaimStore:
+            def filter_unclaimed(self, issue_numbers):
+                raise RuntimeError("claims unreachable")
+
+        text = "\n".join(
+            digest.gather_digest(
+                ".", FakeDB(), fetch_github=False, claim_store=BrokenClaimStore()
+            )
+        )
+        self.assertIn("#50", text)
+        self.assertIn("#51", text)
+
     def test_build_digest_flags_sqlite_fallback(self):
         """When memory is on the SQLite fallback (SurrealDB unreachable), the
         digest must say so loudly, so fallback rows are never mistaken for the
