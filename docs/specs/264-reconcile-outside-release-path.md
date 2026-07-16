@@ -5,74 +5,135 @@
 
 ## Context
 
-Raised by the 2026-07-14 ecosystem audit (process lens); re-confirmed live by the 2026-07-16 verification audit. `cli reconcile` exists as a first-class CLI subcommand and already handles the memory-status half of GitHub/board drift, but is only ever invoked from inside the release stage's own gap-filing steps.
+Raised by the 2026-07-14 ecosystem audit and re-confirmed on 2026-07-16.
+`cli reconcile` is a first-class command, but its only workflow call site was the
+release path. A live snapshot found 20 of 47 open issues off-board and eight
+closed issues outside `Done`; issue #280 was already terminal in memory while its
+card remained in `Code Review`.
 
 ## Problem
 
-Because reconcile only runs at release cadence — which can be weeks apart — board and memory drift accumulates for the entire span between releases. A live snapshot showed 20 of 47 open issues (43%) off the board entirely and 8 closed issues stranded in non-Done columns. Reconcile also only ever wrote the memory-status half of the fix; it never moved a GitHub-closed issue's board card to Done, so even a timely run left the board-column half of the drift untouched.
+Release cadence can be weeks apart, so board/memory drift remains visible for the
+entire interval. The terminal backstop repaired memory but not the canonical
+Project card. The first PR implementation then over-corrected: every closed issue
+was rewritten on every `SessionStart`, in a daemon thread that could outlive its
+timeout and bypass the single-driver lock.
 
 ## Requirements
 
-1. `cli reconcile` (or an equivalent best-effort call) runs on a standing cadence independent of the release path — either folded into the existing SessionStart digest or registered as a new standing loop stage.
-2. The standing invocation is a fast no-op when there is nothing to reconcile, with no perceptible delay to whichever surface triggers it.
-3. Reconcile is extended to move a GitHub-closed issue's board card to `Done` when it is not already there, reusing the existing board-status-move primitive rather than a new API call path.
-4. The existing release-path invocation of reconcile is unchanged (this is additive, not a replacement).
-5. A partial failure (memory status fixed, board move fails, or vice versa) is reported distinctly per issue, never silently dropped.
+1. Reconciliation has a standing, schedulable invocation independent of release:
+   `/solomon-reconcile` / `solomon-harness dev reconcile`.
+2. `SessionStart` starts no reconciliation worker or board mutation. The standing
+   no-op bulk-reads state and performs zero board writes when all closed cards are
+   already `Done`.
+3. For each GitHub-closed issue, reconcile compares the canonical repository
+   board status and calls the existing bare
+   `set_issue_status(issue_number, "Done")` primitive only when the card is absent
+   or not already `Done`.
+4. The command acquires the shared git-common-dir `LoopLock` before database or
+   GitHub access. A second live driver is refused. Direct bulk subprocesses have
+   explicit deadlines and no mutable worker survives command return.
+5. The existing release-path invocation remains additive and behavior-compatible.
+6. Memory and board outcomes are independent. If memory repair succeeds and the
+   board write fails, that issue is retained in `board_failures` with `ok: False`,
+   the memory repair remains recorded, and stderr names the issue and error.
+7. Automation never originates terminal authority: it does not merge, close,
+   release, or move an issue whose validated GitHub snapshot is `OPEN`. The
+   closed-only projection exception is governed by ADR-0034.
 
 ## Implementation Pointers
 
-- `solomon_harness/cli.py:707` (`handle_reconcile(workspace_root, dry_run)`) — current: the only caller of this function across the whole `/solomon-*` command surface is the release stage's own gap-filing/close-out steps (per `docs/solomon-workflow.md`'s Deliver/release description); no `SessionStart` hook, cron, or standing loop stage calls it independently. Expected: add a second, independent standing call site (see the two wiring options below).
-- `solomon_harness/cli.py:555-706` (`reconcile_memory`, `normalize_memory_statuses`, `reconcile_tracking_rows` — the three passes `handle_reconcile` composes) — current: each sets a memory row's status to a terminal value (`closed`/`done`) or normalizes it; none of the three touches the GitHub Project board column. Expected: after `reconcile_memory` identifies a GitHub-closed issue, call `solomon_harness.github.set_issue_status(issue_number, "Done")` for its board card, reusing the exact primitive `merge_pr_and_close` already uses for the same transition, rather than inventing a new board-move helper.
-- `solomon_harness/github.py` (`set_issue_status`, and the partial-failure reporting shape inside `merge_pr_and_close`: `{"ok": False, "error": ..., "merged": True, ...}`) — the reporting pattern the new board-column reconcile path should mirror when the memory write succeeds but the board write fails, so a caller can tell the two outcomes apart.
-- `solomon_harness/cli.py:97` (`handle_run`, the SessionStart entry point that already calls `gather_digest`) — the first wiring option: fold a best-effort `handle_reconcile(workspace_root, dry_run=False)` call in here, guarded so any failure degrades silently and never blocks or slows SessionStart beyond a fast-no-op budget.
-- `solomon_harness/workflows.py:16-27` (`LOCKED_STAGES`, which already lists `scan-arch`/`scan-dedup` alongside `workflow`, `loop`, `start`, `review`, `release`) plus `.claude/commands/solomon-scan-arch.md` — the second wiring option: register a new standing stage here with its own command file, mirroring the `scan-arch`/`scan-dedup` cadence pattern already documented for `loop_engineer`, if that fits the existing infrastructure better than folding into SessionStart.
-- Board-target safety: the mutation must use the bare `set-status` form that targets the single repo board (#5); never pass `--title` (the prior footgun that silently created duplicate boards per issue).
+- `solomon_harness.cli.handle_reconcile` — public lock boundary. It acquires
+  `LoopLock(stage="reconcile")` and delegates to `_handle_reconcile_locked`, so
+  direct CLI, standing-stage, and release callers share one mutation guard.
+- `solomon_harness.cli._fetch_gh_issue_states` and
+  `_canonical_board_status` — the bulk `gh issue list` read requests
+  `number,state,projectItems`, validates all untrusted records, selects the
+  canonical board by repository title, and carries its current status into the
+  reconcile record. The subprocess uses `GH_TIMEOUT_SECONDS`.
+- `solomon_harness.cli.reconcile_memory` — memory repair stays gated by an
+  existing non-terminal row; board repair is separately gated by `CLOSED` plus
+  `board_status != "Done"`. Dry-run uses the same predicate.
+- `solomon_harness.github.set_issue_status` — unchanged board mutation primitive.
+  Use its bare form only; never pass `--title`. It resolves the single canonical
+  board and refuses to create a missing board.
+- `solomon_harness.workflows.STAGES` / `LOCKED_STAGES` and
+  `solomon_harness.loop_policy.AUTOMATION_ALLOWED_STAGES` — register the standing
+  stage, require the single-driver lock, allow it at L2/L3, and keep L1
+  report-only.
+- `.claude/commands/solomon-reconcile.md` and its Gemini mirror — execute the CLI
+  command only and explicitly forbid merge, close, release, or an open-issue
+  terminal move.
 
 ## Acceptance Criteria
 
 ```gherkin
-Scenario: A standing reconcile closes both halves of the drift
-  Given a GitHub-closed issue whose board card is still in "Code Review" and whose memory status is still "in_progress"
-  When the new standing reconcile runs
-  Then the board card moves to "Done"
-  And the memory status becomes terminal in the same run
+Scenario: A standing reconcile closes both projections
+  Given a GitHub-closed issue whose canonical card is in "Code Review" and whose memory status is "in_progress"
+  When the locked standing reconcile runs
+  Then the memory status becomes terminal
+  And the existing board primitive moves the canonical card to "Done"
 
-Scenario: Boundary — a fast no-op when there is nothing to reconcile
-  Given the standing reconcile runs (via SessionStart or a new standing loop stage) and there is nothing to reconcile
-  When it completes
-  Then it is a fast no-op with no perceptible session-start delay
+Scenario: A converged repository is a write-free no-op
+  Given every GitHub-closed issue has a canonical card already in "Done"
+  When reconcile runs again
+  Then no board-status write is attempted
+  And SessionStart has no reconciliation call or background worker
 
-Scenario: Boundary — the release-path invocation is unchanged
-  Given the existing release-path reconcile call
-  When a release runs
-  Then its behavior is unchanged (no regression)
-  And reconcile still runs there too, additively
+Scenario: A concurrent driver is refused
+  Given another live session holds the repository loop lock
+  When reconcile starts
+  Then it exits non-zero before opening memory or calling GitHub
 
-Scenario: Failure path — a partial write is reported distinctly, not dropped
-  Given the standing reconcile's board-column write fails for one issue (e.g., a missing Status field or option) while its memory-status write already succeeded
-  When the run completes
-  Then that issue is reported as ok: False with the memory write already recorded as done
-  And it is never silently dropped from the run's output
+Scenario: The release invocation remains additive
+  Given the existing release path invokes cli reconcile
+  When release runs
+  Then the same memory, tracking, normalization, and board summaries are produced
+  And the standing stage has not replaced the release call
+
+Scenario: A partial board failure remains visible
+  Given memory repair succeeds for a closed issue and its board write fails
+  When reconcile completes
+  Then memory remains terminal
+  And board_failures contains that issue with ok: False
+  And stderr reports the issue-specific failure
+
+Scenario: An outbound read reaches its deadline
+  Given the bulk gh issue read does not return within GH_TIMEOUT_SECONDS
+  When reconcile runs
+  Then the synchronous command fails and releases its lock
+  And no daemon thread or detached mutable process continues the sweep
 ```
 
 ## Verification
 
 ```bash
-uv run python -m solomon_harness.cli reconcile --dry-run   # before and after, on a repo with known drift
-uv run pytest tests/test_cli.py tests/test_memory.py -k reconcile -v
-gh project item-list 5 --owner ortisan --limit 200   # cross-referenced against gh issue list --state closed; expect 0 stranded off Done after a run
+uv run pytest tests/test_reconcile.py tests/test_workflows.py tests/test_loop_policy.py tests/test_command_gates.py -k 'reconcile or Reconcile' -v
+uv run pytest tests/ -k reconcile -v
+uv run python -m solomon_harness.cli reconcile --dry-run
+gh issue list --state closed --limit 1000 --json number,projectItems
 ```
+
+For the live check, inspect the last command's canonical `solomon-harness`
+project item and expect no closed issue whose status name differs from `Done`
+after a successful non-dry run.
 
 ## Design Constraints
 
-The standing invocation must be best-effort and never block or perceptibly slow SessionStart, mirroring the existing digest timeout discipline in `digest.py`'s `_run_with_timeout`. The release-path invocation is untouched (additive, not replaced). Board-column writes reuse the existing `set_issue_status` primitive (bare form, board #5) rather than a new GitHub API call path.
+The standing path is synchronous, single-driver, and separately schedulable; it
+does not run during SessionStart. A converged board is write-free. Every external
+subprocess has a deadline. Board mutation reuses the existing canonical-board
+primitive. The closed-only exception and human-gate boundary are defined by
+ADR-0034.
 
 ## Out of Scope
 
-The underlying causes of why cards go off-board or fail to write canonical statuses in the first place (tracked separately, e.g. #173). Claim-ref release for GitHub-closed issues (#289). A full board-hygiene redesign beyond widening reconcile's reach and cadence.
+The root causes that omit cards or miss normal status write-through (tracked
+separately, including #173). Claim-ref release for closed issues (#289).
+Reconciliation of reopened issues. A broader board-hygiene redesign.
 
 ## Traceability
 
 - Issue: #264
-- ADR: none yet
-- PR: #<M once opened>
+- ADR: `docs/adrs/0034-closed-issue-board-projection-reconciliation.md`
+- PR: #309

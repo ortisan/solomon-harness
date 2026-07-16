@@ -13,6 +13,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from solomon_harness import cli  # noqa: E402
+from solomon_harness.loop_lock import LoopLock, resolve_lock_path  # noqa: E402
 from solomon_harness.tools.database_client import (  # noqa: E402
     DatabaseClient,
     is_terminal,
@@ -83,9 +85,9 @@ class TestReconcileMemory(unittest.TestCase):
     def test_repairs_closed_leaves_open_and_is_idempotent(self):
         client = self._seed()
         states = [
-            {"number": "6", "state": "CLOSED"},
-            {"number": "8", "state": "CLOSED"},
-            {"number": "100", "state": "OPEN"},
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "8", "state": "CLOSED", "board_status": "Done"},
+            {"number": "100", "state": "OPEN", "board_status": "In Progress"},
         ]
 
         first = cli.reconcile_memory(
@@ -114,8 +116,8 @@ class TestReconcileMemory(unittest.TestCase):
     def test_dry_run_reports_stale_rows_without_writing(self):
         client = self._seed()
         states = [
-            {"number": "6", "state": "CLOSED"},
-            {"number": "100", "state": "OPEN"},
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "100", "state": "OPEN", "board_status": "In Progress"},
         ]
         result = cli.reconcile_memory(
             client, states, dry_run=True, set_issue_status_fn=self._noop_status_fn
@@ -130,7 +132,7 @@ class TestReconcileMemory(unittest.TestCase):
         client = self._seed()
         result = cli.reconcile_memory(
             client,
-            [{"number": "999", "state": "CLOSED"}],
+            [{"number": "999", "state": "CLOSED", "board_status": "Done"}],
             set_issue_status_fn=self._noop_status_fn,
         )
         self.assertEqual(result["repaired"], 0)
@@ -143,7 +145,9 @@ class TestReconcileMemory(unittest.TestCase):
         decoupled from whether memory needed repair."""
         client = self._seed()
         client.log_issue("280", "Already closed in memory", "bug", "closed", None)
-        states = [{"number": "280", "state": "CLOSED"}]
+        states = [
+            {"number": "280", "state": "CLOSED", "board_status": "Code Review"}
+        ]
         calls = []
 
         def spy_status_fn(number, status):
@@ -158,9 +162,50 @@ class TestReconcileMemory(unittest.TestCase):
         self.assertEqual(result["board_failures"], [])
         client.close()
 
+    def test_closed_issue_missing_from_board_uses_existing_move_primitive(self):
+        client = self._seed()
+        calls = []
+
+        def spy_status_fn(number, status):
+            calls.append((number, status))
+            return {"ok": True}
+
+        result = cli.reconcile_memory(
+            client,
+            [{"number": "6", "state": "CLOSED", "board_status": None}],
+            set_issue_status_fn=spy_status_fn,
+        )
+
+        self.assertEqual(calls, [(6, "Done")])
+        self.assertEqual(result["board_moved"], 1)
+        client.close()
+
+    def test_closed_issue_already_done_is_a_board_no_op(self):
+        """A converged canonical card must never be written again."""
+        client = self._seed()
+        client.log_issue("280", "Already closed", "bug", "closed", None)
+        calls = []
+
+        def spy_status_fn(number, status):
+            calls.append((number, status))
+            return {"ok": True}
+
+        result = cli.reconcile_memory(
+            client,
+            [{"number": "280", "state": "CLOSED", "board_status": "Done"}],
+            set_issue_status_fn=spy_status_fn,
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["board_moved"], 0)
+        self.assertEqual(result["would_move_board"], [])
+        client.close()
+
     def test_board_move_failure_is_reported_without_losing_memory_repair(self):
         client = self._seed()
-        states = [{"number": "6", "state": "CLOSED"}]
+        states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Code Review"}
+        ]
 
         def failing_status_fn(number, status):
             return {"ok": False, "error": "missing Status option"}
@@ -172,7 +217,8 @@ class TestReconcileMemory(unittest.TestCase):
         self.assertEqual(client.get_issue("6")["status"], "closed")
         self.assertEqual(result["board_moved"], 0)
         self.assertEqual(
-            result["board_failures"], [{"issue": "6", "error": "missing Status option"}]
+            result["board_failures"],
+            [{"issue": "6", "ok": False, "error": "missing Status option"}],
         )
         client.close()
 
@@ -180,9 +226,9 @@ class TestReconcileMemory(unittest.TestCase):
         client = self._seed()
         client.log_issue("280", "Already closed in memory", "bug", "closed", None)
         states = [
-            {"number": "6", "state": "CLOSED"},
-            {"number": "280", "state": "CLOSED"},
-            {"number": "100", "state": "OPEN"},
+            {"number": "6", "state": "CLOSED", "board_status": "Code Review"},
+            {"number": "280", "state": "CLOSED", "board_status": "Done"},
+            {"number": "100", "state": "OPEN", "board_status": "In Progress"},
         ]
         calls = []
 
@@ -195,7 +241,7 @@ class TestReconcileMemory(unittest.TestCase):
         )
 
         self.assertEqual(calls, [])
-        self.assertEqual(result["would_move_board"], ["6", "280"])
+        self.assertEqual(result["would_move_board"], ["6"])
         self.assertEqual(result["board_moved"], 0)
         self.assertEqual(result["board_failures"], [])
         client.close()
@@ -410,6 +456,71 @@ class TestReconcileTrackingRows(unittest.TestCase):
 
 
 class TestFetchGhIssueStates(unittest.TestCase):
+    def test_board_title_comes_from_git_common_origin(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            git_dir = os.path.join(workspace, ".git")
+            os.makedirs(git_dir)
+            with open(os.path.join(git_dir, "config"), "w", encoding="utf-8") as config:
+                config.write(
+                    '[remote "origin"]\n\turl = git@github.com:ortisan/solomon-harness.git\n'
+                )
+
+            self.assertEqual(cli._canonical_board_title(workspace), "solomon-harness")
+
+    def test_duplicate_same_title_project_items_are_treated_as_drift(self):
+        project_items = [
+            {"title": "solomon-harness", "status": {"name": "Done"}},
+            {"title": "solomon-harness", "status": {"name": "Code Review"}},
+        ]
+
+        self.assertIsNone(
+            cli._canonical_board_status(project_items, "solomon-harness")
+        )
+
+    def test_includes_canonical_project_status_in_each_issue_record(self):
+        payload = json.dumps(
+            [
+                {
+                    "number": 6,
+                    "state": "CLOSED",
+                    "projectItems": [
+                        {
+                            "title": "solomon-harness",
+                            "status": {"name": "Done", "optionId": "done-id"},
+                        }
+                    ],
+                },
+                {
+                    "number": 8,
+                    "state": "CLOSED",
+                    "projectItems": [
+                        {
+                            "title": "solomon-harness",
+                            "status": {"name": "Code Review"},
+                        }
+                    ],
+                },
+                {"number": 9, "state": "CLOSED", "projectItems": []},
+            ]
+        )
+
+        with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
+            states = cli._fetch_gh_issue_states(".")
+
+        self.assertEqual(
+            states,
+            [
+                {"number": "6", "state": "CLOSED", "board_status": "Done"},
+                {
+                    "number": "8",
+                    "state": "CLOSED",
+                    "board_status": "Code Review",
+                },
+                {"number": "9", "state": "CLOSED", "board_status": None},
+            ],
+        )
+        self.assertIn("projectItems", " ".join(run.call_args.args[0]))
+
     def test_validates_number_and_state_as_data(self):
         payload = json.dumps(
             [
@@ -425,8 +536,8 @@ class TestFetchGhIssueStates(unittest.TestCase):
         self.assertEqual(
             states,
             [
-                {"number": "6", "state": "CLOSED"},
-                {"number": "100", "state": "OPEN"},
+                {"number": "6", "state": "CLOSED", "board_status": None},
+                {"number": "100", "state": "OPEN", "board_status": None},
             ],
         )
 
@@ -442,6 +553,15 @@ class TestFetchGhIssueStates(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 cli._fetch_gh_issue_states(".")
 
+    def test_gh_timeout_raises_runtime_error(self):
+        """The bulk read owns a real subprocess deadline, not an outer thread."""
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["gh", "issue", "list"], 15),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                cli._fetch_gh_issue_states(".")
+
     def test_malformed_json_raises_runtime_error(self):
         """Non-JSON gh output is a parse failure, not an empty result set."""
         with patch("subprocess.run", return_value=_Proc(0, "not json {")):
@@ -454,7 +574,9 @@ class TestFetchGhIssueStates(unittest.TestCase):
         payload = json.dumps([{"number": 6, "state": "CLOSED"}, "garbage", 42, None])
         with patch("subprocess.run", return_value=_Proc(0, payload)):
             states = cli._fetch_gh_issue_states(".")
-        self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
+        self.assertEqual(
+            states, [{"number": "6", "state": "CLOSED", "board_status": None}]
+        )
 
     def test_strips_inherited_git_env_before_shelling_out(self):
         # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
@@ -601,18 +723,47 @@ class TestReconcileBackendGuard(unittest.TestCase):
     def test_sqlite_fallback_warns_and_skips_with_zero_writes(self):
         fake = _FakeSqliteClient()
         err = io.StringIO()
-        with (
-            patch(
-                "solomon_harness.tools.database_client.DatabaseClient",
-                return_value=fake,
-            ),
-            # gh must never be shelled out to on the guard path.
-            patch("subprocess.run", side_effect=AssertionError("gh must not run")),
-            contextlib.redirect_stderr(err),
-        ):
-            cli.handle_reconcile("/workspace", dry_run=False)
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "solomon_harness.tools.database_client.DatabaseClient",
+                    return_value=fake,
+                ),
+                patch.object(
+                    cli,
+                    "_fetch_gh_issue_states",
+                    side_effect=AssertionError("gh must not run"),
+                ),
+                contextlib.redirect_stderr(err),
+            ):
+                cli.handle_reconcile(workspace, dry_run=False)
         self.assertIn("SQLite fallback", err.getvalue())
         self.assertEqual(fake.writes, [])
+
+
+class TestHandleReconcileLock(unittest.TestCase):
+    def test_foreign_driver_is_refused_before_database_or_github_access(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            os.makedirs(os.path.join(workspace, ".git"))
+            holder = LoopLock(
+                workspace, session_id="foreign-reconcile-driver", pid=os.getpid()
+            ).acquire(stage="reconcile")
+            err = io.StringIO()
+            try:
+                with (
+                    patch(
+                        "solomon_harness.tools.database_client.DatabaseClient",
+                        side_effect=AssertionError("database must not open"),
+                    ),
+                    contextlib.redirect_stderr(err),
+                ):
+                    with self.assertRaises(SystemExit) as raised:
+                        cli.handle_reconcile(workspace, dry_run=False)
+            finally:
+                holder.release()
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("another solomon driver", err.getvalue())
 
 
 class _ShareStoreProxy:
@@ -732,6 +883,7 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 cli.handle_reconcile(self.temp_dir.name, dry_run=False)
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("reconcile failed", err.getvalue())
+        self.assertFalse(os.path.exists(resolve_lock_path(self.temp_dir.name)))
 
     def test_handle_reconcile_prints_board_move_summary(self):
         """The release-path handle_reconcile gains a line reporting board moves,
@@ -764,6 +916,39 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
         ):
             cli.handle_reconcile(self.temp_dir.name, dry_run=True)
         self.assertIn("1 board card(s) would move to Done", out.getvalue())
+
+    def test_converged_board_card_is_not_written_by_command_path(self):
+        self.inner.log_issue("6", "Stale closed", "bug", "closed", None)
+        payload = json.dumps(
+            [
+                {
+                    "number": 6,
+                    "state": "CLOSED",
+                    "projectItems": [
+                        {
+                            "title": "solomon-harness",
+                            "status": {"name": "Done"},
+                        }
+                    ],
+                },
+                {"number": 100, "state": "OPEN", "projectItems": []},
+            ]
+        )
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(cli, "_canonical_board_title", return_value="solomon-harness"),
+            patch("subprocess.run", return_value=_Proc(0, payload)),
+            patch("solomon_harness.github.set_issue_status") as set_status,
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+
+        set_status.assert_not_called()
+        self.assertIn("0 board card(s) moved to Done", out.getvalue())
 
 
 class TestHandleReconcileTracking(unittest.TestCase):
@@ -834,12 +1019,7 @@ class TestHandleReconcileTracking(unittest.TestCase):
 
 
 class _FakeSurrealDbClient:
-    """A minimal fake reporting the shared-store backend, standing in for
-    handle_run's standing reconcile pass (#264). scan_project_structure,
-    gather_digest and the healthcheck calls are mocked out in every test that
-    uses this fake, so it needs to support only what the real
-    ``_run_standing_reconcile`` composition touches: the three reconcile passes
-    over an empty store."""
+    """A minimal shared-store fake for the read-oriented handle_run tests."""
 
     backend = "surrealdb"
 
@@ -856,11 +1036,8 @@ class _FakeSurrealDbClient:
         return None
 
 
-class TestHandleRunStandingReconcile(unittest.TestCase):
-    """handle_run's best-effort standing reconcile pass (#264): it runs on every
-    SessionStart independent of the release path, swallows any exception from
-    the pass so session start always completes and the digest still renders,
-    and stays silent when there is nothing to reconcile."""
+class TestHandleRunDoesNotReconcile(unittest.TestCase):
+    """SessionStart stays read-oriented; standing mutation owns another stage."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -895,65 +1072,11 @@ class TestHandleRunStandingReconcile(unittest.TestCase):
                 cli.handle_run(self.temp_dir.name)
         return out.getvalue()
 
-    def test_standing_reconcile_runs_during_handle_run(self):
-        with patch.object(cli, "_run_standing_reconcile") as spy:
+    def test_session_start_does_not_launch_mutating_reconcile_work(self):
+        """Board convergence belongs to the locked standing stage, not a daemon."""
+        with patch.object(cli, "_fetch_gh_issue_states") as spy:
             self._run_handle_run_with()
-        spy.assert_called_once_with(self.temp_dir.name)
-
-    def test_exception_from_standing_reconcile_is_swallowed(self):
-        """A raised exception (e.g. gh unauthenticated) never blocks session
-        start: handle_run completes and the digest still prints."""
-        out = self._run_handle_run_with(
-            patch.object(
-                cli,
-                "_run_standing_reconcile",
-                side_effect=RuntimeError("gh unauthenticated"),
-            )
-        )
-        self.assertIn("digest line", out)
-
-    def test_nothing_to_reconcile_prints_nothing_extra(self):
-        """The real standing pass, given no drift on either side, prints
-        nothing beyond the ordinary digest -- the common no-op case stays
-        silent."""
-        out = self._run_handle_run_with(
-            patch("solomon_harness.cli._fetch_gh_issue_states", return_value=[]),
-            patch("solomon_harness.cli._fetch_gh_pr_states", return_value=[]),
-        )
-        self.assertIn("digest line", out)
-        self.assertNotIn("reconcile:", out)
-
-    def test_hanging_standing_reconcile_does_not_block_past_the_budget(self):
-        """A standing reconcile stuck past its timeout budget (e.g. a wedged
-        `gh` subprocess) must not block handle_run's caller for anywhere near
-        the full hang -- the #264 Design Constraints / RAID R2 mitigation
-        ("time-boxed/backgrounded with a hard timeout") must genuinely bound
-        wall-clock time, not just nominally wrap the call in a try/except."""
-        import time
-
-        hang_seconds = 0.6
-        bound_seconds = 0.1
-
-        def _hang(_workspace_root):
-            time.sleep(hang_seconds)
-
-        start = time.monotonic()
-        with self.assertLogs(level="WARNING") as log_ctx:
-            out = self._run_handle_run_with(
-                patch.object(cli, "_run_standing_reconcile", side_effect=_hang),
-                patch.object(cli, "_STANDING_RECONCILE_TIMEOUT_SECONDS", bound_seconds),
-            )
-        elapsed = time.monotonic() - start
-
-        # Bounded, not equal to the full hang: comfortably under half of it,
-        # proving the timeout actually applies rather than being decorative.
-        self.assertLess(elapsed, hang_seconds / 2)
-        self.assertIn("digest line", out)
-        self.assertTrue(
-            any("did not finish" in msg for msg in log_ctx.output),
-            log_ctx.output,
-        )
-
+        spy.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

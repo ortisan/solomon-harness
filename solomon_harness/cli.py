@@ -130,8 +130,6 @@ def handle_run(harness_dir: str, task=None) -> None:
             import logging
             logging.warning(f"Project structure scan failed at session start: {type(exc).__name__}")
 
-        _run_standing_reconcile_bounded(workspace_root)
-
         print(say("project status"))
 
         # One-screen board digest: resume point, open work, the last loop run,
@@ -433,15 +431,72 @@ def handle_log(workspace_root: str, last: int) -> None:
 _GH_ISSUE_LIMIT = 1000
 
 
+def _canonical_board_title(workspace_root: str) -> str:
+    """Resolve the repository board title from the origin URL without a network call.
+
+    The delivery board is named after the repository (``github.board_title``).
+    Reading the git-common-dir config keeps linked worktrees on the same identity
+    while avoiding another ``gh`` round trip on the standing no-op path.
+    """
+    from solomon_harness.loop_lock import resolve_common_file
+
+    config_path = resolve_common_file(workspace_root, "config", "git-config")
+    in_origin = False
+    try:
+        with open(config_path, "r", encoding="utf-8") as config:
+            for raw_line in config:
+                line = raw_line.strip()
+                if line.startswith("["):
+                    in_origin = line.lower() == '[remote "origin"]'
+                    continue
+                if not in_origin or "=" not in line:
+                    continue
+                key, value = (part.strip() for part in line.split("=", 1))
+                if key.lower() != "url":
+                    continue
+                repository = value.rstrip("/").rsplit("/", 1)[-1]
+                if repository.endswith(".git"):
+                    repository = repository[:-4]
+                if repository:
+                    return repository
+    except OSError:
+        pass
+    return os.path.basename(os.path.abspath(workspace_root))
+
+
+def _canonical_board_status(project_items: object, board_title: str) -> Optional[str]:
+    """Return one unambiguous status from the repository's canonical board.
+
+    Missing, malformed, or duplicate same-title project entries are treated as
+    unknown. Reconcile then takes the conservative path and asks the existing
+    canonical-board primitive to converge the card instead of trusting an
+    unrelated or ambiguous project item.
+    """
+    if not isinstance(project_items, list):
+        return None
+    matches: List[str] = []
+    for project_item in project_items:
+        if not isinstance(project_item, dict) or project_item.get("title") != board_title:
+            continue
+        status = project_item.get("status")
+        if not isinstance(status, dict) or not isinstance(status.get("name"), str):
+            continue
+        matches.append(status["name"])
+    return matches[0] if len(matches) == 1 else None
+
+
 def _fetch_gh_states(
     list_args: List[str],
     valid_states: Tuple[str, ...],
     kind_label: str,
     workspace_root: str,
+    board_title: Optional[str] = None,
 ) -> List[dict]:
     """Run a bulk ``gh <list_args> --state all`` query and return validated records.
 
-    Returns a list of ``{"number": "<int-as-str>", "state": <one of valid_states>}``.
+    Returns validated number/state records. Issue records additionally carry the
+    canonical ``board_status`` (a string or ``None``) when ``board_title`` is
+    provided.
     gh output is treated strictly as data across the trust boundary (STRIDE): the
     number is coerced to ``str(int(...))`` and the state must be one of the accepted
     GitHub literals, so a malformed record is skipped rather than trusted, and no
@@ -453,18 +508,24 @@ def _fetch_gh_states(
     import json as _json
     import subprocess
 
+    from solomon_harness.github import GH_TIMEOUT_SECONDS
     from solomon_harness.subprocess_env import clean_git_env
 
     try:
+        json_fields = "number,state,projectItems" if board_title else "number,state"
         proc = subprocess.run(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
-             "--json", "number,state"],
+             "--json", json_fields],
             cwd=workspace_root, capture_output=True, text=True, check=False,
-            env=clean_git_env(),
+            env=clean_git_env(), timeout=GH_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
             "gh CLI not found; install and authenticate the GitHub CLI."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"gh {kind_label} list timed out after {GH_TIMEOUT_SECONDS}s"
         ) from exc
     if proc.returncode != 0:
         raise RuntimeError(
@@ -497,7 +558,12 @@ def _fetch_gh_states(
         state = str(item.get("state", "")).upper()
         if state not in valid_states:
             continue
-        states.append({"number": number, "state": state})
+        record: Dict[str, object] = {"number": number, "state": state}
+        if board_title is not None:
+            record["board_status"] = _canonical_board_status(
+                item.get("projectItems"), board_title
+            )
+        states.append(record)
     return states
 
 
@@ -507,7 +573,13 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     Thin config over ``_fetch_gh_states``; the validation and STRIDE handling live
     in that shared core.
     """
-    return _fetch_gh_states(["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root)
+    return _fetch_gh_states(
+        ["issue", "list"],
+        ("OPEN", "CLOSED"),
+        "issue",
+        workspace_root,
+        board_title=_canonical_board_title(workspace_root),
+    )
 
 
 def _fetch_gh_pr_states(workspace_root: str) -> List[dict]:
@@ -571,19 +643,19 @@ def reconcile_memory(
     rows terminal and writes nothing.
 
     The board-card move is deliberately decoupled from the memory-repair gate
-    (#264, #280): it is attempted for every GitHub-CLOSED entry regardless of
-    whether that entry's memory row needed repair, already existed, or is
-    terminal already -- a live case showed memory already "closed" while the
-    board card was still stuck in "Code Review", which the memory gate alone
-    would never touch. ``set_issue_status_fn`` defaults to
+    (#264, #280), but remains idempotent: it is attempted only for a
+    GitHub-CLOSED entry whose canonical ``board_status`` is absent or differs
+    from ``Done``. A live case showed memory already "closed" while the board
+    card was still stuck in "Code Review", which the memory gate alone would
+    never touch. ``set_issue_status_fn`` defaults to
     ``solomon_harness.github.set_issue_status`` (mirroring this codebase's
     ``claim_store``/``GitClaimStore`` default-construction convention); a caller
     may inject a fake to avoid a live gh call. A board-move failure is recorded
     per-issue in ``board_failures`` and never rolls back or blocks the memory
     repair for that same issue, which may already have landed independently.
     With ``dry_run`` no write and no board move is attempted: the stale memory
-    ids are collected in ``would_repair`` and the would-be board moves in
-    ``would_move_board``.
+    ids are collected in ``would_repair`` and only actual board drift is listed
+    in ``would_move_board`` (ADR-0034).
 
     Returns ``{"repaired", "would_repair", "scanned", "board_moved",
     "board_failures", "would_move_board"}``.
@@ -616,6 +688,9 @@ def reconcile_memory(
                 )
                 repaired += 1
 
+        if entry.get("board_status") == "Done":
+            continue
+
         if dry_run:
             would_move_board.append(number)
             continue
@@ -624,7 +699,9 @@ def reconcile_memory(
         if move_result.get("ok"):
             board_moved += 1
         else:
-            board_failures.append({"issue": number, "error": move_result.get("error")})
+            board_failures.append(
+                {"issue": number, "ok": False, "error": move_result.get("error")}
+            )
     return {
         "repaired": repaired,
         "would_repair": would_repair,
@@ -750,6 +827,25 @@ def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = F
 
 
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
+    """Run reconciliation under the repository's single-driver mutation lock."""
+    from solomon_harness.loop_lock import LoopLock, LoopLockHeld
+
+    lock = LoopLock(workspace_root, stage="reconcile")
+    try:
+        lock.acquire()
+    except LoopLockHeld as held:
+        print(
+            f"reconcile refused: another solomon driver holds the loop lock ({held}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        _handle_reconcile_locked(workspace_root, dry_run)
+    finally:
+        lock.release()
+
+
+def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
     """Reconcile the memory issue rows against GitHub (GitHub is the source of truth).
 
     Targets the shared SurrealDB only: on a SQLite-fallback backend it warns and
@@ -830,113 +926,6 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
         )
 
 
-def _run_standing_reconcile(workspace_root: str) -> None:
-    """Best-effort standing reconcile pass, run from ``handle_run``'s
-    SessionStart hook independently of the release path (#264).
-
-    Composes the same three passes as ``handle_reconcile`` (memory repair plus
-    board move, tracking-row close, status normalization), but stays silent
-    when there is nothing to reconcile: unlike the explicit release-path
-    command, this runs on every session start, so an always-printed line (even
-    at zero) would add digest noise on the common no-op case. A board-move
-    failure is still printed to stderr even when nothing else changed -- a
-    partial failure is never silently dropped (spec req 5). Skips outright on
-    a SQLite-fallback backend, exactly like ``handle_reconcile``'s own guard
-    (ADR-0006 / RAID R1): a per-worktree store is never half-repaired.
-
-    Raises whatever the underlying passes raise (e.g. a gh failure via
-    ``_fetch_gh_issue_states``); the caller (``handle_run``) wraps this call in
-    a try/except that logs a warning and never blocks or fails SessionStart.
-    """
-    from solomon_harness.tools.database_client import DatabaseClient
-
-    with DatabaseClient(harness_dir=workspace_root) as db:
-        if db.backend != "surrealdb":
-            return
-        issue_states = _fetch_gh_issue_states(workspace_root)
-        pr_states = _fetch_gh_pr_states(workspace_root)
-        result = reconcile_memory(db, issue_states, dry_run=False)
-        resolved_map = _build_resolved_map(issue_states, pr_states)
-        tracking = reconcile_tracking_rows(db, resolved_map, dry_run=False)
-        statuses = normalize_memory_statuses(db, dry_run=False)
-
-    changed = (
-        result["repaired"]
-        or result["board_moved"]
-        or tracking["closed"]
-        or statuses["normalized"]
-    )
-    if changed:
-        print(
-            f"reconcile: {result['repaired']} issue(s) closed, "
-            f"{result['board_moved']} board card(s) moved to Done, "
-            f"{tracking['closed']} tracking row(s) closed, "
-            f"{statuses['normalized']} status(es) normalized"
-        )
-    for failure in result["board_failures"]:
-        print(
-            f"reconcile: board move failed for #{failure['issue']}: "
-            f"{failure['error']}",
-            file=sys.stderr,
-        )
-
-
-# Wall-clock ceiling for _run_standing_reconcile_bounded's join (#264 Design
-# Constraints / RAID R2). _fetch_gh_issue_states/_fetch_gh_pr_states and each
-# per-issue set_issue_status board write shell out to `gh`, and each such call
-# carries its own ~15s ceiling (GH_TIMEOUT_SECONDS in github.py). 5.0s is
-# generous enough for a couple of real `gh` round trips yet well below that
-# per-call ceiling, so a slow network bounds the session-start delay instead
-# of chaining toward it. A module-level constant (mirroring GH_TIMEOUT_SECONDS)
-# rather than a function default so tests can override it without waiting out
-# the real budget.
-_STANDING_RECONCILE_TIMEOUT_SECONDS = 5.0
-
-
-def _run_standing_reconcile_bounded(workspace_root: str) -> None:
-    """Run the standing reconcile pass with a wall-clock timeout bound.
-
-    ``_run_standing_reconcile`` shells out to ``gh`` (via
-    ``_fetch_gh_issue_states``/``_fetch_gh_pr_states``) and, for each closed
-    issue, writes its board status -- on a slow network or with many closed
-    issues this can genuinely take several seconds, and a plain try/except
-    around the call (the prior implementation) has no wall-clock bound at
-    all: a hung `gh` subprocess would only be capped by its own internal
-    ~15s timeout, which is not "no perceptible delay" (the #264 Design
-    Constraints and RAID R2: "never block or perceptibly slow SessionStart").
-
-    This deliberately does not reuse ``digest.py``'s ``_run_with_timeout``:
-    that helper silently swallows any exception raised in its worker thread,
-    which would regress the warning-on-exception behavior this call site
-    already had. Instead, the pass runs in a background daemon thread; any
-    exception it raises is caught and logged here (matching the previous
-    try/except behavior), and the thread is joined for at most
-    ``_STANDING_RECONCILE_TIMEOUT_SECONDS``. If it is still running once the
-    join times out, it is left to finish in the background (a daemon thread,
-    so it never blocks process exit) and a second warning notes that it
-    is continuing there; either way, this function returns within the
-    timeout budget and never blocks ``handle_run``'s caller past it.
-    """
-    import logging
-    import threading
-
-    def _worker() -> None:
-        try:
-            _run_standing_reconcile(workspace_root)
-        except Exception as exc:
-            logging.warning(f"Standing reconcile failed at session start: {type(exc).__name__}")
-
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
-    thread.join(_STANDING_RECONCILE_TIMEOUT_SECONDS)
-    if thread.is_alive():
-        logging.warning(
-            "Standing reconcile did not finish within the "
-            f"{_STANDING_RECONCILE_TIMEOUT_SECONDS}s session-start budget; "
-            "continuing in the background."
-        )
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser and every subcommand.
 
@@ -979,9 +968,9 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_parser = subparsers.add_parser(
         "reconcile",
         help=(
-            "Repair shared-memory issue/tracking rows from GitHub and canonicalize "
-            "non-terminal status tokens. Run from a fresh process against the shared "
-            "SurrealDB."
+            "Under the single-driver lock, repair closed-issue memory/tracking rows, "
+            "canonical board drift, and non-terminal status tokens. Run from a fresh "
+            "process against the shared SurrealDB."
         ),
     )
     reconcile_parser.add_argument(
@@ -1057,7 +1046,13 @@ def build_parser() -> argparse.ArgumentParser:
         "loop-budget", help="Show today's autonomous-loop cost spend versus the ceiling"
     )
 
-    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (workflow, loop, idea, issue, bug, refine, start, review, release)")
+    dev_parser = subparsers.add_parser(
+        "dev",
+        help=(
+            "Run a delivery workflow headless (workflow, loop, idea, issue, bug, "
+            "refine, start, review, release, reconcile)"
+        ),
+    )
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument(
         "dev_args", nargs=argparse.REMAINDER,
@@ -1358,4 +1353,3 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
 
 if __name__ == "__main__":
     main()
-
