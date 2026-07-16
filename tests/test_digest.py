@@ -121,6 +121,38 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("Last loop:", text)
         self.assertIn("Open issues: 0 GitHub issues, 1 tracking items", text)
 
+    def test_gather_digest_filters_claimed_issues(self):
+        """ADR-0027: a session-start digest must not offer an issue another
+        session already claimed, or the double-pick race #215 closed reopens
+        at exactly the seam that suggests next steps to the human (#297)."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Free issue", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class FakeClaimStore:
+            def filter_unclaimed(self, issue_numbers):
+                return [51]
+
+        text = "\n".join(
+            digest.gather_digest(
+                ".", FakeDB(), fetch_github=False, claim_store=FakeClaimStore()
+            )
+        )
+        self.assertIn("#51", text)
+        self.assertIn("Free issue", text)
+        self.assertNotIn("#50", text)
+        self.assertNotIn("Taken issue", text)
+
     def test_build_digest_flags_sqlite_fallback(self):
         """When memory is on the SQLite fallback (SurrealDB unreachable), the
         digest must say so loudly, so fallback rows are never mistaken for the
