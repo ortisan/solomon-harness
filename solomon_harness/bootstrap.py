@@ -4,6 +4,7 @@ import shutil
 import datetime
 import subprocess
 import tempfile
+import time
 from typing import Callable, List, Dict, Any, Optional
 
 from solomon_harness.wiki_bootstrap import (
@@ -12,6 +13,19 @@ from solomon_harness.wiki_bootstrap import (
     resolve_wiki_clone_url,
     wiki_refs_present,
 )
+
+# TEMPORARY: diagnosing a CI-only hang in index_codebase (see PR #288 / issue
+# #240). Remove this tap and its call sites once the root cause is found.
+_DIAG_LOG_PATH = os.path.join(tempfile.gettempdir(), "solomon_index_codebase_diag.log")
+
+
+def _diag(msg: str) -> None:
+    try:
+        with open(_DIAG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(msg + "\n")
+            fh.flush()
+    except Exception:
+        pass
 
 
 def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
@@ -1089,6 +1103,12 @@ def index_codebase(workspace_root: str, db) -> None:
     import json as _json
 
     print("Indexing project codebase into database...")
+    _diag(
+        f"index_codebase START workspace_root={workspace_root!r} "
+        f"abspath={os.path.abspath(workspace_root)!r} "
+        f"isdir={os.path.isdir(workspace_root)} pid={os.getpid()}"
+    )
+    _t0 = time.monotonic()
     exclude_dirs = {
         ".git", "node_modules", ".venv", "venv", "build", "dist", ".solomon",
         ".agents", ".claude", ".codex", ".gemini", "docs", "planning",
@@ -1108,13 +1128,18 @@ def index_codebase(workspace_root: str, db) -> None:
             old_manifest = _json.loads(raw)
         except Exception:
             old_manifest = {}
+    _diag(f"  [{time.monotonic() - _t0:.3f}s] old_manifest entries={len(old_manifest)}")
 
     new_manifest = {}
     indexed = 0
+    seen = 0
     for root, dirs, files in os.walk(workspace_root):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
         for file in files:
+            seen += 1
             rel_path = os.path.relpath(os.path.join(root, file), workspace_root)
+            if seen <= 20 or seen % 200 == 0:
+                _diag(f"  [{time.monotonic() - _t0:.3f}s] seen#{seen} rel={rel_path}")
             if rel_path in {"AGENTS.md", ".mcp.json"}:
                 continue
             if os.path.splitext(file)[1].lower() in exclude_exts:
@@ -1137,6 +1162,7 @@ def index_codebase(workspace_root: str, db) -> None:
                 indexed += 1
             except Exception:
                 new_manifest.pop(rel_path, None)  # re-try this file next run
+    _diag(f"  [{time.monotonic() - _t0:.3f}s] walk complete: seen={seen} indexed={indexed}")
 
     removed = 0
     for rel_path in old_manifest:

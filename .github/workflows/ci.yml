@@ -101,6 +101,19 @@ jobs:
           --cov-report=term-missing
           --cov-fail-under=80
 
+      # TEMPORARY: diagnosing a CI-only hang in index_codebase (PR #288 /
+      # issue #240). Remove this step once the root cause is found.
+      - name: Print index_codebase diagnostic log
+        if: always()
+        run: |
+          diag_path="$(uv run python -c "import tempfile, os; print(os.path.join(tempfile.gettempdir(), 'solomon_index_codebase_diag.log'))")"
+          echo "diagnostic log path: $diag_path"
+          if [ -f "$diag_path" ]; then
+            cat "$diag_path"
+          else
+            echo "no diagnostic log written"
+          fi
+
       - name: Enforce host-neutral core branch coverage
         run: >-
           uv run coverage report
