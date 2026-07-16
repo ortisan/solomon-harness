@@ -13,9 +13,12 @@ import re
 import subprocess
 import threading
 import sys
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from solomon_harness.tools.database_client import is_github_issue, is_terminal
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimStore
 
 _MAX_LIST = 5
 
@@ -347,10 +350,65 @@ def _run_with_timeout(func, *args, timeout: float = 1.5, default=None):
     return result["val"]
 
 
-def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> List[str]:
+def _filter_claimed(
+    open_issues: List[Dict[str, Any]], claim_store: "ClaimStore"
+) -> List[Dict[str, Any]]:
+    """Drop issues actively claimed by another session (ADR-0027).
+
+    Mirrors ``MemoryService.get_open_issues``'s claim-aware filter exactly
+    (numeric-id extraction, ``filter_unclaimed``, non-numeric rows always
+    kept), so the digest can never judge a claim differently than
+    ``MemoryService.get_open_issues`` or ``github.list_open_issues`` -- one
+    shared port, not a fourth independent implementation. Degrades to the
+    unfiltered list on any failure: filtering here is advisory (a convenience
+    over the real enforcement, which is ``claim_issue``'s own CAS at start
+    time), so an unfiltered digest is noisier, never unsafe.
+    """
+    try:
+        numeric_ids = []
+        for issue in open_issues:
+            try:
+                numeric_ids.append(int(str(issue.get("github_id"))))
+            except (TypeError, ValueError):
+                continue
+        if not numeric_ids:
+            return open_issues  # nothing to filter; skip the claim-store call
+        unclaimed_ids = set(claim_store.filter_unclaimed(numeric_ids))
+
+        def _keep(issue: Dict[str, Any]) -> bool:
+            try:
+                return int(str(issue.get("github_id"))) in unclaimed_ids
+            except (TypeError, ValueError):
+                return True  # non-numeric tracking rows are never claimed
+
+        return [issue for issue in open_issues if _keep(issue)]
+    except Exception as exc:  # noqa: BLE001 - degrade to unfiltered, but log
+        sys.stderr.write(
+            f"WARNING: claim-aware issue filtering degraded ({exc}); returning "
+            "the unfiltered issue list.\n"
+        )
+        return open_issues
+
+
+def gather_digest(
+    workspace_root: str,
+    db: Any,
+    fetch_github: bool = True,
+    claim_store: Optional["ClaimStore"] = None,
+) -> List[str]:
     """Collect facts from memory (and best-effort gh) and render the digest with timeout protection."""
     resume = _run_with_timeout(db.get_latest_activity, timeout=0.5, default=None)
     open_issues = _run_with_timeout(db.get_open_issues, timeout=0.5, default=[]) or []
+    if claim_store is None:
+        from solomon_harness.claim import GitClaimStore
+
+        claim_store = GitClaimStore(workspace_root)
+    # Bounded the same way as every other memory query in this function: a
+    # hung claim store (git/gh subprocess) must not hang SessionStart, and a
+    # raised exception alone would not bound a genuine hang (#297).
+    open_issues = _run_with_timeout(
+        _filter_claimed, open_issues, claim_store, timeout=0.5, default=open_issues
+    )
     runs = _run_with_timeout(db.list_loop_runs, 1, timeout=0.5, default=[]) or []
     last_loop = runs[0] if runs else None
     # The per-issue activity graph (ADR-0018). getattr-guarded so an older or
