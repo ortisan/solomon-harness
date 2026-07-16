@@ -197,16 +197,19 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 
 ### Delivery workflows
 
-Eleven `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
+Twelve `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
 guarded by `tests/test_readme_sync.py` — are authored once as Claude Code
 commands under `.claude/commands/` and mirrored to Antigravity commands under
 `.gemini/commands/`. Eight drive the lifecycle table above; `/solomon-loop`
-runs the autonomous parallel loop over Ready issues; and the remaining two,
+runs the autonomous parallel loop over Ready issues; two,
 `/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
 scan the codebase for architectural drift and duplication (see
-`docs/solomon-workflow.md`). They orchestrate the specialist agents, the `gh` CLI, the
-GitHub board, and the project memory, and confirm before any outward-facing action
-(creating issues/PRs, merging, releasing).
+`docs/solomon-workflow.md`); and `/solomon-reconcile` is the locked standing
+projection repair for issues GitHub already reports closed. They orchestrate the
+specialist agents, the `gh` CLI, the GitHub board, and project memory. Lifecycle
+authority remains human-gated: creation, merge, close, and release require the
+normal workflow decision; reconcile only repairs an already-terminal projection
+(ADR-0034).
 
 ### Project memory and MCP
 
@@ -306,7 +309,7 @@ table.
 | `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
 | `memory-down` | Stop the shared memory backend |
 | `memory sync` | Replay pending mirror records to SurrealDB and report the counts |
-| `reconcile [--dry-run]` | Repair shared-memory issue/tracking rows from GitHub and canonicalize non-terminal status tokens |
+| `reconcile [--dry-run]` | Under the single-driver lock, repair closed-issue memory/tracking rows, canonical board drift, and non-terminal status tokens |
 | `install-global [--no-mcp]` | Install agents + `/solomon-*` commands into `~/.claude`/`~/.gemini`, the MCP server, and the shared memory home |
 | `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
 | `healthcheck` | Report runtime readiness and pending init items (Docker, memory, board, global install) |
@@ -319,7 +322,7 @@ table.
 | `loop-policy` | Show the autonomy level, kill-switch state, denylist, and per-stage gates |
 | `notify <message> [--event EVENT]` | Send an outbound status notification (console or webhook) |
 | `loop-budget` | Show today's autonomous-loop cost spend versus the ceiling |
-| `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release) |
+| `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release, reconcile, and maintenance stages) |
 | `release plan\|prep [version]\|check\|wiki-page [version]` | Plan, prepare, check, or document a milestone-gated release |
 | `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |

@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-07-15
 - Amends: ADR-0006 (decision points 1, 2, and the orchestration of 3)
+- Amended: ADR-0034 (standing, locked closed-issue board projection repair)
 - Deciders: software_architect, software_engineer
 - Issue: #173
 
@@ -226,3 +227,6 @@ required no change. The implementation seams are
 `reconcile_memory`, and `normalize_memory_statuses` in `solomon_harness/cli.py`.
 Symbol names are used deliberately instead of mutable line-number citations.
 This decision is also recorded in project memory via `save_decision`.
+ADR-0034 changes the operational shape from on-demand-only to an idempotent,
+locked standing stage and extends terminal reconciliation to the canonical board;
+it does not change this ADR's live write-through or normalization decisions.

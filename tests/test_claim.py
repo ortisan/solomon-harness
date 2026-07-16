@@ -966,6 +966,24 @@ class TestPrLivenessBoardPaths(unittest.TestCase):
         with patch("solomon_harness.github.repo_owner", side_effect=RuntimeError("boom")):
             self.assertIsNone(claim.fetch_board_items("/tmp"))
 
+    def test_fetch_board_items_requests_the_full_reconcile_snapshot(self):
+        with (
+            patch("solomon_harness.github.repo_owner", return_value="ortisan"),
+            patch("solomon_harness.github.board_title", return_value="solomon-harness"),
+            patch(
+                "solomon_harness.github.find_project",
+                return_value={"number": 5},
+            ),
+            patch(
+                "solomon_harness.github._gh",
+                return_value={"ok": True, "data": {"items": []}},
+            ) as gh,
+        ):
+            self.assertEqual(claim.fetch_board_items("/tmp"), [])
+
+        self.assertIn("--limit", gh.call_args.args[0])
+        self.assertIn("1000", gh.call_args.args[0])
+
     def test_protected_claim_blocks_reclaim(self):
         # A TTL-stale claim whose board card sits in Code Review must not be
         # reclaimable: the protected path, end to end through claim_issue.

@@ -54,6 +54,11 @@ _SESSION_ID_CACHE: Optional[str] = None
 # leak the lock).
 GIT_SUBPROCESS_TIMEOUT_SECONDS = 15.0
 
+# One canonical-board snapshot is shared by claim liveness and standing
+# reconciliation. Keep it above the repository's issue-list cap so an old card
+# cannot disappear behind gh's default project-item pagination.
+BOARD_ITEM_LIMIT = 1000
+
 
 def _run_git(
     args: List[str],
@@ -303,7 +308,12 @@ def fetch_board_items(workspace_root: str) -> Optional[List[Dict[str, Any]]]:
         if not project:
             return []
         board_res = _gh(
-            ["project", "item-list", str(project.get("number")), "--owner", owner, "--format", "json"],
+            [
+                "project", "item-list", str(project.get("number")),
+                "--owner", owner,
+                "--limit", str(BOARD_ITEM_LIMIT),
+                "--format", "json",
+            ],
             parse_json=True,
         )
         if not board_res.get("ok"):
