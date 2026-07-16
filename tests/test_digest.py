@@ -218,7 +218,10 @@ class TestBuildDigest(unittest.TestCase):
 
     def test_gather_digest_degrades_on_claim_store_failure(self):
         """Failure path: a claim store that raises must degrade to the
-        unfiltered issue list rather than blocking or crashing SessionStart."""
+        unfiltered issue list rather than blocking or crashing SessionStart,
+        and the degradation must actually be logged (not silently absorbed)."""
+        import io
+        from unittest.mock import patch
 
         class FakeDB:
             def get_latest_activity(self):
@@ -237,13 +240,16 @@ class TestBuildDigest(unittest.TestCase):
             def filter_unclaimed(self, issue_numbers):
                 raise RuntimeError("claims unreachable")
 
-        text = "\n".join(
-            digest.gather_digest(
-                ".", FakeDB(), fetch_github=False, claim_store=BrokenClaimStore()
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            text = "\n".join(
+                digest.gather_digest(
+                    ".", FakeDB(), fetch_github=False, claim_store=BrokenClaimStore()
+                )
             )
-        )
         self.assertIn("#50", text)
         self.assertIn("#51", text)
+        self.assertIn("claim-aware issue filtering degraded", stderr_capture.getvalue())
 
     def test_build_digest_flags_sqlite_fallback(self):
         """When memory is on the SQLite fallback (SurrealDB unreachable), the

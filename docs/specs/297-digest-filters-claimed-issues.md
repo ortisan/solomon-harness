@@ -74,4 +74,4 @@ Changing `ClaimStore`/`filter_unclaimed` semantics — settled by #215/ADR-0027.
 
 - Issue: #297
 - ADR: ADR-0027
-- PR: #<M once opened>
+- PR: #307
