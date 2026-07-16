@@ -37,12 +37,15 @@ LIVE_TEST_CLASSES = (
     ),
 )
 NETWORK_TEARDOWN_CALLS = {"close", "connect", "query", "signin", "use"}
-# Classes that hold their live connection on ``self.raw`` must release it via
-# the bounded conftest helper (a daemon thread, joined with a timeout) so the
+# Every live-connection-holding class must release it via the bounded
+# conftest helper (a daemon thread, joined with a timeout) so the
 # connection's keepalive/recv background threads don't leak for the rest of
-# the pytest process; TestMcpServerGraphAndVectorTools never exposes its
-# connection this way, so it is intentionally excluded.
-CLASSES_REQUIRING_BOUNDED_CLOSE = {"TestMultiModelLive", "TestMemoryServiceMultiModelLive"}
+# the pytest process.
+CLASSES_REQUIRING_BOUNDED_CLOSE = {
+    "TestMultiModelLive",
+    "TestMemoryServiceMultiModelLive",
+    "TestMcpServerGraphAndVectorTools",
+}
 
 
 def _validate_job():

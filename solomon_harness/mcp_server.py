@@ -290,6 +290,10 @@ def build_server() -> Any:
         """Return the k memory entries nearest to a query (SurrealDB-only)."""
         return service.semantic_search(query, k, category, ef)
 
+    # Exposed only so a live-SurrealDB test can release the underlying
+    # connection in tearDown; the tool closures above are otherwise the only
+    # holders of `service`.
+    server._solomon_memory_service = service  # type: ignore[attr-defined]
     return server
 
 

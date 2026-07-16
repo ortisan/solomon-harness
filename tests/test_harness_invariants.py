@@ -14,6 +14,8 @@ import socket
 import unittest
 from unittest.mock import patch
 
+from conftest import close_surreal_quietly
+
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -242,6 +244,7 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         self.server = build_server()
 
     def tearDown(self):
+        close_surreal_quietly(self.server._solomon_memory_service.client.db)
         if self._prior_url is None:
             os.environ.pop("SURREAL_URL", None)
         else:
