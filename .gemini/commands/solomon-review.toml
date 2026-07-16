@@ -92,7 +92,8 @@ Each lens returns findings tagged blocker, major, or minor.
   `docs/solomon-workflow.md` (go/no-go verdict, findings, what to release), then
   `log_handoff(sender="qa", recipient="sre",
   contract_type="release-candidate",
-  contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="accepted")`
+  contract_path=".solomon/handoffs/issue-<issue>-review-to-release.md", status="accepted",
+  summary="<2-5 line synopsis of the review verdict and what the release stage needs>")`
   so the Release stage can resume; keep the returned handoff id.
 - `save_session` capturing what was reviewed, the verdict, and
   the linked decision and issue IDs; pass `issues=[<issue>]` so the session carries

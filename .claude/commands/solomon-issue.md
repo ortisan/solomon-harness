@@ -110,7 +110,8 @@ Steps:
      using the contract template in the conventions doc (`.solomon/` is gitignored
      local state).
    - `mcp__solomon-memory__log_handoff` — product_owner → scrum_master, contract
-     "feature-story", contract_path = that handoff file, status="open";
+     "feature-story", contract_path = that handoff file, status="open",
+     summary="<2-5 line synopsis of the story filed and its acceptance criteria>";
      keep the returned handoff id.
    - `mcp__solomon-memory__save_session` (session_id="issue-<n>",
      agent_name="product_owner", task="Filed #<n>", messages=[], issues=[<n>]) to

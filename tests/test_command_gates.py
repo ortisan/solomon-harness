@@ -481,3 +481,24 @@ def test_gemini_mirrors_carry_the_canonical_adr_line():
         assert "ADR: not warranted — <reason>" in body, name
     review = _read(os.path.join(".gemini", "commands", "solomon-review.toml"))
     assert "check-adr-gate.py" in review
+
+
+# --- log_handoff summary required (issue #295) ------------------------------
+
+
+def test_command_files_pass_log_handoff_summary():
+    # summary is the documented mitigation for handoff contract files dying
+    # with worktree teardown (docs/solomon-workflow.md, "Handoff contracts"):
+    # a resume reads get_latest_activity, and a caller that omits summary
+    # leaves that field empty alongside a contract_path that no longer
+    # resolves. Every command file that instructs a log_handoff call must
+    # carry a concrete summary= argument -- the full glob, not a sample.
+    cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+    offenders = []
+    for name in sorted(os.listdir(cmd_dir)):
+        if not name.endswith(".md"):
+            continue
+        body = _read(os.path.join(".claude", "commands", name))
+        if "log_handoff" in body and "summary=" not in body:
+            offenders.append(name)
+    assert offenders == [], f"log_handoff call sites missing summary=: {offenders}"
