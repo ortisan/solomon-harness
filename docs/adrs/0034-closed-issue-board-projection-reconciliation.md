@@ -68,9 +68,13 @@ merge-to-`Done` transition, after explicit human confirmation (ADR-0020).
 The exception is intentionally narrow:
 
 1. The bulk issue read validates issue numbers and allow-lists GitHub states.
-   It also reads `projectItems` and selects the item whose project title matches
-   the repository's canonical board title. Missing, malformed, or ambiguous
-   matches count as drift; only an unambiguous `Done` match suppresses a write.
+   A separate bulk `project item-list` resolves the exact canonical board through
+   the existing owner/title/oldest-project helpers, requests up to 1,000 items,
+   and joins status by issue number. `issue.projectItems` is not authoritative for
+   this comparison: live verification found issue #6 exposing both a deleted
+   same-title project's `Backlog` item and the canonical board's `Done` item.
+   Missing, malformed, or duplicate entries on the exact board count as drift;
+   only one exact-board `Done` item suppresses a write.
 2. `reconcile_memory` calls the existing
    `set_issue_status(issue_number, "Done")` primitive only for a `CLOSED` issue
    whose canonical projection is not already `Done`. The primitive retains its
@@ -123,8 +127,9 @@ writes and repeated multi-process `gh` traffic.
   ADR-0010's single-driver lock, ADR-0020's interactive merge ownership, and
   ADR-0033's status write-through and reconciliation orchestration.
 - Implementation seams: `handle_reconcile`, `_fetch_gh_issue_states`,
-  `_canonical_board_status`, and `reconcile_memory` in
-  `solomon_harness/cli.py`; `STAGES`/`LOCKED_STAGES` in
+  `_fetch_reconcile_issue_states`, `_canonical_board_statuses`, and
+  `reconcile_memory` in `solomon_harness/cli.py`; `fetch_board_items` in
+  `solomon_harness/claim.py`; `STAGES`/`LOCKED_STAGES` in
   `solomon_harness/workflows.py`; and `AUTOMATION_ALLOWED_STAGES` in
   `solomon_harness/loop_policy.py`.
 - This decision is also recorded in project memory via `save_decision`.

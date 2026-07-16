@@ -456,70 +456,73 @@ class TestReconcileTrackingRows(unittest.TestCase):
 
 
 class TestFetchGhIssueStates(unittest.TestCase):
-    def test_board_title_comes_from_git_common_origin(self):
-        with tempfile.TemporaryDirectory() as workspace:
-            git_dir = os.path.join(workspace, ".git")
-            os.makedirs(git_dir)
-            with open(os.path.join(git_dir, "config"), "w", encoding="utf-8") as config:
-                config.write(
-                    '[remote "origin"]\n\turl = git@github.com:ortisan/solomon-harness.git\n'
-                )
-
-            self.assertEqual(cli._canonical_board_title(workspace), "solomon-harness")
-
-    def test_duplicate_same_title_project_items_are_treated_as_drift(self):
-        project_items = [
-            {"title": "solomon-harness", "status": {"name": "Done"}},
-            {"title": "solomon-harness", "status": {"name": "Code Review"}},
+    def test_reconcile_snapshot_uses_the_exact_canonical_board_item(self):
+        """A deleted duplicate project may expose another same-title item via
+        issue.projectItems (#6 live); only project item-list for the canonical
+        board can prove that its real card is already Done."""
+        canonical_items = [
+            {
+                "content": {"number": 6, "type": "Issue"},
+                "status": "Done",
+            }
         ]
-
-        self.assertIsNone(
-            cli._canonical_board_status(project_items, "solomon-harness")
-        )
-
-    def test_includes_canonical_project_status_in_each_issue_record(self):
-        payload = json.dumps(
-            [
-                {
-                    "number": 6,
-                    "state": "CLOSED",
-                    "projectItems": [
-                        {
-                            "title": "solomon-harness",
-                            "status": {"name": "Done", "optionId": "done-id"},
-                        }
-                    ],
-                },
-                {
-                    "number": 8,
-                    "state": "CLOSED",
-                    "projectItems": [
-                        {
-                            "title": "solomon-harness",
-                            "status": {"name": "Code Review"},
-                        }
-                    ],
-                },
-                {"number": 9, "state": "CLOSED", "projectItems": []},
-            ]
-        )
-
-        with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
-            states = cli._fetch_gh_issue_states(".")
+        with (
+            patch.object(
+                cli,
+                "_fetch_gh_issue_states",
+                return_value=[{"number": "6", "state": "CLOSED"}],
+            ),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=canonical_items,
+            ),
+        ):
+            states = cli._fetch_reconcile_issue_states(".")
 
         self.assertEqual(
             states,
-            [
-                {"number": "6", "state": "CLOSED", "board_status": "Done"},
-                {
-                    "number": "8",
-                    "state": "CLOSED",
-                    "board_status": "Code Review",
-                },
-                {"number": "9", "state": "CLOSED", "board_status": None},
-            ],
+            [{"number": "6", "state": "CLOSED", "board_status": "Done"}],
         )
-        self.assertIn("projectItems", " ".join(run.call_args.args[0]))
+
+    def test_canonical_board_snapshot_rejects_untrusted_and_duplicate_items(self):
+        self.assertEqual(cli._canonical_board_statuses({"items": []}), {})
+
+        statuses = cli._canonical_board_statuses(
+            [
+                "not-an-item",
+                {
+                    "content": {"number": 1, "type": "PullRequest"},
+                    "status": "Done",
+                },
+                {"content": {"number": 2, "type": "Issue"}, "status": 42},
+                {
+                    "content": {"number": True, "type": "Issue"},
+                    "status": "Done",
+                },
+                {
+                    "content": {"number": "invalid", "type": "Issue"},
+                    "status": "Done",
+                },
+                {
+                    "content": {"number": "06", "type": "Issue"},
+                    "status": "Done",
+                },
+                {
+                    "content": {"number": 6, "type": "Issue"},
+                    "status": "Code Review",
+                },
+            ]
+        )
+
+        self.assertEqual(statuses, {"6": None})
+
+    def test_reconcile_snapshot_fails_closed_when_board_read_fails(self):
+        with (
+            patch.object(cli, "_fetch_gh_issue_states", return_value=[]),
+            patch("solomon_harness.claim.fetch_board_items", return_value=None),
+            self.assertRaisesRegex(RuntimeError, "could not read canonical board items"),
+        ):
+            cli._fetch_reconcile_issue_states(".")
 
     def test_validates_number_and_state_as_data(self):
         payload = json.dumps(
@@ -536,8 +539,8 @@ class TestFetchGhIssueStates(unittest.TestCase):
         self.assertEqual(
             states,
             [
-                {"number": "6", "state": "CLOSED", "board_status": None},
-                {"number": "100", "state": "OPEN", "board_status": None},
+                {"number": "6", "state": "CLOSED"},
+                {"number": "100", "state": "OPEN"},
             ],
         )
 
@@ -574,9 +577,7 @@ class TestFetchGhIssueStates(unittest.TestCase):
         payload = json.dumps([{"number": 6, "state": "CLOSED"}, "garbage", 42, None])
         with patch("subprocess.run", return_value=_Proc(0, payload)):
             states = cli._fetch_gh_issue_states(".")
-        self.assertEqual(
-            states, [{"number": "6", "state": "CLOSED", "board_status": None}]
-        )
+        self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
 
     def test_strips_inherited_git_env_before_shelling_out(self):
         # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
@@ -817,6 +818,16 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
             [{"number": 6, "state": "CLOSED"}, {"number": 100, "state": "OPEN"}]
         )
 
+    @staticmethod
+    def _board_items(status="Code Review"):
+        return [
+            {"content": {"number": 6, "type": "Issue"}, "status": status},
+            {
+                "content": {"number": 100, "type": "Issue"},
+                "status": "In Progress",
+            },
+        ]
+
     def test_main_dispatch_dry_run_reports_without_writing(self):
         """cli.main(["reconcile", "--dry-run", ...]) dispatches to the command, which
         reports the would-repair ids and writes nothing."""
@@ -825,6 +836,10 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
             patch(
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
+            ),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=self._board_items(),
             ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             contextlib.redirect_stdout(out),
@@ -846,6 +861,10 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=self._board_items(),
+            ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
             contextlib.redirect_stdout(out),
@@ -860,6 +879,10 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
             patch(
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
+            ),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=self._board_items(),
             ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
@@ -895,6 +918,10 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=self._board_items(),
+            ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             patch("solomon_harness.github.set_issue_status", return_value={"ok": True}),
             contextlib.redirect_stdout(out),
@@ -911,6 +938,10 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=self._board_items(),
+            ),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             contextlib.redirect_stdout(out),
         ):
@@ -919,29 +950,17 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
 
     def test_converged_board_card_is_not_written_by_command_path(self):
         self.inner.log_issue("6", "Stale closed", "bug", "closed", None)
-        payload = json.dumps(
-            [
-                {
-                    "number": 6,
-                    "state": "CLOSED",
-                    "projectItems": [
-                        {
-                            "title": "solomon-harness",
-                            "status": {"name": "Done"},
-                        }
-                    ],
-                },
-                {"number": 100, "state": "OPEN", "projectItems": []},
-            ]
-        )
         out = io.StringIO()
         with (
             patch(
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
-            patch.object(cli, "_canonical_board_title", return_value="solomon-harness"),
-            patch("subprocess.run", return_value=_Proc(0, payload)),
+            patch(
+                "solomon_harness.claim.fetch_board_items",
+                return_value=self._board_items(status="Done"),
+            ),
+            patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             patch("solomon_harness.github.set_issue_status") as set_status,
             contextlib.redirect_stdout(out),
         ):
@@ -979,6 +998,7 @@ class TestHandleReconcileTracking(unittest.TestCase):
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
+            patch("solomon_harness.claim.fetch_board_items", return_value=[]),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             contextlib.redirect_stdout(out),
         ):
@@ -995,6 +1015,7 @@ class TestHandleReconcileTracking(unittest.TestCase):
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
+            patch("solomon_harness.claim.fetch_board_items", return_value=[]),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             contextlib.redirect_stdout(out2),
         ):
@@ -1008,6 +1029,7 @@ class TestHandleReconcileTracking(unittest.TestCase):
                 "solomon_harness.tools.database_client.DatabaseClient",
                 return_value=self.proxy,
             ),
+            patch("solomon_harness.claim.fetch_board_items", return_value=[]),
             patch("subprocess.run", return_value=_Proc(0, self._gh_payload())),
             contextlib.redirect_stdout(out),
         ):

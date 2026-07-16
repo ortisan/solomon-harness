@@ -431,72 +431,15 @@ def handle_log(workspace_root: str, last: int) -> None:
 _GH_ISSUE_LIMIT = 1000
 
 
-def _canonical_board_title(workspace_root: str) -> str:
-    """Resolve the repository board title from the origin URL without a network call.
-
-    The delivery board is named after the repository (``github.board_title``).
-    Reading the git-common-dir config keeps linked worktrees on the same identity
-    while avoiding another ``gh`` round trip on the standing no-op path.
-    """
-    from solomon_harness.loop_lock import resolve_common_file
-
-    config_path = resolve_common_file(workspace_root, "config", "git-config")
-    in_origin = False
-    try:
-        with open(config_path, "r", encoding="utf-8") as config:
-            for raw_line in config:
-                line = raw_line.strip()
-                if line.startswith("["):
-                    in_origin = line.lower() == '[remote "origin"]'
-                    continue
-                if not in_origin or "=" not in line:
-                    continue
-                key, value = (part.strip() for part in line.split("=", 1))
-                if key.lower() != "url":
-                    continue
-                repository = value.rstrip("/").rsplit("/", 1)[-1]
-                if repository.endswith(".git"):
-                    repository = repository[:-4]
-                if repository:
-                    return repository
-    except OSError:
-        pass
-    return os.path.basename(os.path.abspath(workspace_root))
-
-
-def _canonical_board_status(project_items: object, board_title: str) -> Optional[str]:
-    """Return one unambiguous status from the repository's canonical board.
-
-    Missing, malformed, or duplicate same-title project entries are treated as
-    unknown. Reconcile then takes the conservative path and asks the existing
-    canonical-board primitive to converge the card instead of trusting an
-    unrelated or ambiguous project item.
-    """
-    if not isinstance(project_items, list):
-        return None
-    matches: List[str] = []
-    for project_item in project_items:
-        if not isinstance(project_item, dict) or project_item.get("title") != board_title:
-            continue
-        status = project_item.get("status")
-        if not isinstance(status, dict) or not isinstance(status.get("name"), str):
-            continue
-        matches.append(status["name"])
-    return matches[0] if len(matches) == 1 else None
-
-
 def _fetch_gh_states(
     list_args: List[str],
     valid_states: Tuple[str, ...],
     kind_label: str,
     workspace_root: str,
-    board_title: Optional[str] = None,
 ) -> List[dict]:
     """Run a bulk ``gh <list_args> --state all`` query and return validated records.
 
-    Returns validated number/state records. Issue records additionally carry the
-    canonical ``board_status`` (a string or ``None``) when ``board_title`` is
-    provided.
+    Returns validated number/state records.
     gh output is treated strictly as data across the trust boundary (STRIDE): the
     number is coerced to ``str(int(...))`` and the state must be one of the accepted
     GitHub literals, so a malformed record is skipped rather than trusted, and no
@@ -512,10 +455,9 @@ def _fetch_gh_states(
     from solomon_harness.subprocess_env import clean_git_env
 
     try:
-        json_fields = "number,state,projectItems" if board_title else "number,state"
         proc = subprocess.run(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
-             "--json", json_fields],
+             "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
             env=clean_git_env(), timeout=GH_TIMEOUT_SECONDS,
         )
@@ -558,12 +500,7 @@ def _fetch_gh_states(
         state = str(item.get("state", "")).upper()
         if state not in valid_states:
             continue
-        record: Dict[str, object] = {"number": number, "state": state}
-        if board_title is not None:
-            record["board_status"] = _canonical_board_status(
-                item.get("projectItems"), board_title
-            )
-        states.append(record)
+        states.append({"number": number, "state": state})
     return states
 
 
@@ -573,13 +510,50 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     Thin config over ``_fetch_gh_states``; the validation and STRIDE handling live
     in that shared core.
     """
-    return _fetch_gh_states(
-        ["issue", "list"],
-        ("OPEN", "CLOSED"),
-        "issue",
-        workspace_root,
-        board_title=_canonical_board_title(workspace_root),
-    )
+    return _fetch_gh_states(["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root)
+
+
+def _canonical_board_statuses(board_items: object) -> Dict[str, Optional[str]]:
+    """Index unambiguous issue statuses from the exact canonical board listing."""
+    if not isinstance(board_items, list):
+        return {}
+    candidates: Dict[str, List[str]] = {}
+    for board_item in board_items:
+        if not isinstance(board_item, dict):
+            continue
+        content = board_item.get("content")
+        status = board_item.get("status")
+        if not isinstance(content, dict) or content.get("type") != "Issue":
+            continue
+        if not isinstance(status, str):
+            continue
+        raw_number = content.get("number")
+        if isinstance(raw_number, bool) or not isinstance(raw_number, (int, str)):
+            continue
+        try:
+            number = str(int(raw_number))
+        except (TypeError, ValueError):
+            continue
+        candidates.setdefault(number, []).append(status)
+    return {
+        number: statuses[0] if len(statuses) == 1 else None
+        for number, statuses in candidates.items()
+    }
+
+
+def _fetch_reconcile_issue_states(workspace_root: str) -> List[dict]:
+    """Join GitHub issue state to the exact canonical Project card status."""
+    from solomon_harness.claim import fetch_board_items
+
+    issue_states = _fetch_gh_issue_states(workspace_root)
+    board_items = fetch_board_items(workspace_root)
+    if board_items is None:
+        raise RuntimeError("could not read canonical board items")
+    board_statuses = _canonical_board_statuses(board_items)
+    return [
+        {**entry, "board_status": board_statuses.get(str(entry["number"]))}
+        for entry in issue_states
+    ]
 
 
 def _fetch_gh_pr_states(workspace_root: str) -> List[dict]:
@@ -865,7 +839,7 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             )
             return
         try:
-            issue_states = _fetch_gh_issue_states(workspace_root)
+            issue_states = _fetch_reconcile_issue_states(workspace_root)
             pr_states = _fetch_gh_pr_states(workspace_root)
         except RuntimeError as exc:
             print(f"reconcile failed: {exc}", file=sys.stderr)

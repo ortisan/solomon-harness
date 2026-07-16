@@ -46,11 +46,15 @@ timeout and bypass the single-driver lock.
 - `solomon_harness.cli.handle_reconcile` — public lock boundary. It acquires
   `LoopLock(stage="reconcile")` and delegates to `_handle_reconcile_locked`, so
   direct CLI, standing-stage, and release callers share one mutation guard.
-- `solomon_harness.cli._fetch_gh_issue_states` and
-  `_canonical_board_status` — the bulk `gh issue list` read requests
-  `number,state,projectItems`, validates all untrusted records, selects the
-  canonical board by repository title, and carries its current status into the
-  reconcile record. The subprocess uses `GH_TIMEOUT_SECONDS`.
+- `solomon_harness.cli._fetch_gh_issue_states`,
+  `_fetch_reconcile_issue_states`, and `_canonical_board_statuses` — one bounded
+  bulk read validates GitHub issue states; a second exact canonical-board
+  snapshot is joined by issue number. Do not use `issue.projectItems` for the
+  board decision: live issue #6 includes a deleted same-title project's stale
+  item alongside the canonical card.
+- `solomon_harness.claim.fetch_board_items` — reuses the established
+  owner/title/oldest-project lookup and requests `--limit 1000`, so old cards are
+  not hidden by `gh project item-list` pagination.
 - `solomon_harness.cli.reconcile_memory` — memory repair stays gated by an
   existing non-terminal row; board repair is separately gated by `CLOSED` plus
   `board_status != "Done"`. Dry-run uses the same predicate.
@@ -108,15 +112,16 @@ Scenario: An outbound read reaches its deadline
 ## Verification
 
 ```bash
-uv run pytest tests/test_reconcile.py tests/test_workflows.py tests/test_loop_policy.py tests/test_command_gates.py -k 'reconcile or Reconcile' -v
+uv run pytest tests/test_reconcile.py tests/test_claim.py tests/test_workflows.py tests/test_loop_policy.py tests/test_command_gates.py -k 'reconcile or Reconcile or fetch_board_items' -v
 uv run pytest tests/ -k reconcile -v
 uv run python -m solomon_harness.cli reconcile --dry-run
-gh issue list --state closed --limit 1000 --json number,projectItems
+gh issue list --state closed --limit 1000 --json number,state
+gh project item-list 5 --owner ortisan --limit 1000 --format json
 ```
 
-For the live check, inspect the last command's canonical `solomon-harness`
-project item and expect no closed issue whose status name differs from `Done`
-after a successful non-dry run.
+For the live check, cross-reference the last two commands and expect no closed
+issue whose exact board-#5 status differs from `Done` after a successful non-dry
+run. The second dry-run must report zero board moves.
 
 ## Design Constraints
 
