@@ -24,8 +24,8 @@ def _diag(msg: str) -> None:
         with open(_DIAG_LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(msg + "\n")
             fh.flush()
-    except Exception:
-        pass
+    except OSError as exc:
+        print(f"_diag: could not write diagnostic log: {exc}")
 
 
 def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
