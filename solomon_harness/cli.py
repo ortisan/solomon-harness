@@ -113,22 +113,28 @@ def handle_run(harness_dir: str, task=None) -> None:
     from solomon_harness.voice import say
 
     with db_client as db:
-        try:
-            # Determine workspace root
-            project_root = harness_dir
-            found_root = False
-            while project_root and project_root != os.path.dirname(project_root):
-                if os.path.exists(os.path.join(project_root, ".git")):
-                    found_root = True
-                    break
-                project_root = os.path.dirname(project_root)
-            workspace_root = project_root if found_root else harness_dir
+        # Determine workspace root
+        project_root = harness_dir
+        found_root = False
+        while project_root and project_root != os.path.dirname(project_root):
+            if os.path.exists(os.path.join(project_root, ".git")):
+                found_root = True
+                break
+            project_root = os.path.dirname(project_root)
+        workspace_root = project_root if found_root else harness_dir
 
+        try:
             from solomon_harness.bootstrap import scan_project_structure
             scan_project_structure(workspace_root, db)
         except Exception as exc:
             import logging
             logging.warning(f"Project structure scan failed at session start: {type(exc).__name__}")
+
+        try:
+            _run_standing_reconcile(workspace_root)
+        except Exception as exc:
+            import logging
+            logging.warning(f"Standing reconcile failed at session start: {type(exc).__name__}")
 
         print(say("project status"))
 
@@ -825,6 +831,57 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile: {statuses['normalized']} row(s) status-normalized "
             f"({statuses['scanned']} non-terminal rows scanned)"
+        )
+
+
+def _run_standing_reconcile(workspace_root: str) -> None:
+    """Best-effort standing reconcile pass, run from ``handle_run``'s
+    SessionStart hook independently of the release path (#264).
+
+    Composes the same three passes as ``handle_reconcile`` (memory repair plus
+    board move, tracking-row close, status normalization), but stays silent
+    when there is nothing to reconcile: unlike the explicit release-path
+    command, this runs on every session start, so an always-printed line (even
+    at zero) would add digest noise on the common no-op case. A board-move
+    failure is still printed to stderr even when nothing else changed -- a
+    partial failure is never silently dropped (spec req 5). Skips outright on
+    a SQLite-fallback backend, exactly like ``handle_reconcile``'s own guard
+    (ADR-0006 / RAID R1): a per-worktree store is never half-repaired.
+
+    Raises whatever the underlying passes raise (e.g. a gh failure via
+    ``_fetch_gh_issue_states``); the caller (``handle_run``) wraps this call in
+    a try/except that logs a warning and never blocks or fails SessionStart.
+    """
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    with DatabaseClient(harness_dir=workspace_root) as db:
+        if db.backend != "surrealdb":
+            return
+        issue_states = _fetch_gh_issue_states(workspace_root)
+        pr_states = _fetch_gh_pr_states(workspace_root)
+        result = reconcile_memory(db, issue_states, dry_run=False)
+        resolved_map = _build_resolved_map(issue_states, pr_states)
+        tracking = reconcile_tracking_rows(db, resolved_map, dry_run=False)
+        statuses = normalize_memory_statuses(db, dry_run=False)
+
+    changed = (
+        result["repaired"]
+        or result["board_moved"]
+        or tracking["closed"]
+        or statuses["normalized"]
+    )
+    if changed:
+        print(
+            f"reconcile: {result['repaired']} issue(s) closed, "
+            f"{result['board_moved']} board card(s) moved to Done, "
+            f"{tracking['closed']} tracking row(s) closed, "
+            f"{statuses['normalized']} status(es) normalized"
+        )
+    for failure in result["board_failures"]:
+        print(
+            f"reconcile: board move failed for #{failure['issue']}: "
+            f"{failure['error']}",
+            file=sys.stderr,
         )
 
 

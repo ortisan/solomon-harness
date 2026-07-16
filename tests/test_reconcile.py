@@ -833,5 +833,96 @@ class TestHandleReconcileTracking(unittest.TestCase):
         self.assertEqual(self.inner.get_issue("68-R-01")["status"], "in_progress")
 
 
+class _FakeSurrealDbClient:
+    """A minimal fake reporting the shared-store backend, standing in for
+    handle_run's standing reconcile pass (#264). scan_project_structure,
+    gather_digest and the healthcheck calls are mocked out in every test that
+    uses this fake, so it needs to support only what the real
+    ``_run_standing_reconcile`` composition touches: the three reconcile passes
+    over an empty store."""
+
+    backend = "surrealdb"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_open_issues(self):
+        return []
+
+    def get_issue(self, github_id):
+        return None
+
+
+class TestHandleRunStandingReconcile(unittest.TestCase):
+    """handle_run's best-effort standing reconcile pass (#264): it runs on every
+    SessionStart independent of the release path, swallows any exception from
+    the pass so session start always completes and the digest still renders,
+    and stays silent when there is nothing to reconcile."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.temp_dir.name, ".git"))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _run_handle_run_with(self, *extra_patches):
+        """Run cli.handle_run against the temp workspace with the heavy
+        neighbors (db client, project scan, digest, healthcheck) stubbed out,
+        plus any extra patches the caller layers on top, and return stdout."""
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "solomon_harness.tools.database_client.DatabaseClient",
+                    return_value=_FakeSurrealDbClient(),
+                )
+            )
+            stack.enter_context(patch("solomon_harness.bootstrap.scan_project_structure"))
+            stack.enter_context(
+                patch("solomon_harness.digest.gather_digest", return_value=["digest line"])
+            )
+            stack.enter_context(patch("solomon_harness.healthcheck.run_checks", return_value=[]))
+            stack.enter_context(
+                patch("solomon_harness.healthcheck.pending_summary", return_value=[])
+            )
+            for p in extra_patches:
+                stack.enter_context(p)
+            with contextlib.redirect_stdout(out):
+                cli.handle_run(self.temp_dir.name)
+        return out.getvalue()
+
+    def test_standing_reconcile_runs_during_handle_run(self):
+        with patch.object(cli, "_run_standing_reconcile") as spy:
+            self._run_handle_run_with()
+        spy.assert_called_once_with(self.temp_dir.name)
+
+    def test_exception_from_standing_reconcile_is_swallowed(self):
+        """A raised exception (e.g. gh unauthenticated) never blocks session
+        start: handle_run completes and the digest still prints."""
+        out = self._run_handle_run_with(
+            patch.object(
+                cli,
+                "_run_standing_reconcile",
+                side_effect=RuntimeError("gh unauthenticated"),
+            )
+        )
+        self.assertIn("digest line", out)
+
+    def test_nothing_to_reconcile_prints_nothing_extra(self):
+        """The real standing pass, given no drift on either side, prints
+        nothing beyond the ordinary digest -- the common no-op case stays
+        silent."""
+        out = self._run_handle_run_with(
+            patch("solomon_harness.cli._fetch_gh_issue_states", return_value=[]),
+            patch("solomon_harness.cli._fetch_gh_pr_states", return_value=[]),
+        )
+        self.assertIn("digest line", out)
+        self.assertNotIn("reconcile:", out)
+
+
 if __name__ == "__main__":
     unittest.main()
