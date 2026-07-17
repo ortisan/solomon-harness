@@ -388,9 +388,11 @@ def handle_loop_budget(workspace_root: str) -> None:
 def handle_loop_guard(workspace_root: str) -> None:
     """PreToolUse hook: block unsafe tool calls under the loop's guardrails.
 
-    Blocks a `git push` / `gh pr merge` issued while another live driver holds the
-    lock, and a file-write tool (Edit/Write/MultiEdit) that targets a denylisted
-    path (so an autonomous run cannot edit `.agent/config.json` to widen itself).
+    Blocks a human-gated transition (`gh pr merge` / `gh release create` / a
+    force-push to a protected branch) whenever the stage runs headlessly, a `git
+    push` / `gh pr merge` issued while another live driver holds the lock, and a
+    file-write tool (Edit/Write/MultiEdit) that targets a denylisted path (so an
+    autonomous run cannot edit `.agent/config.json` to widen itself).
     Reads the Claude Code hook payload from stdin. Exits 2 to block (the message is
     fed back to the model), 0 to allow. Fail-open: any error allows the tool,
     because the portable enforcement of record is the run_stage gate, not this hook.
@@ -408,7 +410,10 @@ def handle_loop_guard(workspace_root: str) -> None:
         from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
 
         lock = LoopLock(workspace_root, session_id=payload.get("session_id"))
-        block, reason = guard_verdict(payload, lock)
+        # SOLOMON_SUBPROCESS marks a headless run_stage child (workflows.py), where
+        # no human is present to complete a merge or release.
+        headless = os.environ.get("SOLOMON_SUBPROCESS") == "1"
+        block, reason = guard_verdict(payload, lock, headless=headless)
         if not block:
             block, reason = denied_write_verdict(payload, LoopPolicy.from_config(workspace_root))
     except Exception:
@@ -1180,7 +1185,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "loop-guard",
-        help="PreToolUse hook: block push/merge while another driver holds the loop lock (reads the hook payload on stdin)",
+        help="PreToolUse hook: block a headless merge/release/protected-force-push, and any push/merge while another driver holds the loop lock (reads the hook payload on stdin)",
     )
 
     loop_stop_parser = subparsers.add_parser(
