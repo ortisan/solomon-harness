@@ -108,6 +108,108 @@ class TestScaffoldDoesNotMutateSource(unittest.TestCase):
         self.assertEqual(unexpected, [], f"scaffold created unexpected files: {unexpected}")
 
 
+class TestScaffoldPathSafety(unittest.TestCase):
+    def _workspace(self, local_runtime=True):
+        import tempfile
+
+        temp_dir = tempfile.TemporaryDirectory()
+        root = temp_dir.name
+        if local_runtime:
+            runtime = os.path.join(root, "solomon_harness")
+            os.makedirs(runtime)
+            with open(os.path.join(runtime, "cli.py"), "w", encoding="utf-8") as f:
+                f.write("# local runtime\n")
+        role_dir = os.path.join(root, "agents", "qa", "agents")
+        os.makedirs(role_dir)
+        with open(os.path.join(role_dir, "qa.md"), "w", encoding="utf-8") as f:
+            f.write("# QA Profile\n")
+        return temp_dir, root
+
+    def test_scaffold_without_local_runtime_writes_nothing(self):
+        from solomon_harness.bootstrap import scaffold_agents
+
+        temp_dir, root = self._workspace(local_runtime=False)
+        with temp_dir:
+            scaffold_agents(root)
+            agent_dir = os.path.join(root, "agents", "qa")
+            self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
+            self.assertFalse(os.path.lexists(os.path.join(agent_dir, ".agent")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_scaffold_rejects_symlinked_agent_directory(self):
+        import tempfile
+
+        from solomon_harness.bootstrap import scaffold_agents
+
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            runtime = os.path.join(root, "solomon_harness")
+            os.makedirs(runtime)
+            with open(os.path.join(runtime, "cli.py"), "w", encoding="utf-8") as f:
+                f.write("# local runtime\n")
+            os.makedirs(os.path.join(root, "agents"))
+            role_dir = os.path.join(outside, "agents")
+            os.makedirs(role_dir)
+            with open(os.path.join(role_dir, "qa.md"), "w", encoding="utf-8") as f:
+                f.write("# QA Profile\n")
+            os.symlink(outside, os.path.join(root, "agents", "qa"))
+
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                scaffold_agents(root)
+            self.assertFalse(os.path.lexists(os.path.join(outside, "main.py")))
+            self.assertFalse(os.path.lexists(os.path.join(outside, ".agent")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_scaffold_rejects_dangling_main_symlink_without_writing_target(self):
+        from solomon_harness.bootstrap import scaffold_agents
+
+        temp_dir, root = self._workspace()
+        with temp_dir:
+            agent_dir = os.path.join(root, "agents", "qa")
+            escaped = os.path.join(root, "escaped-main.py")
+            os.symlink(escaped, os.path.join(agent_dir, "main.py"))
+
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                scaffold_agents(root)
+            self.assertFalse(os.path.exists(escaped))
+            self.assertFalse(os.path.lexists(os.path.join(agent_dir, ".agent")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_scaffold_rejects_symlinked_config_without_partial_main(self):
+        from solomon_harness.bootstrap import scaffold_agents
+
+        temp_dir, root = self._workspace()
+        with temp_dir:
+            agent_dir = os.path.join(root, "agents", "qa")
+            config_dir = os.path.join(agent_dir, ".agent")
+            os.makedirs(config_dir)
+            outside = os.path.join(root, "outside-config.json")
+            with open(outside, "w", encoding="utf-8") as f:
+                f.write("do not trust\n")
+            os.symlink(outside, os.path.join(config_dir, "config.json"))
+
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                scaffold_agents(root)
+            self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
+            with open(outside, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "do not trust\n")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_scaffold_rejects_symlinked_config_directory_without_escape(self):
+        import tempfile
+
+        from solomon_harness.bootstrap import scaffold_agents
+
+        temp_dir, root = self._workspace()
+        with temp_dir, tempfile.TemporaryDirectory() as outside:
+            agent_dir = os.path.join(root, "agents", "qa")
+            os.symlink(outside, os.path.join(agent_dir, ".agent"))
+
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                scaffold_agents(root)
+            self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
+            self.assertEqual(os.listdir(outside), [])
+
+
 class TestMcpServerBuilds(unittest.TestCase):
     """The MCP server must construct with the declared mcp dependency."""
 
