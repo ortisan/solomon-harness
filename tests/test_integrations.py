@@ -92,6 +92,7 @@ class TestMcpRegistration(unittest.TestCase):
 
 class TestGeneratedSubagents(unittest.TestCase):
     def test_every_agent_has_a_thin_subagent(self):
+        gen = self._load_generator()
         for name in _agent_names():
             rel = os.path.join(".claude", "agents", f"{name}.md")
             self.assertTrue(
@@ -102,6 +103,9 @@ class TestGeneratedSubagents(unittest.TestCase):
             self.assertIn(f"name: {name}", body)
             self.assertIn(f"agents/{name}/", body)
             self.assertIn("agents/AGENTS.md", body)
+            role = os.path.join(WORKSPACE, "agents", name, "agents", f"{name}.md")
+            expected = gen.subagent_markdown(name, gen.role_description(role, name))
+            self.assertEqual(body, expected)
 
     def test_generator_discovers_all_agents(self):
         path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
@@ -315,7 +319,6 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
                 "name: quant_trader\n"
                 "description: \"The Quant Trader validates trading systems. "
                 "Use this agent when a strategy needs quantitative validation.\"\n"
-                "model: sonnet\n"
                 "---\n\n"
                 "You are the quant_trader specialist agent for this project.\n\n"
                 "Your role is defined in `agents/quant_trader/agents/quant_trader.md` "
@@ -331,6 +334,11 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             self.assertNotIn("agents/AGENTS.md", body)
             self.assertFalse(
                 os.path.exists(os.path.join(tmp, "agents", "quant_trader", "main.py"))
+            )
+            self.assertFalse(
+                os.path.exists(
+                    os.path.join(tmp, "agents", "quant_trader", ".agent", "config.json")
+                )
             )
 
             cli.main(harness_dir=tmp, argv=["compile"])
@@ -476,7 +484,7 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             os.makedirs(outside_dir)
             os.symlink(outside_dir, os.path.join(tmp, ".claude", "agents"))
 
-            with self.assertRaisesRegex(ValueError, "output directory"):
+            with self.assertRaisesRegex(ValueError, "unsafe"):
                 generate_claude_agents(tmp)
             self.assertEqual(os.listdir(outside_dir), [])
 
@@ -503,6 +511,63 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             self.assertFalse(os.path.islink(destination))
             with open(outside, "r", encoding="utf-8") as f:
                 self.assertEqual(f.read(), "do not overwrite\n")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_packaged_generator_revokes_stale_wrapper_after_role_becomes_symlink(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 1)
+            generated = os.path.join(tmp, ".claude", "agents", "qa.md")
+            custom = os.path.join(tmp, ".claude", "agents", "custom.md")
+            with open(custom, "w", encoding="utf-8") as f:
+                f.write("# Human-managed agent\n")
+
+            role = os.path.join(tmp, "agents", "qa", "agents", "qa.md")
+            outside = os.path.join(tmp, "outside-role.md")
+            with open(outside, "w", encoding="utf-8") as f:
+                f.write("# Revoked role\n")
+            os.unlink(role)
+            os.symlink(outside, role)
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.lexists(generated))
+            self.assertTrue(os.path.isfile(custom))
+
+    def test_packaged_generator_anchors_atomic_replace_to_output_directory_fd(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from solomon_harness import integrations, secure_paths
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+            real_replace = os.replace
+            calls = []
+
+            def anchored_replace(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+                calls.append((src_dir_fd, dst_dir_fd))
+                return real_replace(
+                    src,
+                    dst,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+
+            with patch.object(secure_paths.os, "replace", side_effect=anchored_replace):
+                self.assertEqual(integrations.generate_claude_agents(tmp), 1)
+
+            self.assertTrue(calls)
+            self.assertTrue(all(src_fd is not None for src_fd, _ in calls))
+            self.assertTrue(all(dst_fd is not None for _, dst_fd in calls))
 
 
 class TestStartWorktree(unittest.TestCase):

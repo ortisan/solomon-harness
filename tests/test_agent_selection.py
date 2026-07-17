@@ -1,10 +1,13 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from solomon_harness import agent_selection
 from solomon_harness.agent_selection import (
     CORE_AGENTS,
     MAX_MANIFEST_BYTES,
+    _manifest_text,
     select_agents,
 )
 
@@ -87,6 +90,51 @@ class TestAgentSelection(unittest.TestCase):
         root = _project(files)
         self.assertNotIn("quant_trader", select_agents(root))
 
+    def test_solomon_control_trees_cannot_activate_an_agent(self):
+        files = {
+            "main.py": "x",
+            "agents/quant_trader/agents/quant_trader.md": "# Quant Trader",
+            "agents/quant_trader/persona.md": "# Quant Trader Persona",
+            "agents/quant_trader/skills/scope.md": "# Scope",
+        }
+        for directory in (
+            "agents",
+            ".agent",
+            ".agents",
+            ".claude",
+            ".gemini",
+            ".solomon",
+            ".solomon-harness",
+            "solomon_harness",
+        ):
+            files[f"{directory}/activation/requirements.txt"] = "ccxt\n"
+        root = _project(files)
+
+        self.assertNotIn("quant_trader", select_agents(root))
+
+    def test_manifest_scan_stops_when_total_read_budget_is_exhausted(self):
+        first = "requests\n"
+        root = _project({
+            "main.py": "x",
+            "a/requirements.txt": first,
+            "b/requirements.txt": "ccxt\n",
+        })
+        opened = []
+        real_open = open
+
+        def recording_open(path, *args, **kwargs):
+            if str(path).endswith("requirements.txt"):
+                opened.append(str(path))
+            return real_open(path, *args, **kwargs)
+
+        with (
+            patch.object(agent_selection, "MAX_MANIFEST_TOTAL_BYTES", len(first.encode())),
+            patch("builtins.open", side_effect=recording_open),
+        ):
+            _manifest_text(root)
+
+        self.assertEqual(opened, [os.path.join(root, "a", "requirements.txt")])
+
     def test_oversized_manifest_is_ignored(self):
         root = _project({
             "main.py": "x",
@@ -104,7 +152,11 @@ class TestAgentSelection(unittest.TestCase):
             "main.py": "x",
             "pubspec.yaml": "name: app",
             "agents/flutter/agents/flutter.md": "# Flutter",
+            "agents/flutter/persona.md": "# Flutter Persona",
+            "agents/flutter/skills/scope.md": "# Scope",
             "agents/qa/agents/qa.md": "# QA",
+            "agents/qa/persona.md": "# QA Persona",
+            "agents/qa/skills/scope.md": "# Scope",
         })
         selected = select_agents(root)
         self.assertEqual(set(selected), {"flutter", "qa"})

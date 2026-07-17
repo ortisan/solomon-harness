@@ -3,7 +3,16 @@ import json
 import shutil
 import datetime
 import subprocess
+import stat
 from typing import Callable, List, Dict, Any, Optional
+
+from solomon_harness.secure_paths import (
+    UnsafePathError,
+    create_regular_at,
+    open_directory_at,
+    open_regular_at,
+    open_root_directory,
+)
 
 from solomon_harness.wiki_bootstrap import (
     is_github_remote,
@@ -421,39 +430,128 @@ def retrofit_instruction_docs(workspace_root: str) -> None:
 def scaffold_agents(workspace_root: str) -> None:
     """Ensure each agent has safe local scaffolding (create-only).
 
-    Non-destructive: a hand-authored entrypoint or config is never overwritten;
-    only genuinely missing scaffolding is filled in from the bundled template.
-    The entrypoint is only useful when this workspace contains the local
-    ``solomon_harness`` runtime it imports, so capability-only projects receive
-    configuration but never an ambient-environment Python launcher.
+    Non-destructive: a hand-authored entrypoint or config is never overwritten.
+    Capability-only projects receive no executable or configuration scaffolding;
+    a local ``solomon_harness/cli.py`` runtime is required for both files.
+    Every managed component is opened relative to directory descriptors and any
+    symlink, dangling link, or unexpected file type fails closed.
     """
-    agents_dir = os.path.join(workspace_root, "agents")
-    if not os.path.isdir(agents_dir):
-        return
+    import re
+
     package_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = os.path.join(package_dir, "templates", "harness")
     main_src = os.path.join(template_dir, "main.py")
     config_src = os.path.join(template_dir, ".agent", "config.json")
-    has_local_runtime = os.path.isfile(
-        os.path.join(workspace_root, "solomon_harness", "cli.py")
-    )
+    workspace_fd = open_root_directory(workspace_root)
+    runtime_fd = cli_fd = agents_fd = None
+    try:
+        try:
+            runtime_fd = open_directory_at(
+                workspace_fd,
+                "solomon_harness",
+                missing_ok=True,
+            )
+            if runtime_fd is None:
+                return
+            cli_fd = open_regular_at(runtime_fd, "cli.py", missing_ok=True)
+            if cli_fd is None:
+                return
+        except (FileNotFoundError, UnsafePathError, OSError):
+            return
+        finally:
+            if cli_fd is not None:
+                os.close(cli_fd)
+                cli_fd = None
+            if runtime_fd is not None:
+                os.close(runtime_fd)
+                runtime_fd = None
 
-    for name in sorted(os.listdir(agents_dir)):
-        agent_dir = os.path.join(agents_dir, name)
-        if not os.path.isfile(os.path.join(agent_dir, "agents", f"{name}.md")):
-            continue  # not an agent directory
+        agents_fd = open_directory_at(workspace_fd, "agents", missing_ok=True)
+        if agents_fd is None:
+            return
 
-        main_dst = os.path.join(agent_dir, "main.py")
-        if has_local_runtime and os.path.isfile(main_src) and not os.path.isfile(main_dst):
-            shutil.copy2(main_src, main_dst)
-
-        config_dst = os.path.join(agent_dir, ".agent", "config.json")
-        if os.path.isfile(config_src) and not os.path.isfile(config_dst):
-            os.makedirs(os.path.dirname(config_dst), exist_ok=True)
+        main_content = main_mode = None
+        if os.path.isfile(main_src) and not os.path.islink(main_src):
+            with open(main_src, "rb") as f:
+                main_content = f.read()
+            main_mode = stat.S_IMODE(os.stat(main_src, follow_symlinks=False).st_mode)
+        config_template = config_mode = None
+        if os.path.isfile(config_src) and not os.path.islink(config_src):
             with open(config_src, "r", encoding="utf-8") as f:
-                content = f.read().replace("{{AGENT_NAME}}", name)
-            with open(config_dst, "w", encoding="utf-8") as f:
-                f.write(content)
+                config_template = f.read()
+            config_mode = stat.S_IMODE(os.stat(config_src, follow_symlinks=False).st_mode)
+
+        for name in sorted(os.listdir(agents_fd)):
+            if not re.fullmatch(r"[a-z0-9_]+", name):
+                continue
+            agent_fd = role_dir_fd = role_fd = config_dir_fd = existing_fd = None
+            try:
+                agent_fd = open_directory_at(agents_fd, name)
+                assert agent_fd is not None
+                role_dir_fd = open_directory_at(agent_fd, "agents", missing_ok=True)
+                if role_dir_fd is None:
+                    continue
+                role_fd = open_regular_at(
+                    role_dir_fd,
+                    f"{name}.md",
+                    missing_ok=True,
+                )
+                if role_fd is None:
+                    continue
+
+                existing_fd = open_regular_at(agent_fd, "main.py", missing_ok=True)
+                main_exists = existing_fd is not None
+                if existing_fd is not None:
+                    os.close(existing_fd)
+                    existing_fd = None
+
+                config_dir_fd = open_directory_at(agent_fd, ".agent", missing_ok=True)
+                config_exists = False
+                if config_dir_fd is not None:
+                    existing_fd = open_regular_at(
+                        config_dir_fd,
+                        "config.json",
+                        missing_ok=True,
+                    )
+                    config_exists = existing_fd is not None
+                    if existing_fd is not None:
+                        os.close(existing_fd)
+                        existing_fd = None
+
+                if main_content is not None and main_mode is not None and not main_exists:
+                    create_regular_at(
+                        agent_fd,
+                        "main.py",
+                        main_content,
+                        mode=main_mode,
+                    )
+                if config_template is not None and config_mode is not None and not config_exists:
+                    if config_dir_fd is None:
+                        config_dir_fd = open_directory_at(agent_fd, ".agent", create=True)
+                        assert config_dir_fd is not None
+                    config_content = config_template.replace("{{AGENT_NAME}}", name).encode(
+                        "utf-8"
+                    )
+                    create_regular_at(
+                        config_dir_fd,
+                        "config.json",
+                        config_content,
+                        mode=config_mode,
+                    )
+            finally:
+                for descriptor in (
+                    existing_fd,
+                    config_dir_fd,
+                    role_fd,
+                    role_dir_fd,
+                    agent_fd,
+                ):
+                    if descriptor is not None:
+                        os.close(descriptor)
+    finally:
+        if agents_fd is not None:
+            os.close(agents_fd)
+        os.close(workspace_fd)
 
 
 def scaffold_new_agent(
