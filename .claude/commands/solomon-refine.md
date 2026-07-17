@@ -118,8 +118,10 @@ Steps:
      `.solomon/handoffs/issue-<n>-refine-to-start.md` using the template in
      `docs/solomon-workflow.md`, then `mcp__solomon-memory__log_handoff` sender
      `product_owner` recipient `software_engineer` (engineering), `contract_type`
-     `prd`, `contract_path` set to that file, `status` `pending` (gate: every story
-     has testable acceptance criteria, an estimate, and DoR met).
+     `prd`, `contract_path` set to that file, `status="pending"`, and
+     `summary="<2-5 line synopsis of the refinement outcome: slicing, estimate,
+     and DoR status>"` (gate: every story has testable acceptance criteria, an
+     estimate, and DoR met).
    - `mcp__solomon-memory__save_session` to checkpoint under `<feat>/refine`.
 
 Report the refined issue link, any sub-issues created, the estimate, the RAID

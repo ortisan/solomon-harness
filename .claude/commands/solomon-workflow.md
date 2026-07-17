@@ -69,5 +69,7 @@ Present the next step and execution options as a decision card with the followin
 ## 4. Record
 
 - `mcp__solomon-memory__save_decision` — the loop's recommendation and the chosen action, so the next session resumes from it.
-- `mcp__solomon-memory__log_handoff` — when the chosen workflow hands off to the next stage.
+- `mcp__solomon-memory__log_handoff` — when the chosen workflow hands off to the next stage,
+  passing `summary="<2-5 line synopsis of what this stage did>"` so a resume survives worktree
+  teardown.
 

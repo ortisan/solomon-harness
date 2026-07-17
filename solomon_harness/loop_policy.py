@@ -4,9 +4,9 @@ Phase 2 of the loop-engineering adaptation. The policy is the one autonomy dial,
 enforced in portable Python (so it holds on both Claude Code and the Gemini CLI),
 not only in a Claude-only hook. Three hard rules it can never widen:
 
-- merge, release, and moving a card to Done are PERMANENTLY human-gated at every
-  level — the autonomous path may draft work and route it to the review gate, but
-  a human always approves the merge;
+- merge, release, and the lifecycle decision that originates Done are
+  PERMANENTLY human-gated at every level — ADR-0034 permits only an idempotent
+  projection repair after GitHub already reports the issue closed;
 - L3 (unattended) only runs while the single-driver lock is held;
 - the kill-switch halts every stage immediately, in one command.
 
@@ -29,10 +29,11 @@ HUMAN_GATED_STAGES = {"release"}
 # L1 is report-only: it may scan and propose, never mutate.
 L1_ALLOWED_STAGES = {"workflow"}
 # L2/L3 may create work and draft PRs, but never the human-gated stages above.
-# The scan loops are generative maintenance: they draft PRs, so they belong here.
+# The scan loops draft PRs; reconcile only repairs the projection of issues that
+# GitHub already reports CLOSED (ADR-0034). Neither originates a merge/release.
 AUTOMATION_ALLOWED_STAGES = {
     "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review",
-    "scan-arch", "scan-dedup",
+    "scan-arch", "scan-dedup", "reconcile",
 }
 
 # Renamed stages, normalized on read so pre-rename callers and recorded state
@@ -115,7 +116,11 @@ class LoopPolicy:
         if self.is_halted():
             return Decision(False, "loop halted by kill-switch; clear with 'solomon-harness loop-stop --clear'")
         if stage in HUMAN_GATED_STAGES:
-            return Decision(False, f"'{stage}' is permanently human-gated (merge/release/Done are never autonomous)")
+            return Decision(
+                False,
+                f"'{stage}' is permanently human-gated "
+                "(merge/release/terminal decisions are never autonomous)",
+            )
         if self.level == "human":
             return Decision(True, "")
         if self.level == "L1":

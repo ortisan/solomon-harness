@@ -463,6 +463,17 @@ def test_scan_loops_write_the_canonical_adr_line():
         assert "ADR: not warranted — <reason>" in body, name
 
 
+def test_standing_reconcile_commands_use_the_locked_cli_projection():
+    for rel in (
+        os.path.join(".claude", "commands", "solomon-reconcile.md"),
+        os.path.join(".gemini", "commands", "solomon-reconcile.toml"),
+    ):
+        body = _read(rel)
+        assert "python -m solomon_harness.cli reconcile" in body, rel
+        assert "already reports CLOSED" in body, rel
+        assert "Never merge" in body, rel
+
+
 def test_start_release_and_review_carry_the_canonical_adr_line():
     canonical_link = "ADR: docs/adrs/NNNN-<slug>.md"
     canonical_skip = "ADR: not warranted — <reason>"
@@ -481,3 +492,37 @@ def test_gemini_mirrors_carry_the_canonical_adr_line():
         assert "ADR: not warranted — <reason>" in body, name
     review = _read(os.path.join(".gemini", "commands", "solomon-review.toml"))
     assert "check-adr-gate.py" in review
+
+
+# --- log_handoff summary required (issue #295) ------------------------------
+
+
+def test_command_files_pass_log_handoff_summary():
+    # summary is the documented mitigation for handoff contract files dying
+    # with worktree teardown (docs/solomon-workflow.md, "Handoff contracts"):
+    # a resume reads get_latest_activity, and a caller that omits summary
+    # leaves that field empty alongside a contract_path that no longer
+    # resolves. Every command file that instructs a log_handoff call must
+    # carry a concrete summary= argument -- the full glob, not a sample.
+    cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+    offenders = []
+    for name in sorted(os.listdir(cmd_dir)):
+        if not name.endswith(".md"):
+            continue
+        body = _read(os.path.join(".claude", "commands", name))
+        if "log_handoff" in body and "summary=" not in body:
+            offenders.append(name)
+    assert offenders == [], f"log_handoff call sites missing summary=: {offenders}"
+
+
+def test_workflow_doc_documents_summary_argument():
+    # The canonical Handoff contracts rule documented the 5-argument call with
+    # no mention of summary; a caller following the doc alone would omit it.
+    doc = _read(os.path.join("docs", "solomon-workflow.md"))
+    assert "## Handoff contracts (bounded context)" in doc
+    assert (
+        "log_handoff(sender, recipient, contract_type, contract_path, status, summary)"
+        in doc
+    ), "the log_handoff signature must name summary as an explicit argument"
+    low = doc.lower()
+    assert "required" in low and "non-empty" in low

@@ -69,6 +69,12 @@ class TestLadder(unittest.TestCase):
         self.assertFalse(_policy("L1").decide_stage("scan-arch").allowed)  # not report-only
         self.assertTrue(_policy("human").decide_stage("scan-arch").allowed)
 
+    def test_reconcile_projection_is_locked_l2_l3_automation(self):
+        self.assertFalse(_policy("L1").decide_stage("reconcile").allowed)
+        self.assertTrue(_policy("L2").decide_stage("reconcile").allowed)
+        self.assertTrue(_policy("L3").decide_stage("reconcile").allowed)
+        self.assertTrue(_policy("L3").requires_lock("reconcile"))
+
     def test_invalid_level_fails_closed(self):
         # A typo must never silently become unrestricted.
         p = _policy("l2")

@@ -669,6 +669,12 @@ class TestStageRename(unittest.TestCase):
         self.assertIn("loop", stderr.getvalue())
 
 
+class TestStandingReconcileStage(unittest.TestCase):
+    def test_reconcile_stage_is_registered_and_single_driver_locked(self):
+        self.assertIn("reconcile", workflows.STAGES)
+        self.assertIn("reconcile", workflows.LOCKED_STAGES)
+
+
 class TestLoopStage(unittest.TestCase):
     """`loop` (the autonomous parallel loop, formerly `loop-auto`) drives N
     iterations of the existing `workflow` stage logic — it must not build a new

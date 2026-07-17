@@ -149,7 +149,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - Write the start -> review handoff contract to `.solomon/handoffs/issue-{{args}}-start-to-review.md`
   using the template in `docs/solomon-workflow.md`: the PR link, PLAN.md, the ADR decision, what changed,
   and how to verify (the test plan). Keep it compact — a summary plus pointers.
-- `log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-{{args}}-start-to-review.md", status="open")`; keep the returned handoff id.
+- `log_handoff(sender="software_engineer", recipient="qa", contract_type="pull_request", contract_path=".solomon/handoffs/issue-{{args}}-start-to-review.md", status="open", summary="<2-5 line synopsis of what start produced>")`; keep the returned handoff id.
 - `save_session(session_id="start-{{args}}", agent_name="software_engineer", task="Implement #{{args}}", messages=..., issues=[{{args}}])` to checkpoint; `issues` writes the worked_on edge so resume is a graph query, not a task-string parse (ADR-0018).
 - `link_session_handoff(session_id="start-{{args}}", handoff_id=<the returned handoff id>)` to record the produced edge.
 - Report the branch, PR URL, and ADR decision. Then continue directly into the Review

@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -212,6 +213,93 @@ class TestGeminiCommands(unittest.TestCase):
             # Claude-isms must be translated, not leaked.
             self.assertNotIn("$ARGUMENTS", body)
             self.assertNotIn("mcp__solomon-memory__", body)
+
+
+class TestCodexSkills(unittest.TestCase):
+    def _generator(self):
+        path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
+        spec = importlib.util.spec_from_file_location("gen_codex_integrations", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_every_workflow_command_has_a_codex_skill(self):
+        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+        for name in sorted(os.listdir(cmd_dir)):
+            if not name.startswith("solomon-") or not name.endswith(".md"):
+                continue
+            skill_name = name[:-3]
+            rel = os.path.join(".agents", "skills", skill_name, "SKILL.md")
+            self.assertTrue(
+                os.path.isfile(os.path.join(WORKSPACE, rel)),
+                f"missing Codex skill for {name}",
+            )
+            body = _read(rel)
+            self.assertIn(f"name: {skill_name}", body)
+            self.assertIn("Use when", body)
+            self.assertNotIn("$ARGUMENTS", body)
+            self.assertIsNone(
+                re.search(r"(?<![A-Za-z0-9_./-])/solomon-", body),
+                f"{skill_name} exposes slash commands that Codex cannot invoke",
+            )
+
+    def test_codex_skills_match_regenerated_source(self):
+        gen = self._generator()
+        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+        for name in sorted(os.listdir(cmd_dir)):
+            if not name.startswith("solomon-") or not name.endswith(".md"):
+                continue
+            skill_name = name[:-3]
+            description, body = gen._parse_command_file(os.path.join(cmd_dir, name))
+            expected = gen.codex_skill_markdown(skill_name, description, body)
+            actual = _read(
+                os.path.join(".agents", "skills", skill_name, "SKILL.md")
+            )
+            self.assertEqual(
+                actual,
+                expected,
+                f"{skill_name} Codex skill is out of sync; run the generator",
+            )
+
+    def test_codex_skill_renderer_adapts_arguments(self):
+        gen = self._generator()
+        rendered = gen.codex_skill_markdown(
+            "solomon-start",
+            "Start an issue.",
+            "Begin issue #$ARGUMENTS.",
+        )
+        self.assertIn("name: solomon-start", rendered)
+        self.assertIn("Use when", rendered)
+        self.assertIn("Begin issue #ARGUMENTS.", rendered)
+        self.assertNotIn("$ARGUMENTS", rendered)
+
+    def test_codex_skill_renderer_adapts_workflow_invocations(self):
+        gen = self._generator()
+        rendered = gen.codex_skill_markdown(
+            "solomon-start",
+            "Start an issue.",
+            "Run /solomon-refine 42, then /solomon-start 42.",
+        )
+        self.assertIn("Run $solomon-refine 42, then $solomon-start 42.", rendered)
+        self.assertNotIn("/solomon-", rendered)
+
+    def test_codex_skill_renderer_preserves_document_and_command_file_paths(self):
+        gen = self._generator()
+        rendered = gen.codex_skill_markdown(
+            "solomon-start",
+            "Start an issue.",
+            "Read docs/solomon-workflow.md and .claude/commands/solomon-start.md, "
+            "then run /solomon-start 42.",
+        )
+        self.assertIn("docs/solomon-workflow.md", rendered)
+        self.assertIn(".claude/commands/solomon-start.md", rendered)
+        self.assertIn("run $solomon-start 42", rendered)
+
+    def test_readme_documents_codex_skill_invocation(self):
+        readme = _read("README.md")
+        self.assertIn("$solomon-workflow", readme)
+        self.assertIn("$solomon-start", readme)
+        self.assertIn("~/.agents/skills", readme)
 
 
 class TestCompileSyncsIntegrations(unittest.TestCase):

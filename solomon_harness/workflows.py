@@ -12,8 +12,8 @@ from typing import Any, List, Optional
 
 STAGES = [
     "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
-    # Standing maintenance loops (Phase 3): generative, open draft PRs only.
-    "scan-arch", "scan-dedup",
+    # Standing maintenance stages: generative scans plus state convergence.
+    "scan-arch", "scan-dedup", "reconcile",
 ]
 
 # Renamed stages, still accepted on input with a deprecation notice:
@@ -24,7 +24,10 @@ DEPRECATED_STAGE_ALIASES = {"loop-auto": "loop"}
 # under a single driver. The lock is a portable Python gate run on both hosts —
 # the documented concurrent-driver race produced premature merges that bypassed
 # the review gate, so honoring an advisory markdown "Step 0" was not enough.
-LOCKED_STAGES = {"workflow", "loop", "start", "review", "release", "scan-arch", "scan-dedup"}
+LOCKED_STAGES = {
+    "workflow", "loop", "start", "review", "release", "scan-arch",
+    "scan-dedup", "reconcile",
+}
 
 # `loop` is the headless cadence entrypoint: `dev loop --concurrency N` drives N
 # iterations of the `workflow` stage's own prompt, with LOOP_AUTONOMOUS_MODE_DIRECTIVE
@@ -269,7 +272,8 @@ def run_stage(
         return 1
 
     # Governed-autonomy gate (portable, both hosts): the maturity ladder, the
-    # permanent human gate for merge/release/Done, and the kill-switch. At the
+    # permanent human gate for merge/release/terminal decisions (ADR-0034 only
+    # permits closed-issue projection repair), and the kill-switch. At the
     # default "human" level this allows everything, so behavior is unchanged.
     from solomon_harness.loop_policy import LoopPolicy
 

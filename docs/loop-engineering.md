@@ -69,13 +69,17 @@ auditable record are guaranteed.
   resume decision card (enumerated options) in `/solomon-workflow`.
 - **Phase 2 — Governed autonomy (shipped).** An L1/L2/L3 maturity policy
   (`solomon_harness/loop_policy.py`) enforced portably in `run_stage`; merge,
-  release and board-Done permanently human-gated; an unknown level fails closed; a
+  release and the terminal lifecycle decision permanently human-gated (with
+  ADR-0034's closed-issue projection-repair exception); an unknown level fails closed; a
   denylist; the maker/checker model split surfaced; and a kill-switch
   (`solomon-harness loop-stop`, `loop-policy`). See below.
 - **Phase 3 — Maintenance loops + budget (shipped).** `/solomon-scan-arch` and
   `/solomon-scan-dedup` (gated `dev` stages) that open draft PRs only; outbound
   notification egress (`notify.py`); a post-hoc cost ceiling (`loop_budget.py`)
   that degrades the automation path to report-only. See below.
+- **Phase 3b — State convergence (shipped).** `/solomon-reconcile` is a gated,
+  single-driver standing stage. It repairs only the board/memory projection of an
+  issue GitHub already reports closed and leaves SessionStart read-oriented.
 - **Phase 4 — Ownership (loop_engineer shipped).** A dedicated `loop_engineer`
   agent now owns the lock/policy/run-log/budget/notify modules, with six skills
   citing their real APIs (the precedent `practice_curator` set for a deferred
@@ -112,7 +116,7 @@ on start and immediately prompts the user with the options.
 | --- | --- |
 | L1/L2/L3 ladder + `human` default, fail-closed on a bad level | `solomon_harness/loop_policy.py` |
 | Portable enforcement (both hosts), exit 3 on deny | `run_stage` in `solomon_harness/workflows.py` |
-| Permanent human gate for merge / release / Done | `HUMAN_GATED_STAGES` |
+| Permanent human gate for merge / release / terminal lifecycle decision | `HUMAN_GATED_STAGES`; closed-issue projection exception in ADR-0034 |
 | Path denylist + maker/checker split surfaced | `is_denied_path`, `checker_split_ok` |
 | Kill-switch (sentinel beside the lock) | `solomon-harness loop-stop` / `loop-policy` |
 
@@ -124,6 +128,7 @@ Set the level in the project's `.agent/config.json` `loop` block (or
 | Piece | Where |
 | --- | --- |
 | Standing maintenance loops (one lens each, draft-PR-only) | `/solomon-scan-arch`, `/solomon-scan-dedup` (gated `dev` stages) |
+| Standing closed-issue projection convergence | `/solomon-reconcile` (gated, locked `dev` stage; ADR-0034) |
 | Their guardrail skills (one-open-PR budget, denylist, run note) | `agents/software_architect/skills/architecture_scan_loop.md`, `agents/software_engineer/skills/duplication_scan_loop.md` |
 | Outbound-only notification (console / webhook, env URL) | `solomon_harness/notify.py`, `solomon-harness notify` |
 | Post-hoc cost ceiling -> report-only | `solomon_harness/loop_budget.py`, `solomon-harness loop-budget` |

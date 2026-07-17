@@ -13,9 +13,13 @@ import re
 import subprocess
 import threading
 import sys
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from solomon_harness.tools.database_client import is_github_issue, is_terminal
+from solomon_harness.host import workflow_invocation
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimStore
 
 _MAX_LIST = 5
 
@@ -82,6 +86,7 @@ def build_digest(
     prs: Optional[List[Dict[str, Any]]],
     backend: str = "surrealdb",
     per_issue: Optional[List[Dict[str, Any]]] = None,
+    host: str = "unknown",
 ) -> List[str]:
     """Render the digest lines from already-collected facts (pure).
 
@@ -98,6 +103,10 @@ def build_digest(
     sessions with no edges.
     """
     lines: List[str] = []
+
+    def command(stage: str, arguments: Any = "") -> str:
+        rendered_arguments = str(arguments).strip() if arguments is not None else ""
+        return workflow_invocation(stage, rendered_arguments, host=host)
 
     if backend == "sqlite":
         lines.append(
@@ -116,7 +125,7 @@ def build_digest(
     if last_loop_run:
         r = last_loop_run
         lines.append(
-            f"Last loop: /solomon-{r.get('stage')} {r.get('target', '')} -> "
+            f"Last loop: {command(str(r.get('stage')), r.get('target', ''))} -> "
             f"{r.get('status')} ({r.get('created_at', '')})"
         )
 
@@ -162,7 +171,7 @@ def build_digest(
         pr_num = _safe_id(pr.get('number'))
         if pr_num:
             pending = {
-                "command": f"/solomon-release {pr_num}",
+                "command": command("release", pr_num),
                 "description": f"Release approved PR #{pr_num}: {_sanitize_title(pr.get('title'))}"
             }
     elif prs and awaiting:
@@ -170,7 +179,7 @@ def build_digest(
         pr_num = _safe_id(pr.get('number'))
         if pr_num:
             pending = {
-                "command": f"/solomon-review {pr_num}",
+                "command": command("review", pr_num),
                 "description": f"Review open PR #{pr_num}: {_sanitize_title(pr.get('title'))}"
             }
     else:
@@ -185,10 +194,10 @@ def build_digest(
             if issue_id:
                 status = str(issue.get("status")).lower().replace(" ", "_")
                 if status == "in_progress":
-                    cmd = f"/solomon-start {issue_id}"
+                    cmd = command("start", issue_id)
                     desc = f"Resume implementation for issue #{issue_id}: {_sanitize_title(issue.get('title'))}"
                 else:
-                    cmd = f"/solomon-review {issue_id}"
+                    cmd = command("review", issue_id)
                     desc = f"Review/QA issue #{issue_id}: {_sanitize_title(issue.get('title'))}"
                 pending = {
                     "command": cmd,
@@ -196,7 +205,7 @@ def build_digest(
                 }
         elif resume and resume.get("status") == "active":
             task_str = resume.get("task", "")
-            cmd = "/solomon-workflow"
+            cmd = command("workflow")
             # Graph-based resume (ADR-0018): the worked_on edges name the
             # issue directly. Prefer the resume row's own linked issues, then
             # the most recent per-issue activity row; the issue's status picks
@@ -215,9 +224,9 @@ def build_digest(
                 issue_id = linked[0]
                 issue_status = status_by_id.get(issue_id, "").lower().replace(" ", "_")
                 if issue_status in ("code_review", "qa"):
-                    cmd = f"/solomon-review {issue_id}"
+                    cmd = command("review", issue_id)
                 else:
-                    cmd = f"/solomon-start {issue_id}"
+                    cmd = command("start", issue_id)
             elif "start" in str(task_str).lower():
                 # DEPRECATED (ADR-0018): free-text fallback for legacy sessions
                 # written before the worked_on edge existed. Scheduled for
@@ -229,14 +238,14 @@ def build_digest(
                 if m:
                     safe_val = _safe_id(m.group(1))
                     if safe_val:
-                        cmd = f"/solomon-start {safe_val}"
+                        cmd = command("start", safe_val)
                 else:
                     # Fallback to single digit sequence if only one exists
                     matches = re.findall(r'\d+', str(task_str))
                     if len(matches) == 1:
                         safe_val = _safe_id(matches[0])
                         if safe_val:
-                            cmd = f"/solomon-start {safe_val}"
+                            cmd = command("start", safe_val)
             pending = {
                 "command": cmd,
                 "description": f"Resume last activity: {resume.get('agent')} is working on '{_sanitize_title(task_str)}'"
@@ -252,7 +261,7 @@ def build_digest(
                 issue_id = _safe_id(issue.get('github_id'))
                 if issue_id:
                     pending = {
-                        "command": f"/solomon-start {issue_id}",
+                        "command": command("start", issue_id),
                         "description": f"Start development on Ready issue #{issue_id}: {_sanitize_title(issue.get('title'))}"
                     }
 
@@ -269,7 +278,7 @@ def build_digest(
     # Filter issues to show (exclude only the one that is currently selected as pending to prevent task elision)
     pending_github_id = None
     if pending and "command" in pending:
-        m_id = re.search(r'/solomon-\w+\s+([a-zA-Z0-9_-]+)', pending["command"])
+        m_id = re.search(r'[/\$]solomon-\w+\s+([a-zA-Z0-9_-]+)', pending["command"])
         if m_id:
             pending_github_id = m_id.group(1)
 
@@ -293,32 +302,32 @@ def build_digest(
             issue_id = _safe_id(i.get("github_id"))
             if issue_id:
                 if status == "backlog":
-                    cmd = f"/solomon-refine {issue_id}"
+                    cmd = command("refine", issue_id)
                 elif status in ("ideas", "idea"):
-                    cmd = f"/solomon-issue {issue_id}"
+                    cmd = command("issue", issue_id)
                 elif status in ("ready", "in_progress", "in progress"):
-                    cmd = f"/solomon-start {issue_id}"
+                    cmd = command("start", issue_id)
                 elif status in ("code_review", "code review", "qa"):
-                    cmd = f"/solomon-review {issue_id}"
+                    cmd = command("review", issue_id)
                 else:
-                    cmd = f"/solomon-issue {issue_id}"
+                    cmd = command("issue", issue_id)
                 lines.append(f"  {option_idx}. Refine/Start Issue #{issue_id}: {cmd}")
                 option_idx += 1
 
-        lines.append(f"  {option_idx}. Capture a new product idea: /solomon-idea")
+        lines.append(f"  {option_idx}. Capture a new product idea: {command('idea')}")
         option_idx += 1
-        lines.append(f"  {option_idx}. Create a new feature/story issue: /solomon-issue")
+        lines.append(f"  {option_idx}. Create a new feature/story issue: {command('issue')}")
         option_idx += 1
-        lines.append(f"  {option_idx}. Create a new bug report: /solomon-bug")
+        lines.append(f"  {option_idx}. Create a new bug report: {command('bug')}")
         option_idx += 1
         lines.append(f"  {option_idx}. Other: Free-text entry")
     elif not pending:
         lines.append("No open issues found on GitHub.")
         lines.append("")
         lines.append("Options to proceed:")
-        lines.append("  1. Capture a new product idea: /solomon-idea")
-        lines.append("  2. Create a new feature/story issue: /solomon-issue")
-        lines.append("  3. Create a new bug report: /solomon-bug")
+        lines.append(f"  1. Capture a new product idea: {command('idea')}")
+        lines.append(f"  2. Create a new feature/story issue: {command('issue')}")
+        lines.append(f"  3. Create a new bug report: {command('bug')}")
         lines.append("  4. Other: Free-text entry")
 
     return lines
@@ -347,10 +356,66 @@ def _run_with_timeout(func, *args, timeout: float = 1.5, default=None):
     return result["val"]
 
 
-def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> List[str]:
+def _filter_claimed(
+    open_issues: List[Dict[str, Any]], claim_store: "ClaimStore"
+) -> List[Dict[str, Any]]:
+    """Drop issues actively claimed by another session (ADR-0027).
+
+    Mirrors ``MemoryService.get_open_issues``'s claim-aware filter exactly
+    (numeric-id extraction, ``filter_unclaimed``, non-numeric rows always
+    kept), so the digest can never judge a claim differently than
+    ``MemoryService.get_open_issues`` or ``github.list_open_issues`` -- one
+    shared port, not a fourth independent implementation. Degrades to the
+    unfiltered list on any failure: filtering here is advisory (a convenience
+    over the real enforcement, which is ``claim_issue``'s own CAS at start
+    time), so an unfiltered digest is noisier, never unsafe.
+    """
+    try:
+        numeric_ids = []
+        for issue in open_issues:
+            try:
+                numeric_ids.append(int(str(issue.get("github_id"))))
+            except (TypeError, ValueError):
+                continue
+        if not numeric_ids:
+            return open_issues  # nothing to filter; skip the claim-store call
+        unclaimed_ids = set(claim_store.filter_unclaimed(numeric_ids))
+
+        def _keep(issue: Dict[str, Any]) -> bool:
+            try:
+                return int(str(issue.get("github_id"))) in unclaimed_ids
+            except (TypeError, ValueError):
+                return True  # non-numeric tracking rows are never claimed
+
+        return [issue for issue in open_issues if _keep(issue)]
+    except Exception as exc:  # noqa: BLE001 - degrade to unfiltered, but log
+        sys.stderr.write(
+            f"WARNING: claim-aware issue filtering degraded ({exc}); returning "
+            "the unfiltered issue list.\n"
+        )
+        return open_issues
+
+
+def gather_digest(
+    workspace_root: str,
+    db: Any,
+    fetch_github: bool = True,
+    claim_store: Optional["ClaimStore"] = None,
+    host: str = "unknown",
+) -> List[str]:
     """Collect facts from memory (and best-effort gh) and render the digest with timeout protection."""
     resume = _run_with_timeout(db.get_latest_activity, timeout=0.5, default=None)
     open_issues = _run_with_timeout(db.get_open_issues, timeout=0.5, default=[]) or []
+    if claim_store is None:
+        from solomon_harness.claim import GitClaimStore
+
+        claim_store = GitClaimStore(workspace_root)
+    # Bounded the same way as every other memory query in this function: a
+    # hung claim store (git/gh subprocess) must not hang SessionStart, and a
+    # raised exception alone would not bound a genuine hang (#297).
+    open_issues = _run_with_timeout(
+        _filter_claimed, open_issues, claim_store, timeout=0.5, default=open_issues
+    )
     runs = _run_with_timeout(db.list_loop_runs, 1, timeout=0.5, default=[]) or []
     last_loop = runs[0] if runs else None
     # The per-issue activity graph (ADR-0018). getattr-guarded so an older or
@@ -367,5 +432,6 @@ def gather_digest(workspace_root: str, db: Any, fetch_github: bool = True) -> Li
     # above actually came from.
     backend = getattr(db, "backend", "surrealdb")
     return build_digest(
-        resume, open_issues, last_loop, prs, backend=backend, per_issue=per_issue
+        resume, open_issues, last_loop, prs, backend=backend, per_issue=per_issue,
+        host=host,
     )

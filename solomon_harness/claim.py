@@ -23,9 +23,9 @@ import socket
 import datetime
 import subprocess
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Protocol, Tuple, TypedDict
 
-from solomon_harness.subprocess_env import clean_git_env
+from solomon_harness.subprocess_env import clean_gh_env, clean_git_env
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,26 @@ _SESSION_ID_CACHE: Optional[str] = None
 # through run_stage's claim gate (which runs before the try/finally and would
 # leak the lock).
 GIT_SUBPROCESS_TIMEOUT_SECONDS = 15.0
+
+# One canonical-board snapshot is shared by claim liveness and standing
+# reconciliation. Keep it above the repository's issue-list cap so an old card
+# cannot disappear behind gh's default project-item pagination.
+BOARD_ITEM_LIMIT = 1000
+
+
+class ClaimRefVersionSnapshot(TypedDict):
+    """Authoritative remote claim-ref versions read in one operation."""
+
+    ok: bool
+    versions: Dict[int, str]
+    error: str
+
+
+class ConditionalClaimRelease(TypedDict):
+    """Result of deleting exactly one previously observed claim-ref version."""
+
+    status: Literal["released", "changed", "missing", "failed"]
+    error: str
 
 
 def _run_git(
@@ -303,7 +323,12 @@ def fetch_board_items(workspace_root: str) -> Optional[List[Dict[str, Any]]]:
         if not project:
             return []
         board_res = _gh(
-            ["project", "item-list", str(project.get("number")), "--owner", owner, "--format", "json"],
+            [
+                "project", "item-list", str(project.get("number")),
+                "--owner", owner,
+                "--limit", str(BOARD_ITEM_LIMIT),
+                "--format", "json",
+            ],
             parse_json=True,
         )
         if not board_res.get("ok"):
@@ -611,6 +636,136 @@ def release_claim(workspace_root: str, issue_number: int, current_session_id: Op
     return True
 
 
+def _valid_ref_version(version: str) -> bool:
+    """Return whether ``version`` is a SHA-1 or SHA-256 object id."""
+    return len(version) in (40, 64) and all(
+        character in "0123456789abcdefABCDEF" for character in version
+    )
+
+
+def _parse_claim_ref_versions(stdout: str) -> Optional[Dict[int, str]]:
+    """Parse ``git ls-remote`` output without accepting malformed object ids."""
+    versions: Dict[int, str] = {}
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            return None
+        version, refname = parts
+        if not _valid_ref_version(version):
+            return None
+        prefix = "refs/claims/issue-"
+        if not refname.startswith(prefix):
+            logger.warning("claim origin returned unexpected ref name %s", refname)
+            return None
+        issue_text = refname[len(prefix) :]
+        if not (issue_text.isascii() and issue_text.isdigit()):
+            logger.warning("claim origin returned malformed claim ref name %s", refname)
+            return None
+        issue_number = int(issue_text)
+        if issue_number <= 0 or str(issue_number) != issue_text:
+            logger.warning("claim origin returned non-canonical claim ref name %s", refname)
+            return None
+        versions[issue_number] = version
+    return versions
+
+
+def fetch_claim_ref_versions(workspace_root: str) -> ClaimRefVersionSnapshot:
+    """Read every authoritative remote claim ref and its opaque version once.
+
+    ``git ls-remote`` reads origin directly and does not update cached
+    remote-tracking refs. A failed or malformed response is explicit so a
+    mutating caller cannot confuse an unavailable origin with an empty claim
+    namespace.
+    """
+    env = clean_git_env(workspace_root)
+    result = _run_git(
+        ["git", "ls-remote", "--refs", "origin", "refs/claims/issue-*"],
+        workspace_root,
+        env,
+    )
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "versions": {},
+            "error": "claim origin unavailable",
+        }
+    versions = _parse_claim_ref_versions(result.stdout or "")
+    if versions is None:
+        return {
+            "ok": False,
+            "versions": {},
+            "error": "claim origin returned malformed refs",
+        }
+    return {"ok": True, "versions": versions, "error": ""}
+
+
+def release_claim_if_version(
+    workspace_root: str,
+    issue_number: int,
+    expected_version: str,
+) -> ConditionalClaimRelease:
+    """Delete a claim only while origin still holds ``expected_version``.
+
+    The expected version comes from :func:`fetch_claim_ref_versions`. Git's
+    force-with-lease compare-and-swap is the linearization point: a heartbeat,
+    reclaim, or fresh acquisition that changes the ref makes the delete fail
+    closed. A failed push is classified with one exact-ref read so callers can
+    distinguish a race, an already-converged absence, and an unavailable
+    origin without parsing git's human-facing stderr.
+    """
+    if not _valid_ref_version(expected_version):
+        return {"status": "failed", "error": "invalid claim ref version"}
+
+    ref = f"refs/claims/issue-{issue_number}"
+    env = clean_git_env(workspace_root)
+    push_result = _run_git(
+        [
+            "git",
+            "push",
+            f"--force-with-lease={ref}:{expected_version}",
+            "origin",
+            f":{ref}",
+        ],
+        workspace_root,
+        env,
+    )
+    if push_result.returncode == 0:
+        _clear_claim_mirror(workspace_root, issue_number)
+        session_id = get_current_session_id()
+        _audit_claim_event(
+            workspace_root,
+            issue_number,
+            "conditional-released",
+            session_id,
+            detail=f"matched version {expected_version[:12]}",
+        )
+        from solomon_harness.github import _gh
+
+        _gh(
+            ["issue", "edit", str(issue_number), "--remove-assignee", "@me"],
+            cwd=workspace_root,
+            env=clean_gh_env(workspace_root),
+        )
+        return {"status": "released", "error": ""}
+
+    read_result = _run_git(
+        ["git", "ls-remote", "--refs", "origin", ref],
+        workspace_root,
+        env,
+    )
+    if read_result.returncode != 0:
+        return {"status": "failed", "error": "claim origin unavailable"}
+    versions = _parse_claim_ref_versions(read_result.stdout or "")
+    if versions is None:
+        return {"status": "failed", "error": "claim origin returned malformed refs"}
+    current_version = versions.get(issue_number)
+    if current_version is None:
+        return {"status": "missing", "error": ""}
+    if current_version != expected_version:
+        return {"status": "changed", "error": ""}
+    return {"status": "failed", "error": "conditional claim release rejected"}
+
+
 def refresh_claim(workspace_root: str, issue_number: int, session_id: str) -> bool:
     """Re-touch an existing claim's heartbeat_at, keeping it fresh past the TTL (B5a).
 
@@ -820,6 +975,12 @@ class ClaimStore(Protocol):
 
     def fetch_all(self) -> Dict[int, Dict[str, Any]]: ...
 
+    def fetch_versions(self) -> ClaimRefVersionSnapshot: ...
+
+    def release_if_version(
+        self, issue_number: int, expected_version: str
+    ) -> ConditionalClaimRelease: ...
+
     def filter_unclaimed(
         self, issue_numbers: Iterable[int], session_id: Optional[str] = None
     ) -> List[int]: ...
@@ -867,6 +1028,18 @@ class GitClaimStore:
 
     def fetch_all(self) -> Dict[int, Dict[str, Any]]:
         return fetch_all_claims(self.workspace_root)
+
+    def fetch_versions(self) -> ClaimRefVersionSnapshot:
+        return fetch_claim_ref_versions(self.workspace_root)
+
+    def release_if_version(
+        self, issue_number: int, expected_version: str
+    ) -> ConditionalClaimRelease:
+        return release_claim_if_version(
+            self.workspace_root,
+            issue_number,
+            expected_version,
+        )
 
     def filter_unclaimed(
         self, issue_numbers: Iterable[int], session_id: Optional[str] = None

@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-07-04
+- Amended: ADR-0034 (2026-07-16; closed-issue projection repair is not a new terminal decision)
 - Deciders: software_architect, software_engineer, product_owner
 - Issue: #172
 
@@ -186,4 +187,8 @@ decision.
   unchanged; this ADR only decides who calls it after a real merge.
 - Related, not fixed here: #183, #185 (both filed 2026-07-04, from the PR #181
   review).
+- Amended by ADR-0034: `/solomon-review` remains the only workflow that
+  originates the normal merge-to-`Done` transition after human confirmation;
+  a locked reconcile stage may repair a stale board projection only after an
+  authoritative GitHub snapshot already reports the issue `CLOSED`.
 - This decision is also recorded in the project memory via `save_decision`.

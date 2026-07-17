@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from solomon_harness.subprocess_env import clean_git_env
+from solomon_harness.subprocess_env import clean_gh_env, clean_git_env
 
 
 class TestCleanGitEnv(unittest.TestCase):
@@ -29,6 +29,21 @@ class TestCleanGitEnv(unittest.TestCase):
         with patch.dict(os.environ, {"PATH": os.environ.get("PATH", ""), "SOME_OTHER_VAR": "keep-me"}):
             env = clean_git_env()
         self.assertEqual(env.get("SOME_OTHER_VAR"), "keep-me")
+        self.assertIn("PATH", env)
+
+
+class TestCleanGhEnv(unittest.TestCase):
+    def test_strips_repository_override_and_git_context(self):
+        leaked = {
+            "GH_REPO": "attacker/other",
+            "GIT_DIR": "/tmp/leaked/.git",
+            "PATH": os.environ.get("PATH", ""),
+        }
+        with patch.dict(os.environ, leaked):
+            env = clean_gh_env()
+
+        self.assertNotIn("GH_REPO", env)
+        self.assertNotIn("GIT_DIR", env)
         self.assertIn("PATH", env)
 
 
