@@ -1,6 +1,6 @@
 ---
 name: context-reset-discipline
-description: Governs the Ralph-loop tick contract of disposable context, reading the handoff contract and run-log from disk, bounding each tick to one task, and externalizing state via `dev loop-auto` before the tick ends. Use when reviewing a headless loop tick, or a tick that carried state across iterations.
+description: Governs the Ralph-loop tick contract of disposable context, reading the handoff contract and run-log from disk, bounding each tick to one task, and externalizing state via `dev loop` before the tick ends. Use when reviewing a headless loop tick, or a tick that carried state across iterations.
 ---
 
 # Context-Reset Discipline
@@ -16,7 +16,7 @@ Treat every loop tick as disposable: start from the handoff contract and the run
 
 ## How the harness implements the reset
 
-The headless tick runner is `solomon-harness dev loop-auto --concurrency N` (`run_stage` in `solomon_harness/workflows.py`). It is a bounded for-loop, not a scheduler: `_parse_concurrency` strips the flag (default 1; values below 1 or non-integers are rejected) so it never leaks into `$ARGUMENTS`; `build_prompt` reads `.claude/commands/solomon-loop.md`, drops the YAML frontmatter, and substitutes the remaining args — `loop-auto` has no command file of its own, so every iteration sees the exact `/solomon-loop` instructions. Each iteration then launches a FRESH engine subprocess (`claude -p`, `gemini -p ... --skip-trust`, or `agy`; chosen by `SOLOMON_ENGINE`, default `claude`) with the prompt on stdin. The reset is therefore by construction: no conversation state can survive an iteration boundary, because each iteration is a new process reading the same instructions and resuming from durable state. A failed iteration (nonzero exit) stops the run rather than plowing ahead — the same one-confirmed-step behavior `/solomon-loop` has interactively. The whole run executes under the single-driver lock and the autonomy policy; despite its name, `--concurrency N` runs N iterations sequentially under one lock.
+The headless tick runner is `solomon-harness dev loop --concurrency N` (`run_stage` in `solomon_harness/workflows.py`; `loop-auto` survives only as a deprecated input alias). It is a bounded for-loop, not a scheduler: `_parse_concurrency` strips the flag (default 1; values below 1 or non-integers are rejected) so it never leaks into `$ARGUMENTS`; the stage is remapped to `prompt_stage = "workflow"`, so `build_prompt` reads `.claude/commands/solomon-workflow.md`, drops the YAML frontmatter, and substitutes the remaining args with the loop-driven autonomous-mode directive — the `loop` stage has no command file of its own, so every iteration sees the exact `/solomon-workflow` instructions. Each iteration then launches a FRESH engine subprocess (`claude -p`, `gemini -p ... --skip-trust`, or `agy`; chosen by `SOLOMON_ENGINE`, default `claude`) with the prompt on stdin. The reset is therefore by construction: no conversation state can survive an iteration boundary, because each iteration is a new process reading the same instructions and resuming from durable state. A failed iteration (nonzero exit) stops the run rather than plowing ahead — the same one-confirmed-step behavior `/solomon-loop` has interactively. The whole run executes under the single-driver lock and the autonomy policy; despite its name, `--concurrency N` runs N iterations sequentially under one lock.
 
 ## What a tick reads and writes
 
@@ -24,7 +24,7 @@ Read at tick start, from durable state only: the SessionStart digest (`solomon-h
 
 ## Why the reset is a feature
 
-A long session degrades as the window fills with dead ends and stale file contents. Throwing the session away each tick and resuming from the filesystem + git keeps each tick sharp and makes resumption the normal path, not a recovery path. The raw infinite `while` loop, though, is forbidden here: cadence comes from a host primitive, one tick per interval, each under the single-driver lock — never a self-hosted runner. `dev loop-auto` deliberately stays a finite, human-sized batch (N iterations, stop on first failure) so the ledger and the review gate keep pace with the loop.
+A long session degrades as the window fills with dead ends and stale file contents. Throwing the session away each tick and resuming from the filesystem + git keeps each tick sharp and makes resumption the normal path, not a recovery path. The raw infinite `while` loop, though, is forbidden here: cadence comes from a host primitive, one tick per interval, each under the single-driver lock — never a self-hosted runner. `dev loop` deliberately stays a finite, human-sized batch (N iterations, stop on first failure) so the ledger and the review gate keep pace with the loop.
 
 ## Common pitfalls
 
@@ -41,4 +41,4 @@ A long session degrades as the window fills with dead ends and stale file conten
 - [ ] A tick advances exactly one stage and commits an independently reviewable unit.
 - [ ] The exit condition is checkable; merge/release ticks require explicit human approval.
 - [ ] All state is externalized (contract, ledger, git) before the tick ends.
-- [ ] Cadence is a host primitive, one tick per interval, under the single-driver lock; headless batches go through `dev loop-auto`, fresh subprocess per iteration, stop on first failure.
+- [ ] Cadence is a host primitive, one tick per interval, under the single-driver lock; headless batches go through `dev loop`, fresh subprocess per iteration, stop on first failure.

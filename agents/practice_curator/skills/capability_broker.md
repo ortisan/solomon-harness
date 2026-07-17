@@ -14,7 +14,7 @@ Governs how the practice_curator acts as a proxy for incoming demands: resolve a
 - **route** — an existing agent serves the demand: `agent`, a single-line `rationale`, and ranked `alternatives` (surface them as enumerated options with an "Other" escape hatch; never silently collapse ambiguity to one pick).
 - **gap** — no agent fully covers it: `missing_capability`, `nearest_agent` (or null), and `suggested_action`:
   - `adapt_skill` when a `nearest_agent` exists that only lacks a skill — fetch and adapt an external skill into that agent (slice #47).
-  - `create_agent` when no agent fits — scaffold a new agent (slice #48), delegated to the `agent_builder` meta-agent once it exists (slice #49).
+  - `create_agent` when no agent fits — scaffold a new agent (slice #48), delegated to the `agent_builder` meta-agent.
 
 The gap verdict is the hand-off shape the acquisition slices consume; do not widen it without updating ADR-0008 (recorded in MADR 4.0 format under `docs/adrs/`).
 

@@ -10,11 +10,11 @@ The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop ma
 ## The ladder (`LoopPolicy.decide_stage`)
 
 - **human (default):** no restriction. A repository with no `loop` block in `.agent/config.json` behaves exactly as before.
-- **L1 (report):** only the stages in `L1_ALLOWED_STAGES = {"loop"}` (scan and propose); every mutating stage is denied.
-- **L2 (assisted):** the stages in `AUTOMATION_ALLOWED_STAGES` — `loop`, `loop-auto`, `idea`, `issue`, `bug`, `refine`, `start`, `review`, `scan-arch`, `scan-dedup` — create work and draft PRs, never merge.
-- **L3 (unattended):** the same stage set as L2, may run on a cadence, and `requires_lock(stage)` is true for every stage except `loop`, so an unattended run only acts while holding the single-driver lock; `run_stage` enforces this, it is not just claimed.
+- **L1 (report):** only the stages in `L1_ALLOWED_STAGES = {"workflow"}` (scan and propose); every mutating stage is denied.
+- **L2 (assisted):** the stages in `AUTOMATION_ALLOWED_STAGES` — `workflow`, `loop`, `idea`, `issue`, `bug`, `refine`, `start`, `review`, `scan-arch`, `scan-dedup` — create work and draft PRs, never merge.
+- **L3 (unattended):** the same stage set as L2, may run on a cadence, and `requires_lock(stage)` is true for every stage except `workflow`, so an unattended run only acts while holding the single-driver lock; `run_stage` enforces this, it is not just claimed.
 
-`decide_stage` evaluates in a fixed order: the kill-switch denies first (even at `human`); `human` then allows everything; `HUMAN_GATED_STAGES = {"release"}` denies at every non-human level; then the level's allow-set applies; anything left — including an unknown or typo'd level — fails closed (`LoopPolicy` keeps a mistyped `l2` verbatim so it denies, never silently becomes `human`). A denied stage exits `3` from `run_stage`, printed as `Blocked by loop autonomy policy (level ...)`, never silently.
+`decide_stage` evaluates in a fixed order: the kill-switch denies first (even at `human`); `HUMAN_GATED_STAGES = {"release"}` denies next, at EVERY level including `human` — on the dev automation path a release is never autonomous; `human` then allows everything else; then the level's allow-set applies; anything left — including an unknown or typo'd level — fails closed (`LoopPolicy` keeps a mistyped `l2` verbatim so it denies, never silently becomes `human`). A denied stage exits `3` from `run_stage`, printed as `Blocked by loop autonomy policy (level ...)`, never silently.
 
 ## Configuration
 
@@ -46,8 +46,8 @@ Worked scenario for a runaway cadence: run `solomon-harness loop-stop`; the next
 
 ## Definition of done
 
-- [ ] `human` is unrestricted; L1 report-only; L2/L3 draft-only; an invalid level denies (exit 3 from `run_stage`).
-- [ ] Merge, release, and Done are denied at every non-human level; L3 mutating stages hold the lock.
+- [ ] `human` is unrestricted except the permanently human-gated stages; L1 report-only (`workflow` only); L2/L3 draft-only; an invalid level denies (exit 3 from `run_stage`).
+- [ ] Merge, release, and Done are denied at every level of the dev automation path; L3 mutating stages hold the lock.
 - [ ] The kill-switch halts all stages (all worktrees, even `human`) and is clearable; `loop-policy` shows the full state.
 - [ ] The denylist is enforced at the loop-guard PreToolUse boundary (Edit/Write/Bash) and model-honored on Gemini; the checker-split is surfaced; secrets stay in env.
 - [ ] Changes ship with covering tests in `tests/test_loop_policy.py`.
