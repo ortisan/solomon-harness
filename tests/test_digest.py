@@ -315,6 +315,32 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("We found a pending task: Review open PR #15", text)
         self.assertIn("1. Single Step (Recommended): Run /solomon-review 15", text)
 
+    def test_codex_digest_uses_skill_invocations_only(self):
+        prs = [{"number": 12, "title": "fix auth", "reviewDecision": "APPROVED", "isDraft": False}]
+        last_loop = {
+            "stage": "start",
+            "target": "11",
+            "status": "ok",
+            "created_at": "2026-07-17T10:00:00Z",
+        }
+        issues = [{"github_id": "45", "title": "fix login", "status": "backlog"}]
+
+        text = "\n".join(
+            digest.build_digest(
+                resume=None,
+                open_issues=issues,
+                last_loop_run=last_loop,
+                prs=prs,
+                host="codex",
+            )
+        )
+
+        self.assertIn("Last loop: $solomon-start 11", text)
+        self.assertIn("Run $solomon-release 12", text)
+        self.assertIn("$solomon-refine 45", text)
+        self.assertIn("$solomon-idea", text)
+        self.assertNotIn("/solomon-", text)
+
     def test_digest_shows_no_pending_task_options(self):
         # No pending tasks -> lists github open issues (ideas/backlog) and their refine/issue commands
         issues = [

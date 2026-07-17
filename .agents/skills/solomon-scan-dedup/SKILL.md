@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
@@ -37,7 +37,7 @@ Act on the single highest-confidence duplication only:
   unchanged (TDD). Open a **draft** PR with a `Refs`/`Closes` line and the
   canonical ADR line the CI gate enforces (usually
   `ADR: not warranted — <reason>` for a deduplication), then stop.
-- **Risky merge:** file a `/solomon-issue` (board `Backlog`) describing the
+- **Risky merge:** file a `$solomon-issue` (board `Backlog`) describing the
   duplication and the proposed unification, instead of a PR.
 
 Per-loop budget: at most one draft PR per run, and never a second while a prior
@@ -48,5 +48,5 @@ automatically through `run_stage`.
 
 - `save_decision` — the duplication unified (or filed) and why.
 - Write a one-line run note to `.solomon/scan-runs/scan-dedup-<date>.md`.
-- The draft PR enters the unchanged `/solomon-review` gate; a human approves any
+- The draft PR enters the unchanged `$solomon-review` gate; a human approves any
   merge. Never advance past the draft PR yourself.

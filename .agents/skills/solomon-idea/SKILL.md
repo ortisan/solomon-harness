@@ -9,11 +9,11 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
-You are running `/solomon-idea`, the discovery-intake stage. This captures an
+You are running `$solomon-idea`, the discovery-intake stage. This captures an
 idea lightly: no build commitment, no implementation plan. The driving specialist
 is **product_owner**.
 
@@ -71,10 +71,10 @@ If `ARGUMENTS` is empty, ask the user for the idea in one line and stop.
 
 6. **Output the issue URL** and a one-line recap (JTBD + riskiest assumption).
    State explicitly that no implementation was planned and that promotion to the
-   backlog requires the evidence defined in step 1 (via `/solomon-issue`). An idea is
+   backlog requires the evidence defined in step 1 (via `$solomon-issue`). An idea is
    a pre-Definition-of-Ready discovery item by design: it carries no Acceptance
    Criteria, Definition of Ready, or Definition of Done yet, and only graduates to a
-   Definition of Ready and a Definition of Done at refinement (`/solomon-refine`) once
+   Definition of Ready and a Definition of Done at refinement (`$solomon-refine`) once
    it is promoted to the backlog. Do not force a Definition of Ready onto a raw idea.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.

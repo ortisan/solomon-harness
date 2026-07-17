@@ -9,6 +9,7 @@ as Codex skills. Run from the repository root:
 """
 
 import os
+import re
 import shutil
 import sys
 
@@ -141,7 +142,11 @@ def codex_skill_markdown(skill_name: str, description: str, body: str) -> str:
         f"{description.rstrip()} Use when the user asks to run the corresponding "
         f"Solomon stage or explicitly invokes ${skill_name}."
     )
-    portable_body = body.replace("$ARGUMENTS", "ARGUMENTS")
+    portable_body = re.sub(
+        r"(?<![A-Za-z0-9_./-])/solomon-",
+        "$solomon-",
+        body.replace("$ARGUMENTS", "ARGUMENTS"),
+    )
     return (
         "---\n"
         f"name: {skill_name}\n"
@@ -153,8 +158,8 @@ def codex_skill_markdown(skill_name: str, description: str, body: str) -> str:
         "arguments supplied with the skill invocation or elsewhere in the "
         "conversation.\n\n"
         "Codex compatibility rules:\n\n"
-        "- References to `/solomon-*` identify Solomon workflow stages. In Codex, "
-        "invoke a stage explicitly with its `$solomon-*` skill name.\n"
+        "- Invoke Solomon workflow stages explicitly with their `$solomon-*` "
+        "skill names.\n"
         "- When the workflow names Claude-specific Task or AskUserQuestion tools, "
         "use the equivalent sub-agent delegation or structured user-input "
         "capability available in the current Codex session.\n"

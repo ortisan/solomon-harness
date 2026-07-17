@@ -102,10 +102,14 @@ def handle_run(harness_dir: str, task=None) -> None:
 
     The harness does not run a model itself; Claude Code and Gemini expose the
     workflows as /solomon-* commands, while Codex exposes them as $solomon-*
-    skills. This command resumes context from project memory and lists both
-    invocation forms. It no longer simulates task execution.
+    skills. This command resumes context from project memory and renders the
+    invocation form accepted by the active host. It no longer simulates task
+    execution.
     """
     from solomon_harness.tools.database_client import DatabaseClient
+    from solomon_harness.host import current_host, workflow_invocation
+
+    host = current_host()
 
     try:
         db_client = DatabaseClient(harness_dir=harness_dir)
@@ -141,7 +145,7 @@ def handle_run(harness_dir: str, task=None) -> None:
         from solomon_harness.digest import gather_digest
 
         print()
-        for line in gather_digest(harness_dir, db):
+        for line in gather_digest(harness_dir, db, host=host):
             print(line)
 
         # Surface any pending initialization items (Docker down, memory on the
@@ -158,12 +162,14 @@ def handle_run(harness_dir: str, task=None) -> None:
             print(f"Warning: could not run healthcheck: {e}", file=sys.stderr)
 
         if task:
+            command = workflow_invocation("issue", f'"{task}"', host=host)
             print(
                 "\nTasks are not auto-run here. Start this one with a workflow, "
-                f'e.g. /solomon-issue "{task}", or $solomon-issue in Codex.'
+                f"e.g. {command}."
             )
 
-        print("\nDelivery workflows (Claude/Gemini | Codex):")
+        host_label = "Codex" if host == "codex" else "Claude/Gemini"
+        print(f"\nDelivery workflows ({host_label}):")
         workflows = [
             ("solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
             ("solomon-loop", "autonomous parallel loop over Ready issues"),
@@ -176,7 +182,8 @@ def handle_run(harness_dir: str, task=None) -> None:
             ("solomon-release", "deliver and release"),
         ]
         for name, desc in workflows:
-            print(f"  /{name:<20} ${name:<20} {desc}")
+            command = workflow_invocation(name, host=host)
+            print(f"  {command:<21} {desc}")
         print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
 
 
@@ -1129,7 +1136,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ig_parser = subparsers.add_parser(
         "install-global",
-        help="Install agents, /solomon commands, the session hook, and the shared memory home into ~/.claude and ~/.solomon-harness",
+        help="Install agents, Solomon workflows, the session hook, and the shared memory home into host configuration",
     )
     ig_parser.add_argument("--no-mcp", action="store_true", help="Skip MCP server registration with the host CLI")
 
@@ -1154,7 +1161,7 @@ def build_parser() -> argparse.ArgumentParser:
     claim_parser.add_argument(
         "action", choices=["status", "acquire", "release"],
         help="status shows the holder; acquire claims the issue for this session "
-        "(the /solomon-start interactive gate); release clears a claim",
+        "(the interactive start-stage gate); release clears a claim",
     )
     claim_parser.add_argument(
         "issue", type=int,
@@ -1221,7 +1228,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     wt_parser = subparsers.add_parser(
         "worktree",
-        help="Create or locate the isolated git worktree for a branch (used by /solomon-start)",
+        help="Create or locate the isolated git worktree used by the start stage",
     )
     wt_parser.add_argument("branch", type=str, help="Branch name, e.g. feature/<slug>")
     wt_parser.add_argument(

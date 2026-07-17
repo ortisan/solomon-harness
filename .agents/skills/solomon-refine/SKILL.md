@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
@@ -67,7 +67,7 @@ Steps:
     see "Spec generation" in `docs/solomon-workflow.md`). Refinement is the gate
     where the spec stops being a product sketch and becomes something a model can
     implement without asking. Open the issue's spec `docs/specs/<n>-<slug>.md`
-    (created at `/solomon-issue`) and resolve **every** `TBD (refine)`:
+    (created at `$solomon-issue`) and resolve **every** `TBD (refine)`:
     - **Implementation Pointers** — read the code and state the exact `file:line`
       targets the change touches, the current behavior versus the expected
       behavior at each, and the concrete approach. No guessing left for the
@@ -81,7 +81,7 @@ Steps:
       `TBD (refine)` line — this is the mechanical Ready gate; do not move the
       board card to Ready while it fails.
     - If no spec exists (an issue filed before the spec system, or a bug — bugs
-      carry the same detail in their issue body via `/solomon-bug`), enforce the
+      carry the same detail in their issue body via `$solomon-bug`), enforce the
       same bar in the issue body: suspected `file:line`, current vs expected, and
       the verification command.
 
@@ -100,7 +100,7 @@ Steps:
    or t-shirt).
    Also state the issue's **Definition of Done** — the conditions that close it
    (every acceptance criterion met with covering tests, reviewed and merged with CI
-   green, docs updated) — which `/solomon-review` and `/solomon-release` enforce as
+   green, docs updated) — which `$solomon-review` and `$solomon-release` enforce as
    the close gate.
 
 5. Map dependencies and risks as a RAID block (scrum_master): Risks (5x5
