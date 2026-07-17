@@ -67,8 +67,8 @@ class TestEnsureProjectGitignore(unittest.TestCase):
 
         _ensure_project_gitignore(self.root)
 
-        self.assertIn("PLAN.md", self._tracked_lines())
-        self.assertIn(".solomon/", self._tracked_lines())
+        self.assertIn("/PLAN.md", self._tracked_lines())
+        self.assertIn("/.solomon/", self._tracked_lines())
         # untracked from git, but the working file is left in place
         self.assertFalse(_is_tracked(self.root, "PLAN.md"))
         self.assertTrue(os.path.exists(os.path.join(self.root, "PLAN.md")))
@@ -138,15 +138,53 @@ class TestEnsureProjectGitignore(unittest.TestCase):
             f.write("target/\n")
         _ensure_project_gitignore(self.root)
         _ensure_project_gitignore(self.root)
-        self.assertEqual(self._tracked_lines().count("PLAN.md"), 1)
-        self.assertEqual(self._tracked_lines().count(".solomon/"), 1)
+        self.assertEqual(self._tracked_lines().count("/PLAN.md"), 1)
+        self.assertEqual(self._tracked_lines().count("/.solomon/"), 1)
 
     def test_creates_gitignore_when_absent(self):
         self.assertFalse(os.path.exists(os.path.join(self.root, ".gitignore")))
         _ensure_project_gitignore(self.root)
         lines = self._tracked_lines()
-        self.assertIn("PLAN.md", lines)
-        self.assertIn(".solomon/", lines)
+        self.assertIn("/PLAN.md", lines)
+        self.assertIn("/.solomon/", lines)
+        self.assertEqual(
+            _git(
+                self.root,
+                "check-ignore",
+                "--no-index",
+                "--quiet",
+                "--",
+                "nested/PLAN.md",
+            ).returncode,
+            1,
+        )
+        self.assertEqual(
+            _git(
+                self.root,
+                "check-ignore",
+                "--no-index",
+                "--quiet",
+                "--",
+                "nested/.solomon/state.json",
+            ).returncode,
+            1,
+        )
+
+    def test_rejects_symlinked_gitignore_without_mutating_target(self):
+        with tempfile.TemporaryDirectory() as unrelated:
+            outside_gitignore = os.path.join(unrelated, ".gitignore")
+            original = "outside-only/\n"
+            with open(outside_gitignore, "w", encoding="utf-8") as f:
+                f.write(original)
+            os.symlink(outside_gitignore, os.path.join(self.root, ".gitignore"))
+
+            with self.assertRaisesRegex(
+                RuntimeError, "Unable to safely open project .gitignore"
+            ):
+                _ensure_project_gitignore(self.root)
+
+            with open(outside_gitignore, encoding="utf-8") as f:
+                self.assertEqual(f.read(), original)
 
     def test_noop_when_already_present(self):
         with open(os.path.join(self.root, ".gitignore"), "w", encoding="utf-8") as f:
@@ -162,7 +200,7 @@ class TestEnsureProjectGitignore(unittest.TestCase):
         _ensure_project_gitignore(self.root)
         lines = self._tracked_lines()
         self.assertEqual(lines.count(".solomon/"), 1)
-        self.assertEqual(lines.count("PLAN.md"), 1)
+        self.assertEqual(lines.count("/PLAN.md"), 1)
 
     def test_appends_rules_after_negations_so_git_effectively_ignores_artifacts(self):
         with open(os.path.join(self.root, ".gitignore"), "w", encoding="utf-8") as f:
