@@ -207,7 +207,9 @@ def recover_parent(github_id: Optional[str], title: Optional[str]) -> Optional[s
 # ---------------------------------------------------------------------------
 
 # The canonical loop-run outcomes. workflows.py writes exactly these.
-LOOP_RUN_STATUSES = ("ok", "failed")
+# "skipped": a zero-exit start that changed nothing (ADR-0039 amending
+# ADR-0016); excluded from loop_run_failure_rate by construction.
+LOOP_RUN_STATUSES = ("ok", "failed", "skipped")
 
 # Lowercased legacy/alias token -> canonical loop-run token.
 _LOOP_RUN_ALIASES = {

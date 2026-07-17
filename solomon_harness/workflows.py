@@ -596,13 +596,27 @@ def run_stage(
             from solomon_harness import worktree as _worktree
 
             if not _worktree.workspace_changed(workspace_root, noop_baseline):
-                run_skipped = True
-                print(
-                    f"/solomon-{stage} {' '.join(args)} exited 0 with no "
-                    "workspace changes; recording the run as skipped and "
-                    "releasing the claim.",
-                    file=sys.stderr,
-                )
+                # A PR-protected issue means work was delivered remotely (the
+                # manual-mode resume opens a PR without moving local refs), so
+                # the run is a real success and the claim must stay.
+                protected = False
+                if claimed_issue_number is not None:
+                    try:
+                        if claim_store is None:
+                            from solomon_harness import claim as _claim
+
+                            claim_store = _claim.GitClaimStore(workspace_root)
+                        protected = bool(claim_store.pr_protected(claimed_issue_number))
+                    except Exception:
+                        protected = True
+                if not protected:
+                    run_skipped = True
+                    print(
+                        f"/solomon-{stage} {' '.join(args)} exited 0 with no "
+                        "workspace changes; recording the run as skipped and "
+                        "releasing the claim.",
+                        file=sys.stderr,
+                    )
         if lock is not None:
             _record_loop_run(
                 workspace_root,

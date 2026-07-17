@@ -44,13 +44,18 @@ class WorktreeConflict(WorktreeError):
 
 
 def _run_git(repo_root: str, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
+    """Single git-exec primitive for this module, Popen-backed: run_stage's
+    tests mock subprocess.run as the engine, and worktree reads must keep
+    real git access while the engine is faked."""
+    popen = subprocess.Popen(
         ["git", "-C", repo_root, *args],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
         env=clean_git_env(),
     )
+    out, err = popen.communicate()
+    proc = subprocess.CompletedProcess(popen.args, popen.returncode, out, err)
     if check and proc.returncode != 0:
         raise WorktreeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc
@@ -202,22 +207,6 @@ def repair_git_config(repo_root: str) -> None:
     _run_git(repo_root, ["config", "--local", "core.bare", "false"], check=False)
 
 
-def _popen_git(repo_root: str, *args: str) -> str:
-    """Run git via Popen (not subprocess.run: run_stage's tests mock that as
-    the engine, and the snapshot must keep real git access) and return stdout."""
-    proc = subprocess.Popen(
-        ["git", "-C", repo_root, *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=clean_git_env(),
-    )
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise WorktreeError(f"git {' '.join(args)} failed: {err.strip()}")
-    return out
-
-
 def workspace_snapshot(repo_root: str) -> Optional[dict]:
     """Fingerprint of the local branch refs and working-tree status, or None
     outside git. Start-stage work lands in a sibling worktree, so shared refs
@@ -225,10 +214,11 @@ def workspace_snapshot(repo_root: str) -> Optional[dict]:
     if not os.path.exists(os.path.join(repo_root, ".git")):
         return None
     try:
-        refs = _popen_git(
-            repo_root, "for-each-ref", "refs/heads", "--format=%(refname) %(objectname)"
-        )
-        status = _popen_git(repo_root, "status", "--porcelain")
+        refs = _run_git(
+            repo_root,
+            ["for-each-ref", "refs/heads", "--format=%(refname) %(objectname)"],
+        ).stdout
+        status = _run_git(repo_root, ["status", "--porcelain"]).stdout
     except Exception:
         return None
     return {"refs": refs, "status": status}

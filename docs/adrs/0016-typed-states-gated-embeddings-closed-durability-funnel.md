@@ -59,7 +59,7 @@ GitHub board adapter), exactly like `normalize_status` (ADR-0006):
 | Kind      | Field  | Canonical set                                              | Aliases mapped on write                              |
 | --------- | ------ | ---------------------------------------------------------- | ---------------------------------------------------- |
 | issue     | status | Ideas, Backlog, Ready, in_progress, code_review, qa, closed (+ legacy open, done, Done) | ADR-0006 aliases, plus casing aliases for the display columns |
-| loop_run  | status | ok, failed                                                  | success, passed -> ok; failure, error -> failed       |
+| loop_run  | status | ok, failed, skipped (ADR-0039)                              | success, passed -> ok; failure, error -> failed       |
 | handoff   | status | open, accepted, done                                        | ready, pending -> open; approved -> accepted; completed, closed -> done |
 | session   | status | active, done                                                | completed, closed, finished -> done                   |
 | milestone | state  | open, closed                                                | active, pending -> open; complete, completed, done -> closed |

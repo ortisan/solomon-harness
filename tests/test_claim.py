@@ -1451,7 +1451,8 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_store_cls.assert_called_once_with(self.local)
         mock_store.get.assert_called_once_with(99)
-        mock_store.pr_protected.assert_called_once_with(99)
+        self.assertEqual(mock_store.pr_protected.call_count, 2)
+        mock_store.pr_protected.assert_called_with(99)
         mock_store.acquire.assert_called_once_with(99, session_id=unittest.mock.ANY)
         mock_store.release.assert_called_once_with(99, session_id=unittest.mock.ANY)
 

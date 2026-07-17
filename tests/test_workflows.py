@@ -835,6 +835,25 @@ class TestWorkspaceSnapshot(unittest.TestCase):
             f.write("x")
         self.assertTrue(worktree.workspace_changed(root, before))
 
+    def test_snapshot_detects_a_deleted_file(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        os.remove(os.path.join(root, ".keep"))
+        self.assertTrue(worktree.workspace_changed(root, before))
+
+    def test_snapshot_detects_an_advanced_ref(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        with open(os.path.join(root, "advance.txt"), "w", encoding="utf-8") as f:
+            f.write("x")
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "advance"], cwd=root, check=True)
+        self.assertTrue(worktree.workspace_changed(root, before))
+
     def test_snapshot_is_none_outside_git(self):
         from solomon_harness import worktree
 
@@ -932,6 +951,23 @@ class TestRunStageNoOpDetection(unittest.TestCase):
 
         with patch("subprocess.run", side_effect=_dispatching_fake_run()):
             rc = workflows.run_stage(root, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        self.assertIsNone(mock_record.call_args.kwargs.get("status"))
+        store.release.assert_not_called()
+        mock_notify.assert_called_once()
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_pr_protected_issue_is_never_classified_skipped(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+        store.pr_protected.side_effect = [False, True]
+
+        with patch("subprocess.run", side_effect=_dispatching_fake_run()):
+            rc = workflows.run_stage(self.root, "start", ["99"], engine="claude")
 
         self.assertEqual(rc, 0)
         self.assertIsNone(mock_record.call_args.kwargs.get("status"))
