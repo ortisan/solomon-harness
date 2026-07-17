@@ -186,6 +186,37 @@ class TestEnsureProjectGitignore(unittest.TestCase):
             with open(outside_gitignore, encoding="utf-8") as f:
                 self.assertEqual(f.read(), original)
 
+    def test_rejects_hard_linked_gitignore_without_mutating_target(self):
+        with tempfile.TemporaryDirectory() as unrelated:
+            outside_gitignore = os.path.join(unrelated, ".gitignore")
+            original = "outside-only/\n"
+            with open(outside_gitignore, "w", encoding="utf-8") as f:
+                f.write(original)
+            os.link(outside_gitignore, os.path.join(self.root, ".gitignore"))
+
+            with self.assertRaisesRegex(RuntimeError, "exactly one link"):
+                _ensure_project_gitignore(self.root)
+
+            with open(outside_gitignore, encoding="utf-8") as f:
+                self.assertEqual(f.read(), original)
+
+    def test_rejects_non_regular_gitignore_without_blocking(self):
+        gitignore_path = os.path.join(self.root, ".gitignore")
+        os.mkfifo(gitignore_path)
+
+        with self.assertRaisesRegex(RuntimeError, "path must be a regular file"):
+            _ensure_project_gitignore(self.root)
+
+    def test_fails_before_open_when_nofollow_is_unavailable(self):
+        with patch.object(os, "O_NOFOLLOW", None):
+            with patch("solomon_harness.bootstrap.os.open") as open_file:
+                with self.assertRaisesRegex(
+                    RuntimeError, "platform cannot reject symbolic links"
+                ):
+                    _ensure_project_gitignore(self.root)
+
+        open_file.assert_not_called()
+
     def test_noop_when_already_present(self):
         with open(os.path.join(self.root, ".gitignore"), "w", encoding="utf-8") as f:
             f.write("PLAN.md\n.solomon/\n")

@@ -62,6 +62,12 @@ Scenario: A linked ignore file cannot escape the project boundary
   Then it raises an actionable RuntimeError
   And the external file remains unchanged
 
+Scenario: Other unsafe ignore-file shapes fail closed
+  Given the project .gitignore is hard-linked, non-regular, or cannot be opened with no-follow semantics
+  When planning-artifact repair runs
+  Then it raises an actionable RuntimeError before writing
+  And no external target is changed
+
 Scenario: Generated rules are root-scoped
   Given a project without lifecycle ignore rules
   When planning-artifact repair runs
