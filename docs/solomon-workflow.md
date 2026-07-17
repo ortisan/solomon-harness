@@ -212,6 +212,45 @@ This keeps each issue's record clean and every discovered unit of work
 independently trackable, refinable, and claimable. The protocol is recorded
 with the implementation-ready bar in ADR-0032.
 
+## Contract-fidelity gates (`/solomon-start`, `/solomon-review`)
+
+Three gates keep implementation and review faithful to the canonical contract —
+the spec document, the issue's acceptance criteria, and the ADRs — instead of a
+paraphrase of it (ADR-0038). The motivating failure mode: a deliverable can pass
+several review rounds on engineering quality while contradicting the contract,
+because no stage ever compared the built thing against the artifact that pinned
+the canonical behavior.
+
+- **Spec corpus survey** (start, `software_engineer` via `spec_contract_fidelity`):
+  before PLAN.md and before any edit, inventory the contract-bearing artifacts —
+  the spec document, the issue's acceptance criteria and Definition of Done, the
+  ADRs the change touches, the incoming handoff contract — and read each one in
+  full. PLAN.md lists the artifacts the plan was built from.
+- **Contract precedence ladder** (start, same skill): contradictory sources
+  resolve top-down — (1) machine-checked constraints (failing tests, validators,
+  schemas, the spec's Verification commands); (2) contract catalogs, where the
+  issue body's acceptance criteria are canonical and the spec's Acceptance
+  Criteria section is a mirror reconciled toward the issue body; (3) Accepted
+  ADRs; (4) paraphrases (PLAN.md, issue title, PR body) — a paraphrase never
+  overrides a higher rung. The existing runtime shape is never the contract:
+  extend the runtime to meet the contract or file the gap as a discovered
+  problem; never quietly narrow the deliverable. Material cross-rung
+  contradictions are filed through the discovered-problem protocol, not
+  arbitrated silently.
+- **Verification iron law** (start and the review qa lens, via
+  `verification_iron_law`): no completion claim without verification evidence
+  produced in the same run — command, exit code, output summary — and the
+  verification scope must cover the claim scope (a ready-for-review claim runs
+  the full suite and validators). The pre-push verification report is reproduced
+  in the PR body summary, and the review qa lens cites its own suite run —
+  command, exit code, counts — in the review record.
+- **Contract parity** (review, `qa` via `spec_contract_parity`): the qa lens
+  compares the deliverable field by field against the contract corpus; a parity
+  mismatch is a blocker, engineering quality alone can never earn approval, and
+  the managed review record carries the verdict as a
+  `Contract parity: <artifacts> — PASS|MISMATCH` line. A review whose inputs
+  never included the contract artifacts cannot pass this gate and says so.
+
 ## Review staffing
 
 The Review stage always runs three mandatory gates — qa, security, and
