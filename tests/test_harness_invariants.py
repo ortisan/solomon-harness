@@ -222,7 +222,8 @@ class TestMcpServerBuilds(unittest.TestCase):
     EXPECTED_TOOLS = {
         "save_decision", "get_decision", "save_memory", "get_memory",
         "log_issue", "get_open_issues", "get_issue", "create_milestone",
-        "list_milestones", "save_release", "get_release", "list_releases",
+        "list_milestones", "ensure_milestone", "close_milestone",
+        "save_release", "get_release", "list_releases",
         "save_backtest", "save_session", "get_session", "log_handoff",
         "update_handoff_status", "get_latest_activity", "get_backend_status",
         # Claim mirror read (ADR-0027): queryability only, git ref stays authoritative.
