@@ -13,8 +13,11 @@ CLI:
 import argparse
 import json
 import os
+import stat
 import sys
 from typing import List, Optional, Set
+
+from solomon_harness.integrations import discover_agents as discover_compilable_agents
 
 # Always enabled: planning, build, quality, delivery and documentation roles.
 CORE_AGENTS = [
@@ -36,16 +39,33 @@ TRADING_DEPS = ("backtrader", "ccxt", "zipline", "vectorbt", "ta-lib", "alpaca")
 FRONTEND_DEPS = ("react", "next", "@angular/core", "vue", "svelte")
 AUTH_DEPS = ("authlib", "python-jose", "passport", "next-auth", "@auth/core", "pyjwt", "oauthlib")
 
+SCAN_SKIP_DIRS = frozenset({
+    ".git",
+    "node_modules",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "agents",
+    ".agent",
+    ".agents",
+    ".claude",
+    ".gemini",
+    ".solomon",
+    ".solomon-harness",
+    "solomon_harness",
+})
+MANIFEST_NAMES = frozenset(
+    {"package.json", "pyproject.toml", "requirements.txt", "pipfile", "go.mod"}
+)
+MAX_SCAN_DEPTH = 4
+MAX_MANIFEST_BYTES = 512 * 1024
+MAX_MANIFEST_TOTAL_BYTES = 2 * 1024 * 1024
+
 
 def discover_agents(workspace_root: str) -> Set[str]:
-    agents_dir = os.path.join(workspace_root, "agents")
-    found: Set[str] = set()
-    if not os.path.isdir(agents_dir):
-        return found
-    for item in os.listdir(agents_dir):
-        if os.path.isfile(os.path.join(agents_dir, item, "agents", f"{item}.md")):
-            found.add(item)
-    return found
+    """Return only agents that the canonical compiler can safely activate."""
+    return set(discover_compilable_agents(os.path.join(workspace_root, "agents")))
 
 
 # Back-compat alias for the historical private name (now a public surface that
@@ -53,14 +73,13 @@ def discover_agents(workspace_root: str) -> Set[str]:
 _discover_agents = discover_agents
 
 
-def _scan(workspace_root: str, max_depth: int = 4) -> tuple:
+def _scan(workspace_root: str, max_depth: int = MAX_SCAN_DEPTH) -> tuple:
     """Return (set of file extensions, set of basenames) up to max_depth."""
     exts: Set[str] = set()
     names: Set[str] = set()
-    skip = {".git", "node_modules", ".venv", "__pycache__", "build", "dist"}
     root_depth = workspace_root.rstrip(os.sep).count(os.sep)
     for dirpath, dirnames, filenames in os.walk(workspace_root):
-        dirnames[:] = [d for d in dirnames if d not in skip]
+        dirnames[:] = sorted(d for d in dirnames if d not in SCAN_SKIP_DIRS)
         if dirpath.count(os.sep) - root_depth >= max_depth:
             dirnames[:] = []
             continue
@@ -72,17 +91,45 @@ def _scan(workspace_root: str, max_depth: int = 4) -> tuple:
     return exts, names
 
 
-def _manifest_text(workspace_root: str) -> str:
-    """Concatenate dependency manifests so we can sniff frameworks by name."""
-    chunks = []
-    for rel in ("package.json", "pyproject.toml", "requirements.txt", "Pipfile", "go.mod"):
-        path = os.path.join(workspace_root, rel)
-        if os.path.isfile(path):
+def _manifest_text(workspace_root: str, max_depth: int = MAX_SCAN_DEPTH) -> str:
+    """Concatenate bounded dependency manifests found in a monorepo tree."""
+    chunks: List[str] = []
+    remaining = MAX_MANIFEST_TOTAL_BYTES
+    root_depth = workspace_root.rstrip(os.sep).count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(workspace_root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SCAN_SKIP_DIRS)
+        if dirpath.count(os.sep) - root_depth >= max_depth:
+            dirnames[:] = []
+            continue
+        for name in sorted(filenames):
+            if remaining <= 0:
+                return "\n".join(chunks)
+            if name.lower() not in MANIFEST_NAMES:
+                continue
+            path = os.path.join(dirpath, name)
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    chunks.append(f.read().lower())
+                file_stat = os.stat(path, follow_symlinks=False)
+                if not stat.S_ISREG(file_stat.st_mode):
+                    continue
+                if file_stat.st_size > MAX_MANIFEST_BYTES:
+                    continue
+                if file_stat.st_size > remaining:
+                    return "\n".join(chunks)
+                with open(path, "rb") as f:
+                    content = f.read(min(file_stat.st_size + 1, remaining))
             except OSError:
+                continue
+            remaining -= len(content)
+            if len(content) != file_stat.st_size:
+                if remaining <= 0:
+                    return "\n".join(chunks)
+                continue
+            try:
+                chunks.append(content.decode("utf-8").lower())
+            except UnicodeDecodeError:
                 pass
+            if remaining <= 0:
+                return "\n".join(chunks)
     return "\n".join(chunks)
 
 
@@ -122,7 +169,12 @@ def _signals(workspace_root: str) -> Set[str]:
 
 def select_agents(workspace_root: str) -> List[str]:
     """Return the sorted list of agents to enable for the project at workspace_root."""
+    agents_dir = os.path.join(workspace_root, "agents")
     available = _discover_agents(workspace_root)
+    catalog_present = bool(available) or os.path.lexists(agents_dir)
+    if catalog_present and not available:
+        return []
+
     selected: Set[str] = set(CORE_AGENTS)
     sig = _signals(workspace_root)
 
@@ -141,9 +193,10 @@ def select_agents(workspace_root: str) -> List[str]:
         if signal in sig:
             selected.update(agents)
 
-    # Only keep agents that actually exist in this harness.
-    if available:
-        selected &= available | set(CORE_AGENTS)
+    # A present catalog is authoritative, even when it has no compilable agents.
+    # The legacy core-and-signal fallback is reserved for projects with no agents/
+    # entry at all.
+    if catalog_present:
         selected &= available
     return sorted(selected)
 
