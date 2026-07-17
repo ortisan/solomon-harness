@@ -216,7 +216,7 @@ with the implementation-ready bar in ADR-0032.
 
 Three gates keep implementation and review faithful to the canonical contract —
 the spec document, the issue's acceptance criteria, and the ADRs — instead of a
-paraphrase of it (ADR-0037). The motivating failure mode: a deliverable can pass
+paraphrase of it (ADR-0038). The motivating failure mode: a deliverable can pass
 several review rounds on engineering quality while contradicting the contract,
 because no stage ever compared the built thing against the artifact that pinned
 the canonical behavior.

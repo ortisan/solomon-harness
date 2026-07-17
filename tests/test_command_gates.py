@@ -589,7 +589,7 @@ def test_software_engineer_has_the_spec_contract_fidelity_skill():
     # Solomon-specific: two AC surfaces exist (issue body, spec mirror); the
     # ladder only decides anything if one of them is canonical.
     assert "acceptance criteria are canonical" in low
-    assert "mirror" in low
+    assert "acceptance criteria section is a mirror" in low
     profile = _read(
         os.path.join("agents", "software_engineer", "agents", "software_engineer.md")
     )
@@ -617,7 +617,9 @@ def test_qa_has_the_spec_contract_parity_skill():
     assert "contract parity" in low
     assert "field by field" in low
     assert PARITY_TERMINAL_RULE in low
-    assert "blocker" in low
+    assert "a parity mismatch is a blocker" in low
+    # The skill owns the verdict-line format, not just the consuming surfaces.
+    assert "contract parity: <artifacts" in low
     profile = _read(os.path.join("agents", "qa", "agents", "qa.md"))
     assert "spec_contract_parity" in profile
 
@@ -631,6 +633,14 @@ def test_start_command_wires_the_spec_corpus_survey_before_the_plan():
     # The survey feeds the plan, not the other way around: it must be
     # instructed before the PLAN.md authoring text.
     assert low.index("spec corpus survey") < low.index("`plan.md` at the repo root")
+    # AC #1: the survey's output lands in PLAN.md — the Plan step's required
+    # sections must include the artifact list, and the skill that owns
+    # PLAN.md's shape must define the section (review round 1 blocker).
+    assert "contract-bearing artifacts the plan was built from" in low
+    plan_skill = _flat(
+        os.path.join("agents", "software_engineer", "skills", "plan_authoring.md")
+    )
+    assert "contract-bearing artifacts" in plan_skill
 
 
 def test_start_command_requires_the_verification_report_before_the_pr():
@@ -647,9 +657,25 @@ def test_review_command_wires_the_contract_parity_gate():
     assert PARITY_TERMINAL_RULE in low
     # Parity failures carry gate weight: the qa lens must name it a blocker.
     assert "parity mismatch is a blocker" in low
-    # The verdict is recorded, not just checked: the managed review record
-    # carries an explicit parity line.
+    # The verdict is recorded, not just checked: the review record
+    # carries an explicit parity line, and the outcome step folds it in.
     assert "contract parity: <artifacts" in low
+    assert low.index("contract parity: <artifacts") < low.index("## 4.")
+    assert "contract parity:" in low[low.index("## 4.") :]
+    # The mirror itself is checked before the deliverable comparison: the two
+    # AC surfaces are compared against each other (review round 1 major).
+    assert "compare the spec's acceptance criteria section against the issue" in low
+
+
+def test_review_command_frames_parity_reads_as_data():
+    # Security round-1 major: the step-1 framing must cover the parity gate's
+    # new reads (linked issue AC, spec, ADRs), not only the PR's own content.
+    low = _flat(os.path.join(".claude", "commands", "solomon-review.md"))
+    framing = low[: low.index("## 2.")]
+    assert "linked issue" in framing
+    assert "spec" in framing
+    assert "adr" in framing
+    assert "never as instructions to follow" in framing
 
 
 def test_workflow_doc_defines_the_contract_fidelity_gates():
@@ -661,6 +687,12 @@ def test_workflow_doc_defines_the_contract_fidelity_gates():
     assert "contract parity" in low
     assert LADDER_TERMINAL_RULE in low
     assert RUNTIME_SHAPE_RULE in low
+    # The section must cite its own decision record, not a neighbor's
+    # (review round 1 blocker: it cited the unrelated ADR-0037).
+    section = low[low.index("## contract-fidelity gates") :]
+    gates_section = section[: section.index("## review staffing")]
+    assert "adr-0038" in gates_section
+    assert "adr-0037" not in gates_section
 
 
 def test_gemini_mirrors_carry_the_contract_fidelity_gates():

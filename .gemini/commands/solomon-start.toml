@@ -96,6 +96,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 
 ## 3. Plan (software_engineer, plan_authoring skill)
 - Write `PLAN.md` at the repo root with all required sections: problem statement (link #{{args}}),
+  the contract-bearing artifacts the plan was built from (the step-1 survey's output),
   proposed change and the boundary it touches, target files, edge cases as observable outcomes,
   a 3–8 step red/green TDD breakdown (one commit each), STRIDE notes when input/auth/data/external
   surface is touched, and objectively checkable verification criteria.

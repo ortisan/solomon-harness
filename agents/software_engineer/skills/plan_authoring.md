@@ -18,12 +18,13 @@ Save the plan as `PLAN.md` at the repo root (the lifecycle expects it there). Re
 Keep the plan to these sections, in this order. Each has a job; skip none, pad none.
 
 1. **Problem statement.** One or two sentences: the observed behavior or missing capability and why it matters now. State it from the outside (what a user or caller experiences), not as "refactor X". If you cannot name the symptom, you are not ready to plan. Link the issue id from `log_issue`/`get_open_issues`.
-2. **Proposed change.** The approach in three to six sentences: which component owns the change, which port or contract is affected, and the one alternative you rejected with the reason. Name the boundary explicitly (see `hexagonal_architecture_ports_and_adapters`) so the reviewer knows whether domain, port, or adapter moves.
-3. **Target files.** A bulleted list of every file you expect to create or modify, each with a half-line of why. This list is the scope fence: a diff that touches a file not on the list is a signal to stop and re-plan, not to quietly expand. Order them by the layer they sit in.
-4. **Edge cases.** The boundary and failure inputs you will handle: empty/null, max size, concurrent access, the dependency timing out, the malformed payload. For each, state the expected behavior. These become test names later, so write them as observable outcomes ("returns 422 with a problem detail", not "handle bad input"). Cross-reference `robust_defensive_code` for which boundaries to enumerate.
-5. **TDD step breakdown.** An ordered list of red-green steps, each one test wide. See the sizing rules below.
-6. **STRIDE notes** (only when the change touches input, auth, data, or an external boundary). See below; otherwise write "No security-relevant surface" and move on.
-7. **Verification criteria.** The explicit, checkable conditions that mean done. See below.
+2. **Contract-bearing artifacts.** A short bulleted list of the artifacts the plan was built from — the spec document, the issue's acceptance criteria, the ADRs the change touches — as produced by the spec corpus survey (`spec_contract_fidelity`). This is how the reviewer checks the plan against the same corpus; a plan listing nothing but the issue title was built from a paraphrase. Note any divergence you reconciled and which rung of the precedence ladder decided it.
+3. **Proposed change.** The approach in three to six sentences: which component owns the change, which port or contract is affected, and the one alternative you rejected with the reason. Name the boundary explicitly (see `hexagonal_architecture_ports_and_adapters`) so the reviewer knows whether domain, port, or adapter moves.
+4. **Target files.** A bulleted list of every file you expect to create or modify, each with a half-line of why. This list is the scope fence: a diff that touches a file not on the list is a signal to stop and re-plan, not to quietly expand. Order them by the layer they sit in.
+5. **Edge cases.** The boundary and failure inputs you will handle: empty/null, max size, concurrent access, the dependency timing out, the malformed payload. For each, state the expected behavior. These become test names later, so write them as observable outcomes ("returns 422 with a problem detail", not "handle bad input"). Cross-reference `robust_defensive_code` for which boundaries to enumerate.
+6. **TDD step breakdown.** An ordered list of red-green steps, each one test wide. See the sizing rules below.
+7. **STRIDE notes** (only when the change touches input, auth, data, or an external boundary). See below; otherwise write "No security-relevant surface" and move on.
+8. **Verification criteria.** The explicit, checkable conditions that mean done. See below.
 
 ## Sizing the TDD step breakdown
 

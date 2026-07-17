@@ -30,7 +30,7 @@ The suite passing proves the code matches the tests. If the tests were written f
 
 ## Verdict integration
 
-The parity result merges into the review verdict alongside the existing checks (test pyramid, suite run, acceptance criteria, Definition of Done): zero parity mismatches is a precondition for approval, and the review record's findings list each mismatch with its contract citation so a re-review can confirm the fix against the same line. When the gate cannot run — no spec, no AC, corpus missing from the inputs — say so explicitly in the verdict rather than approving on quality; an unrunnable gate is a process finding, not a pass.
+The parity result merges into the review verdict alongside the existing checks (test pyramid, suite run, acceptance criteria, Definition of Done): zero parity mismatches is a precondition for approval. The verdict is always recorded as one explicit line — `Contract parity: <artifacts compared> — PASS|MISMATCH` (or `could not run — <missing artifact>`) — folded into the review's summary record on the pass path as well as the fail path, and the findings list each mismatch with its contract citation so a re-review can confirm the fix against the same line. When the gate cannot run — no spec, no AC, corpus missing from the inputs — say so explicitly in the verdict rather than approving on quality; an unrunnable gate is a process finding, not a pass.
 
 ## Common pitfalls
 
