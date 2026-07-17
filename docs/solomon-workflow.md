@@ -237,12 +237,13 @@ the canonical behavior.
   problem; never quietly narrow the deliverable. Material cross-rung
   contradictions are filed through the discovered-problem protocol, not
   arbitrated silently.
-- **Verification iron law** (start, `software_engineer` via
+- **Verification iron law** (start and the review qa lens, via
   `verification_iron_law`): no completion claim without verification evidence
   produced in the same run — command, exit code, output summary — and the
   verification scope must cover the claim scope (a ready-for-review claim runs
   the full suite and validators). The pre-push verification report is reproduced
-  in the PR body summary.
+  in the PR body summary, and the review qa lens cites its own suite run —
+  command, exit code, counts — in the review record.
 - **Contract parity** (review, `qa` via `spec_contract_parity`): the qa lens
   compares the deliverable field by field against the contract corpus; a parity
   mismatch is a blocker, engineering quality alone can never earn approval, and

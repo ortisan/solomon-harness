@@ -1,6 +1,6 @@
 ---
 name: plan-authoring
-description: Governs authoring PLAN.md between the Planning and Execution phases, covering the problem statement, proposed change, target-files fence, edge cases, a 3-to-8-step TDD breakdown, STRIDE notes, and checkable verification criteria. Use when starting a non-trivial feature or bugfix before writing any production code.
+description: Governs authoring PLAN.md between the Planning and Execution phases, covering the problem statement, the contract-bearing artifacts list from the spec corpus survey, proposed change, target-files fence, edge cases, a 3-to-8-step TDD breakdown, STRIDE notes, and checkable verification criteria. Use when starting a non-trivial feature or bugfix before writing any production code.
 ---
 
 # Authoring PLAN.md
@@ -66,8 +66,9 @@ If a criterion cannot be expressed as something a reviewer runs or reads, rewrit
 
 ## Definition of done
 
-- [ ] `PLAN.md` exists at the repo root with all required sections: problem statement, proposed change, target files, edge cases, TDD step breakdown, STRIDE notes (or an explicit "no security-relevant surface"), and verification criteria.
+- [ ] `PLAN.md` exists at the repo root with all required sections: problem statement, the contract-bearing artifacts it was built from, proposed change, target files, edge cases, TDD step breakdown, STRIDE notes (or an explicit "no security-relevant surface"), and verification criteria.
 - [ ] The problem statement names an observable symptom and links the issue id from `log_issue`/`get_open_issues`.
+- [ ] The contract-bearing artifacts list cites the spec, acceptance criteria, and ADRs the survey read, and records any reconciled divergence with the ladder rung that decided it.
 - [ ] The target-files list is complete and specific; the eventual diff touches nothing outside it without a re-plan.
 - [ ] Every edge case states an expected, assertable behavior and maps to a planned test.
 - [ ] The step breakdown is 3 to 8 red-green steps, each one test wide and each mappable to a single commit, feeding the `tdd_red_green_refactor` loop.

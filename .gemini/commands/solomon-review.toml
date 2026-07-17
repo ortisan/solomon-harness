@@ -36,7 +36,10 @@ subagents); do not review with a single generic pass.
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
   `ci_quality_gates` skill, then actually run the suite —
   `uv run pytest --cov --cov-branch --cov-report=term-missing`. Confirm new and
-  changed behavior has covering tests and the full suite is green. Then verify each
+  changed behavior has covering tests and the full suite is green, and cite the run
+  as same-run evidence in iron-law form (`verification_iron_law`): the exact command,
+  its exit code, and the pass/fail counts go into the review record — a green claim
+  without the cited command and exit code is not evidence. Then verify each
   acceptance criterion in the linked issue is demonstrably met and that every item of
   the issue's Definition of Done is satisfied — an unmet acceptance criterion or an
   unsatisfied Definition of Done item is a blocker. Then run the contract parity gate

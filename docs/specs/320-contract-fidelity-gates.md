@@ -34,7 +34,7 @@ Implementing agents can build from a paraphrase (issue title, PLAN.md) without r
 
 - Given a start run, when the software_engineer loads context, then the command instructs the spec corpus survey before PLAN.md and PLAN.md lists the contract-bearing artifacts.
 - Given contradictory sources, when the implementer resolves them, then the command and skill state the ladder, the canonical/mirror rule, and that a paraphrase never overrides a higher rung.
-- Given a completion claim in start or review, when the claim is made, then verification evidence produced in that same run backs it — in start, the verification report (commands, exit codes, output summary) precedes the push confirmation; in review, the qa lens's fresh suite run supplies it. (Mirror re-synced toward the issue body's AC #3, which covers both stages; the first spec draft narrowed it to start only.)
+- Given a completion claim in start or review, when the claim is made, then verification evidence produced in that same run backs it — in start, the verification report (commands, exit codes, output summary) precedes the push confirmation; in review, the qa lens cites its fresh suite run — command, exit code, counts — in the review record. (Mirror re-synced toward the issue body's AC #3, which covers both stages; the first spec draft narrowed it to start only.)
 - Given a review run, when the qa lens executes, then it performs the field-by-field parity check, treats a mismatch as a blocker, and records the `Contract parity:` line.
 - Given CI, when the validators run, then the skill-depth gate, the integrations drift test, and the full suite pass.
 
