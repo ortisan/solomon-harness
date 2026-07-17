@@ -11,14 +11,21 @@ import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import patch
 
 from solomon_harness.bootstrap import _ensure_project_gitignore
 from solomon_harness.subprocess_env import clean_git_env
 
 
 def _git(cwd, *args):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, env=clean_git_env()
+    return subprocess.run(  # noqa: S603 - fixture helper receives only test-owned arguments.
+        ["git", *args],  # noqa: S607 - exercise the same operator-selected Git as production.
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=clean_git_env(),
     )
 
 
@@ -66,6 +73,66 @@ class TestEnsureProjectGitignore(unittest.TestCase):
         self.assertFalse(_is_tracked(self.root, "PLAN.md"))
         self.assertTrue(os.path.exists(os.path.join(self.root, "PLAN.md")))
 
+    def test_untracks_committed_solomon_state_without_deleting_working_files(self):
+        os.makedirs(os.path.join(self.root, ".solomon"))
+        state_path = os.path.join(self.root, ".solomon", "state.json")
+        with open(state_path, "w", encoding="utf-8") as f:
+            f.write('{"status": "active"}\n')
+        _git(self.root, "add", "-A")
+        _git(self.root, "commit", "-m", "track lifecycle state")
+        self.assertTrue(_is_tracked(self.root, ".solomon/state.json"))
+
+        _ensure_project_gitignore(self.root)
+
+        self.assertFalse(_is_tracked(self.root, ".solomon/state.json"))
+        self.assertTrue(os.path.exists(state_path))
+
+    def test_ignores_hostile_git_environment_and_mutates_only_target_repo(self):
+        with open(os.path.join(self.root, "PLAN.md"), "w", encoding="utf-8") as f:
+            f.write("# target plan\n")
+        _git(self.root, "add", "PLAN.md")
+        _git(self.root, "commit", "-m", "track target plan")
+
+        with tempfile.TemporaryDirectory() as unrelated:
+            _git(unrelated, "init")
+            _git(unrelated, "config", "user.email", "t@t")
+            _git(unrelated, "config", "user.name", "t")
+            with open(os.path.join(unrelated, "PLAN.md"), "w", encoding="utf-8") as f:
+                f.write("# unrelated plan\n")
+            _git(unrelated, "add", "PLAN.md")
+            _git(unrelated, "commit", "-m", "track unrelated plan")
+
+            hostile_env = {
+                "GIT_DIR": os.path.join(unrelated, ".git"),
+                "GIT_WORK_TREE": unrelated,
+                "GIT_INDEX_FILE": os.path.join(unrelated, ".git", "index"),
+            }
+            with patch.dict(os.environ, hostile_env, clear=False):
+                _ensure_project_gitignore(self.root)
+
+            self.assertFalse(_is_tracked(self.root, "PLAN.md"))
+            self.assertTrue(_is_tracked(unrelated, "PLAN.md"))
+
+    def test_raises_and_does_not_report_success_when_git_rm_fails(self):
+        plan_path = os.path.join(self.root, "PLAN.md")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            f.write("committed\n")
+        _git(self.root, "add", "PLAN.md")
+        _git(self.root, "commit", "-m", "track plan")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            f.write("staged\n")
+        _git(self.root, "add", "PLAN.md")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            f.write("working tree\n")
+
+        output = StringIO()
+        with redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError, "Unable to untrack local lifecycle artifacts"):
+                _ensure_project_gitignore(self.root)
+
+        self.assertTrue(_is_tracked(self.root, "PLAN.md"))
+        self.assertNotIn("Untracked local lifecycle artifacts", output.getvalue())
+
     def test_idempotent(self):
         with open(os.path.join(self.root, ".gitignore"), "w", encoding="utf-8") as f:
             f.write("target/\n")
@@ -96,6 +163,31 @@ class TestEnsureProjectGitignore(unittest.TestCase):
         lines = self._tracked_lines()
         self.assertEqual(lines.count(".solomon/"), 1)
         self.assertEqual(lines.count("PLAN.md"), 1)
+
+    def test_appends_rules_after_negations_so_git_effectively_ignores_artifacts(self):
+        with open(os.path.join(self.root, ".gitignore"), "w", encoding="utf-8") as f:
+            f.write("PLAN.md\n.solomon/\n!PLAN.md\n!.solomon/\n")
+
+        _ensure_project_gitignore(self.root)
+        repaired = self._read_gitignore()
+        _ensure_project_gitignore(self.root)
+
+        self.assertEqual(
+            _git(self.root, "check-ignore", "--no-index", "--quiet", "--", "PLAN.md").returncode,
+            0,
+        )
+        self.assertEqual(
+            _git(
+                self.root,
+                "check-ignore",
+                "--no-index",
+                "--quiet",
+                "--",
+                ".solomon/state.json",
+            ).returncode,
+            0,
+        )
+        self.assertEqual(self._read_gitignore(), repaired)
 
 
 if __name__ == "__main__":

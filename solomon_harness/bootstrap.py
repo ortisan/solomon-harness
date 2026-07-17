@@ -5,6 +5,7 @@ import datetime
 import subprocess
 from typing import Callable, List, Dict, Any, Optional
 
+from solomon_harness.subprocess_env import clean_git_env
 from solomon_harness.wiki_bootstrap import (
     is_github_remote,
     resolve_web_wiki_url,
@@ -62,8 +63,6 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
 
     # Git Remote
     try:
-        from solomon_harness.subprocess_env import clean_git_env
-
         git_remote = subprocess.check_output(
             ["git", "remote", "get-url", "origin"],
             cwd=workspace_root,
@@ -361,6 +360,11 @@ def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
 # excludes them; the block below propagates that rule into every project, because
 # tracking PLAN.md makes concurrent branches rewrite and collide on it.
 _PLAN_GITIGNORE_ENTRIES = ("PLAN.md", ".solomon/")
+_PLAN_GITIGNORE_PROBES = {
+    "PLAN.md": "PLAN.md",
+    ".solomon/": ".solomon/.solomon-harness-ignore-probe",
+}
+_LOCAL_GIT_TIMEOUT_SECONDS = 10
 _PLAN_GITIGNORE_BLOCK = (
     "# Local lifecycle state: handoff contract artifacts written between workflow stages\n"
     ".solomon/\n"
@@ -372,15 +376,82 @@ _PLAN_GITIGNORE_BLOCK = (
 )
 
 
+def _run_project_git(
+    workspace_root: str, args: List[str]
+) -> subprocess.CompletedProcess[str]:
+    """Run one bounded Git command against only ``workspace_root``."""
+    try:
+        return subprocess.run(  # noqa: S603 - module-private callers pass fixed Git subcommands.
+            ["git", *args],  # noqa: S607 - use the same operator-selected Git as the CLI.
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            env=clean_git_env(workspace_root),
+            timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"Unable to inspect or repair local lifecycle artifacts: {exc}"
+        ) from exc
+
+
+def _has_effective_exact_ignore_rule(contents: str, entry: str) -> bool:
+    """Return whether the last exact local rule keeps ``entry`` ignored."""
+    target = entry.lstrip("/").rstrip("/")
+    effective = False
+    matched = False
+    for raw_line in contents.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        pattern = line[1:] if negated else line
+        normalized = pattern.lstrip("/").rstrip("/")
+        if normalized == target:
+            matched = True
+            effective = not negated
+    return matched and effective
+
+
+def _git_effectively_ignores(workspace_root: str, path: str) -> bool:
+    result = _run_project_git(
+        workspace_root,
+        ["check-ignore", "--no-index", "--quiet", "--", path],
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = result.stderr.strip() or f"git check-ignore exited {result.returncode}"
+    raise RuntimeError(f"Unable to verify local lifecycle ignore rules: {detail}")
+
+
+def _tracked_lifecycle_roots(workspace_root: str) -> List[str]:
+    result = _run_project_git(
+        workspace_root,
+        ["ls-files", "-z", "--", "PLAN.md", ".solomon"],
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git ls-files exited {result.returncode}"
+        raise RuntimeError(f"Unable to inspect tracked local lifecycle artifacts: {detail}")
+
+    tracked = [path for path in result.stdout.split("\0") if path]
+    roots: List[str] = []
+    if "PLAN.md" in tracked:
+        roots.append("PLAN.md")
+    if any(path == ".solomon" or path.startswith(".solomon/") for path in tracked):
+        roots.append(".solomon")
+    return roots
+
+
 def _ensure_project_gitignore(workspace_root: str) -> None:
     """Ensure the project ignores the per-branch planning artifacts.
 
-    Appends ``PLAN.md`` and ``.solomon/`` to the project's ``.gitignore`` when
-    missing, and untracks ``PLAN.md`` when a prior commit already tracked it (the
-    ignore rule alone does not stop tracking an already-committed file). Runs on
-    every ``init`` -- including already-installed projects, which is exactly where
-    a stale ``.gitignore`` let PLAN.md get committed and collide across branches.
-    Idempotent: only missing entries are appended.
+    Appends effective ``PLAN.md`` and ``.solomon/`` rules when needed, then removes
+    either artifact from the selected repository's index without deleting working
+    files. Every Git command is repository-scoped and fail-closed. Runs on every
+    ``init`` so projects installed before this convention self-heal. Idempotent:
+    a converged project performs no further file or index mutation.
     """
     if not os.path.isdir(workspace_root):
         return  # nothing to configure (a real init always has a workspace dir)
@@ -390,12 +461,17 @@ def _ensure_project_gitignore(workspace_root: str) -> None:
         with open(gitignore_path, "r", encoding="utf-8") as f:
             existing = f.read()
 
-    present = {
-        line.strip()
-        for line in existing.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    }
-    missing = [entry for entry in _PLAN_GITIGNORE_ENTRIES if entry not in present]
+    is_git_repo = os.path.exists(os.path.join(workspace_root, ".git"))
+    missing = []
+    for entry in _PLAN_GITIGNORE_ENTRIES:
+        exact_rule_is_effective = _has_effective_exact_ignore_rule(existing, entry)
+        git_rule_is_effective = True
+        if is_git_repo:
+            git_rule_is_effective = _git_effectively_ignores(
+                workspace_root, _PLAN_GITIGNORE_PROBES[entry]
+            )
+        if not exact_rule_is_effective or not git_rule_is_effective:
+            missing.append(entry)
     if missing:
         if set(missing) == set(_PLAN_GITIGNORE_ENTRIES):
             addition = _PLAN_GITIGNORE_BLOCK
@@ -410,29 +486,26 @@ def _ensure_project_gitignore(workspace_root: str) -> None:
             f.write(prefix + addition)
         print("  - .gitignore: excluded per-branch planning artifacts (PLAN.md, .solomon/).")
 
-    # A .gitignore entry does not untrack an already-committed file; do that here
-    # so a project that predates this rule (PLAN.md already in git) self-heals.
-    if os.path.exists(os.path.join(workspace_root, ".git")):
-        try:
-            tracked = (
-                subprocess.run(
-                    ["git", "ls-files", "--error-unmatch", "PLAN.md"],
-                    cwd=workspace_root,
-                    capture_output=True,
-                    text=True,
-                ).returncode
-                == 0
-            )
-            if tracked:
-                subprocess.run(
-                    ["git", "rm", "--cached", "--quiet", "PLAN.md"],
-                    cwd=workspace_root,
-                    capture_output=True,
-                    text=True,
-                )
-                print("  - Untracked PLAN.md (now local per-branch state; commit the removal).")
-        except Exception:
-            pass
+    if not is_git_repo:
+        return
+
+    for entry in _PLAN_GITIGNORE_ENTRIES:
+        if not _git_effectively_ignores(workspace_root, _PLAN_GITIGNORE_PROBES[entry]):
+            raise RuntimeError(f"Unable to make {entry} an effective local ignore rule")
+
+    tracked_roots = _tracked_lifecycle_roots(workspace_root)
+    if not tracked_roots:
+        return
+
+    result = _run_project_git(
+        workspace_root,
+        ["rm", "-r", "--cached", "--quiet", "--", *tracked_roots],
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git rm exited {result.returncode}"
+        raise RuntimeError(f"Unable to untrack local lifecycle artifacts: {detail}")
+    names = ", ".join(tracked_roots)
+    print(f"  - Untracked local lifecycle artifacts: {names} (working files preserved).")
 
 
 # Idempotent upsert targets for the docs/specs and docs/adrs references (#236):
