@@ -1,6 +1,7 @@
 import os
 import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
 from solomon_harness.layout import (
@@ -627,11 +628,16 @@ def broker_agent(
     gh_runner: Optional[Callable[[List[str]], Any]] = None,
     issue_id: Optional[str] = None
 ) -> str:
-    """Acquires a new agent by scaffolding its directories, files, and default skill,
+    """Register a new agent directly in an installed consumer harness.
 
-    registering it, compiling the integrations, and opening a draft PR via apply_proposal.
+    Agent creation is a human-gated local extension operation. It writes to the
+    canonical installed catalog and recompiles native host adapters without
+    creating a branch, commit, or pull request. Source-checkout agent changes
+    remain normal reviewed development work and are not accepted through this
+    broker shortcut.
     """
     import re
+    from solomon_harness.install_layout import register_agent_extension
 
     # Validate agent name strictly to prevent path traversal/confinement escape
     if not re.match(r"^[a-z0-9_]+$", agent_name):
@@ -642,34 +648,44 @@ def broker_agent(
     if issue_id is not None and not re.fullmatch(r"[0-9]+", str(issue_id)):
         raise ValueError("issue_id must be a plain issue number")
 
-    def edit_callback(agent_dir: str) -> None:
-        # Confinement check
-        paths = HarnessPaths(workspace_root)
-        agents_path = confined_path(paths.root, paths.resolve_agents())
-        target_path = confined_path(paths.root, agent_dir)
-        try:
-            target_path.relative_to(agents_path)
-        except ValueError as exc:
-            raise ValueError(
-                f"Confinement violation: target path {target_path} "
-                f"is outside {agents_path}"
-            ) from exc
+    from solomon_harness.agent_builder import build_agent
 
-        from solomon_harness.agent_builder import build_agent
+    def register(agent_path: Path) -> None:
+        registration_root = agent_path.parents[3]
         build_agent(
-            workspace_root,
+            os.fspath(registration_root),
             agent_name,
             description,
             title=title,
             duties=duties,
+            reconcile_adapters=False,
         )
 
-    proposal = Proposal(
-        agent=agent_name,
-        drift_description=f"Create agent {agent_name}",
-        sources=(f"demand@{agent_name}", f"template@{agent_name}"),
-        rationale=f"Creating missing agent {agent_name} for capability",
-        decision_id=issue_id,
-        kind="create_agent",
-    )
-    return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
+    agent_path = register_agent_extension(workspace_root, agent_name, register)
+    paths = HarnessPaths(workspace_root)
+
+    # ``gh_runner`` remains in the signature for callers compiled against the
+    # reviewed-PR implementation. It is intentionally never invoked here.
+    _ = gh_runner
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        with DatabaseClient(harness_dir=os.fspath(paths.root)) as db:
+            issue_note = f" for #{issue_id}" if issue_id else ""
+            db.log_decision(
+                title=f"Capability broker: registered {agent_name}{issue_note}",
+                rationale=f"Creating missing agent {agent_name} for capability",
+                outcome=(
+                    "Mode: direct_registration\n"
+                    f"Agent path: {agent_path.relative_to(paths.root).as_posix()}"
+                ),
+                author="practice_curator",
+                branch="",
+                commit_sha="",
+            )
+    except Exception as db_exc:
+        import logging
+
+        logging.warning(f"Could not log agent registration to database: {db_exc}")
+
+    return os.fspath(agent_path)

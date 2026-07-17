@@ -4,6 +4,9 @@
 - Date: 2026-06-29
 - Deciders: software_architect, product_owner, practice_curator, software_engineer, security
 - Issue: #46 (slice A of epic #43)
+- Amended: 2026-07-16 by ADR-0035, which moves `create_agent` to direct
+  registration in the installed harness while retaining reviewed PRs for
+  `adapt_skill`.
 
 > Numbering note: originally authored as 0003 (the next free number at authoring time,
 > after the worktree ADR-0001 and the memory-resilience ADR). The concurrent cockpit (#44)

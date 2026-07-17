@@ -4,7 +4,7 @@ The Agent Builder specialist agent scaffolds new specialist agents.
 
 ## Delegation cue
 
-Use this agent when a new specialist agent needs to be scaffolded end to end — creating its persona, role profile, skills directory, and `.agent/config.json` in the canonical Solomon catalog, validating the name and target path for safety, and registering it in the canonical rules plus the compiled Claude, AGY, and Codex integrations. Source-checkout documentation is updated only while authoring solomon-harness itself.
+Use this agent when a new specialist agent needs to be scaffolded end to end — creating its persona, role profile, skills directory, and `.agent/config.json` in the canonical Solomon catalog, validating the name and target path for safety, and registering it through the compiled Claude, AGY, and Codex integrations. Source-checkout rules and documentation are updated only while authoring solomon-harness itself; a consumer registration leaves the installed package-owned rules unchanged.
 
 ## Core Duties
 - Scaffold new agent directories and configuration templates.
@@ -19,15 +19,18 @@ Use this agent when a new specialist agent needs to be scaffolded end to end —
   remain clean and cliche-free.
 - A confinement-verified filesystem write: canonical path resolution confirming the target
   stays inside `agents/`, and a validated snake_case agent name.
-- An updated canonical rules entry (alphabetical order, one-sentence summary):
-  `agents/AGENTS.md` in this source checkout or `.agents/solomon/AGENTS.md` in an
-  installed consumer.
+- Source checkout only: an updated `agents/AGENTS.md` rules entry in alphabetical order
+  with a one-sentence summary. An installed consumer discovers its extension from the
+  canonical agent directory and never rewrites package-owned `.agents/solomon/AGENTS.md`.
 - Source checkout only: an updated harness `README.md` agent count/table and
   `scripts/validate-agents.py` keyword registration. An installed consumer never
   changes the product repository's `README.md` or validation scripts.
 - A successful compilation run that regenerates all three host integrations:
   `.claude/agents/<name>.md`, `.agents/agents/<name>/agent.md`, and
   `.codex/agents/<name>.toml`.
+- Installed-consumer creation returns the confined `.agents/solomon/agents/<name>` path
+  without creating a Git branch, commit, or pull request. The caller reports that a new
+  session is required before the host can load the agent.
 
 ## Handoffs
 
@@ -38,7 +41,7 @@ Use this agent when a new specialist agent needs to be scaffolded end to end —
 ## Active Skills
 
 The following specific skills are actively configured for this agent:
-- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents in either a source checkout or an installed consumer, with path confinement, canonical rules updates, and compiled Claude, AGY, and Codex integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+- [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents in either a source checkout or an installed consumer, with path confinement, source-only rules updates, and compiled Claude, AGY, and Codex integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
 
 ## External Skills
 

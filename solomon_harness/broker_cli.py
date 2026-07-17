@@ -1,4 +1,4 @@
-"""CLI surface for the capability broker (ADR-0008): route verdicts and gated apply.
+"""CLI surface for the capability broker (ADR-0008/0035): route and gated apply.
 
 The workflow prompts never build inline Python over issue-derived text. They
 write a JSON file (via the host Write tool, so untrusted text never touches a
@@ -14,9 +14,9 @@ shell string) and hand its path to these subcommands:
   AC2; the loop may surface a gap, never act on it).
 
 Free-text fields (title, description, duties) are constrained to single lines
-without backticks: they end up spliced into ``agents/AGENTS.md`` and the new
-agent's persona/role files, which every future session reads as trusted
-instructions, so structural characters are rejected at this boundary.
+without backticks: they enter the new agent's persona and role files, which
+future sessions read as trusted instructions, so structural characters are
+rejected at this boundary.
 
 Exit codes: 0 success, 2 bad input (malformed file or failed validation),
 3 refused (fail-closed routing error or the human gate).
@@ -231,17 +231,31 @@ def apply_from_file(
 
     from solomon_harness import curator
 
+    result: Dict[str, Any]
     if action.kind == "adapt_skill":
         pr_url = curator.broker_skill(
             root, action.source_name, action.skill_name, action.agent_name,
             issue_id=action.issue_id,
         )
+        result = {
+            "pr_url": pr_url,
+            "kind": action.kind,
+            "agent": action.agent_name,
+            "mode": "reviewed_pr",
+        }
     else:
-        pr_url = curator.broker_agent(
+        agent_path = curator.broker_agent(
             root, action.agent_name, action.title, action.description,
             list(action.duties), issue_id=action.issue_id,
         )
-    print(json.dumps({"pr_url": pr_url, "kind": action.kind, "agent": action.agent_name}))
+        result = {
+            "agent_path": agent_path,
+            "kind": action.kind,
+            "agent": action.agent_name,
+            "mode": "direct_registration",
+            "restart_required": True,
+        }
+    print(json.dumps(result))
     return EXIT_OK
 
 

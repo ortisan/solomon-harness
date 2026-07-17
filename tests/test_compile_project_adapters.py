@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from solomon_harness import curator
 from solomon_harness.bootstrap import scaffold_new_agent
+from solomon_harness.agent_selection import discover_agents
 from solomon_harness.install_layout import (
     InstallConflictError,
     compile_project_adapters,
     install_project,
+    register_agent_extension,
 )
 from solomon_harness.install_transaction import record_install_mutation
+from solomon_harness.host_adapters import compile_adapters as compile_host_adapters
 from solomon_harness.layout import HarnessPaths
 
 
@@ -197,6 +203,382 @@ def test_scaffold_reconciles_a_real_installed_catalog_across_all_hosts(
             ".codex/agents/consumer_specialist.toml",
         )
     )
+
+
+@pytest.mark.integration
+def test_broker_agent_registers_in_installed_catalog_without_git_or_pr(
+    tmp_path: Path,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "test: install harness"],
+        cwd=tmp_path,
+        check=True,
+    )
+    paths = HarnessPaths(tmp_path)
+    before_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    before_branch = subprocess.check_output(
+        ["git", "branch", "--show-current"], cwd=tmp_path, text=True
+    ).strip()
+    before_refs = subprocess.check_output(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads"],
+        cwd=tmp_path,
+        text=True,
+    )
+    before_rules = paths.rules.read_bytes()
+    before_entries = _manifest_entries(tmp_path)
+    github_calls: list[list[str]] = []
+
+    def github_runner(arguments: list[str]) -> object:
+        github_calls.append(arguments)
+        raise AssertionError("agent registration must not call GitHub")
+
+    with (
+        patch.object(
+            curator,
+            "apply_proposal",
+            side_effect=AssertionError("agent registration must not use the PR path"),
+        ) as apply_proposal,
+        patch(
+            "solomon_harness.host_adapters.compile_adapters",
+            wraps=compile_host_adapters,
+        ) as compile_adapters,
+        patch("solomon_harness.tools.database_client.DatabaseClient") as database,
+    ):
+        agent_path = curator.broker_agent(
+            str(tmp_path),
+            "consumer_specialist",
+            "Consumer Specialist",
+            "Owns consumer-specific delivery work.",
+            ["Handle consumer-specific delivery work"],
+            gh_runner=github_runner,
+            issue_id="240",
+        )
+
+    expected_agent = paths.agents / "consumer_specialist"
+    after_entries = _manifest_entries(tmp_path)
+    assert agent_path == os.fspath(expected_agent)
+    assert (expected_agent / "agents" / "consumer_specialist.md").is_file()
+    assert not (tmp_path / "agents" / "consumer_specialist").exists()
+    assert "consumer_specialist" in discover_agents(str(tmp_path))
+    assert paths.rules.read_bytes() == before_rules
+    assert {
+        path: entry
+        for path, entry in after_entries.items()
+        if entry["owner"] != "adapter"
+    } == {
+        path: entry
+        for path, entry in before_entries.items()
+        if entry["owner"] != "adapter"
+    }
+    assert {
+        ".agents/agents/consumer_specialist/agent.md",
+        ".claude/agents/consumer_specialist.md",
+        ".codex/agents/consumer_specialist.toml",
+    } <= set(after_entries)
+    assert all(
+        after_entries[path]["owner"] == "adapter"
+        for path in (
+            ".agents/agents/consumer_specialist/agent.md",
+            ".claude/agents/consumer_specialist.md",
+            ".codex/agents/consumer_specialist.toml",
+        )
+    )
+    assert not any(
+        path.startswith(".agents/solomon/agents/consumer_specialist/")
+        for path in after_entries
+    )
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip() == before_head
+    assert subprocess.check_output(
+        ["git", "branch", "--show-current"], cwd=tmp_path, text=True
+    ).strip() == before_branch
+    assert subprocess.check_output(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads"],
+        cwd=tmp_path,
+        text=True,
+    ) == before_refs
+    assert github_calls == []
+    apply_proposal.assert_not_called()
+    compile_adapters.assert_called_once_with(tmp_path)
+    database.assert_called_once_with(harness_dir=os.fspath(tmp_path))
+
+    upgrade = install_project(tmp_path, source_root=SOURCE_ROOT)
+    upgraded_entries = _manifest_entries(tmp_path)
+    assert upgrade.blocking_conflicts == ()
+    assert (expected_agent / "agents" / "consumer_specialist.md").is_file()
+    assert "consumer_specialist" in discover_agents(str(tmp_path))
+    assert paths.rules.read_bytes() == before_rules
+    assert not any(
+        path.startswith(".agents/solomon/agents/consumer_specialist/")
+        for path in upgraded_entries
+    )
+    assert all(
+        upgraded_entries[path]["owner"] == "adapter"
+        for path in (
+            ".agents/agents/consumer_specialist/agent.md",
+            ".claude/agents/consumer_specialist.md",
+            ".codex/agents/consumer_specialist.toml",
+        )
+    )
+
+
+@pytest.mark.integration
+def test_broker_agent_rolls_back_source_adapters_and_manifest_on_conflict(
+    tmp_path: Path,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    existing = HarnessPaths(tmp_path).agents / "existing_consumer"
+    existing_role = existing / "agents" / "existing_consumer.md"
+    existing_role.parent.mkdir(parents=True)
+    existing_role.write_text("# Existing consumer\n", encoding="utf-8")
+    preserved = tmp_path / ".claude" / "agents" / "conflict_specialist.md"
+    preserved.write_text("user-owned adapter\n", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    with pytest.raises(InstallConflictError, match="adapter conflicts"):
+        curator.broker_agent(
+            str(tmp_path),
+            "conflict_specialist",
+            "Conflict Specialist",
+            "Exercises registration rollback.",
+            ["Exercise registration rollback"],
+        )
+
+    assert _snapshot(tmp_path) == before
+    assert preserved.read_text(encoding="utf-8") == "user-owned adapter\n"
+    assert not (HarnessPaths(tmp_path).agents / "conflict_specialist").exists()
+    assert not (
+        tmp_path / ".agents" / "agents" / "conflict_specialist" / "agent.md"
+    ).exists()
+    assert not (
+        tmp_path / ".codex" / "agents" / "conflict_specialist.toml"
+    ).exists()
+    assert not (existing / "main.py").exists()
+    assert not (existing / ".agent" / "config.json").exists()
+
+
+@pytest.mark.integration
+def test_broker_agent_preserves_an_external_write_when_registration_fails(
+    tmp_path: Path,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    paths = HarnessPaths(tmp_path)
+    persona = paths.agents / "external_specialist" / "persona.md"
+
+    def external_write_then_fail(_root: str) -> object:
+        persona.write_text("external writer\n", encoding="utf-8")
+        raise RuntimeError("adapter compilation failed")
+
+    with (
+        patch(
+            "solomon_harness.host_adapters.compile_adapters",
+            side_effect=external_write_then_fail,
+        ),
+        pytest.raises(InstallConflictError, match="Rollback preserved paths"),
+    ):
+        curator.broker_agent(
+            str(tmp_path),
+            "external_specialist",
+            "External Specialist",
+            "Exercises compare-and-swap rollback.",
+            ["Exercise compare-and-swap rollback"],
+        )
+
+    assert persona.read_text(encoding="utf-8") == "external writer\n"
+
+
+@pytest.mark.integration
+def test_broker_agent_rolls_back_a_partial_scaffold_file_write(
+    tmp_path: Path,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    before = _snapshot(tmp_path)
+
+    def fail_after_partial_write(stream, payload: bytes) -> None:
+        stream.write(payload[:8])
+        stream.flush()
+        raise OSError("disk full")
+
+    with (
+        patch(
+            "solomon_harness.install_transaction._write_install_payload",
+            side_effect=fail_after_partial_write,
+        ),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        curator.broker_agent(
+            str(tmp_path),
+            "partial_specialist",
+            "Partial Specialist",
+            "Exercises atomic scaffold publication.",
+            ["Exercise atomic scaffold publication"],
+        )
+
+    assert _snapshot(tmp_path) == before
+    assert not (HarnessPaths(tmp_path).agents / "partial_specialist").exists()
+
+
+@pytest.mark.integration
+def test_broker_agent_does_not_claim_an_external_pre_checkpoint_write(
+    tmp_path: Path,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    paths = HarnessPaths(tmp_path)
+    persona = paths.agents / "racing_specialist" / "persona.md"
+    preserved = tmp_path / ".claude" / "agents" / "racing_specialist.md"
+    preserved.write_text("user-owned adapter\n", encoding="utf-8")
+
+    from solomon_harness import install_transaction
+
+    original = install_transaction.record_install_file_publication
+
+    def external_before_checkpoint(path, publication) -> None:
+        if path == persona:
+            path.write_text("external writer\n", encoding="utf-8")
+        original(path, publication)
+
+    with (
+        patch.object(
+            install_transaction,
+            "record_install_file_publication",
+            side_effect=external_before_checkpoint,
+        ),
+        pytest.raises(InstallConflictError, match="Rollback preserved paths"),
+    ):
+        curator.broker_agent(
+            str(tmp_path),
+            "racing_specialist",
+            "Racing Specialist",
+            "Exercises publication proof rollback.",
+            ["Exercise publication proof rollback"],
+        )
+
+    assert persona.read_text(encoding="utf-8") == "external writer\n"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("symlink_parent", [False, True])
+def test_registration_rejects_symlinked_scaffold_content(
+    tmp_path: Path,
+    symlink_parent: bool,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    paths = HarnessPaths(tmp_path)
+    agent = paths.agents / "symlink_specialist"
+    (agent / "agents").mkdir(parents=True)
+    (agent / "skills").mkdir()
+    (agent / "agents" / "symlink_specialist.md").write_text(
+        "# Symlink Specialist\n",
+        encoding="utf-8",
+    )
+    (agent / "skills" / "scope_and_mandate.md").write_text(
+        "# Scope\n",
+        encoding="utf-8",
+    )
+    (agent / "main.py").write_text("\n", encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as external_directory:
+        external = Path(external_directory)
+        if symlink_parent:
+            (external / "config.json").write_text("{}\n", encoding="utf-8")
+            (agent / ".agent").symlink_to(external, target_is_directory=True)
+            (agent / "persona.md").write_text("# Persona\n", encoding="utf-8")
+        else:
+            (agent / ".agent").mkdir()
+            (agent / ".agent" / "config.json").write_text("{}\n", encoding="utf-8")
+            external_persona = external / "persona.md"
+            external_persona.write_text("# External persona\n", encoding="utf-8")
+            (agent / "persona.md").symlink_to(external_persona)
+
+        with pytest.raises(InstallConflictError, match="symlink"):
+            register_agent_extension(
+                tmp_path,
+                "symlink_specialist",
+                lambda _path: None,
+            )
+
+
+@pytest.mark.integration
+def test_broker_agent_refuses_direct_registration_in_a_source_checkout(
+    tmp_path: Path,
+) -> None:
+    install_project(tmp_path, source_root=SOURCE_ROOT)
+    source_markers = (
+        Path("pyproject.toml"),
+        Path("agents/AGENTS.md"),
+        Path("solomon_harness/__init__.py"),
+        Path("solomon_harness/mcp_server.py"),
+        Path("scripts/generate-integrations.py"),
+    )
+    for relative in source_markers:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SOURCE_ROOT / relative, destination)
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "--", *(str(path) for path in source_markers)],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "test: source checkout"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "scripts" / "generate-integrations.py").unlink()
+    subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--force-remove",
+            "--",
+            "scripts/generate-integrations.py",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "consumer-lookalike"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "add", "--", "pyproject.toml"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    with pytest.raises(InstallConflictError, match="source checkout"):
+        curator.broker_agent(
+            str(tmp_path),
+            "source_specialist",
+            "Source Specialist",
+            "Must use reviewed source development.",
+            ["Use reviewed source development"],
+        )
+
+    assert not (HarnessPaths(tmp_path).agents / "source_specialist").exists()
 
 
 @pytest.mark.integration
