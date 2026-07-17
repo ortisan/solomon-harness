@@ -544,3 +544,115 @@ def test_prep_pr_body_carries_the_canonical_adr_skip_line():
         "bump and CHANGELOG section; decisions live with the merged issues.\n"
     )
     assert gate.check_body(body) == []
+
+
+# --- Release-prep footprint guard (#265): a chore/release-* PR must touch ------
+# --- only pyproject.toml + CHANGELOG.md, nothing else (root cause of #214). ----
+
+def test_footprint_violations_clean_for_the_allowlist():
+    # Exactly what cmd_prep stages -> no violations, in either order.
+    assert release.release_prep_footprint_violations(["pyproject.toml", "CHANGELOG.md"]) == []
+    assert release.release_prep_footprint_violations(["CHANGELOG.md"]) == []
+    assert release.release_prep_footprint_violations([]) == []
+
+
+def test_footprint_violations_flag_any_extra_path_sorted():
+    violations = release.release_prep_footprint_violations(
+        ["CHANGELOG.md", "pyproject.toml", "solomon_harness/cli.py", "README.md"]
+    )
+    assert violations == ["README.md", "solomon_harness/cli.py"]
+
+
+def test_footprint_violations_flag_deletions_like_pr_209():
+    # A reconstruction of the PR #209 blast radius: the surviving pyproject.toml
+    # and CHANGELOG.md carry matching versions (so `release check` passes), but
+    # the diff also deletes the rest of the repository. Every deleted path must
+    # be flagged -- git diff --name-only lists deletions the same as edits.
+    pr209_like = [
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "solomon_harness/cli.py",
+        "solomon_harness/release.py",
+        "tests/test_release.py",
+        "agents/software_engineer/agents/software_engineer.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+    ]
+    violations = release.release_prep_footprint_violations(pr209_like)
+    assert "pyproject.toml" not in violations
+    assert "CHANGELOG.md" not in violations
+    assert violations == [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "agents/software_engineer/agents/software_engineer.md",
+        "solomon_harness/cli.py",
+        "solomon_harness/release.py",
+        "tests/test_release.py",
+    ]
+
+
+def test_footprint_violations_ignore_blank_lines():
+    # git diff --name-only output ends with a trailing newline -> blank splits.
+    assert release.release_prep_footprint_violations(["pyproject.toml", "", "  "]) == []
+
+
+def test_cmd_check_footprint_passes_for_a_prep_only_diff(repo, capsys):
+    # A faithful prep branch: only the version bump + changelog section.
+    _git(repo, "checkout", "-q", "-b", "chore/release-v0.4.0", "main")
+    release.set_pyproject_version(_pyproject(repo), "0.4.0")
+    release.prepend_changelog_section(
+        _changelog(repo), "## [0.4.0] - 2026-06-28\n\n- feat: thing\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.4.0")
+
+    rc = release.cmd_check_footprint(repo, "main")
+    assert rc == 0
+    assert "OK" in capsys.readouterr().out
+
+
+def test_cmd_check_footprint_fails_when_the_prep_diff_touches_another_file(repo, capsys):
+    _git(repo, "checkout", "-q", "-b", "chore/release-v0.4.0", "main")
+    release.set_pyproject_version(_pyproject(repo), "0.4.0")
+    release.prepend_changelog_section(
+        _changelog(repo), "## [0.4.0] - 2026-06-28\n\n- feat: thing\n"
+    )
+    (Path(repo) / "solomon_harness").mkdir(exist_ok=True)
+    (Path(repo) / "solomon_harness" / "sneaky.py").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.4.0")
+
+    rc = release.cmd_check_footprint(repo, "main")
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "solomon_harness/sneaky.py" in err
+
+
+def test_cmd_check_footprint_fails_when_the_prep_diff_deletes_files(repo, capsys):
+    # The exact PR #209 shape: the prep branch deletes source while keeping a
+    # consistent pyproject/CHANGELOG. cmd_check_footprint must still fail.
+    (Path(repo) / "keep.py").write_text("keep\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: add a source file to later delete")
+
+    _git(repo, "checkout", "-q", "-b", "chore/release-v0.5.0", "main")
+    release.set_pyproject_version(_pyproject(repo), "0.5.0")
+    release.prepend_changelog_section(
+        _changelog(repo), "## [0.5.0] - 2026-06-29\n\n- feat: thing\n"
+    )
+    (Path(repo) / "keep.py").unlink()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.5.0")
+
+    rc = release.cmd_check_footprint(repo, "main")
+    assert rc == 1
+    assert "keep.py" in capsys.readouterr().err
+
+
+def test_release_check_footprint_dispatches_through_run(repo):
+    _git(repo, "checkout", "-q", "-b", "chore/release-v0.4.0", "main")
+    release.set_pyproject_version(_pyproject(repo), "0.4.0")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "chore(release): v0.4.0")
+
+    assert release.run(repo, ["check-footprint", "--base", "main"]) == 0
