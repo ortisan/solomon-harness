@@ -101,6 +101,16 @@ REQUIRED_KEYWORDS = {
         "dataset",
         "features",
     ],
+    "peer_reviewer.md": [
+        "Peer Reviewer",
+        "evidence",
+        "adversarially",
+        "verdict",
+        "severities",
+        "CONFIRMED",
+        "human merge gate",
+        "never merges",
+    ],
     "quant_trader.md": [
         "Quant Trader",
         "backtest",

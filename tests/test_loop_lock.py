@@ -234,6 +234,79 @@ class TestGuard(unittest.TestCase):
         block, _ = loop_lock.guard_verdict({"tool_name": "Edit"}, lock)
         self.assertFalse(block)
 
+    # --- Headless human-gated transition deny (#185) -------------------------
+
+    def test_is_human_gated_transition(self):
+        self.assertTrue(loop_lock.is_human_gated_transition("gh pr merge 28 --squash"))
+        self.assertTrue(loop_lock.is_human_gated_transition("gh release create v1.2.0 --notes x"))
+        self.assertTrue(loop_lock.is_human_gated_transition("git push --force origin main"))
+        self.assertTrue(loop_lock.is_human_gated_transition("git push -f origin master"))
+        self.assertTrue(loop_lock.is_human_gated_transition("git push origin +main"))
+        # The sanctioned interactive merge goes through the python wrapper, not raw gh.
+        self.assertFalse(
+            loop_lock.is_human_gated_transition(
+                "uv run python -m solomon_harness.github merge --pr 5 --issue 3"
+            )
+        )
+        # A force-push to a feature branch (e.g. after a rebase) is not human-gated.
+        self.assertFalse(loop_lock.is_human_gated_transition("git push --force origin feature/x"))
+        # A plain (non-force) push to main is left to branch protection, not this rule.
+        self.assertFalse(loop_lock.is_human_gated_transition("git push origin main"))
+        self.assertFalse(loop_lock.is_human_gated_transition("gh pr view 5"))
+        self.assertFalse(loop_lock.is_human_gated_transition("git status"))
+
+    def test_headless_blocks_merge_even_under_own_lock(self):
+        # The exact gap in #185: a headless stage holding its OWN lock (no foreign
+        # driver) must still be denied a merge. guard_verdict's foreign-lock rule
+        # never fires here, so the headless human-gate rule must.
+        LoopLock(lock_path=self.path, session_id="me", pid=os.getpid()).acquire()
+        lock = LoopLock(lock_path=self.path, session_id="me")
+        self.assertIsNone(lock.held_by_other())  # own lock, not foreign
+        block, reason = loop_lock.guard_verdict(
+            {"tool_name": "Bash", "tool_input": {"command": "gh pr merge 28 --squash"}},
+            lock,
+            headless=True,
+        )
+        self.assertTrue(block)
+        self.assertIn("human-gated", reason.lower())
+
+    def test_headless_blocks_release_create_under_own_lock(self):
+        lock = LoopLock(lock_path=self.path, session_id="me")
+        block, reason = loop_lock.guard_verdict(
+            {"tool_name": "Bash", "tool_input": {"command": "gh release create v1.0.0"}},
+            lock,
+            headless=True,
+        )
+        self.assertTrue(block)
+        self.assertIn("human-gated", reason.lower())
+
+    def test_headless_does_not_block_the_sanctioned_merge_wrapper(self):
+        # `github merge` is the ADR-0020 interactive wrapper; it must stay callable
+        # so the fix does not break the sanctioned merge path.
+        lock = LoopLock(lock_path=self.path, session_id="me")
+        block, _ = loop_lock.guard_verdict(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "uv run python -m solomon_harness.github merge --pr 5 --issue 3"
+                },
+            },
+            lock,
+            headless=True,
+        )
+        self.assertFalse(block)
+
+    def test_interactive_merge_not_blocked_by_headless_rule(self):
+        # Interactive (headless=False), no foreign lock: the headless deny does not
+        # apply; the merge is governed by the command-file flow and the human.
+        lock = LoopLock(lock_path=self.path, session_id="me")
+        block, _ = loop_lock.guard_verdict(
+            {"tool_name": "Bash", "tool_input": {"command": "gh pr merge 28"}},
+            lock,
+            headless=False,
+        )
+        self.assertFalse(block)
+
 
 if __name__ == "__main__":
     unittest.main()

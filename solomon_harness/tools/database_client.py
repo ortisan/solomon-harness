@@ -2282,6 +2282,135 @@ class DatabaseClient:
                 logging.error(f"Failed to list milestones: {e}")
                 raise RuntimeError(f"Failed to list milestones: {e}")
 
+    @_resilient
+    def get_milestone_by_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent milestone row with this exact title, or None."""
+        if self.backend == "surrealdb":
+            try:
+                res = self._run_surreal(
+                    "SELECT * FROM milestones WHERE title = $t ORDER BY created_at DESC LIMIT 1",
+                    {"t": title},
+                )
+                rows = self._extract_list(res)
+                return rows[0] if rows else None
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to look up milestone by title in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to look up milestone by title in SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM milestones WHERE title = ? "
+                        "ORDER BY created_at DESC, id DESC LIMIT 1",
+                        (title,),
+                    )
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                logging.error(f"Failed to look up milestone by title: {e}")
+                raise RuntimeError(f"Failed to look up milestone by title: {e}")
+
+    def ensure_milestone(
+        self, title: str, description: str = "", due_date: str = ""
+    ) -> Union[str, int, None]:
+        """Return the id of the milestone with this title, creating it (open) if new.
+
+        Idempotent by title: a second refine of an issue under the same epic does
+        not create a duplicate memory milestone row (issue #176, AC1).
+        """
+        existing = self.get_milestone_by_title(title)
+        if existing:
+            return existing.get("record_id") or existing.get("id")
+        return self.create_milestone(title, description, due_date, "open")
+
+    def close_milestone(self, title: str) -> Union[str, int, None]:
+        """Write the milestone's state through to closed (terminal), idempotent.
+
+        Finds the existing row by title and re-writes it closed; if none exists
+        yet, records it closed. Re-running never creates a duplicate (#176, AC2).
+        """
+        existing = self.get_milestone_by_title(title)
+        if not existing:
+            return self.create_milestone(title, "", "", "closed")
+        record_id = existing.get("record_id") or self._record_key(
+            existing.get("id"), existing.get("id")
+        )
+        fields = {
+            "title": existing.get("title") or title,
+            "description": existing.get("description") or "",
+            "due_date": existing.get("due_date") or "",
+            "state": "closed",
+        }
+        return self._write_through(
+            "milestone", str(record_id), fields, self._db_set_milestone_state
+        )
+
+    @_resilient
+    def delete_milestone_by_title(self, title: str) -> int:
+        """Delete every milestone row with this title. Returns the number removed.
+
+        Used by the one-shot milestone reconcile to prune junk rows ("Sprint 1",
+        "M1", "m") that never corresponded to a real GitHub milestone (#176).
+        """
+        if self.backend == "surrealdb":
+            try:
+                self._run_surreal("DELETE milestones WHERE title = $t", {"t": title})
+                return 1
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to delete milestone in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to delete milestone in SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    cursor = conn.execute("DELETE FROM milestones WHERE title = ?", (title,))
+                    conn.commit()
+                    return cursor.rowcount
+            except sqlite3.Error as e:
+                logging.error(f"Failed to delete milestone: {e}")
+                raise RuntimeError(f"Failed to delete milestone: {e}")
+
+    @_resilient
+    def _db_set_milestone_state(
+        self, record_id: str, fields: Dict[str, Any]
+    ) -> Union[str, int, None]:
+        """Rewrite an existing milestone with a new state; UPSERT (Surreal), UPDATE (SQLite)."""
+        if self.backend == "surrealdb":
+            query = """
+            UPSERT $id CONTENT {
+                title: $title,
+                description: $description,
+                due_date: $due_date,
+                state: $state,
+                created_at: time::now()
+            };
+            """
+            params = {"id": self._rid("milestones", record_id), **fields}
+            try:
+                res = self._run_surreal(query, params)
+                return self._extract_id(res)
+            except _ConnectionLost:
+                raise
+            except Exception as e:
+                logging.error(f"Failed to update milestone state in SurrealDB: {e}")
+                raise RuntimeError(f"Failed to update milestone state in SurrealDB: {e}")
+        else:
+            try:
+                with self._sqlite_conn() as conn:
+                    conn.execute(
+                        "UPDATE milestones SET state = ? WHERE record_id = ? OR id = ?",
+                        (fields["state"], record_id, record_id),
+                    )
+                    conn.commit()
+                    return record_id
+            except sqlite3.Error as e:
+                logging.error(f"Failed to update milestone state: {e}")
+                raise RuntimeError(f"Failed to update milestone state: {e}")
+
     def save_release(
         self,
         version: str,

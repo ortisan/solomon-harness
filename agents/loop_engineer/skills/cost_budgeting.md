@@ -16,17 +16,17 @@ An unattended loop must throttle itself; this skill governs the post-hoc cost bu
 Both halves live in `solomon_harness/workflows.py` and bind only the automation ladder — at the default `human` level nothing is captured or checked.
 
 - **Capture.** At autonomy L2/L3 the engine is invoked with a JSON result flag (`--output-format json` for `claude` and `gemini`, `-o json` for `agy`), stdout is parsed with `parse_engine_cost`, and a found cost is recorded to the ledger with the stage name. A run whose output lacks a cost field records NOTHING — that spend is invisible to the ceiling, so the budget undercounts on hosts with a different or absent cost field; treat that asymmetry as a documented gap, not parity.
-- **Enforcement.** Before running a stage at L2/L3, and only for stages other than `loop`, `run_stage` checks `over_ceiling` against `loop.daily_cost_ceiling_usd` from `.agent/config.json`. At the ceiling it prints `Blocked by loop budget: daily cost ceiling reached (...); degraded to report-only.` and returns exit code `3`. The `loop` stage stays allowed — that exemption IS the report-only degrade in code: the loop may still scan and propose, but every drafting stage (`start`, `review`, the scan loops) is refused. A human working interactively is never blocked.
+- **Enforcement.** Before running a stage at L2/L3, and only for stages other than `workflow`, `run_stage` checks `over_ceiling` against `loop.daily_cost_ceiling_usd` from `.agent/config.json`. At the ceiling it prints `Blocked by loop budget: daily cost ceiling reached (...); degraded to report-only.` and returns exit code `3`. The `workflow` stage stays allowed — that exemption IS the report-only degrade in code: the orchestrator may still scan and propose, but every other stage (`loop`, `start`, `review`, the scan loops) is refused. A human working interactively is never blocked.
 
 `solomon-harness loop-budget` prints today's spend, the ceiling with its status (`OVER -> report-only` or `within budget`, or `none configured (set loop.daily_cost_ceiling_usd)`), and the ledger path.
 
 ## A worked over-budget day
 
-Ceiling 5.00; a morning of scan iterations records 5.20 across the ledger. The next `solomon-harness dev start 42` exits `3` with the block message, while `solomon-harness dev loop` still runs and reports. Verify with `solomon-harness loop-budget` (`OVER -> report-only`). Recovery: wait for the day key to roll, or have a human raise `daily_cost_ceiling_usd` — and note the default denylist blocks an autonomous run from editing `.agent/config.json`, so the loop cannot raise its own ceiling; on the Gemini host pin the level with `SOLOMON_LOOP_AUTONOMY` so a config self-edit cannot widen it either.
+Ceiling 5.00; a morning of scan iterations records 5.20 across the ledger. The next `solomon-harness dev start 42` (or `dev loop`) exits `3` with the block message, while `solomon-harness dev workflow` still runs and reports. Verify with `solomon-harness loop-budget` (`OVER -> report-only`). Recovery: wait for the day key to roll, or have a human raise `daily_cost_ceiling_usd` — and note the default denylist blocks an autonomous run from editing `.agent/config.json`, so the loop cannot raise its own ceiling; on the Gemini host pin the level with `SOLOMON_LOOP_AUTONOMY` so a config self-edit cannot widen it either.
 
 ## Post-hoc, so pair it with a pre-flight cap
 
-The ceiling is post-hoc by nature: cost is known only after the engine runs, so it reacts after a spend, not before — one expensive tick can overshoot the ceiling before the next check trips. For a hard stop, pair it with a per-cycle cap upstream (max ticks via `dev loop-auto --concurrency N`, or wall-clock on the host scheduler), and keep `solomon-harness loop-stop` as the immediate halt when spend is running away right now.
+The ceiling is post-hoc by nature: cost is known only after the engine runs, so it reacts after a spend, not before — one expensive tick can overshoot the ceiling before the next check trips. For a hard stop, pair it with a per-cycle cap upstream (max ticks via `dev loop --concurrency N`, or wall-clock on the host scheduler), and keep `solomon-harness loop-stop` as the immediate halt when spend is running away right now.
 
 ## Common pitfalls
 
@@ -40,7 +40,7 @@ The ceiling is post-hoc by nature: cost is known only after the engine runs, so 
 ## Definition of done
 
 - [ ] Per-stage cost is captured from the engine's reported actuals at L2/L3 and recorded to the ledger.
-- [ ] Reaching `daily_cost_ceiling_usd` degrades the automation path to report-only (exit 3; `loop` still allowed), never a human.
+- [ ] Reaching `daily_cost_ceiling_usd` degrades the automation path to report-only (exit 3; `workflow` still allowed), never a human.
 - [ ] The ledger is anchored at the git common dir so all worktrees share one budget; an unset or non-positive ceiling disables the check.
 - [ ] `solomon-harness loop-budget` reports spend versus ceiling and the ledger path; host cost asymmetry is documented.
 - [ ] Changes ship with covering tests in `tests/test_loop_budget.py`.

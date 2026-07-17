@@ -647,6 +647,45 @@ def _gather_release_context(workspace_root: str, version: str) -> dict:
 
 # --- CLI handlers ---------------------------------------------------------
 
+def milestone_collision(version: Optional[str], milestones: List[dict]) -> Optional[str]:
+    """Return the title of an OPEN milestone reserving ``version`` with open issues.
+
+    Cutting a tag whose epic milestone is not yet at 0 open issues is the
+    v0.5.0/v0.6.0/v0.8.0 drift (ADR-0004): the computed version equals a reserved
+    epic milestone title while that milestone still carries open work. A milestone
+    titled ``vX.Y.Z`` or ``X.Y.Z`` equal to ``version`` with ``open_issues > 0``
+    collides; one already at 0 open issues does not (it is ready to release, no
+    collision). Returns None when there is no collision.
+    """
+    if not version:
+        return None
+    targets = {f"v{version}", str(version)}
+    for m in milestones or []:
+        entry = m or {}
+        title = str(entry.get("title") or "").strip()
+        if title in targets and int(entry.get("open_issues") or 0) > 0:
+            return title
+    return None
+
+
+def _milestone_collision_message(workspace_root: str, version: Optional[str]) -> Optional[str]:
+    """Fetch open milestones (degrading gracefully) and return a collision error, or None."""
+    try:
+        from solomon_harness import github
+
+        milestones = github.list_open_github_milestones()
+    except Exception:
+        return None  # gh unavailable or unscoped: degrade, never block the release
+    colliding = milestone_collision(version, milestones)
+    if not colliding:
+        return None
+    return (
+        f"version {version} collides with the open milestone {colliding!r}, which still has "
+        f"open issues. Close its remaining issues (or renumber the release) before cutting "
+        f"{version} -- releasing now would tag a milestone that is not done (ADR-0004)."
+    )
+
+
 def cmd_plan(workspace_root: str) -> int:
     try:
         info = plan(workspace_root)
@@ -661,6 +700,10 @@ def cmd_plan(workspace_root: str) -> int:
             f"({info['commit_count']} commit(s), all non-releasable). No tag would be cut."
         )
         return 0
+    collision = _milestone_collision_message(workspace_root, info["next"])
+    if collision:
+        print(f"release plan: {collision}", file=sys.stderr)
+        return 1
     print(f"Planned release: {info['level']} bump {base} -> {info['next']}  (since {tag})")
     print()
     print(render_changelog_section(info["next"], "YYYY-MM-DD", info["commits"]))
@@ -743,6 +786,10 @@ def cmd_check(workspace_root: str) -> int:
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
+    collision = _milestone_collision_message(workspace_root, version)
+    if collision:
+        print(f"release check: {collision}", file=sys.stderr)
+        return 1
     print(f"release check OK: v{version} is consistent (pyproject == CHANGELOG, tag not yet cut).")
     return 0
 
@@ -786,6 +833,10 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
         SemVer.parse(new_version)  # reject a malformed explicit version before branching
     except ValueError as exc:
         print(f"release prep: {exc}", file=sys.stderr)
+        return 1
+    collision = _milestone_collision_message(workspace_root, new_version)
+    if collision:
+        print(f"release prep: {collision}", file=sys.stderr)
         return 1
     branch = f"chore/release-v{new_version}"
     pyproject = os.path.join(workspace_root, "pyproject.toml")
@@ -898,6 +949,11 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
             cmd = [exec_path, "-p", "-", "--conversation", str(uuid.uuid4()), "--dangerously-skip-permissions", "--print-timeout", "20m0s"]
         elif engine == "claude":
             cmd = [engine, "-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
+            from solomon_harness.loop_policy import LoopPolicy
+
+            policy = LoopPolicy.from_config(workspace_root)
+            if policy.orchestrator_model:
+                cmd.extend(["--model", policy.orchestrator_model])
         else:
             cmd = [engine, "-p"]
 

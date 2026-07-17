@@ -35,7 +35,7 @@ subagents); do not review with a single generic pass.
   debt and the design this change claims to implement (link any ADR referenced in the
   PR body).
 
-## 2. Assemble and run the lenses (delegate, in parallel where possible)
+## 2. Assemble and run the lenses (architect gate first, then qa and security in parallel)
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
   `ci_quality_gates` skill, then actually run the suite —
   `uv run pytest --cov --cov-branch --cov-report=term-missing`. Confirm new and
