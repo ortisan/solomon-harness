@@ -389,13 +389,19 @@ class TestClaimGitOperations(unittest.TestCase):
         snapshot = claim.fetch_claim_ref_versions(self.local)
 
         observed = snapshot["versions"][99]
-        with (
-            patch("solomon_harness.claim._run_git", wraps=claim._run_git) as run_git,
-            patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
-            patch("solomon_harness.claim._audit_claim_event") as audit_event,
-            patch("solomon_harness.github._gh") as gh,
+        with patch.dict(
+            os.environ,
+            {"GIT_DIR": "/wrong/repo", "GH_REPO": "attacker/other"},
         ):
-            result = claim.release_claim_if_version(self.local, 99, observed)
+            with (
+                patch(
+                    "solomon_harness.claim._run_git", wraps=claim._run_git
+                ) as run_git,
+                patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+                patch("solomon_harness.claim._audit_claim_event") as audit_event,
+                patch("solomon_harness.github._gh") as gh,
+            ):
+                result = claim.release_claim_if_version(self.local, 99, observed)
 
         self.assertEqual(result, {"status": "released", "error": ""})
         self.assertEqual(
@@ -417,9 +423,14 @@ class TestClaimGitOperations(unittest.TestCase):
             audit_event.call_args.kwargs,
             {"detail": f"matched version {observed[:12]}"},
         )
-        gh.assert_called_once_with(
-            ["issue", "edit", "99", "--remove-assignee", "@me"]
+        self.assertEqual(
+            gh.call_args.args[0],
+            ["issue", "edit", "99", "--remove-assignee", "@me"],
         )
+        self.assertEqual(gh.call_args.kwargs["cwd"], self.local)
+        gh_env = gh.call_args.kwargs["env"]
+        self.assertNotIn("GIT_DIR", gh_env)
+        self.assertNotIn("GH_REPO", gh_env)
         remote = _git(self.local, "ls-remote", "origin", "refs/claims/issue-99")
         self.assertEqual(remote.stdout.strip(), "")
 

@@ -25,7 +25,7 @@ import subprocess
 import uuid
 from typing import Any, Dict, Iterable, List, Literal, Optional, Protocol, Tuple, TypedDict
 
-from solomon_harness.subprocess_env import clean_git_env
+from solomon_harness.subprocess_env import clean_gh_env, clean_git_env
 
 logger = logging.getLogger(__name__)
 
@@ -741,7 +741,11 @@ def release_claim_if_version(
         )
         from solomon_harness.github import _gh
 
-        _gh(["issue", "edit", str(issue_number), "--remove-assignee", "@me"])
+        _gh(
+            ["issue", "edit", str(issue_number), "--remove-assignee", "@me"],
+            cwd=workspace_root,
+            env=clean_gh_env(workspace_root),
+        )
         return {"status": "released", "error": ""}
 
     read_result = _run_git(

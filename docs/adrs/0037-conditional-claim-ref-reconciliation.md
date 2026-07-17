@@ -41,6 +41,11 @@ remote read as successful convergence.
   per-issue GitHub request or a mutable local tracking-ref cache.
 - Fail closed and report whether a ref was released, changed, already absent,
   or could not be verified.
+- Bound aggregate release work while reconciliation owns the repository-wide
+  lock; per-subprocess deadlines must not multiply across the full issue cap.
+- Bind GitHub cleanup to the same selected workspace as the authoritative git
+  delete, even when the parent environment points at another repository.
+- Reject non-canonical GitHub number aliases at the bulk-list trust boundary.
 - Preserve the existing owner-driven `ClaimStore.release` behavior for merge
   and stage cleanup callers.
 - Keep dry-run free of remote deletion, mirror writes, and assignee changes.
@@ -97,6 +102,27 @@ later acquisition: a claimant created after the successful ref deletion remains
 authoritative, its heartbeat repairs the mirror, and its assignee may require a
 later projection repair.
 
+The assignee cleanup is nevertheless repository-linearized with the delete's
+selected workspace: the `gh issue edit` subprocess runs with `workspace_root` as
+its working directory and an explicit environment that strips ambient `GIT_*`
+context and `GH_REPO`. The same environment and working directory survive the
+credential-heal retry. The bulk GitHub state read uses the same environment
+hygiene, and accepts only positive canonical integer issue/PR numbers rather
+than coercing boolean, floating-point, signed, whitespace, or leading-zero
+aliases.
+
+The release pass also has a 60-second aggregate **start budget** while it owns
+the repository `LoopLock`. Before each conditional delete it checks elapsed
+monotonic time; after the budget it starts no new delete and reports the
+remaining issue numbers as deferred. A release that classifies the shared claim
+origin as unavailable or malformed opens the same circuit immediately.
+Deterministic `changed` and `missing` outcomes continue while budget remains.
+An abort is explicit and makes the command exit non-zero only after the other
+independent reconciliation summaries have run. One operation already in flight
+can finish beyond the start budget, but remains bounded by the existing git and
+GitHub subprocess deadlines; the previous issue-count-multiplied worst case is
+removed.
+
 ### Consequences
 
 - Positive: A heartbeat, reclaim, or acquisition after the earlier claim
@@ -105,6 +131,11 @@ later projection repair.
   outstanding claim refs.
 - Positive: Dry-run performs a remote read but no git push and no mirror or
   assignee mutation.
+- Positive: Ambient repository variables cannot redirect the new post-delete
+  GitHub mutation or the GitHub state snapshot to a different repository.
+- Positive: Origin loss or aggregate budget exhaustion cannot start an
+  issue-count-sized sequence of remote timeouts while holding `LoopLock`.
+- Positive: Malformed GitHub number aliases cannot select another claim ref.
 - Negative: The `ClaimStore` port has two additional result-bearing methods,
   and adapters must implement their explicit version and outcome contracts.
 - Negative: A failed conditional push performs one additional exact-ref remote
@@ -114,6 +145,9 @@ later projection repair.
 - Negative: Best-effort mirror and assignee cleanup can race a new acquisition
   after a successful delete; this can create projection drift but cannot remove
   the new authoritative ref.
+- Negative: A release-pass abort can leave known closed-issue refs deferred to a
+  later reconcile run; they are reported explicitly and no active ref is deleted
+  speculatively.
 - Follow-ups: none. Existing unconditional release callers retain their current
   contract; only standing reconciliation uses the conditional path.
 
