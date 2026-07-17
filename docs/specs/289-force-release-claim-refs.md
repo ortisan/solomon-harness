@@ -193,4 +193,4 @@ which is shipped and unchanged.
 - Issue: #289
 - ADR: `docs/adrs/0027-layer-per-issue-claims-on-safety-floor.md` (claim/lease
   store) — extended, no new ADR needed
-- PR: none yet
+- PR: #314
