@@ -8,9 +8,12 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import Dict, Optional, List, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from solomon_harness.bootstrap import scaffold_new_agent
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimRefVersionSnapshot, ClaimStore
 
 
 def _subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
@@ -108,10 +111,14 @@ def handle_run(harness_dir: str, task=None) -> None:
 
     The harness does not run a model itself; Claude Code and Gemini expose the
     workflows as /solomon-* commands, while Codex exposes them as $solomon-*
-    skills. This command resumes context from project memory and lists both
-    invocation forms. It no longer simulates task execution.
+    skills. This command resumes context from project memory and renders the
+    invocation form accepted by the active host. It no longer simulates task
+    execution.
     """
     from solomon_harness.tools.database_client import DatabaseClient
+    from solomon_harness.host import current_host, workflow_invocation
+
+    host = current_host()
 
     try:
         db_client = DatabaseClient(harness_dir=harness_dir)
@@ -147,7 +154,7 @@ def handle_run(harness_dir: str, task=None) -> None:
         from solomon_harness.digest import gather_digest
 
         print()
-        for line in gather_digest(harness_dir, db):
+        for line in gather_digest(harness_dir, db, host=host):
             print(line)
 
         # Surface any pending initialization items (Docker down, memory on the
@@ -164,12 +171,14 @@ def handle_run(harness_dir: str, task=None) -> None:
             print(f"Warning: could not run healthcheck: {e}", file=sys.stderr)
 
         if task:
+            command = workflow_invocation("issue", f'"{task}"', host=host)
             print(
                 "\nTasks are not auto-run here. Start this one with a workflow, "
-                f'e.g. /solomon-issue "{task}", or $solomon-issue in Codex.'
+                f"e.g. {command}."
             )
 
-        print("\nDelivery workflows (Claude/Gemini | Codex):")
+        host_label = "Codex" if host == "codex" else "Claude/Gemini"
+        print(f"\nDelivery workflows ({host_label}):")
         workflows = [
             ("solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
             ("solomon-loop", "autonomous parallel loop over Ready issues"),
@@ -182,7 +191,8 @@ def handle_run(harness_dir: str, task=None) -> None:
             ("solomon-release", "deliver and release"),
         ]
         for name, desc in workflows:
-            print(f"  /{name:<20} ${name:<20} {desc}")
+            command = workflow_invocation(name, host=host)
+            print(f"  {command:<21} {desc}")
         print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
 
 
@@ -439,6 +449,39 @@ def handle_log(workspace_root: str, last: int) -> None:
 # missing closed issues beyond it.
 _GH_ISSUE_LIMIT = 1000
 
+# A reconciliation run owns the repository-wide LoopLock. The versioned delete
+# can spend up to one git push, one classification read, and best-effort GitHub
+# cleanup per issue, so a per-subprocess timeout alone would still permit an
+# unbounded aggregate loop. Stop starting new remote deletes after this budget;
+# one in-flight delete remains bounded by the subprocess-level timeouts.
+CLAIM_RELEASE_BUDGET_SECONDS = 60.0
+
+_FATAL_CLAIM_RELEASE_ERRORS = frozenset(
+    {
+        "claim origin unavailable",
+        "claim origin returned malformed refs",
+    }
+)
+
+
+def _canonical_github_number(raw_number: Any) -> Optional[int]:
+    """Return one positive canonical GitHub number, rejecting numeric aliases."""
+    if isinstance(raw_number, bool):
+        return None
+    if isinstance(raw_number, int):
+        return raw_number if raw_number > 0 else None
+    if not isinstance(raw_number, str):
+        return None
+    if not raw_number or not raw_number.isascii() or not raw_number.isdecimal():
+        return None
+    try:
+        number = int(raw_number)
+    except ValueError:
+        return None
+    if number <= 0 or raw_number != str(number):
+        return None
+    return number
+
 
 def _fetch_gh_states(
     list_args: List[str],
@@ -450,9 +493,10 @@ def _fetch_gh_states(
 
     Returns validated number/state records.
     gh output is treated strictly as data across the trust boundary (STRIDE): the
-    number is coerced to ``str(int(...))`` and the state must be one of the accepted
-    GitHub literals, so a malformed record is skipped rather than trusted, and no
-    field is interpolated into a query. Raises ``RuntimeError`` when gh is
+    number must be a positive canonical integer or decimal string and the state
+    must be one of the accepted GitHub literals, so a malformed record is skipped
+    rather than trusted, and no field is interpolated into a query. Raises
+    ``RuntimeError`` when gh is
     unavailable or its output cannot be parsed, so the caller reports instead of
     repairing nothing silently. This is the single fetch core shared by the issue
     and PR fetchers, which differ only in the subcommand and the accepted state set.
@@ -461,14 +505,14 @@ def _fetch_gh_states(
     import subprocess
 
     from solomon_harness.github import GH_TIMEOUT_SECONDS
-    from solomon_harness.subprocess_env import clean_git_env
+    from solomon_harness.subprocess_env import clean_gh_env
 
     try:
         proc = subprocess.run(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
-            env=clean_git_env(), timeout=GH_TIMEOUT_SECONDS,
+            env=clean_gh_env(), timeout=GH_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
@@ -499,17 +543,13 @@ def _fetch_gh_states(
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
             continue
-        raw_number = item.get("number")
-        if raw_number is None:
-            continue
-        try:
-            number = str(int(raw_number))
-        except (TypeError, ValueError):
+        number = _canonical_github_number(item.get("number"))
+        if number is None:
             continue
         state = str(item.get("state", "")).upper()
         if state not in valid_states:
             continue
-        states.append({"number": number, "state": state})
+        states.append({"number": str(number), "state": state})
     return states
 
 
@@ -695,6 +735,103 @@ def reconcile_memory(
     }
 
 
+def reconcile_claims(
+    claim_store: "ClaimStore",
+    claim_snapshot: "ClaimRefVersionSnapshot",
+    gh_states: List[Dict[str, Any]],
+    dry_run: bool = False,
+    *,
+    release_budget_seconds: float = CLAIM_RELEASE_BUDGET_SECONDS,
+    monotonic: Optional[Callable[[], float]] = None,
+) -> Dict[str, Any]:
+    """Release claims whose issue is closed in the supplied GitHub snapshot.
+
+    ``claim_snapshot`` must be captured before ``gh_states``. Open issues and
+    closed issues without refs are no-ops; dry-run records candidates without
+    mutating the store. Each live delete is conditional on the earlier observed
+    version, so a heartbeat, reclaim, or acquisition before or after the GitHub
+    snapshot fails closed instead of deleting the newer claim. Live work stops
+    before starting another delete when its aggregate budget is exhausted, or
+    immediately after a shared-origin failure; deferred issue numbers remain
+    explicit so a later run can converge them.
+    """
+    released = 0
+    already_absent = 0
+    would_release: List[int] = []
+    release_failures: List[Dict[str, Any]] = []
+    release_abort_error = ""
+    deferred_releases: List[int] = []
+    if not claim_snapshot["ok"]:
+        return {
+            "released": released,
+            "already_absent": already_absent,
+            "release_failures": release_failures,
+            "release_abort_error": release_abort_error,
+            "deferred_releases": deferred_releases,
+            "would_release": would_release,
+            "snapshot_error": claim_snapshot["error"],
+            "scanned": len(gh_states),
+        }
+    versions = claim_snapshot["versions"]
+    candidates: List[Tuple[int, str]] = []
+    for entry in gh_states:
+        if entry.get("state") != "CLOSED":
+            continue
+        issue_number = _canonical_github_number(entry.get("number"))
+        if issue_number is None:
+            continue
+        expected_version = versions.get(issue_number)
+        if expected_version is None:
+            continue
+        if dry_run:
+            would_release.append(issue_number)
+            continue
+        candidates.append((issue_number, expected_version))
+
+    if monotonic is None:
+        import time
+
+        monotonic = time.monotonic
+    release_started = monotonic()
+    for index, (issue_number, expected_version) in enumerate(candidates):
+        if monotonic() - release_started >= release_budget_seconds:
+            release_abort_error = (
+                "claim release budget exhausted after "
+                f"{release_budget_seconds:g}s"
+            )
+            deferred_releases = [number for number, _ in candidates[index:]]
+            break
+        outcome = claim_store.release_if_version(issue_number, expected_version)
+        status = outcome["status"]
+        if status == "released":
+            released += 1
+        elif status == "missing":
+            already_absent += 1
+        else:
+            release_failures.append(
+                {
+                    "issue": issue_number,
+                    "ok": False,
+                    "status": status,
+                    "error": outcome["error"],
+                }
+            )
+            if status == "failed" and outcome["error"] in _FATAL_CLAIM_RELEASE_ERRORS:
+                release_abort_error = outcome["error"]
+                deferred_releases = [number for number, _ in candidates[index + 1 :]]
+                break
+    return {
+        "released": released,
+        "already_absent": already_absent,
+        "release_failures": release_failures,
+        "release_abort_error": release_abort_error,
+        "deferred_releases": deferred_releases,
+        "would_release": would_release,
+        "snapshot_error": "",
+        "scanned": len(gh_states),
+    }
+
+
 def normalize_memory_statuses(db, dry_run: bool = False) -> dict:
     """Canonicalize any non-canonical status still stored on a non-terminal row.
 
@@ -836,6 +973,7 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
     (ADR-0006 / RAID R1). Run it from a fresh process so it never inherits the
     dead MCP write socket of bug #37.
     """
+    from solomon_harness.claim import GitClaimStore
     from solomon_harness.tools.database_client import DatabaseClient
 
     with DatabaseClient(harness_dir=workspace_root) as db:
@@ -847,6 +985,8 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
                 file=sys.stderr,
             )
             return
+        claim_store = GitClaimStore(workspace_root)
+        claim_snapshot = claim_store.fetch_versions()
         try:
             issue_states = _fetch_reconcile_issue_states(workspace_root)
             pr_states = _fetch_gh_pr_states(workspace_root)
@@ -854,11 +994,23 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             print(f"reconcile failed: {exc}", file=sys.stderr)
             sys.exit(1)
         result = reconcile_memory(db, issue_states, dry_run=dry_run)
+        claims = reconcile_claims(
+            claim_store,
+            claim_snapshot,
+            issue_states,
+            dry_run=dry_run,
+        )
         resolved_map = _build_resolved_map(issue_states, pr_states)
         tracking = reconcile_tracking_rows(db, resolved_map, dry_run=dry_run)
         # Runs last: the two passes above may have just made rows terminal, and a
         # terminal row needs no status normalization (#173).
         statuses = normalize_memory_statuses(db, dry_run=dry_run)
+
+    if claims["snapshot_error"]:
+        print(
+            f"reconcile: claim snapshot failed: {claims['snapshot_error']}",
+            file=sys.stderr,
+        )
 
     if dry_run:
         ids = ", ".join(f"#{n}" for n in result["would_repair"])
@@ -872,6 +1024,12 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile --dry-run: {len(result['would_move_board'])} board card(s) "
             f"would move to Done{board_suffix}"
+        )
+        claim_ids = ", ".join(f"#{n}" for n in claims["would_release"])
+        claim_suffix = f": {claim_ids}" if claim_ids else ""
+        print(
+            f"reconcile --dry-run: {len(claims['would_release'])} claim ref(s) "
+            f"would be released{claim_suffix}"
         )
         slugs = ", ".join(tracking["would_close"])
         track_suffix = f": {slugs}" if slugs else ""
@@ -899,6 +1057,28 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
                 f"{failure['error']}",
                 file=sys.stderr,
             )
+        print(f"reconcile: {claims['released']} claim ref(s) released")
+        if claims["already_absent"]:
+            print(
+                f"reconcile: {claims['already_absent']} claim ref(s) already absent"
+            )
+        for failure in claims["release_failures"]:
+            error_suffix = f": {failure['error']}" if failure["error"] else ""
+            print(
+                f"reconcile: claim release failed for #{failure['issue']} "
+                f"({failure['status']}){error_suffix}",
+                file=sys.stderr,
+            )
+        if claims["release_abort_error"]:
+            deferred_ids = ", ".join(
+                f"#{number}" for number in claims["deferred_releases"]
+            )
+            deferred_suffix = f"; deferred: {deferred_ids}" if deferred_ids else ""
+            print(
+                "reconcile: claim release pass aborted: "
+                f"{claims['release_abort_error']}{deferred_suffix}",
+                file=sys.stderr,
+            )
         print(
             f"reconcile: {tracking['closed']} tracking row(s) set to done "
             f"({tracking['scanned_tracking']} tracking rows scanned)"
@@ -907,6 +1087,9 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             f"reconcile: {statuses['normalized']} row(s) status-normalized "
             f"({statuses['scanned']} non-terminal rows scanned)"
         )
+
+    if claims["snapshot_error"] or claims["release_abort_error"]:
+        sys.exit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -962,7 +1145,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ig_parser = subparsers.add_parser(
         "install-global",
-        help="Install agents, /solomon commands, the session hook, and the shared memory home into ~/.claude and ~/.solomon-harness",
+        help="Install agents, Solomon workflows, the session hook, and the shared memory home into host configuration",
     )
     ig_parser.add_argument("--no-mcp", action="store_true", help="Skip MCP server registration with the host CLI")
 
@@ -987,7 +1170,7 @@ def build_parser() -> argparse.ArgumentParser:
     claim_parser.add_argument(
         "action", choices=["status", "acquire", "release"],
         help="status shows the holder; acquire claims the issue for this session "
-        "(the /solomon-start interactive gate); release clears a claim",
+        "(the interactive start-stage gate); release clears a claim",
     )
     claim_parser.add_argument(
         "issue", type=int,
@@ -1054,7 +1237,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     wt_parser = subparsers.add_parser(
         "worktree",
-        help="Create or locate the isolated git worktree for a branch (used by /solomon-start)",
+        help="Create or locate the isolated git worktree used by the start stage",
     )
     wt_parser.add_argument("branch", type=str, help="Branch name, e.g. feature/<slug>")
     wt_parser.add_argument(

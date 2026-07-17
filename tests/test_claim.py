@@ -8,7 +8,7 @@ import subprocess
 import json
 from io import StringIO
 
-from solomon_harness import claim
+from solomon_harness import claim, cli
 
 class TestClaimLiveness(unittest.TestCase):
     def test_parse_claim_commit_message(self):
@@ -277,6 +277,297 @@ class TestClaimGitOperations(unittest.TestCase):
         # Check ref is gone
         res = _git(self.local, "ls-remote", "origin", "refs/claims/issue-99")
         self.assertNotIn("refs/claims/issue-99", res.stdout)
+
+    def test_fetch_claim_ref_versions_reads_one_authoritative_remote_snapshot(self):
+        claim.claim_issue(self.local, 99, current_session_id="sess-a")
+
+        with patch("solomon_harness.claim._run_git", wraps=claim._run_git) as run_git:
+            snapshot = claim.fetch_claim_ref_versions(self.local)
+
+        self.assertTrue(snapshot["ok"])
+        self.assertEqual(snapshot["error"], "")
+        self.assertIn(99, snapshot["versions"])
+        self.assertEqual(len(snapshot["versions"][99]), 40)
+        run_git.assert_called_once()
+        self.assertEqual(
+            run_git.call_args.args[0],
+            [
+                "git",
+                "ls-remote",
+                "--refs",
+                "origin",
+                "refs/claims/issue-*",
+            ],
+        )
+
+    def test_fetch_claim_ref_versions_fails_closed_when_origin_is_unavailable(self):
+        failed = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            1,
+            stdout="",
+            stderr="origin unavailable",
+        )
+
+        with patch("solomon_harness.claim._run_git", return_value=failed):
+            snapshot = claim.fetch_claim_ref_versions(self.local)
+
+        self.assertFalse(snapshot["ok"])
+        self.assertEqual(snapshot["versions"], {})
+        self.assertEqual(snapshot["error"], "claim origin unavailable")
+
+    def test_fetch_claim_ref_versions_fails_closed_on_malformed_remote_output(self):
+        malformed = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            0,
+            stdout="not-an-object-id\trefs/claims/issue-99\n",
+            stderr="",
+        )
+
+        with patch("solomon_harness.claim._run_git", return_value=malformed):
+            snapshot = claim.fetch_claim_ref_versions(self.local)
+
+        self.assertEqual(
+            snapshot,
+            {
+                "ok": False,
+                "versions": {},
+                "error": "claim origin returned malformed refs",
+            },
+        )
+
+    def test_fetch_claim_ref_versions_fails_closed_on_malformed_claim_ref_name(self):
+        malformed = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            0,
+            stdout=f"{'a' * 40}\trefs/claims/issue-not-a-number\n",
+            stderr="",
+        )
+
+        with patch("solomon_harness.claim._run_git", return_value=malformed):
+            snapshot = claim.fetch_claim_ref_versions(self.local)
+
+        self.assertEqual(
+            snapshot,
+            {
+                "ok": False,
+                "versions": {},
+                "error": "claim origin returned malformed refs",
+            },
+        )
+
+    def test_fetch_claim_ref_versions_rejects_malformed_namespace_entries(self):
+        version = "a" * 40
+        malformed_outputs = [
+            "not-a-two-column-ls-remote-line\n",
+            f"{version}\trefs/heads/main\n",
+            f"{version}\trefs/claims/issue-099\n",
+            f"{version}\trefs/claims/issue-0\n",
+        ]
+
+        for stdout in malformed_outputs:
+            with self.subTest(stdout=stdout):
+                malformed = subprocess.CompletedProcess(
+                    ["git", "ls-remote"],
+                    0,
+                    stdout=stdout,
+                    stderr="",
+                )
+                with patch("solomon_harness.claim._run_git", return_value=malformed):
+                    snapshot = claim.fetch_claim_ref_versions(self.local)
+
+                self.assertEqual(
+                    snapshot,
+                    {
+                        "ok": False,
+                        "versions": {},
+                        "error": "claim origin returned malformed refs",
+                    },
+                )
+
+    def test_conditional_release_deletes_only_the_observed_ref_version(self):
+        claim.claim_issue(self.local, 99, current_session_id="sess-a")
+        snapshot = claim.fetch_claim_ref_versions(self.local)
+
+        observed = snapshot["versions"][99]
+        with patch.dict(
+            os.environ,
+            {"GIT_DIR": "/wrong/repo", "GH_REPO": "attacker/other"},
+        ):
+            with (
+                patch(
+                    "solomon_harness.claim._run_git", wraps=claim._run_git
+                ) as run_git,
+                patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+                patch("solomon_harness.claim._audit_claim_event") as audit_event,
+                patch("solomon_harness.github._gh") as gh,
+            ):
+                result = claim.release_claim_if_version(self.local, 99, observed)
+
+        self.assertEqual(result, {"status": "released", "error": ""})
+        self.assertEqual(
+            run_git.call_args.args[0],
+            [
+                "git",
+                "push",
+                f"--force-with-lease=refs/claims/issue-99:{observed}",
+                "origin",
+                ":refs/claims/issue-99",
+            ],
+        )
+        clear_mirror.assert_called_once_with(self.local, 99)
+        self.assertEqual(
+            audit_event.call_args.args[:3],
+            (self.local, 99, "conditional-released"),
+        )
+        self.assertEqual(
+            audit_event.call_args.kwargs,
+            {"detail": f"matched version {observed[:12]}"},
+        )
+        self.assertEqual(
+            gh.call_args.args[0],
+            ["issue", "edit", "99", "--remove-assignee", "@me"],
+        )
+        self.assertEqual(gh.call_args.kwargs["cwd"], self.local)
+        gh_env = gh.call_args.kwargs["env"]
+        self.assertNotIn("GIT_DIR", gh_env)
+        self.assertNotIn("GH_REPO", gh_env)
+        remote = _git(self.local, "ls-remote", "origin", "refs/claims/issue-99")
+        self.assertEqual(remote.stdout.strip(), "")
+
+    def test_conditional_release_preserves_a_ref_that_changed_after_snapshot(self):
+        claim.claim_issue(self.local, 99, current_session_id="sess-a")
+        snapshot = claim.fetch_claim_ref_versions(self.local)
+        observed = snapshot["versions"][99]
+        self.assertTrue(claim.refresh_claim(self.local, 99, "sess-a"))
+
+        with (
+            patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+            patch("solomon_harness.claim._audit_claim_event") as audit_event,
+            patch("solomon_harness.github._gh") as gh,
+        ):
+            result = claim.release_claim_if_version(self.local, 99, observed)
+
+        self.assertEqual(result, {"status": "changed", "error": ""})
+        clear_mirror.assert_not_called()
+        audit_event.assert_not_called()
+        gh.assert_not_called()
+        current = claim.fetch_claim_ref_versions(self.local)
+        self.assertNotEqual(current["versions"][99], observed)
+        self.assertEqual(claim.get_claim(self.local, 99)["session_id"], "sess-a")
+
+    def test_cross_snapshot_refresh_survives_a_later_closed_github_snapshot(self):
+        claim.claim_issue(self.local, 99, current_session_id="sess-a")
+        snapshot = claim.fetch_claim_ref_versions(self.local)
+        observed = snapshot["versions"][99]
+        self.assertTrue(claim.refresh_claim(self.local, 99, "sess-a"))
+
+        result = cli.reconcile_claims(
+            claim.GitClaimStore(self.local),
+            snapshot,
+            [{"number": "99", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["release_failures"][0]["status"], "changed")
+        current = claim.fetch_claim_ref_versions(self.local)
+        self.assertNotEqual(current["versions"][99], observed)
+        self.assertEqual(claim.get_claim(self.local, 99)["session_id"], "sess-a")
+
+    def test_conditional_release_rejects_an_invalid_observed_version_without_git(self):
+        with (
+            patch("solomon_harness.claim._run_git") as run_git,
+            patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+            patch("solomon_harness.claim._audit_claim_event") as audit_event,
+            patch("solomon_harness.github._gh") as gh,
+        ):
+            result = claim.release_claim_if_version(self.local, 99, "not-an-object-id")
+
+        self.assertEqual(
+            result,
+            {"status": "failed", "error": "invalid claim ref version"},
+        )
+        run_git.assert_not_called()
+        clear_mirror.assert_not_called()
+        audit_event.assert_not_called()
+        gh.assert_not_called()
+
+    def test_conditional_release_distinguishes_missing_from_unavailable(self):
+        push_failed = subprocess.CompletedProcess(
+            ["git", "push"],
+            1,
+            stdout="",
+            stderr="lease rejected",
+        )
+        ref_missing = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            0,
+            stdout="",
+            stderr="",
+        )
+        read_failed = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            1,
+            stdout="",
+            stderr="origin unavailable",
+        )
+
+        with patch(
+            "solomon_harness.claim._run_git",
+            side_effect=[push_failed, ref_missing],
+        ):
+            missing = claim.release_claim_if_version(self.local, 99, "a" * 40)
+        with patch(
+            "solomon_harness.claim._run_git",
+            side_effect=[push_failed, read_failed],
+        ):
+            unavailable = claim.release_claim_if_version(self.local, 99, "a" * 40)
+
+        self.assertEqual(missing, {"status": "missing", "error": ""})
+        self.assertEqual(
+            unavailable,
+            {"status": "failed", "error": "claim origin unavailable"},
+        )
+
+    def test_conditional_release_classifies_malformed_and_unchanged_reads(self):
+        expected = "a" * 40
+        push_failed = subprocess.CompletedProcess(
+            ["git", "push"],
+            1,
+            stdout="",
+            stderr="lease rejected",
+        )
+        malformed_read = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            0,
+            stdout="not-an-object-id\trefs/claims/issue-99\n",
+            stderr="",
+        )
+        unchanged_read = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            0,
+            stdout=f"{expected}\trefs/claims/issue-99\n",
+            stderr="",
+        )
+
+        with patch(
+            "solomon_harness.claim._run_git",
+            side_effect=[push_failed, malformed_read],
+        ):
+            malformed = claim.release_claim_if_version(self.local, 99, expected)
+        with patch(
+            "solomon_harness.claim._run_git",
+            side_effect=[push_failed, unchanged_read],
+        ):
+            unchanged = claim.release_claim_if_version(self.local, 99, expected)
+
+        self.assertEqual(
+            malformed,
+            {"status": "failed", "error": "claim origin returned malformed refs"},
+        )
+        self.assertEqual(
+            unchanged,
+            {"status": "failed", "error": "conditional claim release rejected"},
+        )
 
     # -- B5b: fail-closed reclaim --------------------------------------------
 
@@ -781,6 +1072,22 @@ class TestGitClaimStoreDelegation(unittest.TestCase):
             result = self.store.fetch_all()
         mock_fn.assert_called_once_with(self.local)
         self.assertEqual(result, "sentinel-f")
+
+        with patch(
+            "solomon_harness.claim.fetch_claim_ref_versions",
+            return_value="sentinel-v",
+        ) as mock_fn:
+            result = self.store.fetch_versions()
+        mock_fn.assert_called_once_with(self.local)
+        self.assertEqual(result, "sentinel-v")
+
+        with patch(
+            "solomon_harness.claim.release_claim_if_version",
+            return_value="sentinel-c",
+        ) as mock_fn:
+            result = self.store.release_if_version(1, "a" * 40)
+        mock_fn.assert_called_once_with(self.local, 1, "a" * 40)
+        self.assertEqual(result, "sentinel-c")
 
         with patch("solomon_harness.claim.filter_unclaimed", return_value="sentinel-u") as mock_fn:
             result = self.store.filter_unclaimed([1, 2], session_id="sess-x")

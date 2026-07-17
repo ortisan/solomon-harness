@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 

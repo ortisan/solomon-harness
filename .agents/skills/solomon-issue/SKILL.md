@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
@@ -67,7 +67,7 @@ Steps:
      with owners, non-functional constraints stated with numbers, sized by eng.
    - **Definition of Done** — the conditions that close the story: every acceptance
      criterion demonstrably met with covering tests, code reviewed and merged with CI
-     green, and docs updated. `/solomon-review` and `/solomon-release` enforce it as
+     green, and docs updated. `$solomon-review` and `$solomon-release` enforce it as
      the close gate.
 
 4. Choose labels: `type:feature` plus a priority (`priority:p0|p1|p2`, justified
@@ -103,7 +103,7 @@ Steps:
    targets, current versus expected behavior, the concrete approach) and
    **Verification** (the exact command that proves the change works) — carry the
    explicit placeholder `TBD (refine)` unless the demand already pins them down;
-   `/solomon-refine` resolves them before the issue is Ready. Any other section
+   `$solomon-refine` resolves them before the issue is Ready. Any other section
    without content carries the same placeholder. Run
    `uv run python scripts/spec-lint.py docs/specs/<N>-<slug>.md` and fix until
    it exits 0. The spec ships with the issue's first implementation PR —
@@ -129,6 +129,6 @@ Steps:
      to record the produced edge (ADR-0018).
 
 10. Output the issue URL and a one-line summary (number, title, priority, area).
-    Note that the next stage is `/solomon-refine` to move it `Backlog → Ready`.
+    Note that the next stage is `$solomon-refine` to move it `Backlog → Ready`.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.

@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
@@ -97,7 +97,7 @@ Each lens returns findings tagged blocker, major, or minor.
 ## 5. Persist to memory
 - `mcp__solomon-memory__save_decision` with the review outcome (title, rationale,
   outcome go/no-go, author, branch, commit_sha) in ADR shape. State in the rationale
-  whether this review was auto-chained from `/solomon-start` or invoked independently
+  whether this review was auto-chained from `$solomon-start` or invoked independently
   (ADR-0019 provenance), so the two are distinguishable in memory.
 - On approval only: write the compact review -> release handoff contract to
   `.solomon/handoffs/issue-<issue>-review-to-release.md` using the template in
@@ -113,7 +113,7 @@ Each lens returns findings tagged blocker, major, or minor.
 - `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` on approval, recording the produced edge.
 
 ## 6. Merge (interactive only — #172, ADR-0020)
-Review owns the merge-to-`Done` transition; `/solomon-release` never merges an
+Review owns the merge-to-`Done` transition; `$solomon-release` never merges an
 individual PR (it is milestone-gated and only cuts a version tag once a
 milestone's issues are already `Done` — see `docs/release-policy.md`).
 
@@ -131,8 +131,8 @@ milestone's issues are already `Done` — see `docs/release-policy.md`).
   ready, and that a human must complete the merge, either directly
   (`gh pr merge` plus `uv run python -m solomon_harness.github merge --pr
   <n> --issue <issue>` to converge the board/memory) or by re-running
-  `/solomon-review ARGUMENTS` interactively. This mirrors the same
-  interactive/headless branching `/solomon-start` already uses for its own
+  `$solomon-review ARGUMENTS` interactively. This mirrors the same
+  interactive/headless branching `$solomon-start` already uses for its own
   confirmation points — merge is not gated by the autonomy level (#183 is a
   separate, unresolved gap this decision does not depend on).
 - On a decline, or in a headless run: the card stays at `QA`, the PR stays
