@@ -13,6 +13,7 @@ CLI:
 import argparse
 import json
 import os
+import stat
 import sys
 from typing import List, Optional, Set
 
@@ -36,6 +37,16 @@ TRADING_DEPS = ("backtrader", "ccxt", "zipline", "vectorbt", "ta-lib", "alpaca")
 FRONTEND_DEPS = ("react", "next", "@angular/core", "vue", "svelte")
 AUTH_DEPS = ("authlib", "python-jose", "passport", "next-auth", "@auth/core", "pyjwt", "oauthlib")
 
+SCAN_SKIP_DIRS = frozenset(
+    {".git", "node_modules", ".venv", "__pycache__", "build", "dist"}
+)
+MANIFEST_NAMES = frozenset(
+    {"package.json", "pyproject.toml", "requirements.txt", "pipfile", "go.mod"}
+)
+MAX_SCAN_DEPTH = 4
+MAX_MANIFEST_BYTES = 512 * 1024
+MAX_MANIFEST_TOTAL_BYTES = 2 * 1024 * 1024
+
 
 def discover_agents(workspace_root: str) -> Set[str]:
     agents_dir = os.path.join(workspace_root, "agents")
@@ -53,14 +64,13 @@ def discover_agents(workspace_root: str) -> Set[str]:
 _discover_agents = discover_agents
 
 
-def _scan(workspace_root: str, max_depth: int = 4) -> tuple:
+def _scan(workspace_root: str, max_depth: int = MAX_SCAN_DEPTH) -> tuple:
     """Return (set of file extensions, set of basenames) up to max_depth."""
     exts: Set[str] = set()
     names: Set[str] = set()
-    skip = {".git", "node_modules", ".venv", "__pycache__", "build", "dist"}
     root_depth = workspace_root.rstrip(os.sep).count(os.sep)
     for dirpath, dirnames, filenames in os.walk(workspace_root):
-        dirnames[:] = [d for d in dirnames if d not in skip]
+        dirnames[:] = sorted(d for d in dirnames if d not in SCAN_SKIP_DIRS)
         if dirpath.count(os.sep) - root_depth >= max_depth:
             dirnames[:] = []
             continue
@@ -72,17 +82,37 @@ def _scan(workspace_root: str, max_depth: int = 4) -> tuple:
     return exts, names
 
 
-def _manifest_text(workspace_root: str) -> str:
-    """Concatenate dependency manifests so we can sniff frameworks by name."""
+def _manifest_text(workspace_root: str, max_depth: int = MAX_SCAN_DEPTH) -> str:
+    """Concatenate bounded dependency manifests found in a monorepo tree."""
     chunks = []
-    for rel in ("package.json", "pyproject.toml", "requirements.txt", "Pipfile", "go.mod"):
-        path = os.path.join(workspace_root, rel)
-        if os.path.isfile(path):
+    consumed = 0
+    root_depth = workspace_root.rstrip(os.sep).count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(workspace_root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SCAN_SKIP_DIRS)
+        if dirpath.count(os.sep) - root_depth >= max_depth:
+            dirnames[:] = []
+            continue
+        for name in sorted(filenames):
+            if name.lower() not in MANIFEST_NAMES:
+                continue
+            path = os.path.join(dirpath, name)
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    chunks.append(f.read().lower())
+                mode = os.stat(path, follow_symlinks=False).st_mode
+                if not stat.S_ISREG(mode):
+                    continue
+                with open(path, "rb") as f:
+                    content = f.read(MAX_MANIFEST_BYTES + 1)
             except OSError:
-                pass
+                continue
+            if len(content) > MAX_MANIFEST_BYTES:
+                continue
+            if consumed + len(content) > MAX_MANIFEST_TOTAL_BYTES:
+                continue
+            try:
+                chunks.append(content.decode("utf-8").lower())
+            except UnicodeDecodeError:
+                continue
+            consumed += len(content)
     return "\n".join(chunks)
 
 

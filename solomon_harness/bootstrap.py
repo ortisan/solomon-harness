@@ -419,10 +419,13 @@ def retrofit_instruction_docs(workspace_root: str) -> None:
 
 
 def scaffold_agents(workspace_root: str) -> None:
-    """Ensure each agent has main.py and .agent/config.json (create-only).
+    """Ensure each agent has safe local scaffolding (create-only).
 
     Non-destructive: a hand-authored entrypoint or config is never overwritten;
     only genuinely missing scaffolding is filled in from the bundled template.
+    The entrypoint is only useful when this workspace contains the local
+    ``solomon_harness`` runtime it imports, so capability-only projects receive
+    configuration but never an ambient-environment Python launcher.
     """
     agents_dir = os.path.join(workspace_root, "agents")
     if not os.path.isdir(agents_dir):
@@ -431,6 +434,9 @@ def scaffold_agents(workspace_root: str) -> None:
     template_dir = os.path.join(package_dir, "templates", "harness")
     main_src = os.path.join(template_dir, "main.py")
     config_src = os.path.join(template_dir, ".agent", "config.json")
+    has_local_runtime = os.path.isfile(
+        os.path.join(workspace_root, "solomon_harness", "cli.py")
+    )
 
     for name in sorted(os.listdir(agents_dir)):
         agent_dir = os.path.join(agents_dir, name)
@@ -438,7 +444,7 @@ def scaffold_agents(workspace_root: str) -> None:
             continue  # not an agent directory
 
         main_dst = os.path.join(agent_dir, "main.py")
-        if os.path.isfile(main_src) and not os.path.isfile(main_dst):
+        if has_local_runtime and os.path.isfile(main_src) and not os.path.isfile(main_dst):
             shutil.copy2(main_src, main_dst)
 
         config_dst = os.path.join(agent_dir, ".agent", "config.json")

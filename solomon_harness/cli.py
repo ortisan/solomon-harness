@@ -53,12 +53,15 @@ def _generate_integrations(workspace_root: str) -> None:
 
     Loaded from scripts/generate-integrations.py so the compile step keeps the
     host integrations in sync with the agents/ and .claude/commands/ sources. A
-    no-op when the script is absent.
+    packaged Claude-only fallback when the project script is absent.
     """
     import importlib.util
 
     gi_path = os.path.join(workspace_root, "scripts", "generate-integrations.py")
     if not os.path.isfile(gi_path):
+        from solomon_harness.integrations import generate_claude_agents
+
+        generate_claude_agents(workspace_root)
         return
     spec = importlib.util.spec_from_file_location("generate_integrations", gi_path)
     if spec and spec.loader:

@@ -2,7 +2,11 @@ import os
 import tempfile
 import unittest
 
-from solomon_harness.agent_selection import CORE_AGENTS, select_agents
+from solomon_harness.agent_selection import (
+    CORE_AGENTS,
+    MAX_MANIFEST_BYTES,
+    select_agents,
+)
 
 
 def _project(files: dict) -> str:
@@ -59,6 +63,36 @@ class TestAgentSelection(unittest.TestCase):
     def test_trading_signal(self):
         root = _project({"requirements.txt": "ccxt\nbacktrader\n", "strategy.py": "x"})
         self.assertIn("quant_trader", select_agents(root))
+
+    def test_trading_signal_from_nested_monorepo_manifest(self):
+        root = _project({
+            "qtrader/packages/qtrader-strategy/pyproject.toml": (
+                "[project.optional-dependencies]\ntalib = ['ta-lib>=0.5.1']\n"
+            ),
+            "qtrader/packages/qtrader-strategy/src/strategy.py": "x",
+        })
+        self.assertIn("quant_trader", select_agents(root))
+
+    def test_manifest_beyond_scan_depth_is_ignored(self):
+        root = _project({
+            "main.py": "x",
+            "one/two/three/four/five/requirements.txt": "ccxt\n",
+        })
+        self.assertNotIn("quant_trader", select_agents(root))
+
+    def test_manifests_in_skipped_directories_are_ignored(self):
+        files = {"main.py": "x"}
+        for directory in (".git", "node_modules", ".venv", "__pycache__", "build", "dist"):
+            files[f"{directory}/requirements.txt"] = "ccxt\n"
+        root = _project(files)
+        self.assertNotIn("quant_trader", select_agents(root))
+
+    def test_oversized_manifest_is_ignored(self):
+        root = _project({
+            "main.py": "x",
+            "requirements.txt": "ccxt\n" + ("x" * MAX_MANIFEST_BYTES),
+        })
+        self.assertNotIn("quant_trader", select_agents(root))
 
     def test_auth_signal(self):
         root = _project({"requirements.txt": "authlib\n", "auth.py": "x"})
