@@ -248,15 +248,18 @@ class TestReconcileMemory(unittest.TestCase):
 
 
 class _FakeClaimStore:
-    def __init__(self, versions, release_results=None, fetch_error=""):
+    def __init__(self, versions, release_results=None, fetch_error="", events=None):
         self.versions = versions
         self.release_results = release_results or {}
         self.fetch_error = fetch_error
+        self.events = events
         self.fetch_version_calls = 0
         self.release_calls = []
 
     def fetch_versions(self):
         self.fetch_version_calls += 1
+        if self.events is not None:
+            self.events.append("claim snapshot")
         return {
             "ok": not self.fetch_error,
             "versions": {} if self.fetch_error else self.versions,
@@ -272,11 +275,26 @@ class _FakeClaimStore:
 
 
 class TestReconcileClaims(unittest.TestCase):
+    def test_uses_the_supplied_claim_snapshot_without_reading_a_newer_one(self):
+        store = _FakeClaimStore({173: "newer-sha"})
+        snapshot = {"ok": True, "versions": {173: "observed-sha"}, "error": ""}
+
+        result = cli.reconcile_claims(
+            store,
+            snapshot,
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(store.fetch_version_calls, 0)
+        self.assertEqual(store.release_calls, [(173, "observed-sha")])
+        self.assertEqual(result["released"], 1)
+
     def test_closed_claim_is_force_released_and_counted(self):
         store = _FakeClaimStore({173: "sha-173"})
 
         result = cli.reconcile_claims(
             store,
+            store.fetch_versions(),
             [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
         )
 
@@ -299,6 +317,7 @@ class TestReconcileClaims(unittest.TestCase):
 
         result = cli.reconcile_claims(
             store,
+            store.fetch_versions(),
             [
                 {"number": "200", "state": "OPEN", "board_status": "In Progress"},
                 {"number": "201", "state": "CLOSED", "board_status": "Done"},
@@ -315,6 +334,7 @@ class TestReconcileClaims(unittest.TestCase):
 
         result = cli.reconcile_claims(
             store,
+            store.fetch_versions(),
             [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
             dry_run=True,
         )
@@ -339,6 +359,7 @@ class TestReconcileClaims(unittest.TestCase):
 
         result = cli.reconcile_claims(
             store,
+            store.fetch_versions(),
             [
                 {"number": "173", "state": "CLOSED", "board_status": "Done"},
                 {"number": "201", "state": "CLOSED", "board_status": "Done"},
@@ -370,6 +391,7 @@ class TestReconcileClaims(unittest.TestCase):
 
         result = cli.reconcile_claims(
             store,
+            store.fetch_versions(),
             [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
         )
 
@@ -382,6 +404,7 @@ class TestReconcileClaims(unittest.TestCase):
 
         result = cli.reconcile_claims(
             store,
+            store.fetch_versions(),
             [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
         )
 
@@ -1123,6 +1146,27 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
         self.assertEqual(store.fetch_version_calls, 1)
         self.assertEqual(store.release_calls, [])
         self.assertIn("1 claim ref(s) would be released: #6", out.getvalue())
+
+    def test_claim_ref_snapshot_precedes_the_github_issue_snapshot(self):
+        events = []
+        store = _FakeClaimStore({}, events=events)
+
+        def fetch_issue_states(_workspace_root):
+            events.append("github snapshot")
+            return [{"number": "6", "state": "CLOSED", "board_status": "Done"}]
+
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(cli, "_fetch_reconcile_issue_states", fetch_issue_states),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=True)
+
+        self.assertEqual(events[:2], ["claim snapshot", "github snapshot"])
 
     def test_live_run_reports_claim_release_failure_and_continues(self):
         issue_states = [

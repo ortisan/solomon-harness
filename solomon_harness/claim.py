@@ -655,12 +655,17 @@ def _parse_claim_ref_versions(stdout: str) -> Optional[Dict[int, str]]:
             return None
         prefix = "refs/claims/issue-"
         if not refname.startswith(prefix):
-            continue
+            logger.warning("claim origin returned unexpected ref name %s", refname)
+            return None
         issue_text = refname[len(prefix) :]
         if not (issue_text.isascii() and issue_text.isdigit()):
-            logger.warning("ignoring malformed claim ref name %s", refname)
-            continue
-        versions[int(issue_text)] = version
+            logger.warning("claim origin returned malformed claim ref name %s", refname)
+            return None
+        issue_number = int(issue_text)
+        if issue_number <= 0 or str(issue_number) != issue_text:
+            logger.warning("claim origin returned non-canonical claim ref name %s", refname)
+            return None
+        versions[issue_number] = version
     return versions
 
 

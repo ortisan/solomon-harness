@@ -8,7 +8,7 @@ import subprocess
 import json
 from io import StringIO
 
-from solomon_harness import claim
+from solomon_harness import claim, cli
 
 class TestClaimLiveness(unittest.TestCase):
     def test_parse_claim_commit_message(self):
@@ -335,12 +335,66 @@ class TestClaimGitOperations(unittest.TestCase):
             },
         )
 
+    def test_fetch_claim_ref_versions_fails_closed_on_malformed_claim_ref_name(self):
+        malformed = subprocess.CompletedProcess(
+            ["git", "ls-remote"],
+            0,
+            stdout=f"{'a' * 40}\trefs/claims/issue-not-a-number\n",
+            stderr="",
+        )
+
+        with patch("solomon_harness.claim._run_git", return_value=malformed):
+            snapshot = claim.fetch_claim_ref_versions(self.local)
+
+        self.assertEqual(
+            snapshot,
+            {
+                "ok": False,
+                "versions": {},
+                "error": "claim origin returned malformed refs",
+            },
+        )
+
+    def test_fetch_claim_ref_versions_rejects_malformed_namespace_entries(self):
+        version = "a" * 40
+        malformed_outputs = [
+            "not-a-two-column-ls-remote-line\n",
+            f"{version}\trefs/heads/main\n",
+            f"{version}\trefs/claims/issue-099\n",
+            f"{version}\trefs/claims/issue-0\n",
+        ]
+
+        for stdout in malformed_outputs:
+            with self.subTest(stdout=stdout):
+                malformed = subprocess.CompletedProcess(
+                    ["git", "ls-remote"],
+                    0,
+                    stdout=stdout,
+                    stderr="",
+                )
+                with patch("solomon_harness.claim._run_git", return_value=malformed):
+                    snapshot = claim.fetch_claim_ref_versions(self.local)
+
+                self.assertEqual(
+                    snapshot,
+                    {
+                        "ok": False,
+                        "versions": {},
+                        "error": "claim origin returned malformed refs",
+                    },
+                )
+
     def test_conditional_release_deletes_only_the_observed_ref_version(self):
         claim.claim_issue(self.local, 99, current_session_id="sess-a")
         snapshot = claim.fetch_claim_ref_versions(self.local)
 
         observed = snapshot["versions"][99]
-        with patch("solomon_harness.claim._run_git", wraps=claim._run_git) as run_git:
+        with (
+            patch("solomon_harness.claim._run_git", wraps=claim._run_git) as run_git,
+            patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+            patch("solomon_harness.claim._audit_claim_event"),
+            patch("solomon_harness.github._gh"),
+        ):
             result = claim.release_claim_if_version(self.local, 99, observed)
 
         self.assertEqual(result, {"status": "released", "error": ""})
@@ -354,6 +408,7 @@ class TestClaimGitOperations(unittest.TestCase):
                 ":refs/claims/issue-99",
             ],
         )
+        clear_mirror.assert_called_once_with(self.local, 99)
         remote = _git(self.local, "ls-remote", "origin", "refs/claims/issue-99")
         self.assertEqual(remote.stdout.strip(), "")
 
@@ -363,9 +418,29 @@ class TestClaimGitOperations(unittest.TestCase):
         observed = snapshot["versions"][99]
         self.assertTrue(claim.refresh_claim(self.local, 99, "sess-a"))
 
-        result = claim.release_claim_if_version(self.local, 99, observed)
+        with patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror:
+            result = claim.release_claim_if_version(self.local, 99, observed)
 
         self.assertEqual(result, {"status": "changed", "error": ""})
+        clear_mirror.assert_not_called()
+        current = claim.fetch_claim_ref_versions(self.local)
+        self.assertNotEqual(current["versions"][99], observed)
+        self.assertEqual(claim.get_claim(self.local, 99)["session_id"], "sess-a")
+
+    def test_cross_snapshot_refresh_survives_a_later_closed_github_snapshot(self):
+        claim.claim_issue(self.local, 99, current_session_id="sess-a")
+        snapshot = claim.fetch_claim_ref_versions(self.local)
+        observed = snapshot["versions"][99]
+        self.assertTrue(claim.refresh_claim(self.local, 99, "sess-a"))
+
+        result = cli.reconcile_claims(
+            claim.GitClaimStore(self.local),
+            snapshot,
+            [{"number": "99", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["release_failures"][0]["status"], "changed")
         current = claim.fetch_claim_ref_versions(self.local)
         self.assertNotEqual(current["versions"][99], observed)
         self.assertEqual(claim.get_claim(self.local, 99)["session_id"], "sess-a")

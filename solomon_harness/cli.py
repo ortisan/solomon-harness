@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from solomon_harness.bootstrap import scaffold_new_agent
 
 if TYPE_CHECKING:
-    from solomon_harness.claim import ClaimStore
+    from solomon_harness.claim import ClaimRefVersionSnapshot, ClaimStore
 
 
 def _subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
@@ -691,32 +691,32 @@ def reconcile_memory(
 
 def reconcile_claims(
     claim_store: "ClaimStore",
+    claim_snapshot: "ClaimRefVersionSnapshot",
     gh_states: List[Dict[str, Any]],
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Release claims whose issue is closed in the supplied GitHub snapshot.
 
-    Claim-ref versions are read once from the authoritative remote through the
-    injected store. Open issues and closed issues without refs are no-ops;
-    dry-run records candidates without mutating the store. Each live delete is
-    conditional on the observed version, so a concurrent heartbeat or reclaim
-    fails closed instead of deleting the newer claim.
+    ``claim_snapshot`` must be captured before ``gh_states``. Open issues and
+    closed issues without refs are no-ops; dry-run records candidates without
+    mutating the store. Each live delete is conditional on the earlier observed
+    version, so a heartbeat, reclaim, or acquisition before or after the GitHub
+    snapshot fails closed instead of deleting the newer claim.
     """
-    snapshot = claim_store.fetch_versions()
     released = 0
     already_absent = 0
     would_release: List[int] = []
     release_failures: List[Dict[str, Any]] = []
-    if not snapshot["ok"]:
+    if not claim_snapshot["ok"]:
         return {
             "released": released,
             "already_absent": already_absent,
             "release_failures": release_failures,
             "would_release": would_release,
-            "snapshot_error": snapshot["error"],
+            "snapshot_error": claim_snapshot["error"],
             "scanned": len(gh_states),
         }
-    versions = snapshot["versions"]
+    versions = claim_snapshot["versions"]
     for entry in gh_states:
         if entry.get("state") != "CLOSED":
             continue
@@ -905,6 +905,8 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
                 file=sys.stderr,
             )
             return
+        claim_store = GitClaimStore(workspace_root)
+        claim_snapshot = claim_store.fetch_versions()
         try:
             issue_states = _fetch_reconcile_issue_states(workspace_root)
             pr_states = _fetch_gh_pr_states(workspace_root)
@@ -913,7 +915,10 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             sys.exit(1)
         result = reconcile_memory(db, issue_states, dry_run=dry_run)
         claims = reconcile_claims(
-            GitClaimStore(workspace_root), issue_states, dry_run=dry_run
+            claim_store,
+            claim_snapshot,
+            issue_states,
+            dry_run=dry_run,
         )
         resolved_map = _build_resolved_map(issue_states, pr_states)
         tracking = reconcile_tracking_rows(db, resolved_map, dry_run=dry_run)
