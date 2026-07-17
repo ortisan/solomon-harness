@@ -279,13 +279,90 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
 
         from solomon_harness import cli
 
+        events = []
         with (
-            patch("solomon_harness.bootstrap.scaffold_agents") as mock_scaffold,
-            patch.object(cli, "_generate_integrations") as mock_gen,
+            patch(
+                "solomon_harness.bootstrap.scaffold_agents",
+                side_effect=lambda _root: events.append("scaffold"),
+            ) as mock_scaffold,
+            patch(
+                "solomon_harness.agent_selection.select_agents",
+                side_effect=lambda _root: events.append("select") or ["qa"],
+            ) as mock_select,
+            patch.object(
+                cli,
+                "_generate_integrations",
+                side_effect=lambda _root, **_kwargs: events.append("generate"),
+            ) as mock_gen,
         ):
             cli.main(harness_dir=WORKSPACE, argv=["compile"])
-        mock_scaffold.assert_called_once()
-        mock_gen.assert_called_once()
+        mock_scaffold.assert_called_once_with(WORKSPACE)
+        mock_select.assert_called_once_with(WORKSPACE)
+        mock_gen.assert_called_once_with(WORKSPACE, allowed_names=["qa"])
+        self.assertEqual(events, ["scaffold", "select", "generate"])
+
+    def test_packaged_generator_filters_and_reconciles_allowed_agents(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp, "quant_trader")
+            self._write_external_agent(tmp, "execution_engineer")
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 2)
+            output = os.path.join(tmp, ".claude", "agents")
+            human = os.path.join(output, "custom.md")
+            with open(human, "w", encoding="utf-8") as f:
+                f.write("# Human-managed wrapper\n")
+
+            self.assertEqual(
+                generate_claude_agents(tmp, allowed_names=["quant_trader"]),
+                1,
+            )
+            self.assertTrue(os.path.isfile(os.path.join(output, "quant_trader.md")))
+            self.assertFalse(os.path.lexists(os.path.join(output, "execution_engineer.md")))
+            self.assertTrue(os.path.isfile(human))
+
+    def test_compile_fallback_exposes_only_stack_selected_agents(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from solomon_harness import cli
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp, "quant_trader")
+            self._write_external_agent(tmp, "execution_engineer")
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+            with open(os.path.join(tmp, "requirements.txt"), "w", encoding="utf-8") as f:
+                f.write("ccxt\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 2)
+            cli.main(harness_dir=tmp, argv=["compile"])
+
+            output = os.path.join(tmp, ".claude", "agents")
+            self.assertTrue(os.path.isfile(os.path.join(output, "quant_trader.md")))
+            self.assertFalse(os.path.lexists(os.path.join(output, "execution_engineer.md")))
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                cli.main(harness_dir=tmp, argv=["agents", "list"])
+            self.assertIn("quant_trader", stdout.getvalue())
+            self.assertNotIn("execution_engineer", stdout.getvalue())
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                cli.main(
+                    harness_dir=tmp,
+                    argv=["agents", "show", "execution_engineer"],
+                )
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("does not exist", stderr.getvalue())
 
     def test_external_compile_uses_packaged_generator_and_root_trust_file(self):
         import tempfile
@@ -302,6 +379,8 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
                 f.write("# Quant Trader Scope\n")
             with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
                 f.write("# Project instructions\n")
+            with open(os.path.join(tmp, "requirements.txt"), "w", encoding="utf-8") as f:
+                f.write("ccxt\n")
             with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
                 f.write("# Quant Trader Persona\n")
             with open(

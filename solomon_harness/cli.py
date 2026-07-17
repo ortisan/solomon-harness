@@ -48,7 +48,11 @@ def _subagent_description(filepath: str) -> str:
     return ""
 
 
-def _generate_integrations(workspace_root: str) -> None:
+def _generate_integrations(
+    workspace_root: str,
+    *,
+    allowed_names: Optional[List[str]] = None,
+) -> None:
     """Regenerate Claude agents, Gemini commands, and Codex skills.
 
     Loaded from scripts/generate-integrations.py so the compile step keeps the
@@ -61,7 +65,9 @@ def _generate_integrations(workspace_root: str) -> None:
     if not os.path.isfile(gi_path):
         from solomon_harness.integrations import generate_claude_agents
 
-        generate_claude_agents(workspace_root)
+        if allowed_names is None:
+            raise ValueError("fallback integration generation requires selected agent names")
+        generate_claude_agents(workspace_root, allowed_names=allowed_names)
         return
     spec = importlib.util.spec_from_file_location("generate_integrations", gi_path)
     if spec and spec.loader:
@@ -1191,9 +1197,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         sys.exit(cli_worktree(workspace_root, args.branch, base=args.base))
     elif args.command == "compile":
         from solomon_harness.bootstrap import scaffold_agents
+        from solomon_harness.agent_selection import select_agents
+
         scaffold_agents(workspace_root)
+        allowed_names = select_agents(workspace_root)
         # Keep the host-tool integrations in sync so they never drift from source.
-        _generate_integrations(workspace_root)
+        _generate_integrations(workspace_root, allowed_names=allowed_names)
     elif args.command == "index":
         from solomon_harness.bootstrap import index_codebase
         from solomon_harness.tools.database_client import DatabaseClient

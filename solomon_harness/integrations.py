@@ -3,7 +3,7 @@
 import os
 import re
 import stat
-from typing import List, Optional, Set
+from typing import Iterable, List, Optional, Set
 
 from solomon_harness.secure_paths import (
     UnsafePathError,
@@ -446,12 +446,20 @@ def _reconcile_stale_wrappers(output_fd: int, active_agents: Set[str]) -> None:
         unlink_at(output_fd, name)
 
 
-def generate_claude_agents(workspace_root: str, *, harness_style: bool = False) -> int:
+def generate_claude_agents(
+    workspace_root: str,
+    *,
+    harness_style: bool = False,
+    allowed_names: Optional[Iterable[str]] = None,
+) -> int:
     """Compile and reconcile project agents using directory-FD-anchored writes."""
     workspace_fd = open_root_directory(workspace_root)
     output_fd = agents_fd = None
     try:
         names = _agent_names_at(workspace_fd)
+        if allowed_names is not None:
+            allowed = set(allowed_names)
+            names = [name for name in names if name in allowed]
         if not names:
             output_fd = _output_directory_at(workspace_fd, create=False)
             if output_fd is not None:
