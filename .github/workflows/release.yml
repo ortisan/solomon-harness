@@ -190,6 +190,9 @@ jobs:
           if [[ "${HEAD_REF}" == chore/release-* ]]; then
             echo "Release-prep PR: running the fail-closed release check."
             uv run python -m solomon_harness.cli release check
+            echo "Asserting the prep PR touches only pyproject.toml + CHANGELOG.md."
+            git fetch origin "${BASE_REF}" -q
+            uv run python -m solomon_harness.cli release check-footprint --base "origin/${BASE_REF}"
           else
             echo "Non-release PR: asserting it does not hand-edit the version or add a CHANGELOG heading."
             git fetch origin "${BASE_REF}" -q

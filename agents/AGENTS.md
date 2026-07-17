@@ -181,6 +181,10 @@ context and persist what it did. Reach it through the harness:
 - `DatabaseClient(harness_dir=...)` reads and writes memory from code.
 - Backend and credentials come from the agent's `.agent/config.json`; SurrealDB
   credentials can be overridden with `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS`.
+- `HARNESS_DB_PATH` forces the SQLite backend at the given file path, overriding a
+  configured SurrealDB provider even when the shared server is reachable. Use it to
+  isolate tests and ad-hoc runs from the real multi-tenant store; the write-through
+  mirror follows to a `memory-mirror` sibling of that path.
 
 The memory is also exposed as the `solomon-memory` MCP server
 (`solomon_harness/mcp_server.py`, run with `python -m solomon_harness.mcp_server`),
