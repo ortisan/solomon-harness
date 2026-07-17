@@ -200,3 +200,47 @@ def repair_git_config(repo_root: str) -> None:
     """Repair the local git config by unsetting stray core.worktree and setting core.bare to false."""
     _run_git(repo_root, ["config", "--local", "--unset", "core.worktree"], check=False)
     _run_git(repo_root, ["config", "--local", "core.bare", "false"], check=False)
+
+
+def _popen_git(repo_root: str, *args: str) -> str:
+    """Run git via Popen (not subprocess.run: run_stage's tests mock that as
+    the engine, and the snapshot must keep real git access) and return stdout."""
+    proc = subprocess.Popen(
+        ["git", "-C", repo_root, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=clean_git_env(),
+    )
+    out, err = proc.communicate()
+    if proc.returncode != 0:
+        raise WorktreeError(f"git {' '.join(args)} failed: {err.strip()}")
+    return out
+
+
+def workspace_snapshot(repo_root: str) -> Optional[dict]:
+    """Fingerprint of the local branch refs and working-tree status, or None
+    outside git. Start-stage work lands in a sibling worktree, so shared refs
+    are where real work shows up; porcelain status covers direct edits."""
+    if not os.path.exists(os.path.join(repo_root, ".git")):
+        return None
+    try:
+        refs = _popen_git(
+            repo_root, "for-each-ref", "refs/heads", "--format=%(refname) %(objectname)"
+        )
+        status = _popen_git(repo_root, "status", "--porcelain")
+    except Exception:
+        return None
+    return {"refs": refs, "status": status}
+
+
+def workspace_changed(repo_root: str, baseline: Optional[dict]) -> bool:
+    """True when the repository moved since ``baseline``; fail-open on a
+    missing baseline or snapshot failure so a broken git never demotes a real
+    success to a skipped no-op."""
+    if baseline is None:
+        return True
+    current = workspace_snapshot(repo_root)
+    if current is None:
+        return True
+    return current != baseline

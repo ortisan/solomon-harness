@@ -1453,7 +1453,7 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
         mock_store.get.assert_called_once_with(99)
         mock_store.pr_protected.assert_called_once_with(99)
         mock_store.acquire.assert_called_once_with(99, session_id=unittest.mock.ANY)
-        mock_store.release.assert_not_called()
+        mock_store.release.assert_called_once_with(99, session_id=unittest.mock.ANY)
 
     @patch("solomon_harness.claim.release_claim")
     @patch("solomon_harness.claim.claim_issue", return_value=True)
@@ -1464,11 +1464,19 @@ class TestRunStageClaimLifecycle(unittest.TestCase):
     ):
         from solomon_harness import workflows
 
+        local = self.local
+
         class _Proc:
             returncode = 0
 
-        with patch("subprocess.run", return_value=_Proc()):
-            rc = workflows.run_stage(self.local, "start", ["99"], engine="claude")
+        def engine(cmd, *args, **kwargs):
+            if cmd and cmd[0] == "claude":
+                with open(os.path.join(local, "delivered.txt"), "w", encoding="utf-8") as f:
+                    f.write("x")
+            return _Proc()
+
+        with patch("subprocess.run", side_effect=engine):
+            rc = workflows.run_stage(local, "start", ["99"], engine="claude")
 
         self.assertEqual(rc, 0)
         mock_release.assert_not_called()
