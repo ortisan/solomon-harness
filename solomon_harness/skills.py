@@ -1,11 +1,16 @@
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from typing import List, Optional
+
+from solomon_harness import skill_acquisition
+
+# The mechanical copy lives in the acquisition chokepoint; re-exported so existing
+# callers/tests that reference ``skills.install_skill`` keep resolving (#108).
+install_skill = skill_acquisition.install_skill
 
 def get_workspace_root(start_dir: Optional[str] = None) -> str:
     """Locate workspace root from start_dir or current working directory."""
@@ -64,35 +69,6 @@ def discover_skill_files(tree_root: str) -> dict:
     return found
 
 
-def install_skill(src_path: str, agent_skills_dir: str, name: str) -> str:
-    """Installs a skill into an agent's skills directory.
-
-    A standalone ``<name>.md`` is copied to ``<agent_skills_dir>/<name>.md``.
-    A packaged ``SKILL.md`` is treated as a folder skill: its whole parent
-    directory is copied to ``<agent_skills_dir>/<name>/`` so sibling assets and
-    scripts are preserved. Returns the path that was written.
-    """
-    os.makedirs(agent_skills_dir, exist_ok=True)
-    if os.path.basename(src_path) == "SKILL.md":
-        target_dir = os.path.join(agent_skills_dir, name)
-        if os.path.isdir(target_dir):
-            shutil.rmtree(target_dir)
-        shutil.copytree(os.path.dirname(src_path), target_dir)
-        return target_dir
-    target = os.path.join(agent_skills_dir, f"{name}.md")
-    shutil.copy2(src_path, target)
-    return target
-
-
-def _clone(source: dict, dest: str) -> None:
-    subprocess.run(
-        ["git", "clone", "--depth", "1", source["url"], dest],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
 def cmd_sources(root: str) -> int:
     sources = load_sources(root)
     if not sources:
@@ -111,7 +87,10 @@ def cmd_list(root: str, source_name: str) -> int:
         return 1
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            _clone(source, tmp)
+            skill_acquisition._pinned_clone(source, tmp)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
         except subprocess.CalledProcessError as exc:
             print(f"Error: failed to clone {source.get('url')}: {exc.stderr}", file=sys.stderr)
             return 1
@@ -134,17 +113,18 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
     if not os.path.isdir(agent_dir):
         print(f"Error: unknown agent '{agent}' (no agents/{agent}).", file=sys.stderr)
         return 1
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            _clone(source, tmp)
-        except subprocess.CalledProcessError as exc:
-            print(f"Error: failed to clone {source.get('url')}: {exc.stderr}", file=sys.stderr)
-            return 1
-        skills = discover_skill_files(tmp)
-        if skill not in skills:
-            print(f"Error: skill '{skill}' not found in {source_name}. Run 'list {source_name}'.", file=sys.stderr)
-            return 1
-        target = install_skill(skills[skill], os.path.join(agent_dir, "skills"), skill)
+    # The one guarded chokepoint: pinned clone + scan/quarantine/confine + install.
+    # There is no unpinned or unscanned path into agents/<name>/skills/ (#108).
+    try:
+        target = skill_acquisition.acquire_skill(
+            root, source, skill, os.path.join(agent_dir, "skills")
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        print(f"Error: failed to fetch {source.get('url')}: {exc.stderr}", file=sys.stderr)
+        return 1
     print(f"Installed '{skill}' from {source_name} into {os.path.relpath(target, root)}")
     return 0
 
