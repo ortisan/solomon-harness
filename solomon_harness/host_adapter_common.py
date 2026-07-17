@@ -31,10 +31,13 @@ from solomon_harness.adapter_ownership import (
     strategy_for_adapter,
 )
 from solomon_harness.install_transaction import (
+    InstallFilePublication,
     ensure_install_parent,
+    record_install_file_publication,
     record_install_mutation,
 )
 from solomon_harness.layout import HarnessPaths, confined_read_path
+from solomon_harness.subprocess_env import clean_git_env
 
 
 HOSTS = ("agy", "claude", "codex")
@@ -59,6 +62,74 @@ _CAPABILITY_STATES = {
     "pending_trust",
     "unavailable",
 }
+
+
+def is_harness_source_checkout(root: Path) -> bool:
+    """Prove that ``root`` is the Git-owned solomon-harness source tree."""
+
+    workspace = root.resolve()
+    environment = clean_git_env(os.fspath(workspace))
+
+    def git(*arguments: str, capture: bool = False) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(  # noqa: S603 - private callers supply fixed Git argv
+                ["git", "-C", os.fspath(workspace), *arguments],  # noqa: S607 - operator PATH
+                check=False,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except OSError:
+            return None
+
+    top_level = git("rev-parse", "--show-toplevel", capture=True)
+    source_paths = (
+        "pyproject.toml",
+        "agents/AGENTS.md",
+        "solomon_harness/__init__.py",
+        "solomon_harness/mcp_server.py",
+        "scripts/generate-integrations.py",
+    )
+    indexed = tuple(
+        git("ls-files", "--error-unmatch", "--", relative)
+        for relative in source_paths
+    )
+    committed = tuple(
+        git("cat-file", "-e", f"HEAD:{relative}")
+        for relative in source_paths
+    )
+    indexed_pyproject = git("show", ":pyproject.toml", capture=True)
+    committed_pyproject = git("show", "HEAD:pyproject.toml", capture=True)
+    repository_pyproject = (
+        committed_pyproject
+        if committed_pyproject is not None and committed_pyproject.returncode == 0
+        else indexed_pyproject
+    )
+    try:
+        git_root = Path(top_level.stdout.strip()).resolve() if top_level else None
+        metadata = tomllib.loads(
+            repository_pyproject.stdout if repository_pyproject else ""
+        )
+        project = metadata.get("project", {})
+        project_name = project.get("name") if isinstance(project, Mapping) else None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        git_root = None
+        project_name = None
+    return bool(
+        top_level
+        and top_level.returncode == 0
+        and git_root == workspace
+        and repository_pyproject is not None
+        and repository_pyproject.returncode == 0
+        and project_name == "solomon-harness"
+        and all(
+            (index is not None and index.returncode == 0)
+            or (head is not None and head.returncode == 0)
+            for index, head in zip(indexed, committed, strict=True)
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -183,11 +254,20 @@ def _atomic_adapter_write(root: Path, path: Path, payload: bytes, mode: int) -> 
         with os.fdopen(descriptor, "wb") as stream:
             _write_adapter_payload(stream, payload)
         os.chmod(temporary, mode)
+        info = temporary.stat()
+        publication = InstallFilePublication(
+            content=payload,
+            mode=stat.S_IMODE(info.st_mode),
+            atime_ns=info.st_atime_ns,
+            mtime_ns=info.st_mtime_ns,
+            device=info.st_dev,
+            inode=info.st_ino,
+        )
         os.replace(temporary, path)
         # Register immediately after the atomic visibility point. If the
         # directory durability flush fails, an install transaction can now
         # compare-and-swap the published bytes back to its snapshot.
-        record_install_mutation(path)
+        record_install_file_publication(path, publication)
         if os.name != "nt":
             directory = os.open(path.parent, os.O_RDONLY)
             try:
@@ -316,42 +396,7 @@ class _Recorder:
 
         if self._source_checkout is not None:
             return self._source_checkout
-        top_level = self._git("rev-parse", "--show-toplevel", capture=True)
-        source_paths = (
-            "pyproject.toml",
-            "agents/AGENTS.md",
-            "solomon_harness/__init__.py",
-            "solomon_harness/mcp_server.py",
-            "scripts/generate-integrations.py",
-        )
-        tracked = tuple(
-            self._git("ls-files", "--error-unmatch", "--", relative)
-            for relative in source_paths
-        )
-        try:
-            git_root = Path(top_level.stdout.strip()).resolve() if top_level else None
-            metadata = tomllib.loads(
-                (self.root / "pyproject.toml").read_text(encoding="utf-8")
-            )
-            project = metadata.get("project", {})
-            project_name = project.get("name") if isinstance(project, Mapping) else None
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-            git_root = None
-            project_name = None
-        self._source_checkout = bool(
-            top_level
-            and top_level.returncode == 0
-            and git_root == self.root.resolve()
-            and project_name == "solomon-harness"
-            and all(
-                process is not None and process.returncode == 0 for process in tracked
-            )
-            and all(
-                (self.root / relative).is_file()
-                and not (self.root / relative).is_symlink()
-                for relative in source_paths
-            )
-        )
+        self._source_checkout = is_harness_source_checkout(self.root)
         return self._source_checkout
 
     def clean_tracked_generated_source(self, path: Path, current: bytes) -> bool:

@@ -5,7 +5,7 @@ description: Governs how the practice_curator routes a free-text demand to the b
 
 # Capability Broker
 
-Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-reviewed acquisition (adapt an external skill into an agent, or create a new agent). Routing and gap detection are read-only and deterministic; every acquisition is a draft PR a human approves. This skill fixes the contract; the model is recorded in ADR-0008.
+Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-gated acquisition. Routing and gap detection are read-only and deterministic. An external skill adaptation uses a reviewed draft PR; a new agent is registered directly in the installed harness catalog without changing the consumer project's Git history. This skill fixes the contract recorded in ADR-0008 and amended by ADR-0035.
 
 ## The verdict contract
 
@@ -22,12 +22,13 @@ The gap verdict is the hand-off shape the acquisition slices consume; do not wid
 
 The demand→agent match is supplied by the host LLM (the harness's model), passed in as a callable matcher port (`matcher(demand, catalog) -> Match`, Python 3.10+); in tests it is a deterministic stub. The router core itself opens no network socket and instantiates no ML model — it only loads the catalog read-only (each `agents/<name>/agents/<name>.md` role file, discovered via `agent_selection.discover_agents`) and builds the verdict. Do not add an embedded classifier; an ML matcher would need its own ADR.
 
-## Read-only, orchestration-time, reviewed
+## Read-only routing and human-gated acquisition
 
 - Slice A (routing/gap) mutates nothing under `agents/`; it fails closed (raises) on an empty or unreadable catalog rather than guessing.
 - Interception is orchestration-time, not runtime: a newly adapted or created agent is invocable only after `compile` + a session restart.
-- Autonomy ceiling: the broker may at most open a draft PR for an adapt/create, one agent per PR, via the reviewed-PR path (#20); it never merges. Merge is a human gate.
-- Trust boundary (from the acquisition slices): external sources are allowlisted in `skill-sources.json`, fetches are pinned, fetched content is untrusted data that is never executed, and the security agent reviews every adapt/create PR.
+- `create_agent` requires a valid installed manifest, writes only below `.agents/solomon/agents/<name>`, recompiles the Claude, AGY, and Codex adapters, records a best-effort memory decision, and returns `mode: direct_registration` with `agent_path` and `restart_required: true`. It creates no branch, commit, pull request, or PR handoff, and it does not rewrite the package-owned `.agents/solomon/AGENTS.md`.
+- `adapt_skill` retains the reviewed-PR path: external sources are allowlisted in `skill-sources.json`, fetches are pinned, fetched content is untrusted data that is never executed, and the security agent reviews the single-agent draft PR before merge.
+- Autonomy ceiling: both acquisitions remain behind the interactive human gate. The broker never merges. Headless and autonomous stages report the gap but cannot apply either action.
 
 ## Common pitfalls
 
@@ -35,7 +36,8 @@ The demand→agent match is supplied by the host LLM (the harness's model), pass
 - Returning a "route" to an agent that is not in the catalog — a matcher contract violation; the core rejects it (fails closed) rather than routing to a non-existent agent.
 - Treating a missing-skill case as a brand-new agent — if a `nearest_agent` covers the domain, the action is `adapt_skill`, not `create_agent`.
 - Letting the matcher reach into the network or a model from inside the core — keep the match behind the injected port so the core stays deterministic and testable.
-- Acquiring (adapt/create) without a human-approved draft PR, or touching more than one agent per PR — both violate the reviewed, never-bulk stance.
+- Sending `create_agent` through the reviewed-PR path — this changes the consumer repository for a harness-local registration and violates ADR-0035.
+- Applying `adapt_skill` without a human-approved single-agent draft PR — external content still requires the reviewed path and security verdict.
 
 ## Definition of done
 
@@ -43,4 +45,5 @@ The demand→agent match is supplied by the host LLM (the harness's model), pass
 - [ ] Ambiguity surfaces ranked `alternatives`; a route to an unknown agent and an empty catalog both fail closed.
 - [ ] A gap names the `missing_capability` and the correct `suggested_action` (`adapt_skill` with a `nearest_agent`, else `create_agent`).
 - [ ] The contract here matches ADR-0008 and the `route()`/verdict shapes in `capability_router.py`.
-- [ ] Acquisition paths (when implemented) open a single-agent draft PR with human approval, never merging autonomously.
+- [ ] `create_agent` registers once below `.agents/solomon/agents`, compiles all host adapters, leaves Git and GitHub untouched, and reports that a session restart is required.
+- [ ] `adapt_skill` opens a human-approved single-agent draft PR and never merges autonomously.

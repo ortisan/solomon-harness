@@ -42,7 +42,11 @@ Steps:
       (`{"kind": "adapt_skill", "source_name": "...", "skill_name": "...", "agent_name": "...", "issue": "<issue_number>"}` or
       `{"kind": "create_agent", "agent_name": "...", "title": "...", "description": "...", "duties": ["..."], "issue": "<issue_number>"}`),
       then run `uv run python -I -m solomon_harness.cli broker apply --file .agents/solomon/state/broker/proposal-<issue_number>.json`.
-      Report the created PR and stop execution (do not proceed to Step 2).
+      Read the result JSON and stop execution (do not proceed to Step 2):
+      - `adapt_skill` returns `mode: reviewed_pr`; report its `pr_url`.
+      - `create_agent` returns `mode: direct_registration`; report its `agent_path`,
+        confirm that native adapters were compiled, and tell the user that
+        `restart_required: true` means a new session is needed to load the agent.
     - Gap verdict, non-interactive/headless run: acquisition is human-gated and
       `broker apply` refuses it (exit 3) — do not attempt it. Record the gap
       verdict in the run report and continue the refinement without acquiring.

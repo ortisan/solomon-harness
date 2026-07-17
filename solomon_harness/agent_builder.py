@@ -19,8 +19,10 @@ def build_agent(
     description: str,
     title: Optional[str] = None,
     duties: Optional[List[str]] = None,
+    *,
+    reconcile_adapters: bool = True,
 ) -> None:
-    """Delegated scaffolding logic for creating a new agent."""
+    """Build one agent; an outer install transaction may own adapter reconciliation."""
     from solomon_harness.bootstrap import scaffold_new_agent
 
     description = _single_line(description, "description")
@@ -34,4 +36,5 @@ def build_agent(
         description,
         title=title,
         duties=duties,
+        reconcile_adapters=reconcile_adapters,
     )

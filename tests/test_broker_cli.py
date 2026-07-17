@@ -115,7 +115,13 @@ class TestBrokerApplyGate(BrokerCliTestBase):
         })
         with mock.patch(
             "solomon_harness.curator.broker_agent",
-            return_value="https://github.com/mock/pr/1",
+            return_value=os.path.join(
+                self.root,
+                ".agents",
+                "solomon",
+                "agents",
+                "game_designer",
+            ),
         ) as broker_agent:
             code, out = self._run(
                 broker_cli.apply_from_file, path, self.root, env
@@ -137,7 +143,31 @@ class TestBrokerApplyGate(BrokerCliTestBase):
     def test_human_interactive_session_is_allowed(self):
         code, out, broker_agent = self._apply({})
         self.assertEqual(code, broker_cli.EXIT_OK)
-        broker_agent.assert_called_once()
+        broker_agent.assert_called_once_with(
+            self.root,
+            "game_designer",
+            "Game Designer",
+            "Designs game economies.",
+            ["design economies"],
+            issue_id="50",
+        )
+        self.assertEqual(
+            out,
+            {
+                "agent": "game_designer",
+                "agent_path": os.path.join(
+                    self.root,
+                    ".agents",
+                    "solomon",
+                    "agents",
+                    "game_designer",
+                ),
+                "kind": "create_agent",
+                "mode": "direct_registration",
+                "restart_required": True,
+            },
+        )
+        self.assertNotIn("pr_url", out)
 
 
 class TestBrokerApplyValidation(BrokerCliTestBase):
@@ -200,6 +230,15 @@ class TestBrokerApplyValidation(BrokerCliTestBase):
             self.root, "anthropic", "mobile_testing", "qa", issue_id="50"
         )
         agent.assert_not_called()
+        self.assertEqual(
+            out,
+            {
+                "agent": "qa",
+                "kind": "adapt_skill",
+                "mode": "reviewed_pr",
+                "pr_url": "https://github.com/mock/pr/2",
+            },
+        )
 
     def test_skill_name_md_suffix_is_normalized(self):
         code, out, skill, agent = self._apply_payload({

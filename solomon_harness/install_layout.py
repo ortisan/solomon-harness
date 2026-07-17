@@ -18,7 +18,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from solomon_harness.adapter_ownership import (
     AdapterOwnershipError,
@@ -36,11 +36,13 @@ from solomon_harness.install_lock import (
     operation_lock_path,
 )
 from solomon_harness.install_transaction import (
+    InstallFilePublication,
     UnsafeInstallDirectoryError,
     current_install_root,
     ensure_install_directory,
     ensure_install_parent,
     observe_install_mutations,
+    record_install_file_publication,
     record_install_mutation,
 )
 from solomon_harness.layout import HarnessPaths
@@ -160,6 +162,8 @@ class _FileSnapshot:
     mode: int = 0
     atime_ns: int = 0
     mtime_ns: int = 0
+    device: int = 0
+    inode: int = 0
 
 
 def _capture_file_snapshot(path: Path) -> _FileSnapshot:
@@ -175,6 +179,8 @@ def _capture_file_snapshot(path: Path) -> _FileSnapshot:
             stat.S_IMODE(info.st_mode),
             info.st_atime_ns,
             info.st_mtime_ns,
+            info.st_dev,
+            info.st_ino,
         )
     if path.is_dir():
         info = path.stat()
@@ -183,6 +189,8 @@ def _capture_file_snapshot(path: Path) -> _FileSnapshot:
             mode=stat.S_IMODE(info.st_mode),
             atime_ns=info.st_atime_ns,
             mtime_ns=info.st_mtime_ns,
+            device=info.st_dev,
+            inode=info.st_ino,
         )
     return _FileSnapshot("missing")
 
@@ -195,6 +203,8 @@ def _same_file_state(left: _FileSnapshot, right: _FileSnapshot) -> bool:
         and left.content == right.content
         and left.mode == right.mode
         and left.mtime_ns == right.mtime_ns
+        and left.device == right.device
+        and left.inode == right.inode
     )
 
 
@@ -228,6 +238,34 @@ class _RollbackSnapshot:
         current = target
         if current not in self.files:
             self.unknown_mutations.add(current)
+        while True:
+            if current in self.files:
+                self.expected[current] = _capture_file_snapshot(current)
+            if current == self.root or self.root not in current.parents:
+                break
+            current = current.parent
+
+    def checkpoint_publication(
+        self,
+        path: Path,
+        publication: InstallFilePublication,
+    ) -> None:
+        """Record a proven file state without sampling its public path."""
+
+        target = path if path.is_absolute() else self.root / path
+        if target not in self.files:
+            self.unknown_mutations.add(target)
+        else:
+            self.expected[target] = _FileSnapshot(
+                "file",
+                publication.content,
+                publication.mode,
+                publication.atime_ns,
+                publication.mtime_ns,
+                publication.device,
+                publication.inode,
+            )
+        current = target.parent
         while True:
             if current in self.files:
                 self.expected[current] = _capture_file_snapshot(current)
@@ -721,8 +759,17 @@ def _atomic_write(
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary, mode)
+        info = temporary.stat()
+        publication = InstallFilePublication(
+            content=content,
+            mode=stat.S_IMODE(info.st_mode),
+            atime_ns=info.st_atime_ns,
+            mtime_ns=info.st_mtime_ns,
+            device=info.st_dev,
+            inode=info.st_ino,
+        )
         os.replace(temporary, path)
-        record_install_mutation(path)
+        record_install_file_publication(path, publication)
     finally:
         temporary_existed = temporary.exists()
         temporary.unlink(missing_ok=True)
@@ -1863,7 +1910,11 @@ def install_project(
             _transaction_targets(workspace, source, desired, previous_entries),
         )
         try:
-            with observe_install_mutations(snapshot.checkpoint, root=workspace):
+            with observe_install_mutations(
+                snapshot.checkpoint,
+                publication_observer=snapshot.checkpoint_publication,
+                root=workspace,
+            ):
                 with install_operation_lock(workspace):
                     return _apply_install(
                         workspace,
@@ -2059,7 +2110,11 @@ def compile_project_adapters(root: str | Path) -> InstallResult:
             _transaction_targets(workspace, workspace, {}, previous_entries),
         )
         try:
-            with observe_install_mutations(snapshot.checkpoint, root=workspace):
+            with observe_install_mutations(
+                snapshot.checkpoint,
+                publication_observer=snapshot.checkpoint_publication,
+                root=workspace,
+            ):
                 with install_operation_lock(workspace):
                     return _apply_adapter_compile(
                         workspace,
@@ -2077,6 +2132,182 @@ def compile_project_adapters(root: str | Path) -> InstallResult:
                     f"transaction: {detail}"
                 ) from exc
             raise
+
+
+def register_agent_extension(
+    root: str | Path,
+    agent_name: str,
+    mutation: Callable[[Path], None],
+) -> Path:
+    """Run one installed-agent scaffold and adapter compile atomically.
+
+    The source directory is consumer-owned and intentionally absent from the
+    install manifest. The surrounding transaction nevertheless snapshots its
+    fixed scaffold shape together with every adapter/manifest target so a
+    failed or conflicting compile restores the exact pre-registration state.
+    """
+
+    if re.fullmatch(r"[a-z0-9_]+", agent_name) is None:
+        raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
+
+    declared_paths = HarnessPaths(root)
+    workspace = declared_paths.root.resolve()
+    paths = HarnessPaths(workspace)
+    with non_materializing_operation_lock(workspace):
+        from solomon_harness.host_adapter_common import is_harness_source_checkout
+
+        if is_harness_source_checkout(workspace):
+            raise InstallConflictError(
+                "Direct agent registration is not allowed in a "
+                "solomon-harness source checkout"
+            )
+
+        manifest = load_manifest(workspace)
+        if not manifest:
+            raise InstallConflictError(
+                "Direct agent registration requires a valid installed harness manifest"
+            )
+
+        agents_relative = paths.agents.relative_to(workspace).as_posix()
+        agents_path = _confined_path(workspace, agents_relative)
+        if not agents_path.is_dir():
+            raise InstallConflictError(
+                "Direct agent registration requires the canonical installed agent catalog"
+            )
+
+        entries = _manifest_entries(manifest)
+        required_core = (
+            paths.rules,
+            paths.pyproject,
+            paths.python_package / "install_layout.py",
+        )
+        valid_identity = bool(
+            manifest.get("layout_version") == LAYOUT_VERSION
+            and manifest.get("hosts") == list(HOSTS)
+            and isinstance(manifest.get("harness_version"), str)
+            and manifest.get("harness_version")
+        )
+        for required in required_core:
+            relative = required.relative_to(workspace).as_posix()
+            entry = entries.get(relative)
+            valid_identity = bool(
+                valid_identity
+                and entry is not None
+                and entry.get("owner") == "core"
+                and required.is_file()
+                and _owned_entry_is_unchanged(required, entry)
+            )
+        if not valid_identity:
+            raise InstallConflictError(
+                "Direct agent registration requires a complete installed harness identity"
+            )
+
+        agent_path = _confined_path(
+            workspace,
+            (paths.agents / agent_name).relative_to(workspace).as_posix(),
+        )
+        targets = _transaction_targets(workspace, workspace, {}, entries)
+        registration_relatives = (
+            f".agents/solomon/agents/{agent_name}/persona.md",
+            f".agents/solomon/agents/{agent_name}/main.py",
+            f".agents/solomon/agents/{agent_name}/.agent/config.json",
+            f".agents/solomon/agents/{agent_name}/agents/{agent_name}.md",
+            f".agents/solomon/agents/{agent_name}/skills/scope_and_mandate.md",
+            f".agents/agents/{agent_name}/agent.md",
+            f".claude/agents/{agent_name}.md",
+            f".codex/agents/{agent_name}.toml",
+        )
+        targets.update(
+            _confined_path(workspace, relative)
+            for relative in registration_relatives
+        )
+        snapshot = _RollbackSnapshot(workspace, targets)
+        try:
+            with observe_install_mutations(
+                snapshot.checkpoint,
+                publication_observer=snapshot.checkpoint_publication,
+                root=workspace,
+            ):
+                with install_operation_lock(workspace):
+                    mutation(agent_path)
+                    compile_result = _apply_adapter_compile(
+                        workspace,
+                        paths,
+                        manifest,
+                        entries,
+                        snapshot,
+                    )
+                    if compile_result.conflicts:
+                        raise InstallConflictError(
+                            "Agent adapter conflicts prevented registration: "
+                            + ", ".join(compile_result.conflicts)
+                        )
+                    _validate_registered_agent(
+                        workspace,
+                        paths,
+                        agent_name,
+                        agent_path,
+                    )
+        except BaseException as exc:
+            rollback_conflicts = snapshot.rollback()
+            if rollback_conflicts:
+                detail = ", ".join(rollback_conflicts)
+                raise InstallConflictError(
+                    "Rollback preserved paths changed outside the agent "
+                    f"registration transaction: {detail}"
+                ) from exc
+            raise
+        return declared_paths.agents / agent_name
+
+
+def _validate_registered_agent(
+    workspace: Path,
+    paths: HarnessPaths,
+    agent_name: str,
+    agent_path: Path,
+) -> None:
+    """Fail closed unless source, adapters, and ownership are complete."""
+
+    required_source = tuple(
+        _confined_path(workspace, relative)
+        for relative in (
+            f".agents/solomon/agents/{agent_name}/persona.md",
+            f".agents/solomon/agents/{agent_name}/main.py",
+            f".agents/solomon/agents/{agent_name}/.agent/config.json",
+            f".agents/solomon/agents/{agent_name}/agents/{agent_name}.md",
+            f".agents/solomon/agents/{agent_name}/skills/scope_and_mandate.md",
+        )
+    )
+    if (
+        not agent_path.is_dir()
+        or agent_path.is_symlink()
+        or any(path.is_symlink() or not path.is_file() for path in required_source)
+    ):
+        raise InstallConflictError(
+            f"Installed agent scaffold is incomplete: {agent_path}"
+        )
+
+    manifest = load_manifest(workspace)
+    entries = _manifest_entries(manifest)
+    adapters = tuple(
+        _confined_path(workspace, relative)
+        for relative in (
+            f".agents/agents/{agent_name}/agent.md",
+            f".claude/agents/{agent_name}.md",
+            f".codex/agents/{agent_name}.toml",
+        )
+    )
+    for adapter in adapters:
+        relative = adapter.relative_to(workspace).as_posix()
+        entry = entries.get(relative)
+        if (
+            not adapter.is_file()
+            or entry is None
+            or entry.get("owner") != "adapter"
+        ):
+            raise InstallConflictError(
+                f"Installed agent adapter registration is incomplete: {relative}"
+            )
 
 
 def _apply_adapter_compile(

@@ -5,7 +5,8 @@ import datetime
 import stat
 import subprocess
 import tempfile
-from typing import Callable, List, Dict, Any, Optional
+from pathlib import Path
+from typing import Callable, Iterable, List, Dict, Any, Optional
 
 from solomon_harness.wiki_bootstrap import (
     is_github_remote,
@@ -445,13 +446,19 @@ def retrofit_instruction_docs(workspace_root: str) -> None:
             f.write(content + RETROFIT_MARKER + "\n" + block)
 
 
-def scaffold_agents(workspace_root: str) -> None:
+def scaffold_agents(
+    workspace_root: str,
+    *,
+    agent_names: Optional[Iterable[str]] = None,
+) -> None:
     """Ensure each agent has main.py and .agent/config.json (create-only).
 
     Non-destructive: a hand-authored entrypoint or config is never overwritten;
     only genuinely missing scaffolding is filled in from the bundled template.
+    ``agent_names`` confines an individual registration to its own source tree.
     """
     from solomon_harness.layout import HarnessPaths, confined_path, confined_read_path
+    from solomon_harness.install_transaction import create_install_file
 
     paths = HarnessPaths(workspace_root)
     agents_dir = os.fspath(confined_path(paths.root, paths.resolve_agents()))
@@ -467,8 +474,14 @@ def scaffold_agents(workspace_root: str) -> None:
             package_dir, os.path.join(template_dir, ".agent", "config.json")
         )
     )
+    installed_extension = paths.manifest.is_file()
 
-    for name in sorted(os.listdir(agents_dir)):
+    names = (
+        sorted(os.listdir(agents_dir))
+        if agent_names is None
+        else sorted(set(agent_names))
+    )
+    for name in names:
         agent_dir = os.fspath(confined_path(paths.root, os.path.join(agents_dir, name)))
         role_path = os.fspath(
             confined_path(paths.root, os.path.join(agent_dir, "agents", f"{name}.md"))
@@ -478,17 +491,32 @@ def scaffold_agents(workspace_root: str) -> None:
 
         main_dst = os.fspath(confined_path(paths.root, os.path.join(agent_dir, "main.py")))
         if os.path.isfile(main_src) and not os.path.isfile(main_dst):
-            shutil.copy2(main_src, main_dst)
+            if installed_extension:
+                create_install_file(
+                    paths.root,
+                    Path(main_dst),
+                    Path(main_src).read_bytes(),
+                    stat.S_IMODE(Path(main_src).stat().st_mode),
+                )
+            else:
+                shutil.copy2(main_src, main_dst)
 
         config_dst = os.fspath(
             confined_path(paths.root, os.path.join(agent_dir, ".agent", "config.json"))
         )
         if os.path.isfile(config_src) and not os.path.isfile(config_dst):
-            os.makedirs(os.path.dirname(config_dst), exist_ok=True)
             with open(config_src, "r", encoding="utf-8") as f:
                 content = f.read().replace("{{AGENT_NAME}}", name)
-            with open(config_dst, "w", encoding="utf-8") as f:
-                f.write(content)
+            if installed_extension:
+                create_install_file(
+                    paths.root,
+                    Path(config_dst),
+                    content.encode("utf-8"),
+                )
+            else:
+                os.makedirs(os.path.dirname(config_dst), exist_ok=True)
+                with open(config_dst, "w", encoding="utf-8") as f:
+                    f.write(content)
 
 
 def _reconcile_host_adapters(workspace_root: str) -> Any:
@@ -511,26 +539,74 @@ def scaffold_new_agent(
     description: str,
     title: Optional[str] = None,
     duties: Optional[List[str]] = None,
+    *,
+    reconcile_adapters: bool = True,
 ) -> None:
-    """Scaffold a new agent directory from templates (create-only)."""
+    """Scaffold one agent, optionally leaving adapter commit to an outer transaction."""
     import re
-    from solomon_harness.layout import HarnessPaths, confined_path, confined_read_path
+    from solomon_harness.layout import (
+        HarnessPaths,
+        PathConfinementError,
+        confined_path,
+        confined_read_path,
+    )
+    from solomon_harness.install_transaction import create_install_file
 
     if not re.match(r"^[a-z0-9_]+$", name):
         raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
 
     paths = HarnessPaths(workspace_root)
-    agents_path = confined_path(paths.root, paths.resolve_agents())
+    installed_extension = paths.manifest.is_file()
+    selected_agents = paths.agents if installed_extension else paths.resolve_agents()
+    agents_path = confined_path(paths.root, selected_agents)
     agents_dir = os.fspath(agents_path)
     agent_path = confined_path(paths.root, agents_path / name)
     agent_dir = os.fspath(agent_path)
 
     if agent_path.exists():
+        if installed_extension:
+            try:
+                required = tuple(
+                    confined_read_path(paths.root, candidate)
+                    for candidate in (
+                        agent_path / "persona.md",
+                        agent_path / "main.py",
+                        agent_path / ".agent" / "config.json",
+                        agent_path / "agents" / f"{name}.md",
+                        agent_path / "skills" / "scope_and_mandate.md",
+                    )
+                )
+            except PathConfinementError as exc:
+                from solomon_harness.install_layout import InstallConflictError
+
+                raise InstallConflictError(
+                    f"Installed agent scaffold traverses a symlink: {agent_path}"
+                ) from exc
+            if not agent_path.is_dir() or any(
+                candidate.is_symlink() or not candidate.is_file()
+                for candidate in required
+            ):
+                from solomon_harness.install_layout import InstallConflictError
+
+                raise InstallConflictError(
+                    f"Installed agent scaffold is incomplete: {agent_path}"
+                )
+            if reconcile_adapters:
+                compile_result = _reconcile_host_adapters(workspace_root)
+                if compile_result.conflicts:
+                    from solomon_harness.install_layout import InstallConflictError
+
+                    raise InstallConflictError(
+                        "Agent adapter conflicts prevented registration: "
+                        + ", ".join(compile_result.conflicts)
+                    )
+            return
         print(f"Agent '{name}' already exists. Skipping scaffolding.")
         return
 
+    selected_scripts = paths.scripts if installed_extension else paths.resolve_scripts()
     doc_skills_script = confined_read_path(
-        paths.root, paths.resolve_scripts() / "document-skills.py"
+        paths.root, selected_scripts / "document-skills.py"
     )
 
     def project_reference(path: str) -> str:
@@ -556,8 +632,9 @@ def scaffold_new_agent(
     sources_reference = project_reference(sources_path)
 
     # Create directories
-    os.makedirs(os.path.join(agent_dir, "agents"), exist_ok=True)
-    os.makedirs(os.path.join(agent_dir, "skills"), exist_ok=True)
+    if not installed_extension:
+        os.makedirs(os.path.join(agent_dir, "agents"), exist_ok=True)
+        os.makedirs(os.path.join(agent_dir, "skills"), exist_ok=True)
 
     # Write persona.md
     if title is None:
@@ -568,8 +645,12 @@ def scaffold_new_agent(
 
 This agent is the {name} brain for solomon-harness. It reasons within the shared rules in `{rules_reference}` and its contract in `{role_reference}`, applies the skills in `{skills_reference}`, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
 """
-    with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
-        f.write(persona_content)
+    persona_path = Path(agent_dir) / "persona.md"
+    if installed_extension:
+        create_install_file(paths.root, persona_path, persona_content.encode("utf-8"))
+    else:
+        with persona_path.open("w", encoding="utf-8") as f:
+            f.write(persona_content)
 
     # Write role file
     if duties is None:
@@ -591,7 +672,8 @@ Use this agent when the task falls within this mandate: {description}
 
 ## Active Skills
 
-No local skills configured.
+The following specific skills are actively configured for this agent:
+- [scope_and_mandate](skills/scope_and_mandate.md) — Defines what the {name} specialist owns and what it hands off. Use when clarifying whether a task belongs to this agent.
 
 ## External Skills
 
@@ -600,8 +682,12 @@ Additional skills can be fetched and integrated from external skill servers at a
 solomon-harness skills add <source> <skill> --agent {name}
 ```
 """
-    with open(role_path, "w", encoding="utf-8") as f:
-        f.write(role_content)
+    role_file = Path(role_path)
+    if installed_extension:
+        create_install_file(paths.root, role_file, role_content.encode("utf-8"))
+    else:
+        with role_file.open("w", encoding="utf-8") as f:
+            f.write(role_content)
 
     # Write scope_and_mandate.md skill
     skill_content = f"""---
@@ -625,15 +711,25 @@ This skill covers the {name} role's duties.
 
 - [ ] The work stayed within this agent's mandate or was handed off explicitly.
 """
-    with open(os.path.join(agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
-        f.write(skill_content)
+    skill_path = Path(agent_dir) / "skills" / "scope_and_mandate.md"
+    if installed_extension:
+        create_install_file(paths.root, skill_path, skill_content.encode("utf-8"))
+    else:
+        with skill_path.open("w", encoding="utf-8") as f:
+            f.write(skill_content)
 
     # Copy main.py and config.json via scaffold_agents
-    scaffold_agents(workspace_root)
+    scaffold_agents(
+        workspace_root,
+        agent_names=(name,) if installed_extension else None,
+    )
 
-    # Register in agents/AGENTS.md
+    # A consumer-created agent is project-owned extension content. The
+    # installed AGENTS.md belongs to the package manifest; changing it here
+    # would turn the next upgrade into a blocking core conflict. Native source
+    # scaffolds still update their tracked roster.
     agents_md_path = rules_path
-    if os.path.isfile(agents_md_path):
+    if not installed_extension and os.path.isfile(agents_md_path):
         with open(agents_md_path, "r", encoding="utf-8") as f:
             content = f.read()
 
@@ -689,9 +785,12 @@ This skill covers the {name} role's duties.
             with open(agents_md_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-    # Run document-skills script to compile the new agent's skills
+    # Source authoring keeps its historical whole-catalog documentation pass.
+    # Installed profiles are package-owned; rewriting every built-in role would
+    # turn the next upgrade into core drift. The new role already carries its
+    # generated scope skill entry above, so no global pass is needed there.
     doc_skills_script = confined_read_path(paths.root, doc_skills_script)
-    if doc_skills_script.is_file():
+    if not installed_extension and doc_skills_script.is_file():
         import subprocess
         import sys
         subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
@@ -703,8 +802,18 @@ This skill covers the {name} role's duties.
     # Reconcile every host adapter from the neutral catalog. The compiler must
     # receive the outer project root; passing .agents/solomon would render host
     # discovery files inside the managed core instead of the consumer project.
+    if not reconcile_adapters:
+        return
+
     compile_result = _reconcile_host_adapters(workspace_root)
     if compile_result.conflicts:
+        if installed_extension:
+            from solomon_harness.install_layout import InstallConflictError
+
+            raise InstallConflictError(
+                "Agent adapter conflicts prevented registration: "
+                + ", ".join(compile_result.conflicts)
+            )
         print(
             "Preserved conflicting host adapter files: "
             + ", ".join(compile_result.conflicts)

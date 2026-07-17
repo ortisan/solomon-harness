@@ -163,6 +163,16 @@ permanently human-gated: a headless stage subprocess, an automation autonomy
 level, or an engaged kill-switch is refused (exit 3) before any change — the
 loop surfaces gaps, a human applies them.
 
+The apply result is action-specific. `adapt_skill` returns
+`mode: reviewed_pr` and a `pr_url`; its pinned external content still follows
+the security-reviewed pull-request path. `create_agent` returns
+`mode: direct_registration`, the confined `agent_path` below
+`.agents/solomon/agents`, and `restart_required: true`. That path registers the
+new source in the installed harness and recompiles the Claude, AGY, and Codex
+adapters without creating a branch, commit, pull request, or PR handoff in the
+consumer project. The current stage stops so the user can start a new session
+that discovers the new agent.
+
 ### Spec generation (`/solomon-issue`)
 
 Every feature/story issue gets a durable spec document: after creation,

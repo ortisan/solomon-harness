@@ -298,6 +298,10 @@ def test_start_and_refine_wire_the_broker_through_the_cli():
         # (PR #213 review B2, issue #50 AC2).
         assert "human-gated" in low, rel
         assert "fails closed" in low, rel
+        assert "direct_registration" in body, rel
+        assert "reviewed_pr" in body, rel
+        assert "agent_path" in body, rel
+        assert "restart_required" in body, rel
         # The enumerated gate must be answerable: the tool is allowlisted.
         name = os.path.basename(rel).removeprefix("solomon-").removesuffix(".md")
         frontmatter = _read_claude_bridge(name).split("---")[1]
@@ -310,6 +314,10 @@ def test_gemini_mirrors_carry_the_broker_wiring():
         assert "broker route --file" in body, name
         assert "broker apply --file" in body, name
         assert 'python -c "from solomon_harness' not in body, name
+        assert "direct_registration" in body, name
+        assert "reviewed_pr" in body, name
+        assert "agent_path" in body, name
+        assert "restart_required" in body, name
 
 
 def test_workflow_doc_defines_the_capability_check():
@@ -320,6 +328,10 @@ def test_workflow_doc_defines_the_capability_check():
     assert "broker apply --file" in doc
     assert "human-gated" in low
     assert "ADR-0008" in doc
+    assert "direct_registration" in doc
+    assert "reviewed_pr" in doc
+    assert "agent_path" in doc
+    assert "restart_required" in doc
 
 
 def test_loop_documents_gap_surfacing_as_human_gated():

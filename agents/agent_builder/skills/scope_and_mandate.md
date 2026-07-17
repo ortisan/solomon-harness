@@ -1,6 +1,6 @@
 ---
 name: scope-and-mandate
-description: Governs the creation, scaffolding, and registration of new specialist agents in either a source checkout or an installed consumer, with path confinement, canonical rules updates, and compiled Claude, AGY, and Codex integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+description: Governs the creation, scaffolding, and registration of new specialist agents in either a source checkout or an installed consumer, with path confinement, source-only rules updates, and compiled Claude, AGY, and Codex integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
 ---
 
 # Agent Builder Scope and Mandate
@@ -31,21 +31,22 @@ To prevent path traversal attacks or accidental filesystem writes outside the de
 
 ## Registry Integration and Compilation
 
-Once the agent files are successfully scaffolded on disk, the Agent Builder is responsible for updating the central registry files:
-1. Canonical rules: add the new agent to the index list in alphabetical order, with a clear one-sentence summary of its primary focus. The target is `agents/AGENTS.md` in this source checkout and `.agents/solomon/AGENTS.md` in an installed consumer.
+Once the agent files are successfully scaffolded on disk, the Agent Builder is responsible for updating the applicable registry surfaces:
+1. Source checkout only: add the new agent to `agents/AGENTS.md` in alphabetical order, with a clear one-sentence summary of its primary focus. In an installed consumer, `.agents/solomon/AGENTS.md` is package-owned and must remain byte-for-byte unchanged; catalog discovery registers the extension from `.agents/solomon/agents/<name>`.
 2. Source checkout only: update the harness's own `README.md` count/table and `scripts/validate-agents.py` keyword registration. In an installed consumer, do not read or modify the product repository's `README.md`, scripts, agent count, or documentation tables.
-3. Integration Compilation: invoke `solomon-harness compile` (or the equivalent programmatic operation) to regenerate `.claude/agents/<name>.md`, `.agents/agents/<name>/agent.md`, and `.codex/agents/<name>.toml`, ensuring that the new agent is immediately discoverable in all three hosts.
+3. Integration Compilation: invoke `solomon-harness compile` (or the equivalent programmatic operation) to regenerate `.claude/agents/<name>.md`, `.agents/agents/<name>/agent.md`, and `.codex/agents/<name>.toml`, ensuring that the new agent is discoverable in all three hosts after a session restart.
+4. Installed consumer only: return the confined agent path directly. Do not create a branch, commit, pull request, or review handoff for this harness-local registration.
 
 ## Verifying the Integration Sync Points
 
 A newly scaffolded agent is not complete until every downstream reference to it is consistent; the Agent Builder treats each sync point as a checklist item to verify, not merely as a file to write once and forget.
 
-- Canonical rules roster entry: after inserting the new agent into the "The specialist agents" list in alphabetical order, read the selected rules file back and confirm the line appears exactly once, sits between its correct alphabetical neighbors, and no adjacent line was altered, duplicated, or dropped.
+- Source checkout rules roster entry: after inserting the new agent into the "The specialist agents" list in alphabetical order, read `agents/AGENTS.md` back and confirm the line appears exactly once, sits between its correct alphabetical neighbors, and no adjacent line was altered, duplicated, or dropped. In an installed consumer, verify instead that `.agents/solomon/AGENTS.md` did not change.
 - Source checkout only, harness `README.md` agent count and table: recompute the count from `agents/*/agents/*.md`, confirm the spelt-out number matches, and confirm the new row has a working relative link and a description consistent with the profile. Skip this sync point entirely in an installed consumer so product documentation remains product-owned.
 - Source checkout only, `scripts/validate-agents.py` `REQUIRED_KEYWORDS` registration: add the profile filename, title-case name, and three to six domain keywords in the same commit. Skip this sync point in installed consumers; their scripts are outside the harness ownership boundary.
 - Regenerating all host adapters via `compile`: Claude's `.claude/agents/<name>.md`, AGY's `.agents/agents/<name>/agent.md`, and Codex's `.codex/agents/<name>.toml` are generated metadata, never hand-edited. Run `solomon-harness compile` after every scaffold, then confirm all three files exist, are non-empty, and point to the same canonical profile. In an installed consumer that profile is `.agents/solomon/agents/<name>/agents/<name>.md`; this source checkout retains `agents/<name>/agents/<name>.md` as its authoring location.
 
-Treat a scaffold as done only once every sync point applicable to the current layout has been independently re-read and confirmed. A source checkout includes the two source-only checks; an installed consumer includes only the canonical catalog/rules and compiled-host checks.
+Treat a scaffold as done only once every sync point applicable to the current layout has been independently re-read and confirmed. A source checkout includes the source-only checks; an installed consumer includes the canonical catalog, unchanged package rules, and compiled-host checks.
 
 ## Common pitfalls
 
@@ -59,7 +60,8 @@ Treat a scaffold as done only once every sync point applicable to the current la
 
 - [ ] All directories and files are created under the validated canonical catalog path.
 - [ ] No path traversal escape is possible via user-controlled inputs.
-- [ ] The new agent is registered alphabetically in the canonical rules file.
+- [ ] Source checkout only: the new agent is registered alphabetically in `agents/AGENTS.md`; installed consumers leave `.agents/solomon/AGENTS.md` unchanged.
 - [ ] Source checkout only: the harness `README.md` count/table and `scripts/validate-agents.py` entry are updated; installed consumers leave product-owned docs and scripts unchanged.
 - [ ] Compilation succeeds without conflicts and the Claude, AGY, and Codex integration profiles are present and point to the same canonical profile.
+- [ ] Installed-consumer creation returns the canonical agent path without a Git or GitHub mutation and reports the session-restart requirement.
 - [ ] No emojis, icons, or prohibited AI cliches exist in the generated template files.

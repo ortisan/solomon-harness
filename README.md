@@ -360,7 +360,7 @@ table.
 | `release plan\|prep [version]\|check\|wiki-page [version]` | Plan, prepare, check, or document a milestone-gated release |
 | `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
-| `broker route \| apply --file <json>` | Capability broker (ADR-0008): build the route/gap verdict, or run a human-approved acquisition |
+| `broker route \| apply --file <json>` | Capability broker (ADR-0008/0035): build the route/gap verdict, adapt a skill through a reviewed PR, or register a new agent in the installed harness |
 | `agents list \| help \| show <name>` | List or show the generated subagents |
 | `github <args>` | GitHub board and PR helpers (ensure-board, set-status, add-issue, merge, pr-create) |
 
@@ -368,6 +368,14 @@ For `dev`, `--engine {claude,agy,codex}` selects the native headless command. If
 the flag is omitted, `SOLOMON_ENGINE` remains the environment fallback and
 `claude` is the default. Codex retains its normal project-hook trust check; the
 harness never adds a trust-bypass flag.
+
+For a human-approved `create_agent` proposal, `broker apply` writes the agent
+below `.agents/solomon/agents/<name>`, recompiles the native host adapters, and
+returns `mode: direct_registration`, `agent_path`, and
+`restart_required: true`. It does not create a branch, commit, or pull request
+in the consumer project. `adapt_skill` remains `mode: reviewed_pr` and returns
+the draft `pr_url` because fetched external content still requires review.
+
 `python -m solomon_harness.github ensure-board | set-status --issue N --status "<col>" | add-issue --issue N`
 manages the board directly.
 
