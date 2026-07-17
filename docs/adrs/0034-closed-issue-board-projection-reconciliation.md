@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-07-16
 - Amends: ADR-0020 (scope of the human `Done` gate), ADR-0033 (operational shape of `reconcile`)
-- Amended: ADR-0035 (2026-07-17) constrains claim-ref reconciliation to the observed ref version.
+- Amended: ADR-0036 (2026-07-17) constrains claim-ref reconciliation to the observed ref version.
 - Deciders: software_architect, loop_engineer, software_engineer
 - Issue: #264
 
