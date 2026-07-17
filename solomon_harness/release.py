@@ -31,7 +31,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from solomon_harness.dates import today_iso
 
@@ -667,6 +667,65 @@ def cmd_plan(workspace_root: str) -> int:
     return 0
 
 
+# A chore/release-* prep PR is written by ``cmd_prep``, which stages exactly
+# these two paths (nothing else). Any other changed path in the PR -- an edit,
+# an addition, or a deletion -- is outside the mechanical release footprint.
+RELEASE_PREP_ALLOWED_PATHS = ("CHANGELOG.md", "pyproject.toml")
+
+
+def release_prep_footprint_violations(changed_paths: Iterable[str]) -> List[str]:
+    """Return the changed paths that fall outside the release-prep allowlist.
+
+    An empty result means the footprint is clean (only ``RELEASE_PREP_ALLOWED_PATHS``
+    changed). This is the assertion PR #209 would have failed: a release-prep PR
+    can keep a self-consistent ``pyproject.toml``/``CHANGELOG.md`` (so ``cmd_check``
+    passes) while deleting the rest of the repository, and only a footprint check
+    catches it. Deletions appear in ``git diff --name-only`` exactly like edits,
+    so they are flagged the same way. The result is sorted and de-duplicated.
+    """
+    allowed = set(RELEASE_PREP_ALLOWED_PATHS)
+    return sorted(
+        {stripped for path in changed_paths if (stripped := path.strip()) and stripped not in allowed}
+    )
+
+
+def changed_paths_since(workspace_root: str, base_ref: str) -> List[str]:
+    """Return the paths changed on ``HEAD`` relative to the merge-base with ``base_ref``.
+
+    Uses the three-dot form so a stale base does not report unrelated commits
+    that landed on the base after the branch forked -- only what this branch
+    actually changed.
+    """
+    out = _git(["diff", "--name-only", f"{base_ref}...HEAD"], workspace_root)
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def cmd_check_footprint(workspace_root: str, base_ref: str) -> int:
+    """Fail-closed gate: a chore/release-* PR must touch only the allowlisted files.
+
+    Run in CI (``pr-guards``) rather than only inside ``cmd_prep`` so it also
+    catches a prep branch that was hand-edited or force-pushed after prep ran.
+    """
+    allowlist = ", ".join(RELEASE_PREP_ALLOWED_PATHS)
+    try:
+        paths = changed_paths_since(workspace_root, base_ref)
+    except subprocess.CalledProcessError as exc:
+        print(f"release check-footprint: git diff failed: {exc.stderr or exc}", file=sys.stderr)
+        return 1
+    violations = release_prep_footprint_violations(paths)
+    if violations:
+        print(
+            f"release check-footprint FAILED: a release-prep PR must touch only "
+            f"{allowlist}, but it also changes:",
+            file=sys.stderr,
+        )
+        for path in violations:
+            print(f"  - {path}", file=sys.stderr)
+        return 1
+    print(f"release check-footprint OK: the prep PR touches only {allowlist}.")
+    return 0
+
+
 def cmd_check(workspace_root: str) -> int:
     pyproject = os.path.join(workspace_root, "pyproject.toml")
     changelog = os.path.join(workspace_root, "CHANGELOG.md")
@@ -874,10 +933,11 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
 
 
 def run(workspace_root: str, args: List[str]) -> int:
-    """Dispatch ``release <plan|prep|check|verify-window|wiki-page|audit-trigger>``."""
+    """Dispatch ``release <plan|prep|check|check-footprint|verify-window|wiki-page|audit-trigger>``."""
     if not args:
         print(
-            "Usage: solomon-harness release <plan|prep|check|verify-window|wiki-page|audit-trigger> [version]",
+            "Usage: solomon-harness release "
+            "<plan|prep|check|check-footprint|verify-window|wiki-page|audit-trigger> [version]",
             file=sys.stderr,
         )
         return 1
@@ -886,6 +946,13 @@ def run(workspace_root: str, args: List[str]) -> int:
         return cmd_plan(workspace_root)
     if sub == "check":
         return cmd_check(workspace_root)
+    if sub == "check-footprint":
+        base_ref = "origin/main"
+        if "--base" in rest:
+            idx = rest.index("--base")
+            if idx + 1 < len(rest):
+                base_ref = rest[idx + 1]
+        return cmd_check_footprint(workspace_root, base_ref)
     if sub == "verify-window":
         return cmd_verify_window(workspace_root)
     if sub == "prep":
@@ -895,7 +962,8 @@ def run(workspace_root: str, args: List[str]) -> int:
     if sub == "audit-trigger":
         return cmd_audit_trigger(workspace_root, rest[0] if rest else None)
     print(
-        f"Unknown release subcommand {sub!r}. Use plan, prep, check, verify-window, wiki-page, or audit-trigger.",
+        f"Unknown release subcommand {sub!r}. Use plan, prep, check, check-footprint, "
+        f"verify-window, wiki-page, or audit-trigger.",
         file=sys.stderr,
     )
     return 1
@@ -945,6 +1013,21 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _with_root(sub.add_parser("plan"))
     _with_root(sub.add_parser("check"))
+    footprint = _with_root(
+        sub.add_parser(
+            "check-footprint",
+            help=(
+                "Fail if a chore/release-* PR touches any path other than "
+                "pyproject.toml/CHANGELOG.md (run by CI's pr-guards job)"
+            ),
+        )
+    )
+    footprint.add_argument(
+        "--base",
+        dest="base",
+        default="origin/main",
+        help="Base ref to diff HEAD against (default: origin/main).",
+    )
     _with_root(
         sub.add_parser(
             "verify-window",
@@ -967,6 +1050,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_plan(root)
     if args.command == "check":
         return cmd_check(root)
+    if args.command == "check-footprint":
+        return cmd_check_footprint(root, args.base)
     if args.command == "verify-window":
         return cmd_verify_window(root)
     if args.command == "prep":

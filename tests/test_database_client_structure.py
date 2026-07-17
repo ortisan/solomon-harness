@@ -83,7 +83,10 @@ class TestBackendStatus(unittest.TestCase):
             overridden = ("SURREAL_URL", "SURREAL_USER", "SURREAL_PASS",
                           "HARNESS_DB_PATH", "HARNESS_MIRROR_ROOT")
             env_backup = {key: os.environ.pop(key, None) for key in overridden}
-            os.environ["HARNESS_DB_PATH"] = os.path.join(tmp, "memory.db")
+            # HARNESS_DB_PATH is deliberately NOT set here: it now forces SQLite as
+            # an explicit isolation choice (issue #40), which would short-circuit the
+            # very missing-credentials degradation path this test exercises. The tmp
+            # harness_dir already isolates the SQLite fallback file.
             os.environ["HARNESS_MIRROR_ROOT"] = os.path.join(tmp, "mirror")
             try:
                 client = DatabaseClient(harness_dir=tmp)

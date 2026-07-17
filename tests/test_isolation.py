@@ -5,10 +5,14 @@ must ignore leaked GIT_* env (so the suite passes inside a worktree/hook), and t
 SQLite memory path must be overridable so tests never touch the real project DB.
 """
 
+import json
 import os
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
+from unittest.mock import MagicMock, patch
 
 from solomon_harness import home
 from solomon_harness.tools.database_client import DatabaseClient
@@ -52,6 +56,67 @@ class TestDbPathIsolation(unittest.TestCase):
                 with DatabaseClient(harness_dir=tmp) as db:
                     db.save_memory("iso-key", "iso-value", "test")
                 self.assertTrue(os.path.isfile(dbfile))
+            finally:
+                if saved is None:
+                    os.environ.pop("HARNESS_DB_PATH", None)
+                else:
+                    os.environ["HARNESS_DB_PATH"] = saved
+
+    def test_harness_db_path_routes_to_db_path_as_abspath(self):
+        """HARNESS_DB_PATH sets self.db_path (abspath) with its parent created,
+        so it forces SQLite the same way an explicit db_path argument does."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dbfile = os.path.join(tmp, "nested", "iso.db")
+            saved = os.environ.get("HARNESS_DB_PATH")
+            os.environ["HARNESS_DB_PATH"] = dbfile
+            try:
+                with DatabaseClient(harness_dir=tmp) as db:
+                    self.assertEqual(db.db_path, os.path.abspath(dbfile))
+                    self.assertTrue(os.path.isdir(os.path.dirname(os.path.abspath(dbfile))))
+            finally:
+                if saved is None:
+                    os.environ.pop("HARNESS_DB_PATH", None)
+                else:
+                    os.environ["HARNESS_DB_PATH"] = saved
+
+    def test_harness_db_path_forces_sqlite_even_when_surrealdb_is_reachable(self):
+        """The isolation guarantee (#40): with a surrealdb provider configured AND
+        the shared server reachable, HARNESS_DB_PATH must still force SQLite. The
+        surrealdb branch must never be entered, so the real shared multi-tenant
+        store is never touched."""
+        fake_surreal = types.ModuleType("surrealdb")
+        fake_surreal.Surreal = MagicMock()  # a reachable, importable SDK
+        with tempfile.TemporaryDirectory() as tmp:
+            # A real config so _load_config selects the surrealdb provider (and sets
+            # namespace/busy-timeout) exactly like an installed project would.
+            os.makedirs(os.path.join(tmp, ".agent"))
+            with open(os.path.join(tmp, ".agent", "config.json"), "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "database": {
+                            "provider": "surrealdb",
+                            "url": "ws://localhost:8000/rpc",
+                            "username": "root",
+                            "password": "root",
+                            "namespace": "solomon",
+                        }
+                    },
+                    fh,
+                )
+            dbfile = os.path.join(tmp, "iso.db")
+            saved = os.environ.get("HARNESS_DB_PATH")
+            os.environ["HARNESS_DB_PATH"] = dbfile
+            try:
+                # _connect_surreal returning True would mark the shared server
+                # reachable; the fix must skip the branch so it is never called.
+                with patch.dict(sys.modules, {"surrealdb": fake_surreal}), \
+                    patch.object(
+                        DatabaseClient, "_connect_surreal", return_value=True
+                    ) as mock_connect:
+                    client = DatabaseClient(harness_dir=tmp)
+                    self.assertEqual(client.backend, "sqlite")
+                    self.assertEqual(client.db_path, os.path.abspath(dbfile))
+                    mock_connect.assert_not_called()
             finally:
                 if saved is None:
                     os.environ.pop("HARNESS_DB_PATH", None)
