@@ -1227,12 +1227,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     release_parser = subparsers.add_parser(
         "release",
-        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | verify-window | wiki-page [version])",
+        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | check-footprint [--base REF] | verify-window | wiki-page [version])",
     )
     release_parser.add_argument(
         "release_args",
         nargs=argparse.REMAINDER,
-        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), verify-window (recompute the release window against trunk HEAD pre-tag), wiki-page [version] (write the release wiki page)",
+        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), check-footprint [--base REF] (fail if a prep PR touches anything beyond pyproject.toml/CHANGELOG.md), verify-window (recompute the release window against trunk HEAD pre-tag), wiki-page [version] (write the release wiki page)",
     )
 
     wt_parser = subparsers.add_parser(
