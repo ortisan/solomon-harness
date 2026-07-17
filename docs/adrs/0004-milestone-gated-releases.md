@@ -230,3 +230,24 @@ caused #34. Implemented by the `solomon-harness release plan|prep|check` CLI
 surface, the `release.yml` workflow (sole tag/publish owner), and the
 `/solomon-release` workflow; milestones are created by `/solomon-refine`. Recorded
 in the project memory via `save_decision`.
+
+## Amendment (2026-07-17, #176): the lifecycle is written through programmatically
+
+The original decision left the milestone lifecycle to manual bookkeeping, which
+drifted: v0.5.0/v0.6.0/v0.10.0 tags were cut with their milestones still open, and
+memory held only junk test milestones. This amendment makes the lifecycle a
+mechanism, not a convention:
+
+- `/solomon-refine` creates and assigns the milestone and mirrors a memory row via
+  `solomon-harness github assign-milestone` (idempotent).
+- The release close-out closes the milestone on GitHub and in memory via
+  `github close-milestone`, degrading gracefully so a milestone-close failure never
+  blocks a release.
+- `release plan`/`check`/`prep` fail fast when the computed version collides with an
+  open milestone of the same title that still has open issues, closing the
+  titling-discipline gap the original decision described only in prose.
+- A one-shot `github reconcile-milestones` closes open zeroed milestones and prunes
+  junk memory rows.
+
+The titling discipline and the milestone-gated criterion are unchanged; only the
+enforcement moves from prose to code.

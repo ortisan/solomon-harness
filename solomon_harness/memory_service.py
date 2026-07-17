@@ -142,6 +142,18 @@ class MemoryService:
     def list_milestones(self) -> Dict[str, List[Dict[str, Any]]]:
         return {"milestones": self.client.list_milestones()}
 
+    def ensure_milestone(
+        self, title: str, description: str = "", due_date: str = ""
+    ) -> Dict[str, Any]:
+        milestone_id = self.client.ensure_milestone(
+            title=title, description=description, due_date=due_date
+        )
+        return {"milestone_id": milestone_id}
+
+    def close_milestone(self, title: str) -> Dict[str, Any]:
+        milestone_id = self.client.close_milestone(title=title)
+        return {"milestone_id": milestone_id, "state": "closed"}
+
     def save_release(
         self,
         version: str,

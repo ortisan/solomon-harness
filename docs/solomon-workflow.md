@@ -302,8 +302,19 @@ rolls up to exactly one milestone:
   title *is* the version; closing it (`open_issues == 0`, CI green) cuts the MINOR.
 - A **theme / hardening** milestone is titled by theme (`memory-durability`,
   `test-ci-hardening`, `worktree-lifecycle`); closing it cuts a PATCH whose version
-  is computed at cut time. `/solomon-refine` creates the milestone and assigns every
-  Ready child; a parentless bug or chore goes to the nearest theme milestone.
+  is computed at cut time. `/solomon-refine` writes the milestone lifecycle through
+  with `solomon-harness github assign-milestone --issue <n> --milestone "<title>"`,
+  which creates the GitHub milestone if new, assigns the child, and mirrors a memory
+  row (idempotent); a parentless bug or chore goes to the nearest theme milestone.
+
+The lifecycle is written through programmatically, not by hand (#176): the release
+close-out closes the milestone on both GitHub and in memory
+(`github close-milestone --milestone "<title>"`, degrading gracefully so a
+milestone failure never blocks a release), and `release plan`/`check`/`prep` fail
+fast when the computed version collides with an open milestone of the same title
+that still has open issues — the v0.5.0/v0.6.0/v0.8.0 drift. A one-shot
+`github reconcile-milestones` closes open zeroed milestones and prunes junk memory
+rows.
 
 An on-demand escape valve, `solomon-harness release prep`, may cut a PATCH for an
 accumulated batch without waiting for a milestone to fully close.
