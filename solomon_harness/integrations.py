@@ -291,6 +291,12 @@ def _yaml_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+# Every generated harness subagent is pinned to this model so it never silently
+# inherits whatever model the orchestrating session runs under (the harness's
+# own convention: an Opus orchestrator delegates to Sonnet subagents).
+DEFAULT_SUBAGENT_MODEL = "sonnet"
+
+
 def _format_path(path: str, quote_paths: bool) -> str:
     return f"`{path}`" if quote_paths else path
 
@@ -353,7 +359,7 @@ def harness_subagent_markdown(agent_name: str, description: str, trust_root: str
         description,
         trust_root,
         project_label="solomon-harness",
-        model=None,
+        model=DEFAULT_SUBAGENT_MODEL,
         quote_paths=False,
         compliance_suffix=(
             ": strict TDD, SOLID, design contracts, and the humanizer rules "

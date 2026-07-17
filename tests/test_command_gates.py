@@ -723,3 +723,24 @@ def test_gemini_mirrors_carry_the_contract_fidelity_gates():
     review = _flat(os.path.join(".gemini", "commands", "solomon-review.toml"))
     assert "contract parity" in review
     assert PARITY_TERMINAL_RULE in review
+
+
+# --- Approved-PR routing goes to review, not release (#262) ------------------
+
+
+def test_workflow_ladder_routes_approved_pr_to_review_not_release():
+    body = _read(os.path.join(".claude", "commands", "solomon-workflow.md"))
+    # The nonsensical dispatch (an approved PR to the milestone-only release stage)
+    # must be gone, and an approved PR must route to review's merge step (ADR-0020).
+    assert "solomon-release <pr>" not in body
+    assert "release <pr>" not in body
+    low = body.lower()
+    assert "approved" in low and "/solomon-review <pr>" in body
+    # A distinct milestone-triggered release rule must exist.
+    assert "/solomon-release <milestone>" in body
+
+
+def test_gemini_workflow_twin_routes_approved_pr_to_review():
+    body = _read(os.path.join(".gemini", "commands", "solomon-workflow.toml"))
+    assert "solomon-release <pr>" not in body
+    assert "/solomon-release <milestone>" in body

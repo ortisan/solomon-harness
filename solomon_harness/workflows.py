@@ -473,6 +473,8 @@ def run_stage(
                     allowed_tools = _allowed_tools(workspace_root, prompt_stage)
                     if allowed_tools:
                         cmd.extend(["--allowed-tools", allowed_tools])
+                    if policy.orchestrator_model:
+                        cmd.extend(["--model", policy.orchestrator_model])
                     if stage == "start" and os.path.exists(os.path.join(workspace_root, ".git")):
                         try:
                             from solomon_harness.worktree import worktree_root

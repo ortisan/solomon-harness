@@ -11,7 +11,7 @@ Runs a task end-to-end, or continues from a previous execution. It scans the rep
 * **Arguments:** Optional focus (e.g., issue or PR number).
 * **Primary Agent:** Orchestrator (hierarchical coordinator).
 * **Workflows:**
-  1. Checks for approved PRs to trigger release.
+  1. Checks for approved PRs to complete their merge through review (ADR-0020), and for completed milestones (0 open issues, CI green) to trigger a release.
   2. Checks for open PRs needing review to trigger review.
   3. Checks for in-progress branches to resume coding.
   4. Checks for ready issues to start implementation.

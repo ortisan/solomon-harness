@@ -563,10 +563,11 @@ Code and the Antigravity CLI — not only in a Claude-only hook.
 
 - **human (default):** no restriction. A repository with no `loop` block behaves
   exactly as before — the human is driving.
-- **L1 (report):** the loop may only scan and propose (`loop`); every mutating
+- **L1 (report):** the loop may only scan and propose (`workflow`); every mutating
   stage is denied.
-- **L2 (assisted):** the loop may create work and open draft PRs (`idea`..`review`)
-  but never merge or release.
+- **L2 (assisted):** the loop may create work and open draft PRs
+  (`workflow`, `loop`, `idea`, `issue`, `bug`, `refine`, `start`, `review`,
+  `scan-arch`, `scan-dedup`) but never merge or release.
 - **L3 (unattended):** as L2, but may run on a cadence and only while it holds the
   single-driver lock.
 
