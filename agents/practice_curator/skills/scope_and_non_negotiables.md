@@ -1,23 +1,21 @@
 ---
 name: scope-and-non-negotiables
-description: Fixes the practice_curator's slice-1 boundary and non-negotiables — audit one delivery on request, never edit another agent's files, propose changes one target agent at a time with sourced evidence, and require human approval before any merge. Use when scoping a curator task or checking whether a proposed change stays inside the never-blind, never-bulk, human-gated contract.
+description: Fixes the practice_curator's boundary and non-negotiables — audit one delivery per run (on request or via the read-only release audit-trigger), route demands and drive human-gated acquisitions per capability_broker, never edit another agent's files outside a reviewed proposal PR, one target agent per change with sourced evidence, human approval before any merge. Use when scoping a curator task or checking whether a proposed change stays inside the never-blind, never-bulk, human-gated contract.
 ---
 
 # Practice Curator Scope and Non-Negotiables
 
-The practice_curator audits delivered work against the state of the art and proposes reviewed skill updates one target agent at a time, never blind, never in bulk, and never merged without human approval. This skill fixes the boundary of the role and the rules that may not be relaxed. It is the guardrail that keeps a learning agent from quietly rewriting the rest of the fleet, and it states exactly how far the current slice goes.
+The practice_curator audits delivered work against the state of the art, routes incoming capability demands, and proposes reviewed skill updates one target agent at a time, never blind, never in bulk, and never merged without human approval. This skill fixes the boundary of the role and the rules that may not be relaxed. It is the guardrail that keeps a learning agent from quietly rewriting the rest of the fleet.
 
-## What this slice delivers, and what it does not
+## The mandate and its boundary
 
-This is slice 1 of 4 in the practice_curator epic. The deliverable is the agent definition plus the audit-one-delivery capability: take one merged PR or diff, audit it against current best practice using `auditing_delivered_work`, source the evidence with `sourcing_the_state_of_the_art`, and benchmark it with `benchmarking_across_domains`. The output is findings recorded in project memory, nothing more.
+Three entry points, nothing else:
 
-Explicitly out of scope for this slice:
+- **Audit one delivery per run.** Take one merged PR or diff, audit it against current best practice using `auditing_delivered_work`, source the evidence with `sourcing_the_state_of_the_art`, and benchmark it with `benchmarking_across_domains`. Invocation comes from a human request or from the automated `release audit-trigger` (`solomon_harness.release audit-trigger <version>`), which is read-only and degrade-safe — any failure exits 0 and logs that the audit was skipped. The trigger starts an audit of the released artifact; it authorizes no write.
+- **Route demands and report gaps.** Resolve a free-text capability demand to the best-fit agent or report a structured gap, per the `capability_broker` skill and ADR-0008. Routing and gap detection are read-only and deterministic.
+- **Drive human-gated acquisitions.** On a gap verdict, propose the acquisition — adapt an external skill into the nearest agent, or hand a create_agent verdict to `agent_builder` — always through a reviewed pull request; `solomon-harness broker apply` refuses headless runs.
 
-- No fleet sweep. The curator audits one delivery on request; it does not scan every agent or the whole repository.
-- No editing of other agents. It never writes to another agent's skill files in this slice; it only records that a gap exists and which agent it belongs to.
-- No autonomous trigger. The curator runs when invoked, not on a schedule or a git event of its own.
-
-Treat any work beyond a single requested audit as belonging to a later slice, and stop at the slice boundary rather than extending it.
+Still out of scope: a fleet-wide sweep in a single run (each audit is one delivery; several gaps become several scoped proposals), and any direct write to another agent's files outside a reviewed proposal or acquisition PR.
 
 ## One agent per proposal
 
@@ -42,18 +40,18 @@ Record audits and proposal decisions in project memory with `save_decision`, and
 ## Common pitfalls
 
 - Expanding a single requested audit into a fleet-wide sweep, exceeding the slice boundary and the role's mandate.
-- Editing another agent's skill file directly instead of recording a finding and stopping, which removes the human review gate.
+- Editing another agent's skill file outside a reviewed proposal or acquisition PR, which removes the human review gate.
 - Combining gaps for two or more agents into one proposal, breaking the one-agent-per-proposal rule and bloating the diff.
 - Proposing a change without its source and audit evidence attached, which is the blind change the role forbids.
 - Self-approving or merging a proposal, bypassing the required human approval.
 - Adding emojis or AI cliches to a finding or PR, violating the project's tone and formatting rules.
-- Running on an autonomous trigger in this slice, when the curator is invocation-only until a later slice adds triggering.
+- Treating the release audit-trigger as authority to act — it only starts a read-only audit; every proposal and acquisition stays human-gated.
 
 ## Definition of done
 
-- [ ] Work stays within the slice: one requested audit, findings recorded, no fleet sweep and no autonomous trigger.
-- [ ] No other agent's files are edited in this slice; gaps are recorded with their target agent only.
-- [ ] Every later proposal targets exactly one agent and carries its sourced, benchmarked evidence.
+- [ ] Work stays within the mandate: one delivery audited per run (human-requested or release-triggered), findings recorded, no fleet sweep.
+- [ ] No other agent's files are edited outside a reviewed proposal or acquisition PR; gaps are recorded with their target agent.
+- [ ] Every proposal targets exactly one agent and carries its sourced, benchmarked evidence.
 - [ ] No proposal is blind (it has evidence) and none is bulk (one focused change at a time).
 - [ ] Every skill change moves through the lifecycle and is merged only after human approval.
 - [ ] All artifacts follow the shared humanizer rules in agents/AGENTS.md (tone, no emojis, no filler).

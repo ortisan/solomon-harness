@@ -1,19 +1,19 @@
 ---
-description: Fully autonomous parallel loop - spawn multiple agents to start, develop, test, review and open PRs for ready issues
+description: Headless batch loop - run N sequential workflow iterations over ready issues, human-gated at merge
 argument-hint: (optional) --issues 42,43
 allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, AskUserQuestion, mcp__solomon-memory__get_memory
 ---
 
-You are running the fully autonomous parallel loop stage.
+You are running the headless batch loop stage: N sequential workflow iterations, each a fresh engine subprocess under the single-driver lock, always human-gated at merge.
 
-## 1. Ask for Concurrency Limit
+## 1. Ask for the Iteration Count
 
 Ask the user using the AskUserQuestion tool (or standard chat response if the tool is not available):
-"How many concurrent agents (concurrency limit) do you want to run in parallel? (Default: 3)"
+"How many sequential workflow iterations do you want to run? (Default: 3)"
 
 ## 2. Execute the Loop
 
-Once you have the limit (default to 3 if not specified), run the parallel loop orchestrator via the Bash tool:
+Once you have the count (default to 3 if not specified), run the batch loop runner via the Bash tool (the `--concurrency` flag name is historical — iterations run sequentially under one lock):
 ```bash
 uv run python -m solomon_harness.cli dev loop --concurrency <limit> $ARGUMENTS
 ```
