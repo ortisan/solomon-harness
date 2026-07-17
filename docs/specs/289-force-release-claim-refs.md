@@ -17,7 +17,7 @@ names "Claim-ref release for closed issues (#289)" directly.
 
 `refs/claims/issue-N` is meant to protect an issue only while it is actively
 being worked. The only place that ever deletes the ref is
-`merge_pr_and_close` (`solomon_harness/github.py:412-433`), called solely by the
+`merge_pr_and_close` (`solomon_harness/github.py:406-458`), called solely by the
 harness's own merge command. A PR merged any other way — the GitHub web UI, a
 manual `gh pr merge`, a maintainer bypassing the harness — closes the issue on
 GitHub but leaves the git ref on origin indefinitely. `CLAIM_TTL_SECONDS = 1800`
@@ -176,9 +176,10 @@ Scenario: Availability boundary — the release pass cannot monopolize the lock
 ## Verification
 
 ```bash
-uv run pytest tests/test_claim.py tests/test_reconcile.py -v
-uv run pytest tests/ -k reconcile -v
-uv run ruff check solomon_harness/claim.py solomon_harness/cli.py tests/test_claim.py tests/test_reconcile.py
+uv run pytest tests/test_subprocess_env.py tests/test_github.py tests/test_claim.py tests/test_reconcile.py -v
+uv run pytest tests/ -q
+uv run ruff check solomon_harness tests
+uv run mypy solomon_harness tests
 gh pr view 314 --json body --jq .body | uv run python scripts/check-adr-gate.py --body-file /dev/stdin
 uv run python -m solomon_harness.cli reconcile --dry-run
 ```
