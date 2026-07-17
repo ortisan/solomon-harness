@@ -361,24 +361,73 @@ class LoopLock:
 
 _PUSH_OR_MERGE = re.compile(r"\b(git\s+push|gh\s+pr\s+merge|git\s+merge)\b")
 
+# The permanently human-gated, irreversible transitions: merging a PR, publishing
+# a release, or force-pushing a protected branch. The sanctioned interactive merge
+# runs through the `solomon_harness.github merge` wrapper (a `uv run` command), not
+# raw `gh pr merge`, so it is deliberately NOT matched here.
+_HUMAN_GATED_GH = re.compile(r"\b(gh\s+pr\s+merge|gh\s+release\s+create)\b")
+_GIT_PUSH = re.compile(r"\bgit\s+push\b")
+_FORCE_FLAG = re.compile(r"(--force-with-lease|--force|(?<!\w)-f\b)")
+_PROTECTED_BRANCH = re.compile(r"\b(main|master)\b")
+_PLUS_REFSPEC_PROTECTED = re.compile(r"\+\s*(?:[\w./-]*:)?(main|master)\b")
+
 
 def is_push_or_merge(command: str) -> bool:
     """True when a shell command pushes or merges (the irreversible operations)."""
     return bool(_PUSH_OR_MERGE.search(command or ""))
 
 
-def guard_verdict(payload: Dict[str, Any], lock: "LoopLock") -> Tuple[bool, str]:
+def is_human_gated_transition(command: str) -> bool:
+    """True when a command merges a PR, creates a release, or force-pushes main/master.
+
+    These are the transitions the harness holds as permanently human-gated: no
+    headless stage may perform them regardless of lock ownership (issue #185). A
+    force-push is only flagged when it targets a protected branch, so a routine
+    feature-branch force-push (after a rebase) stays allowed.
+    """
+    cmd = command or ""
+    if _HUMAN_GATED_GH.search(cmd):
+        return True
+    if _GIT_PUSH.search(cmd):
+        if _FORCE_FLAG.search(cmd) and _PROTECTED_BRANCH.search(cmd):
+            return True
+        if _PLUS_REFSPEC_PROTECTED.search(cmd):
+            return True
+    return False
+
+
+def guard_verdict(
+    payload: Dict[str, Any], lock: "LoopLock", headless: bool = False
+) -> Tuple[bool, str]:
     """Decide whether a PreToolUse Bash command must be blocked.
 
-    Block only a push/merge issued while another live driver holds the loop lock.
+    Two independent rules:
+
+    1. A headless stage (``headless=True``) can never perform a human-gated
+       transition -- merge a PR, create a release, or force-push a protected
+       branch -- even holding its own lock. Only a human completes those, so the
+       command is denied unconditionally (issue #185). ``Bash(gh:*)`` in the
+       command frontmatter otherwise makes ``gh pr merge``/``gh release create``
+       reachable, with only prose asking the agent not to run them.
+    2. A push/merge issued while another live driver holds the loop lock is
+       blocked so two drivers cannot race the review gate.
+
     This is the Claude-only defense-in-depth layer; the portable enforcement that
-    works on both hosts is the gate inside ``run_stage``. Fail-open by default:
-    anything not clearly a push/merge under a live foreign lock is allowed.
+    works on both hosts is the gate inside ``run_stage``. Fail-open otherwise.
     """
     if (payload.get("tool_name") or payload.get("tool") or "") != "Bash":
         return (False, "")
     tool_input = payload.get("tool_input") or {}
     command = tool_input.get("command") or payload.get("command") or ""
+    if headless and is_human_gated_transition(command):
+        reason = (
+            "Blocked by the solomon human-gated invariant: a headless stage cannot merge "
+            "a PR, create a release, or force-push a protected branch. The command "
+            f"{command!r} is permanently human-gated -- run it in an interactive session "
+            "with explicit confirmation, or let CI own the tag/publish. See "
+            "docs/solomon-workflow.md."
+        )
+        return (True, reason)
     if not is_push_or_merge(command):
         return (False, "")
     holder = lock.held_by_other()
