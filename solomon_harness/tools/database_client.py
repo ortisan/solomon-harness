@@ -3413,8 +3413,9 @@ class DatabaseClient:
         Returns:
             A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
             (and 'contract_path', pointing to the latest handoff contract
-            artifact if any handoff has been logged), or None if no activity
-            exists.
+            artifact, plus 'summary', the latest handoff's persisted "what this
+            stage did" text, both surfaced if any handoff has been logged), or
+            None if no activity exists.
         """
         latest_session = None
         if self.backend == "surrealdb":
@@ -3504,6 +3505,7 @@ class DatabaseClient:
             # "Handoff contracts") is never silently dropped by that ordering.
             if latest_handoff is not None:
                 result["contract_path"] = latest_handoff.get("contract_path")
+                result["summary"] = latest_handoff.get("summary")
             # The linked issue numbers from the session's worked_on edges
             # (ADR-0018), added only when edges exist so consumers pinned on
             # the exact legacy shape are untouched by pre-edge rows.
