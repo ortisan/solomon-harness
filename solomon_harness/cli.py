@@ -696,32 +696,58 @@ def reconcile_claims(
 ) -> Dict[str, Any]:
     """Release claims whose issue is closed in the supplied GitHub snapshot.
 
-    Claim refs are fetched once through the injected store. Open issues and
-    closed issues without refs are no-ops; dry-run records candidates without
-    mutating the store. A failed release is isolated to that issue so later
-    claims still converge.
+    Claim-ref versions are read once from the authoritative remote through the
+    injected store. Open issues and closed issues without refs are no-ops;
+    dry-run records candidates without mutating the store. Each live delete is
+    conditional on the observed version, so a concurrent heartbeat or reclaim
+    fails closed instead of deleting the newer claim.
     """
-    claims = claim_store.fetch_all()
+    snapshot = claim_store.fetch_versions()
     released = 0
+    already_absent = 0
     would_release: List[int] = []
     release_failures: List[Dict[str, Any]] = []
+    if not snapshot["ok"]:
+        return {
+            "released": released,
+            "already_absent": already_absent,
+            "release_failures": release_failures,
+            "would_release": would_release,
+            "snapshot_error": snapshot["error"],
+            "scanned": len(gh_states),
+        }
+    versions = snapshot["versions"]
     for entry in gh_states:
         if entry.get("state") != "CLOSED":
             continue
         issue_number = int(entry["number"])
-        if issue_number not in claims:
+        expected_version = versions.get(issue_number)
+        if expected_version is None:
             continue
         if dry_run:
             would_release.append(issue_number)
             continue
-        if claim_store.release(issue_number, force=True):
+        outcome = claim_store.release_if_version(issue_number, expected_version)
+        status = outcome["status"]
+        if status == "released":
             released += 1
+        elif status == "missing":
+            already_absent += 1
         else:
-            release_failures.append({"issue": issue_number, "ok": False})
+            release_failures.append(
+                {
+                    "issue": issue_number,
+                    "ok": False,
+                    "status": status,
+                    "error": outcome["error"],
+                }
+            )
     return {
         "released": released,
+        "already_absent": already_absent,
         "release_failures": release_failures,
         "would_release": would_release,
+        "snapshot_error": "",
         "scanned": len(gh_states),
     }
 
@@ -895,6 +921,12 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
         # terminal row needs no status normalization (#173).
         statuses = normalize_memory_statuses(db, dry_run=dry_run)
 
+    if claims["snapshot_error"]:
+        print(
+            f"reconcile: claim snapshot failed: {claims['snapshot_error']}",
+            file=sys.stderr,
+        )
+
     if dry_run:
         ids = ", ".join(f"#{n}" for n in result["would_repair"])
         suffix = f": {ids}" if ids else ""
@@ -941,9 +973,15 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
                 file=sys.stderr,
             )
         print(f"reconcile: {claims['released']} claim ref(s) released")
-        for failure in claims["release_failures"]:
+        if claims["already_absent"]:
             print(
-                f"reconcile: claim release failed for #{failure['issue']}",
+                f"reconcile: {claims['already_absent']} claim ref(s) already absent"
+            )
+        for failure in claims["release_failures"]:
+            error_suffix = f": {failure['error']}" if failure["error"] else ""
+            print(
+                f"reconcile: claim release failed for #{failure['issue']} "
+                f"({failure['status']}){error_suffix}",
                 file=sys.stderr,
             )
         print(
@@ -954,6 +992,9 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             f"reconcile: {statuses['normalized']} row(s) status-normalized "
             f"({statuses['scanned']} non-terminal rows scanned)"
         )
+
+    if claims["snapshot_error"]:
+        sys.exit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:

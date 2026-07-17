@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-07-06
+- Amended: ADR-0035 (2026-07-17) adds version-conditional deletion for standing reconciliation.
 - Deciders: software_architect, software_engineer, scrum_master
 - Issue: #51
 
