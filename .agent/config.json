@@ -12,6 +12,9 @@
     "namespace": "solomon",
     "database": "ortisan-solomon-harness"
   },
+  "loop": {
+    "orchestrator_model": "opus"
+  },
   "enabled_agents": [
     "documenter",
     "observability",

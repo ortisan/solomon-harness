@@ -158,7 +158,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-eight role-specific agents, each defined modularly under `agents/<name>/`
+Twenty-nine role-specific agents, each defined modularly under `agents/<name>/`
 (`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
 `.agent/config.json`). They are exposed through Claude Code subagents,
 Antigravity commands, and Codex workflow skills. The count above is the number of `agents/*/agents/*.md`
@@ -194,6 +194,7 @@ from that directory listing.
 | `legacy_modernizer` | dependency/risk-ordered legacy modernization planning, human-gated delegation |
 | `loop_engineer` | autonomous-loop mechanics: single-driver lock, autonomy ladder, run-log, cost budget |
 | `practice_curator` | benchmarks delivered work and agent guidance against the state of the art |
+| `peer_reviewer` | independent peer review of AI work: claim verification, adversarial re-testing, verdicts |
 | `research_analyst` | fundamental/qualitative research: DCF, multiples, sum-of-the-parts, sources playbook |
 
 The shared rules, the memory guide, and the agent index are the single source of
