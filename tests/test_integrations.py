@@ -265,7 +265,10 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
         agent_dir = os.path.join(tmp, "agents", name)
         role_dir = os.path.join(agent_dir, "agents")
         os.makedirs(role_dir)
-        os.makedirs(os.path.join(agent_dir, "skills"))
+        skills_dir = os.path.join(agent_dir, "skills")
+        os.makedirs(skills_dir)
+        with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+            f.write(f"# {name} Scope\n")
         with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
             f.write(f"# {name} Persona\n")
         with open(os.path.join(role_dir, f"{name}.md"), "w", encoding="utf-8") as f:
@@ -293,7 +296,10 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             agent_dir = os.path.join(tmp, "agents", "quant_trader")
             role_dir = os.path.join(agent_dir, "agents")
             os.makedirs(role_dir)
-            os.makedirs(os.path.join(agent_dir, "skills"))
+            skills_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+                f.write("# Quant Trader Scope\n")
             with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
                 f.write("# Project instructions\n")
             with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
@@ -354,7 +360,10 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             agent_dir = os.path.join(tmp, "agents", "qa")
             role_dir = os.path.join(agent_dir, "agents")
             os.makedirs(role_dir)
-            os.makedirs(os.path.join(agent_dir, "skills"))
+            skills_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+                f.write("# QA Scope\n")
             with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
                 f.write("# Root pointer\n")
             with open(
@@ -385,7 +394,10 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             agent_dir = os.path.join(tmp, "agents", "qa")
             role_dir = os.path.join(agent_dir, "agents")
             os.makedirs(role_dir)
-            os.makedirs(os.path.join(agent_dir, "skills"))
+            skills_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+                f.write("# QA Scope\n")
             with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
                 f.write("# QA Persona\n")
             with open(os.path.join(role_dir, "qa.md"), "w", encoding="utf-8") as f:
@@ -396,6 +408,43 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
 
             self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
 
+    def _assert_existing_wrapper_revoked_with_trust_root(self, *, symlink):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            trust_root = os.path.join(tmp, "AGENTS.md")
+            with open(trust_root, "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 1)
+            generated = os.path.join(tmp, ".claude", "agents", "qa.md")
+            custom = os.path.join(tmp, ".claude", "agents", "custom.md")
+            with open(custom, "w", encoding="utf-8") as f:
+                f.write("# Human-managed agent\n")
+
+            os.unlink(trust_root)
+            if symlink:
+                outside = os.path.join(tmp, "outside-rules.md")
+                with open(outside, "w", encoding="utf-8") as f:
+                    f.write("# Untrusted rules\n")
+                os.symlink(outside, trust_root)
+
+            with self.assertRaisesRegex(FileNotFoundError, "project instructions"):
+                generate_claude_agents(tmp)
+
+            self.assertFalse(os.path.lexists(generated))
+            self.assertTrue(os.path.isfile(custom))
+
+    def test_packaged_generator_revokes_existing_wrapper_when_trust_root_is_removed(self):
+        self._assert_existing_wrapper_revoked_with_trust_root(symlink=False)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_packaged_generator_revokes_existing_wrapper_when_trust_root_is_symlinked(self):
+        self._assert_existing_wrapper_revoked_with_trust_root(symlink=True)
+
     def test_packaged_generator_rejects_oversized_role_content(self):
         import tempfile
 
@@ -405,13 +454,32 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             agent_dir = os.path.join(tmp, "agents", "qa")
             role_dir = os.path.join(agent_dir, "agents")
             os.makedirs(role_dir)
-            os.makedirs(os.path.join(agent_dir, "skills"))
+            skills_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+                f.write("# QA Scope\n")
             with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
                 f.write("# Project instructions\n")
             with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
                 f.write("# QA Persona\n")
             with open(os.path.join(role_dir, "qa.md"), "w", encoding="utf-8") as f:
                 f.write("x" * (MAX_ROLE_BYTES + 1))
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_rejects_oversized_persona_content(self):
+        import tempfile
+
+        from solomon_harness.integrations import MAX_PERSONA_BYTES, generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            persona = os.path.join(tmp, "agents", "qa", "persona.md")
+            with open(persona, "w", encoding="utf-8") as f:
+                f.write("x" * (MAX_PERSONA_BYTES + 1))
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
 
             self.assertEqual(generate_claude_agents(tmp), 0)
             self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
@@ -426,7 +494,10 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             agent_dir = os.path.join(tmp, "agents", "qa")
             role_dir = os.path.join(agent_dir, "agents")
             os.makedirs(role_dir)
-            os.makedirs(os.path.join(agent_dir, "skills"))
+            skills_dir = os.path.join(agent_dir, "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+                f.write("# QA Scope\n")
             with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
                 f.write("# Project instructions\n")
             with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
@@ -438,6 +509,184 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
 
             self.assertEqual(generate_claude_agents(tmp), 0)
             self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_rejects_empty_skills_directory(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            os.unlink(os.path.join(tmp, "agents", "qa", "skills", "scope.md"))
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_packaged_generator_rejects_symlinked_skill(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            skill = os.path.join(tmp, "agents", "qa", "skills", "scope.md")
+            outside = os.path.join(tmp, "outside-skill.md")
+            with open(outside, "w", encoding="utf-8") as f:
+                f.write("# Untrusted skill\n")
+            os.unlink(skill)
+            os.symlink(outside, skill)
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_rejects_package_without_manifest(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            nested = os.path.join(tmp, "agents", "qa", "skills", "nested")
+            os.makedirs(nested)
+            with open(os.path.join(nested, "escape.md"), "w", encoding="utf-8") as f:
+                f.write("# Nested skill\n")
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_accepts_bounded_inert_package(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            package = os.path.join(tmp, "agents", "qa", "skills", "goodpkg")
+            os.makedirs(os.path.join(package, "docs"))
+            with open(os.path.join(package, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("# Good Package\n")
+            with open(os.path.join(package, "reference.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            with open(os.path.join(package, "docs", "notes.md"), "w", encoding="utf-8") as f:
+                f.write("# Notes\n")
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 1)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, ".claude", "agents", "qa.md")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_packaged_generator_rejects_nested_skill_symlink(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            package = os.path.join(tmp, "agents", "qa", "skills", "goodpkg")
+            docs = os.path.join(package, "docs")
+            os.makedirs(docs)
+            with open(os.path.join(package, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("# Good Package\n")
+            outside = os.path.join(tmp, "outside-skill.md")
+            with open(outside, "w", encoding="utf-8") as f:
+                f.write("# Untrusted skill\n")
+            os.symlink(outside, os.path.join(docs, "leak.md"))
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_enforces_skills_depth_limit(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from solomon_harness import integrations
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            package = os.path.join(tmp, "agents", "qa", "skills", "goodpkg")
+            os.makedirs(os.path.join(package, "docs"))
+            with open(os.path.join(package, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("# Good Package\n")
+            with open(os.path.join(package, "docs", "notes.md"), "w", encoding="utf-8") as f:
+                f.write("# Notes\n")
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            with patch.object(integrations, "MAX_SKILL_DEPTH", 1):
+                self.assertEqual(integrations.generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_rejects_unexpected_skills_file(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            unexpected = os.path.join(tmp, "agents", "qa", "skills", "config.json")
+            with open(unexpected, "w", encoding="utf-8") as f:
+                f.write("{}")
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    def test_packaged_generator_enforces_skills_tree_limits(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from solomon_harness import integrations
+
+        for limit_name in (
+            "MAX_SKILL_FILES",
+            "MAX_SKILL_BYTES",
+            "MAX_SKILLS_TOTAL_BYTES",
+        ):
+            with self.subTest(limit=limit_name), tempfile.TemporaryDirectory() as tmp:
+                self._write_external_agent(tmp)
+                with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                    f.write("# Project instructions\n")
+                with patch.object(integrations, limit_name, 0):
+                    self.assertEqual(integrations.generate_claude_agents(tmp), 0)
+                self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "agents")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_packaged_generator_revokes_wrapper_after_skill_becomes_symlink(self):
+        import tempfile
+
+        from solomon_harness.integrations import generate_claude_agents
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_external_agent(tmp)
+            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write("# Project instructions\n")
+            self.assertEqual(generate_claude_agents(tmp), 1)
+
+            generated = os.path.join(tmp, ".claude", "agents", "qa.md")
+            custom = os.path.join(tmp, ".claude", "agents", "custom.md")
+            with open(custom, "w", encoding="utf-8") as f:
+                f.write("# Human-managed agent\n")
+            skill = os.path.join(tmp, "agents", "qa", "skills", "scope.md")
+            outside = os.path.join(tmp, "outside-skill.md")
+            with open(outside, "w", encoding="utf-8") as f:
+                f.write("# Untrusted skill\n")
+            os.unlink(skill)
+            os.symlink(outside, skill)
+
+            self.assertEqual(generate_claude_agents(tmp), 0)
+            self.assertFalse(os.path.lexists(generated))
+            self.assertTrue(os.path.isfile(custom))
 
     def test_role_description_rejects_an_oversized_line(self):
         import tempfile

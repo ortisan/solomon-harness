@@ -169,7 +169,12 @@ def _signals(workspace_root: str) -> Set[str]:
 
 def select_agents(workspace_root: str) -> List[str]:
     """Return the sorted list of agents to enable for the project at workspace_root."""
+    agents_dir = os.path.join(workspace_root, "agents")
     available = _discover_agents(workspace_root)
+    catalog_present = bool(available) or os.path.lexists(agents_dir)
+    if catalog_present and not available:
+        return []
+
     selected: Set[str] = set(CORE_AGENTS)
     sig = _signals(workspace_root)
 
@@ -188,9 +193,10 @@ def select_agents(workspace_root: str) -> List[str]:
         if signal in sig:
             selected.update(agents)
 
-    # Only keep agents that actually exist in this harness.
-    if available:
-        selected &= available | set(CORE_AGENTS)
+    # A present catalog is authoritative, even when it has no compilable agents.
+    # The legacy core-and-signal fallback is reserved for projects with no agents/
+    # entry at all.
+    if catalog_present:
         selected &= available
     return sorted(selected)
 

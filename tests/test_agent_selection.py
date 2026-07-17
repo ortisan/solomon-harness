@@ -161,6 +161,24 @@ class TestAgentSelection(unittest.TestCase):
         selected = select_agents(root)
         self.assertEqual(set(selected), {"flutter", "qa"})
 
+    def test_present_incomplete_catalog_fails_closed(self):
+        root = _project({
+            "requirements.txt": "ccxt\n",
+            "strategy.py": "x",
+            "agents/quant_trader/agents/quant_trader.md": "# Quant Trader",
+        })
+
+        self.assertEqual(select_agents(root), [])
+
+    def test_present_empty_catalog_fails_closed(self):
+        root = _project({
+            "requirements.txt": "ccxt\n",
+            "strategy.py": "x",
+        })
+        os.makedirs(os.path.join(root, "agents"))
+
+        self.assertEqual(select_agents(root), [])
+
 
 if __name__ == "__main__":
     unittest.main()
