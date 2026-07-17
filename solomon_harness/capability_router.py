@@ -16,7 +16,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple, Union
 
-from solomon_harness.agent_selection import discover_agents
+from solomon_harness.integrations import MAX_ROLE_BYTES, discover_agents, read_agent_role
+from solomon_harness.secure_paths import UnsafePathError
 
 ADAPT_SKILL = "adapt_skill"
 CREATE_AGENT = "create_agent"
@@ -82,31 +83,12 @@ def _default_workspace_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _role_description(role_path: str) -> str:
-    """First non-heading, non-empty line of a role file (its advertised summary)."""
-    try:
-        if os.path.getsize(role_path) > 1024 * 1024:
-            return ""
-        with open(role_path, "r", encoding="utf-8") as f:
-            in_skipped_line = False
-            while True:
-                line = f.readline(8192)
-                if not line:
-                    break
-                is_continuation = in_skipped_line
-                if line.endswith("\n"):
-                    in_skipped_line = False
-                else:
-                    in_skipped_line = True
-                if is_continuation:
-                    continue
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    return stripped
-                if stripped.startswith("#"):
-                    in_skipped_line = not line.endswith("\n")
-    except OSError:
-        return ""
+def _role_description(role_text: str) -> str:
+    """First non-heading, non-empty line of bounded canonical role text."""
+    for line in role_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped[:8192]
     return ""
 
 
@@ -119,22 +101,24 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     """
     root = workspace_root or _default_workspace_root()
     real_root = os.path.realpath(root)
-    agents_dir = os.path.realpath(os.path.join(real_root, "agents"))
-    names = discover_agents(real_root)
+    agents_dir = os.path.join(real_root, "agents")
+    try:
+        names = discover_agents(os.path.join(real_root, "agents"), strict=True)
+    except (FileNotFoundError, UnsafePathError, OSError) as exc:
+        raise CatalogError(f"unsafe agent catalog under {agents_dir}") from exc
     if not names:
         raise CatalogError(f"no agents discovered under {os.path.join(real_root, 'agents')}")
     catalog = []
     for name in sorted(names):
-        role = os.path.join(agents_dir, name, "agents", f"{name}.md")
-        real_role = os.path.realpath(role)
-        if not real_role.startswith(agents_dir + os.sep):
-            raise CatalogError(f"path confinement violation: {role} resolves outside {agents_dir}")
-        curr = role
-        while curr and curr != agents_dir and curr != os.path.dirname(curr):
-            if os.path.islink(curr):
-                raise CatalogError(f"symlink rejected: {curr}")
-            curr = os.path.dirname(curr)
-        catalog.append(Agent(name=name, description=_role_description(real_role)))
+        try:
+            role_text = read_agent_role(
+                agents_dir,
+                name,
+                max_bytes=MAX_ROLE_BYTES,
+            ).decode("utf-8")
+        except (FileNotFoundError, UnsafePathError, UnicodeDecodeError, OSError) as exc:
+            raise CatalogError(f"unsafe role for agent {name}") from exc
+        catalog.append(Agent(name=name, description=_role_description(role_text)))
     return catalog
 
 

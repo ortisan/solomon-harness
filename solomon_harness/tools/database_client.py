@@ -663,6 +663,22 @@ class DatabaseClient:
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
         self._db_path_param = db_path
 
+        # HARNESS_DB_PATH must force SQLite isolation exactly like an explicit
+        # db_path argument: it has to set self.db_path BEFORE _init_backend runs,
+        # because _init_backend only enters the SurrealDB branch when
+        # ``self.db_path is None``. Reading it later (inside _resolve_sqlite_path)
+        # is too late -- with the shared SurrealDB reachable the backend is already
+        # chosen, and writes land in the real multi-tenant store, so the env var
+        # silently fails to isolate (issue #40). Resolve to an absolute path and
+        # create its parent up front so the SQLite connect never races a missing
+        # directory. An empty value is ignored (treated as unset).
+        if self.db_path is None:
+            env_db = os.environ.get("HARNESS_DB_PATH")
+            if env_db:
+                abs_db = os.path.abspath(env_db)
+                os.makedirs(os.path.dirname(abs_db), exist_ok=True)
+                self.db_path = abs_db
+
         # SurrealDB connection params captured so the connection can be rebuilt
         # mid-session after a drop, not only at construction (issue #37).
         self._surreal_class: Any = None
