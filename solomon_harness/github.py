@@ -44,8 +44,18 @@ DEFAULT_BOARD_TITLE = "solomon"
 GH_TIMEOUT_SECONDS = 15
 
 
-def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
+def _gh(
+    args: List[str],
+    parse_json: bool = False,
+    *,
+    cwd: Optional[str] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """Run a gh command and return {'ok', 'data'|'stdout', 'error'}.
+
+    Repository-scoped callers can supply an explicit working directory and
+    scrubbed environment; both are preserved across the retry and token-heal
+    paths so a transient failure cannot change command scope.
 
     Retries once on a transient failure (a non-zero exit or a timeout): a momentary
     keyring race with a concurrent driver, or a network blip, can fail one call
@@ -60,15 +70,16 @@ def _gh(args: List[str], parse_json: bool = False) -> Dict[str, Any]:
     # it with the specific error, so the generic default is a defensive fallback.
     transient_error: Dict[str, Any] = {"ok": False, "error": "gh command failed."}
     for attempt in range(2):
-        env = _heal_token_env() if attempt == 1 else None
+        attempt_env = _heal_token_env(env, cwd=cwd) if attempt == 1 else env
         try:
             proc = subprocess.run(
                 cmd,
+                cwd=cwd,
                 capture_output=True,
                 text=True,
                 check=False,
                 timeout=GH_TIMEOUT_SECONDS,
-                env=env,
+                env=attempt_env,
             )
         except FileNotFoundError:
             return {"ok": False, "error": "gh CLI not found; install GitHub CLI and authenticate."}
@@ -95,7 +106,11 @@ def _parse_gh_stdout(stdout: str, parse_json: bool) -> Dict[str, Any]:
         return {"ok": False, "error": f"could not parse gh JSON output: {exc}"}
 
 
-def _resolve_gh_token() -> Optional[str]:
+def _resolve_gh_token(
+    *,
+    cwd: Optional[str] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
     """Best-effort resolve a token via ``gh auth token`` for the heal retry.
 
     Returns the token, or None when gh cannot resolve one (the retry then runs
@@ -105,10 +120,12 @@ def _resolve_gh_token() -> Optional[str]:
     try:
         proc = subprocess.run(
             ["gh", "auth", "token"],
+            cwd=cwd,
             capture_output=True,
             text=True,
             check=False,
             timeout=GH_TIMEOUT_SECONDS,
+            env=env,
         )
     except Exception:  # noqa: BLE001 - best-effort heal; any failure falls back to a plain retry
         return None
@@ -117,20 +134,25 @@ def _resolve_gh_token() -> Optional[str]:
     return proc.stdout.strip() or None
 
 
-def _heal_token_env() -> Optional[Dict[str, str]]:
+def _heal_token_env(
+    base_env: Optional[Dict[str, str]] = None,
+    *,
+    cwd: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     """The environment for the heal retry, or None to inherit the parent's.
 
-    Only when the env carries neither GITHUB_TOKEN nor GH_TOKEN does it resolve a
-    fresh token and return a copy of ``os.environ`` with GH_TOKEN set, healing a
-    credential blip. When a token is already present, or none can be resolved, it
-    returns None so the retry inherits the existing environment unchanged.
+    Only when the selected environment carries neither GITHUB_TOKEN nor GH_TOKEN
+    does it resolve a fresh token and return a copy with GH_TOKEN set. An explicit
+    caller environment is always preserved, even when token resolution fails, so
+    a retry cannot reintroduce repository-routing variables scrubbed by the caller.
     """
-    if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
-        return None
-    token = _resolve_gh_token()
+    selected_env = os.environ if base_env is None else base_env
+    if selected_env.get("GITHUB_TOKEN") or selected_env.get("GH_TOKEN"):
+        return base_env
+    token = _resolve_gh_token(cwd=cwd, env=base_env)
     if not token:
-        return None
-    env = os.environ.copy()
+        return base_env
+    env = selected_env.copy()
     env["GH_TOKEN"] = token
     return env
 
