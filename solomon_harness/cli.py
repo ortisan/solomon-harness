@@ -8,9 +8,12 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import Dict, Optional, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from solomon_harness.bootstrap import scaffold_new_agent
+
+if TYPE_CHECKING:
+    from solomon_harness.claim import ClaimStore
 
 
 def _subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
@@ -686,6 +689,43 @@ def reconcile_memory(
     }
 
 
+def reconcile_claims(
+    claim_store: "ClaimStore",
+    gh_states: List[Dict[str, Any]],
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Release claims whose issue is closed in the supplied GitHub snapshot.
+
+    Claim refs are fetched once through the injected store. Open issues and
+    closed issues without refs are no-ops; dry-run records candidates without
+    mutating the store. A failed release is isolated to that issue so later
+    claims still converge.
+    """
+    claims = claim_store.fetch_all()
+    released = 0
+    would_release: List[int] = []
+    release_failures: List[Dict[str, Any]] = []
+    for entry in gh_states:
+        if entry.get("state") != "CLOSED":
+            continue
+        issue_number = int(entry["number"])
+        if issue_number not in claims:
+            continue
+        if dry_run:
+            would_release.append(issue_number)
+            continue
+        if claim_store.release(issue_number, force=True):
+            released += 1
+        else:
+            release_failures.append({"issue": issue_number, "ok": False})
+    return {
+        "released": released,
+        "release_failures": release_failures,
+        "would_release": would_release,
+        "scanned": len(gh_states),
+    }
+
+
 def normalize_memory_statuses(db, dry_run: bool = False) -> dict:
     """Canonicalize any non-canonical status still stored on a non-terminal row.
 
@@ -827,6 +867,7 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
     (ADR-0006 / RAID R1). Run it from a fresh process so it never inherits the
     dead MCP write socket of bug #37.
     """
+    from solomon_harness.claim import GitClaimStore
     from solomon_harness.tools.database_client import DatabaseClient
 
     with DatabaseClient(harness_dir=workspace_root) as db:
@@ -845,6 +886,9 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             print(f"reconcile failed: {exc}", file=sys.stderr)
             sys.exit(1)
         result = reconcile_memory(db, issue_states, dry_run=dry_run)
+        claims = reconcile_claims(
+            GitClaimStore(workspace_root), issue_states, dry_run=dry_run
+        )
         resolved_map = _build_resolved_map(issue_states, pr_states)
         tracking = reconcile_tracking_rows(db, resolved_map, dry_run=dry_run)
         # Runs last: the two passes above may have just made rows terminal, and a
@@ -863,6 +907,12 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile --dry-run: {len(result['would_move_board'])} board card(s) "
             f"would move to Done{board_suffix}"
+        )
+        claim_ids = ", ".join(f"#{n}" for n in claims["would_release"])
+        claim_suffix = f": {claim_ids}" if claim_ids else ""
+        print(
+            f"reconcile --dry-run: {len(claims['would_release'])} claim ref(s) "
+            f"would be released{claim_suffix}"
         )
         slugs = ", ".join(tracking["would_close"])
         track_suffix = f": {slugs}" if slugs else ""
@@ -888,6 +938,12 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             print(
                 f"reconcile: board move failed for #{failure['issue']}: "
                 f"{failure['error']}",
+                file=sys.stderr,
+            )
+        print(f"reconcile: {claims['released']} claim ref(s) released")
+        for failure in claims["release_failures"]:
+            print(
+                f"reconcile: claim release failed for #{failure['issue']}",
                 file=sys.stderr,
             )
         print(

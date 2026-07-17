@@ -247,6 +247,99 @@ class TestReconcileMemory(unittest.TestCase):
         client.close()
 
 
+class _FakeClaimStore:
+    def __init__(self, claims, release_results=None):
+        self.claims = claims
+        self.release_results = release_results or {}
+        self.fetch_calls = 0
+        self.release_calls = []
+
+    def fetch_all(self):
+        self.fetch_calls += 1
+        return self.claims
+
+    def release(self, issue_number, session_id=None, force=False):
+        self.release_calls.append((issue_number, force))
+        return self.release_results.get(issue_number, True)
+
+
+class TestReconcileClaims(unittest.TestCase):
+    def test_closed_claim_is_force_released_and_counted(self):
+        store = _FakeClaimStore({173: {"session_id": "stale-worker"}})
+
+        result = cli.reconcile_claims(
+            store,
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(store.fetch_calls, 1)
+        self.assertEqual(store.release_calls, [(173, True)])
+        self.assertEqual(
+            result,
+            {
+                "released": 1,
+                "release_failures": [],
+                "would_release": [],
+                "scanned": 1,
+            },
+        )
+
+    def test_open_and_unclaimed_issues_are_not_released(self):
+        store = _FakeClaimStore({200: {"session_id": "stale-worker"}})
+
+        result = cli.reconcile_claims(
+            store,
+            [
+                {"number": "200", "state": "OPEN", "board_status": "In Progress"},
+                {"number": "201", "state": "CLOSED", "board_status": "Done"},
+            ],
+        )
+
+        self.assertEqual(store.fetch_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["scanned"], 2)
+
+    def test_dry_run_reports_closed_claim_without_releasing_it(self):
+        store = _FakeClaimStore({173: {"session_id": "stale-worker"}})
+
+        result = cli.reconcile_claims(
+            store,
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+            dry_run=True,
+        )
+
+        self.assertEqual(store.fetch_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["would_release"], [173])
+        self.assertEqual(result["release_failures"], [])
+
+    def test_failed_release_is_recorded_and_does_not_stop_later_claims(self):
+        store = _FakeClaimStore(
+            {
+                173: {"session_id": "worker-one"},
+                201: {"session_id": "worker-two"},
+            },
+            release_results={173: False, 201: True},
+        )
+
+        result = cli.reconcile_claims(
+            store,
+            [
+                {"number": "173", "state": "CLOSED", "board_status": "Done"},
+                {"number": "201", "state": "CLOSED", "board_status": "Done"},
+            ],
+        )
+
+        self.assertEqual(store.release_calls, [(173, True), (201, True)])
+        self.assertEqual(result["released"], 1)
+        self.assertEqual(
+            result["release_failures"],
+            [{"issue": 173, "ok": False}],
+        )
+
+
 class TestNormalizeMemoryStatuses(unittest.TestCase):
     """The one-shot status normalization pass (#173 AC3).
 
@@ -947,6 +1040,65 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
         ):
             cli.handle_reconcile(self.temp_dir.name, dry_run=True)
         self.assertIn("1 board card(s) would move to Done", out.getvalue())
+
+    def test_dry_run_reports_claims_from_the_existing_issue_snapshot(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "100", "state": "OPEN", "board_status": "In Progress"},
+        ]
+        store = _FakeClaimStore({6: {"session_id": "stale-worker"}})
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ) as fetch_issue_states,
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=True)
+
+        fetch_issue_states.assert_called_once_with(self.temp_dir.name)
+        self.assertEqual(store.fetch_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertIn("1 claim ref(s) would be released: #6", out.getvalue())
+
+    def test_live_run_reports_claim_release_failure_and_continues(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "8", "state": "CLOSED", "board_status": "Done"},
+        ]
+        store = _FakeClaimStore(
+            {
+                6: {"session_id": "worker-one"},
+                8: {"session_id": "worker-two"},
+            },
+            release_results={6: False, 8: True},
+        )
+        out = io.StringIO()
+        err = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+
+        self.assertEqual(store.release_calls, [(6, True), (8, True)])
+        self.assertIn("1 claim ref(s) released", out.getvalue())
+        self.assertIn("claim release failed for #6", err.getvalue())
 
     def test_converged_board_card_is_not_written_by_command_path(self):
         self.inner.log_issue("6", "Stale closed", "bug", "closed", None)
