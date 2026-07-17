@@ -786,6 +786,13 @@ class DatabaseClient:
             is_local = any(h in url for h in ("localhost", "127.0.0.1", "0.0.0.0"))
             if is_local:
                 username = username or "root"
+                if not password:
+                    try:
+                        from solomon_harness.home import generated_memory_password
+
+                        password = generated_memory_password()
+                    except Exception:
+                        password = None
                 password = password or "root"
             creds_ok = bool(username and password)
 
