@@ -9,11 +9,11 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
-You are running the `/solomon-bug` stage. Read
+You are running the `$solomon-bug` stage. Read
 `docs/solomon-workflow.md` first and follow it exactly: this is the bug-entry
 stage, the issue is labeled `type:bug`, and the card lands in `Backlog`.
 
@@ -51,11 +51,11 @@ Steps:
      `Given/When/Then`: the repro scenario now passes and no adjacent behavior
      regresses.
    - **Definition of Ready** — the repro is deterministic, severity and priority are
-     assigned, and the suspected area is scoped; `/solomon-refine` completes any gaps
+     assigned, and the suspected area is scoped; `$solomon-refine` completes any gaps
      before the fix starts.
    - **Definition of Done** — the failing regression test exists and then passes, the
      fix is merged with CI green, and no new failures appear; the bug is not closeable
-     until its Definition of Done holds. `/solomon-review` and `/solomon-release`
+     until its Definition of Done holds. `$solomon-review` and `$solomon-release`
      enforce it.
 2. If repro steps, environment, or severity are missing and cannot be inferred,
    ask the user the minimum questions needed rather than inventing details.
@@ -74,7 +74,7 @@ Steps:
    - `log_issue(github_id=<n>, title=<title>, type_="bug", status="Backlog", milestone_id=null)`.
    - Write the compact handoff contract to `.solomon/handoffs/issue-<n>-bug-to-refine.md`
      using the template in `docs/solomon-workflow.md` (a summary plus pointers to the
-     issue and its repro/severity), so `/solomon-refine` reads it as its bounded input.
+     issue and its repro/severity), so `$solomon-refine` reads it as its bounded input.
    - `log_handoff(sender="qa", recipient="software_engineer", contract_type="bug_report", contract_path=".solomon/handoffs/issue-<n>-bug-to-refine.md", status="open", summary="<2-5 line synopsis of the reported defect and its suspected location>")` to hand the defect to implementation; keep the returned handoff id.
    - `save_session(...)` to checkpoint if triage required substantial subagent work;
      pass `issues=[<n>]` (the worked_on edge, ADR-0018). When a session was saved,
@@ -82,6 +82,6 @@ Steps:
 8. Report back the issue URL, the assigned priority, and a one-line reminder that
    the regression test is the close gate.
 
-Do not branch, fix, or open a PR here — that begins at `/solomon-start`.
+Do not branch, fix, or open a PR here — that begins at `$solomon-start`.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.

@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
@@ -33,7 +33,7 @@ generated files, vendored code, secrets, migrations.
 
 Rank findings by severity and act on the single highest-confidence one only:
 
-- **Low confidence:** file a discovery item with `/solomon-idea` (board `Ideas`)
+- **Low confidence:** file a discovery item with `$solomon-idea` (board `Ideas`)
   for human triage. Do not open a PR.
 - **High confidence, bounded fix:** cut `feature/<slug>` (no issue number), make
   the minimal change with a covering test (TDD), and open a **draft** PR with a
@@ -50,5 +50,5 @@ lock — this stage acquires it automatically through `run_stage`.
 
 - `save_decision` — the finding acted on and why, so the run is auditable.
 - Write a one-line run note to `.solomon/scan-runs/scan-arch-<date>.md`.
-- The draft PR enters the unchanged `/solomon-review` gate; a human approves any
+- The draft PR enters the unchanged `$solomon-review` gate; a human approves any
   merge. Never advance past the draft PR yourself.

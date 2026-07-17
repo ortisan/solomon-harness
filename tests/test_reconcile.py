@@ -1556,5 +1556,13 @@ class TestHandleRunDoesNotReconcile(unittest.TestCase):
             self._run_handle_run_with()
         spy.assert_not_called()
 
+    def test_codex_session_catalog_uses_skill_invocations_only(self):
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "thread-123"}, clear=True):
+            output = self._run_handle_run_with()
+
+        self.assertIn("$solomon-workflow", output)
+        self.assertIn("$solomon-start", output)
+        self.assertNotIn("/solomon-", output)
+
 if __name__ == "__main__":
     unittest.main()

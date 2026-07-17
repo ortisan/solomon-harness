@@ -9,7 +9,7 @@ Apply this workflow when the user invokes the skill or asks for the stage it gov
 
 Codex compatibility rules:
 
-- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- Invoke Solomon workflow stages explicitly with their `$solomon-*` skill names.
 - When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
 - Read specialist definitions and skills under `agents/<name>/` before acting in that role.
 
@@ -35,7 +35,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   release the other session's claim. The claim is released automatically on merge, by a
   failed headless run, or manually with `solomon-harness claim release ARGUMENTS`.
 - `mcp__solomon-memory__get_issue("ARGUMENTS")` for prior context; check the card is in
-  `Ready`. If it is not refined, stop and tell the user to run `/solomon-refine` first.
+  `Ready`. If it is not refined, stop and tell the user to run `$solomon-refine` first.
 - **Capability Check** (see "Capability check" in `docs/solomon-workflow.md`):
   Verify the project has the capability (agent + skills) this issue needs.
   The deterministic router core builds the verdict (ADR-0008); you supply the
@@ -131,8 +131,8 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 
 - **Discovered-problem protocol** (see the section of that name in `docs/solomon-workflow.md`) —
   implementation routinely surfaces a *different* problem: an unrelated defect, a better approach,
-  a missing test, a refactor worth doing. File it as a NEW issue (`/solomon-bug` for a defect,
-  `/solomon-issue` for a feature/improvement, a `type:chore` for cleanup) whose body links this one
+  a missing test, a refactor worth doing. File it as a NEW issue (`$solomon-bug` for a defect,
+  `$solomon-issue` for a feature/improvement, a `type:chore` for cleanup) whose body links this one
   with `Refs #ARGUMENTS`. Never append the discovery as a comment on issue #ARGUMENTS, and never
   silently widen this change beyond the PLAN.md target-files fence. If the discovery blocks #ARGUMENTS,
   stop and present the choice to the user as enumerated options (file-and-continue, file-and-switch,
@@ -143,8 +143,8 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   concrete values, the worktree path, the branch `feature/<slug>`, and the PLAN.md path as the
   developer's starting point, plus the ADR decision from step 4. Leave the board card in
   `In Progress` (do not advance it to Code Review). Tell the developer: implement by hand using
-  PLAN.md, then re-run `/solomon-start ARGUMENTS` to open the draft PR and move to Code Review,
-  or open the PR yourself and run `/solomon-review`. Checkpoint the choice with
+  PLAN.md, then re-run `$solomon-start ARGUMENTS` to open the draft PR and move to Code Review,
+  or open the PR yourself and run `$solomon-review`. Checkpoint the choice with
   `mcp__solomon-memory__save_session(session_id="start-ARGUMENTS", agent_name="software_engineer", task="Manual implementation chosen for #ARGUMENTS", messages=..., issues=[ARGUMENTS])` and stop here. Skip step 6.
 
 ## 6. Draft PR, Code Review, handoff
@@ -161,7 +161,7 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
 - `mcp__solomon-memory__save_session(session_id="start-ARGUMENTS", agent_name="software_engineer", task="Implement #ARGUMENTS", messages=..., issues=[ARGUMENTS])` to checkpoint; `issues` writes the worked_on edge so resume is a graph query, not a task-string parse (ADR-0018).
 - `mcp__solomon-memory__link_session_handoff(session_id="start-ARGUMENTS", handoff_id=<the returned handoff id>)` to record the produced edge.
 - Report the branch, PR URL, and ADR decision. Then continue directly into the Review
-  stage for the PR you just opened — run the `/solomon-review` flow for it now, in this
+  stage for the PR you just opened — run the `$solomon-review` flow for it now, in this
   same run, without waiting for a new command. The review is part of the workflow, not a
   separate manual step; only the merge remains a human gate. A blocker verdict halts the
   chain and returns to the human — never fix and re-review inside the same run (ADR-0019).

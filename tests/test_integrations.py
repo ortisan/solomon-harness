@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -218,6 +219,10 @@ class TestCodexSkills(unittest.TestCase):
             self.assertIn(f"name: {skill_name}", body)
             self.assertIn("Use when", body)
             self.assertNotIn("$ARGUMENTS", body)
+            self.assertIsNone(
+                re.search(r"(?<![A-Za-z0-9_./-])/solomon-", body),
+                f"{skill_name} exposes slash commands that Codex cannot invoke",
+            )
 
     def test_codex_skills_match_regenerated_source(self):
         gen = self._generator()
@@ -248,6 +253,28 @@ class TestCodexSkills(unittest.TestCase):
         self.assertIn("Use when", rendered)
         self.assertIn("Begin issue #ARGUMENTS.", rendered)
         self.assertNotIn("$ARGUMENTS", rendered)
+
+    def test_codex_skill_renderer_adapts_workflow_invocations(self):
+        gen = self._generator()
+        rendered = gen.codex_skill_markdown(
+            "solomon-start",
+            "Start an issue.",
+            "Run /solomon-refine 42, then /solomon-start 42.",
+        )
+        self.assertIn("Run $solomon-refine 42, then $solomon-start 42.", rendered)
+        self.assertNotIn("/solomon-", rendered)
+
+    def test_codex_skill_renderer_preserves_document_and_command_file_paths(self):
+        gen = self._generator()
+        rendered = gen.codex_skill_markdown(
+            "solomon-start",
+            "Start an issue.",
+            "Read docs/solomon-workflow.md and .claude/commands/solomon-start.md, "
+            "then run /solomon-start 42.",
+        )
+        self.assertIn("docs/solomon-workflow.md", rendered)
+        self.assertIn(".claude/commands/solomon-start.md", rendered)
+        self.assertIn("run $solomon-start 42", rendered)
 
     def test_readme_documents_codex_skill_invocation(self):
         readme = _read("README.md")
