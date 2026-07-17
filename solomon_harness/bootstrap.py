@@ -1,10 +1,12 @@
 import os
 import json
 import shutil
+import stat
 import datetime
 import subprocess
-from typing import Callable, List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional, TextIO
 
+from solomon_harness.subprocess_env import clean_git_env
 from solomon_harness.wiki_bootstrap import (
     is_github_remote,
     resolve_web_wiki_url,
@@ -62,8 +64,6 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
 
     # Git Remote
     try:
-        from solomon_harness.subprocess_env import clean_git_env
-
         git_remote = subprocess.check_output(
             ["git", "remote", "get-url", "origin"],
             cwd=workspace_root,
@@ -353,6 +353,207 @@ def _install_docs_skeleton(repo_root: str, workspace_root: str) -> None:
             dest = os.path.join(dest_tree, name)
             if os.path.isfile(src) and not os.path.exists(dest):
                 shutil.copy2(src, dest)
+
+
+# Per-branch planning artifacts: /solomon-start writes PLAN.md at the repo root
+# and working state under .solomon/ for the branch in flight. These are local,
+# per-branch artifacts, not shared source. The harness's own .gitignore already
+# excludes them; the block below propagates that rule into every project, because
+# tracking PLAN.md makes concurrent branches rewrite and collide on it.
+_PLAN_GITIGNORE_ENTRIES = ("/PLAN.md", "/.solomon/")
+_PLAN_GITIGNORE_PROBES = {
+    "/PLAN.md": "PLAN.md",
+    "/.solomon/": ".solomon/.solomon-harness-ignore-probe",
+}
+_LOCAL_GIT_TIMEOUT_SECONDS = 10
+_PLAN_GITIGNORE_BLOCK = (
+    "# Local lifecycle state: handoff contract artifacts written between workflow stages\n"
+    "/.solomon/\n"
+    "\n"
+    "# Per-branch planning artifact: PLAN.md is written locally by /solomon-start for\n"
+    "# the branch in flight, not shared source. Tracking it made every concurrent\n"
+    "# branch rewrite and collide on it, so it is local state, never committed.\n"
+    "/PLAN.md\n"
+)
+
+
+def _run_project_git(
+    workspace_root: str, args: List[str]
+) -> subprocess.CompletedProcess[str]:
+    """Run one bounded Git command against only ``workspace_root``."""
+    try:
+        return subprocess.run(  # noqa: S603 - module-private callers pass fixed Git subcommands.
+            ["git", *args],  # noqa: S607 - use the same operator-selected Git as the CLI.
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            env=clean_git_env(workspace_root),
+            timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"Unable to inspect or repair local lifecycle artifacts: {exc}"
+        ) from exc
+
+
+def _open_project_gitignore(gitignore_path: str) -> TextIO:
+    """Open one regular ``.gitignore`` without following a final symlink."""
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise RuntimeError(
+            "Unable to safely open project .gitignore: "
+            "this platform cannot reject symbolic links"
+        )
+
+    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | nofollow
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(gitignore_path, flags, 0o666)
+    except OSError as exc:
+        raise RuntimeError(f"Unable to safely open project .gitignore: {exc}") from exc
+
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        os.close(descriptor)
+        raise RuntimeError(f"Unable to inspect project .gitignore: {exc}") from exc
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        os.close(descriptor)
+        raise RuntimeError(
+            "Unable to safely open project .gitignore: "
+            "path must be a regular file with exactly one link"
+        )
+    try:
+        return os.fdopen(descriptor, "a+", encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        os.close(descriptor)
+        raise RuntimeError(f"Unable to read project .gitignore: {exc}") from exc
+
+
+def _has_effective_exact_ignore_rule(contents: str, entry: str) -> bool:
+    """Return whether the last exact local rule keeps ``entry`` ignored."""
+    target = entry.lstrip("/").rstrip("/")
+    effective = False
+    matched = False
+    for raw_line in contents.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        pattern = line[1:] if negated else line
+        normalized = pattern.lstrip("/").rstrip("/")
+        if normalized == target:
+            matched = True
+            effective = not negated
+    return matched and effective
+
+
+def _git_effectively_ignores(workspace_root: str, path: str) -> bool:
+    result = _run_project_git(
+        workspace_root,
+        ["check-ignore", "--no-index", "--quiet", "--", path],
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = result.stderr.strip() or f"git check-ignore exited {result.returncode}"
+    raise RuntimeError(f"Unable to verify local lifecycle ignore rules: {detail}")
+
+
+def _tracked_lifecycle_roots(workspace_root: str) -> List[str]:
+    result = _run_project_git(
+        workspace_root,
+        ["ls-files", "-z", "--", "PLAN.md", ".solomon"],
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git ls-files exited {result.returncode}"
+        raise RuntimeError(f"Unable to inspect tracked local lifecycle artifacts: {detail}")
+
+    tracked = [path for path in result.stdout.split("\0") if path]
+    roots: List[str] = []
+    if "PLAN.md" in tracked:
+        roots.append("PLAN.md")
+    if any(path == ".solomon" or path.startswith(".solomon/") for path in tracked):
+        roots.append(".solomon")
+    return roots
+
+
+def _ensure_project_gitignore(workspace_root: str) -> None:
+    """Ensure the project ignores the per-branch planning artifacts.
+
+    Appends effective ``PLAN.md`` and ``.solomon/`` rules when needed, then removes
+    either artifact from the selected repository's index without deleting working
+    files. Every Git command is repository-scoped and fail-closed. Runs on every
+    ``init`` so projects installed before this convention self-heal. Idempotent:
+    a converged project performs no further file or index mutation.
+    """
+    if not os.path.isdir(workspace_root):
+        return  # nothing to configure (a real init always has a workspace dir)
+    gitignore_path = os.path.join(workspace_root, ".gitignore")
+    with _open_project_gitignore(gitignore_path) as gitignore_file:
+        try:
+            gitignore_file.seek(0)
+            existing = gitignore_file.read()
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeError(f"Unable to read project .gitignore: {exc}") from exc
+
+        is_git_repo = os.path.exists(os.path.join(workspace_root, ".git"))
+        missing = []
+        for entry in _PLAN_GITIGNORE_ENTRIES:
+            exact_rule_is_effective = _has_effective_exact_ignore_rule(existing, entry)
+            git_rule_is_effective = True
+            if is_git_repo:
+                git_rule_is_effective = _git_effectively_ignores(
+                    workspace_root, _PLAN_GITIGNORE_PROBES[entry]
+                )
+            if not exact_rule_is_effective or not git_rule_is_effective:
+                missing.append(entry)
+        if missing:
+            if set(missing) == set(_PLAN_GITIGNORE_ENTRIES):
+                addition = _PLAN_GITIGNORE_BLOCK
+            else:
+                addition = "\n".join(missing) + "\n"
+            prefix = ""
+            if existing and not existing.endswith("\n"):
+                prefix += "\n"
+            if existing:
+                prefix += "\n"
+            try:
+                gitignore_file.write(prefix + addition)
+                gitignore_file.flush()
+            except (OSError, UnicodeError) as exc:
+                raise RuntimeError(f"Unable to update project .gitignore: {exc}") from exc
+            print(
+                "  - .gitignore: excluded per-branch planning artifacts "
+                "(PLAN.md, .solomon/)."
+            )
+
+        if not is_git_repo:
+            return
+
+        for entry in _PLAN_GITIGNORE_ENTRIES:
+            if not _git_effectively_ignores(
+                workspace_root, _PLAN_GITIGNORE_PROBES[entry]
+            ):
+                raise RuntimeError(f"Unable to make {entry} an effective local ignore rule")
+
+        tracked_roots = _tracked_lifecycle_roots(workspace_root)
+        if not tracked_roots:
+            return
+
+        result = _run_project_git(
+            workspace_root,
+            ["rm", "-r", "--cached", "--quiet", "--", *tracked_roots],
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or f"git rm exited {result.returncode}"
+            raise RuntimeError(f"Unable to untrack local lifecycle artifacts: {detail}")
+        names = ", ".join(tracked_roots)
+        print(
+            f"  - Untracked local lifecycle artifacts: {names} "
+            "(working files preserved)."
+        )
 
 
 # Idempotent upsert targets for the docs/specs and docs/adrs references (#236):
@@ -652,6 +853,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # When run in a fresh project (no agents/ yet), install the harness files from
     # this package's repository into the workspace before configuring it.
     _install_harness_files(workspace_root)
+    # Runs for existing projects too (_install_harness_files early-returns once
+    # agents/ exists): a project bootstrapped before this rule kept a .gitignore
+    # that let PLAN.md get committed and collide across branches.
+    _ensure_project_gitignore(workspace_root)
     print(f"  - Project Name: {project_name}")
     print(f"  - Git Remote:   {git_remote}")
     print(f"  - Technologies: {technologies}")

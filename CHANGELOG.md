@@ -2,6 +2,11 @@
 
 All notable changes to solomon-harness are recorded here. The format follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+- `init` now propagates root-anchored per-branch planning-artifact rules into every project: `bootstrap` safely rejects linked or non-regular `.gitignore` paths, ensures the root `PLAN.md` and `.solomon/` are excluded, then removes either artifact from only the selected project's index while preserving working files. The repair strips inherited `GIT_*`, checks every Git result, and fails closed instead of reporting a false success. Projects bootstrapped before this kept stale lifecycle state that collided across concurrent branches.
+
 ## [0.11.0] - 2026-06-29
 
 ### Added
