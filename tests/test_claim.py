@@ -392,8 +392,8 @@ class TestClaimGitOperations(unittest.TestCase):
         with (
             patch("solomon_harness.claim._run_git", wraps=claim._run_git) as run_git,
             patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
-            patch("solomon_harness.claim._audit_claim_event"),
-            patch("solomon_harness.github._gh"),
+            patch("solomon_harness.claim._audit_claim_event") as audit_event,
+            patch("solomon_harness.github._gh") as gh,
         ):
             result = claim.release_claim_if_version(self.local, 99, observed)
 
@@ -409,6 +409,17 @@ class TestClaimGitOperations(unittest.TestCase):
             ],
         )
         clear_mirror.assert_called_once_with(self.local, 99)
+        self.assertEqual(
+            audit_event.call_args.args[:3],
+            (self.local, 99, "conditional-released"),
+        )
+        self.assertEqual(
+            audit_event.call_args.kwargs,
+            {"detail": f"matched version {observed[:12]}"},
+        )
+        gh.assert_called_once_with(
+            ["issue", "edit", "99", "--remove-assignee", "@me"]
+        )
         remote = _git(self.local, "ls-remote", "origin", "refs/claims/issue-99")
         self.assertEqual(remote.stdout.strip(), "")
 
@@ -418,11 +429,17 @@ class TestClaimGitOperations(unittest.TestCase):
         observed = snapshot["versions"][99]
         self.assertTrue(claim.refresh_claim(self.local, 99, "sess-a"))
 
-        with patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror:
+        with (
+            patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+            patch("solomon_harness.claim._audit_claim_event") as audit_event,
+            patch("solomon_harness.github._gh") as gh,
+        ):
             result = claim.release_claim_if_version(self.local, 99, observed)
 
         self.assertEqual(result, {"status": "changed", "error": ""})
         clear_mirror.assert_not_called()
+        audit_event.assert_not_called()
+        gh.assert_not_called()
         current = claim.fetch_claim_ref_versions(self.local)
         self.assertNotEqual(current["versions"][99], observed)
         self.assertEqual(claim.get_claim(self.local, 99)["session_id"], "sess-a")
@@ -446,7 +463,12 @@ class TestClaimGitOperations(unittest.TestCase):
         self.assertEqual(claim.get_claim(self.local, 99)["session_id"], "sess-a")
 
     def test_conditional_release_rejects_an_invalid_observed_version_without_git(self):
-        with patch("solomon_harness.claim._run_git") as run_git:
+        with (
+            patch("solomon_harness.claim._run_git") as run_git,
+            patch("solomon_harness.claim._clear_claim_mirror") as clear_mirror,
+            patch("solomon_harness.claim._audit_claim_event") as audit_event,
+            patch("solomon_harness.github._gh") as gh,
+        ):
             result = claim.release_claim_if_version(self.local, 99, "not-an-object-id")
 
         self.assertEqual(
@@ -454,6 +476,9 @@ class TestClaimGitOperations(unittest.TestCase):
             {"status": "failed", "error": "invalid claim ref version"},
         )
         run_git.assert_not_called()
+        clear_mirror.assert_not_called()
+        audit_event.assert_not_called()
+        gh.assert_not_called()
 
     def test_conditional_release_distinguishes_missing_from_unavailable(self):
         push_failed = subprocess.CompletedProcess(
