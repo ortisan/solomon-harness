@@ -51,17 +51,26 @@ def _subagent_description(filepath: str) -> str:
     return ""
 
 
-def _generate_integrations(workspace_root: str) -> None:
+def _generate_integrations(
+    workspace_root: str,
+    *,
+    allowed_names: Optional[List[str]] = None,
+) -> None:
     """Regenerate Claude agents, Gemini commands, and Codex skills.
 
     Loaded from scripts/generate-integrations.py so the compile step keeps the
     host integrations in sync with the agents/ and .claude/commands/ sources. A
-    no-op when the script is absent.
+    packaged Claude-only fallback when the project script is absent.
     """
     import importlib.util
 
     gi_path = os.path.join(workspace_root, "scripts", "generate-integrations.py")
     if not os.path.isfile(gi_path):
+        from solomon_harness.integrations import generate_claude_agents
+
+        if allowed_names is None:
+            raise ValueError("fallback integration generation requires selected agent names")
+        generate_claude_agents(workspace_root, allowed_names=allowed_names)
         return
     spec = importlib.util.spec_from_file_location("generate_integrations", gi_path)
     if spec and spec.loader:
@@ -1223,12 +1232,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     release_parser = subparsers.add_parser(
         "release",
-        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | verify-window | wiki-page [version])",
+        help="Plan, prepare, check, or document a milestone-gated release (plan | prep [version] | check | check-footprint [--base REF] | verify-window | wiki-page [version])",
     )
     release_parser.add_argument(
         "release_args",
         nargs=argparse.REMAINDER,
-        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), verify-window (recompute the release window against trunk HEAD pre-tag), wiki-page [version] (write the release wiki page)",
+        help="release subcommand: plan (read-only), prep [version] (open the prep PR), check (fail-closed gate), check-footprint [--base REF] (fail if a prep PR touches anything beyond pyproject.toml/CHANGELOG.md), verify-window (recompute the release window against trunk HEAD pre-tag), wiki-page [version] (write the release wiki page)",
     )
 
     wt_parser = subparsers.add_parser(
@@ -1376,9 +1385,12 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         sys.exit(cli_worktree(workspace_root, args.branch, base=args.base))
     elif args.command == "compile":
         from solomon_harness.bootstrap import scaffold_agents
+        from solomon_harness.agent_selection import select_agents
+
         scaffold_agents(workspace_root)
+        allowed_names = select_agents(workspace_root)
         # Keep the host-tool integrations in sync so they never drift from source.
-        _generate_integrations(workspace_root)
+        _generate_integrations(workspace_root, allowed_names=allowed_names)
     elif args.command == "index":
         from solomon_harness.bootstrap import index_codebase
         from solomon_harness.tools.database_client import DatabaseClient

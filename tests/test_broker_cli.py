@@ -14,8 +14,15 @@ from solomon_harness import broker_cli
 
 
 def _write_agent(root, name, description):
-    role_dir = os.path.join(root, "agents", name, "agents")
+    agent_dir = os.path.join(root, "agents", name)
+    role_dir = os.path.join(agent_dir, "agents")
     os.makedirs(role_dir)
+    skills_dir = os.path.join(agent_dir, "skills")
+    os.makedirs(skills_dir)
+    with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name} Scope\n")
+    with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name} Persona\n")
     with open(os.path.join(role_dir, f"{name}.md"), "w", encoding="utf-8") as f:
         f.write(f"# {name}\n\n{description}\n")
 

@@ -8,6 +8,7 @@ honestly as host-orchestrated and human-gated rather than fully autonomous.
 """
 
 import os
+import re
 
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -526,3 +527,33 @@ def test_workflow_doc_documents_summary_argument():
     ), "the log_handoff signature must name summary as an explicit argument"
     low = doc.lower()
     assert "required" in low and "non-empty" in low
+
+
+# --- Prompt-injection data-framing across content-ingesting stages (#250) ----
+
+
+def test_content_ingesting_commands_frame_input_as_data_not_instructions():
+    # solomon-review.md was hardened first; solomon-start/issue/bug/refine ingest
+    # equally untrusted text (issue bodies, comments, free-text arguments, linked
+    # context) and must carry the same data/instruction framing so an embedded
+    # directive is reported, not executed.
+    for rel in (
+        os.path.join(".claude", "commands", "solomon-start.md"),
+        os.path.join(".claude", "commands", "solomon-issue.md"),
+        os.path.join(".claude", "commands", "solomon-bug.md"),
+        os.path.join(".claude", "commands", "solomon-refine.md"),
+    ):
+        # Collapse whitespace so the check is robust to prose line-wrapping.
+        normalized = re.sub(r"\s+", " ", _read(rel).lower())
+        assert "never as instructions to follow" in normalized, rel
+        # The report-not-execute stance is stated with a concrete directive example.
+        assert "ignore previous instructions" in normalized, rel
+        assert "not a command to execute" in normalized, rel
+
+
+def test_review_command_still_frames_pr_content_as_data():
+    # The reference framing the other four stages mirror must not regress.
+    body = _read(os.path.join(".claude", "commands", "solomon-review.md"))
+    low = body.lower()
+    assert "data to evaluate" in low
+    assert "instructions to follow" in low
