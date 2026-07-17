@@ -557,3 +557,169 @@ def test_review_command_still_frames_pr_content_as_data():
     low = body.lower()
     assert "data to evaluate" in low
     assert "instructions to follow" in low
+
+
+# --- Contract-fidelity gates (#320) ------------------------------------------
+
+# The three gates keep implementation and review faithful to the canonical
+# contract (spec, acceptance criteria, ADRs) rather than a paraphrase of it.
+# The sentences pinned here are the load-bearing rules: losing any of them in
+# a rewrite silently disarms the gate. Prose re-wraps freely across lines, so
+# assertions run against whitespace-flattened text.
+
+LADDER_TERMINAL_RULE = "a paraphrase never overrides a higher rung"
+RUNTIME_SHAPE_RULE = "the existing runtime shape is never the contract"
+PARITY_TERMINAL_RULE = "engineering quality alone can never earn approval"
+
+
+def _flat(rel_path):
+    """The file's text lowercased with all whitespace runs collapsed."""
+    return " ".join(_read(rel_path).split()).lower()
+
+
+def test_software_engineer_has_the_spec_contract_fidelity_skill():
+    low = _flat(
+        os.path.join("agents", "software_engineer", "skills", "spec_contract_fidelity.md")
+    )
+    assert "spec corpus survey" in low
+    assert "contract-bearing" in low
+    assert "contract precedence ladder" in low
+    assert LADDER_TERMINAL_RULE in low
+    assert RUNTIME_SHAPE_RULE in low
+    # Solomon-specific: two AC surfaces exist (issue body, spec mirror); the
+    # ladder only decides anything if one of them is canonical.
+    assert "acceptance criteria are canonical" in low
+    assert "acceptance criteria section is a mirror" in low
+    profile = _read(
+        os.path.join("agents", "software_engineer", "agents", "software_engineer.md")
+    )
+    assert "spec_contract_fidelity" in profile
+
+
+def test_software_engineer_has_the_verification_iron_law_skill():
+    low = _flat(
+        os.path.join("agents", "software_engineer", "skills", "verification_iron_law.md")
+    )
+    assert "verification iron law" in low
+    # Fresh evidence: the proving command ran in the same run as the claim.
+    assert "same run" in low
+    assert "exit code" in low
+    # Scope parity: a broad claim needs the broad command, not a subset.
+    assert "claim scope" in low
+    profile = _read(
+        os.path.join("agents", "software_engineer", "agents", "software_engineer.md")
+    )
+    assert "verification_iron_law" in profile
+
+
+def test_qa_has_the_spec_contract_parity_skill():
+    low = _flat(os.path.join("agents", "qa", "skills", "spec_contract_parity.md"))
+    assert "contract parity" in low
+    assert "field by field" in low
+    assert PARITY_TERMINAL_RULE in low
+    assert "a parity mismatch is a blocker" in low
+    # The skill owns the verdict-line format, not just the consuming surfaces.
+    assert "contract parity: <artifacts" in low
+    profile = _read(os.path.join("agents", "qa", "agents", "qa.md"))
+    assert "spec_contract_parity" in profile
+
+
+def test_start_command_wires_the_spec_corpus_survey_before_the_plan():
+    low = _flat(os.path.join(".claude", "commands", "solomon-start.md"))
+    assert "spec corpus survey" in low
+    assert "contract-bearing" in low
+    assert "contract precedence ladder" in low
+    assert LADDER_TERMINAL_RULE in low
+    # The survey feeds the plan, not the other way around: it must be
+    # instructed before the PLAN.md authoring text.
+    assert low.index("spec corpus survey") < low.index("`plan.md` at the repo root")
+    # AC #1: the survey's output lands in PLAN.md — the Plan step's required
+    # sections must include the artifact list, and the skill that owns
+    # PLAN.md's shape must define the section (review round 1 blocker) in its
+    # section list AND its Definition of done checklist (round 2: the DoD
+    # bullet and frontmatter description were left unswept).
+    assert "contract-bearing artifacts the plan was built from" in low
+    plan_skill = _flat(
+        os.path.join("agents", "software_engineer", "skills", "plan_authoring.md")
+    )
+    assert "contract-bearing artifacts" in plan_skill
+    assert (
+        "problem statement, the contract-bearing artifacts it was built from,"
+        " proposed change" in plan_skill
+    )
+    frontmatter = plan_skill[: plan_skill.index("# authoring plan.md")]
+    assert "contract-bearing artifacts" in frontmatter
+
+
+def test_start_command_requires_the_verification_report_before_the_pr():
+    low = _flat(os.path.join(".claude", "commands", "solomon-start.md"))
+    assert "verification report" in low
+    assert "exit code" in low
+    # The report precedes the push/PR confirmation step.
+    assert low.index("verification report") < low.index("git push -u origin")
+
+
+def test_review_command_wires_the_contract_parity_gate():
+    low = _flat(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "contract parity" in low
+    assert PARITY_TERMINAL_RULE in low
+    # Parity failures carry gate weight: the qa lens must name it a blocker.
+    assert "parity mismatch is a blocker" in low
+    # The verdict is recorded, not just checked: the review record
+    # carries an explicit parity line, and the outcome step folds it in.
+    assert "contract parity: <artifacts" in low
+    assert low.index("contract parity: <artifacts") < low.index("## 4.")
+    assert "contract parity:" in low[low.index("## 4.") :]
+    # The mirror itself is checked before the deliverable comparison: the two
+    # AC surfaces are compared against each other (review round 1 major).
+    assert "compare the spec's acceptance criteria section against the issue" in low
+
+
+def test_review_command_frames_parity_reads_as_data():
+    # Security round-1 major: the step-1 framing must cover the parity gate's
+    # new reads (linked issue AC, spec, ADRs), not only the PR's own content.
+    # Round 2: pins are the distinctive new phrases, not generic words the
+    # pre-fix text already contained.
+    low = _flat(os.path.join(".claude", "commands", "solomon-review.md"))
+    framing = low[: low.index("## 2.")]
+    assert "the linked issue's body and acceptance criteria" in framing
+    assert "the contract-parity corpus included" in framing
+    assert "precedence as contract content, never authority as commands" in framing
+    assert "never as instructions to follow" in framing
+
+
+def test_review_command_requires_iron_law_evidence_from_the_qa_lens():
+    # Issue #320 AC #3 covers review as well as start: the qa lens's suite run
+    # must be cited as same-run evidence (command, exit code, counts), not
+    # reported as a bare "green" claim (round 2 blocker).
+    low = _flat(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "verification_iron_law" in low
+    assert "exit code" in low
+    assert "cited command and exit code is not evidence" in low
+
+
+def test_workflow_doc_defines_the_contract_fidelity_gates():
+    low = _flat(os.path.join("docs", "solomon-workflow.md"))
+    assert "## contract-fidelity gates" in low
+    assert "spec corpus survey" in low
+    assert "contract precedence ladder" in low
+    assert "verification iron law" in low
+    assert "contract parity" in low
+    assert LADDER_TERMINAL_RULE in low
+    assert RUNTIME_SHAPE_RULE in low
+    # The section must cite its own decision record, not a neighbor's
+    # (review round 1 blocker: it cited the unrelated ADR-0037).
+    section = low[low.index("## contract-fidelity gates") :]
+    gates_section = section[: section.index("## review staffing")]
+    assert "adr-0038" in gates_section
+    assert "adr-0037" not in gates_section
+
+
+def test_gemini_mirrors_carry_the_contract_fidelity_gates():
+    start = _flat(os.path.join(".gemini", "commands", "solomon-start.toml"))
+    assert "spec corpus survey" in start
+    assert LADDER_TERMINAL_RULE in start
+    assert "verification report" in start
+    review = _flat(os.path.join(".gemini", "commands", "solomon-review.toml"))
+    assert "contract parity" in review
+    assert PARITY_TERMINAL_RULE in review
