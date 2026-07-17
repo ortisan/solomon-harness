@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-07-14
-- Amended: ADR-0036 (2026-07-17) adds version snapshots and conditional release outcomes to the port.
+- Amended: ADR-0037 (2026-07-17) adds version snapshots and conditional release outcomes to the port.
 - Deciders: software_architect, software_engineer
 - Issue: #238
 

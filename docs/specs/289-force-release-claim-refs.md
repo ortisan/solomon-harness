@@ -154,7 +154,7 @@ dry-run must issue no deletion push.
 ## Design Constraints
 
 The pass remains behind the existing SurrealDB backend gate and repository
-`LoopLock`; it adds no lock or GitHub read. ADR-0036 defines the additional
+`LoopLock`; it adds no lock or GitHub read. ADR-0037 defines the additional
 cross-worktree constraint: the `CLOSED` snapshot authorizes deletion only of
 the claim version observed in the same run. Git's force-with-lease CAS is the
 linearization point. A post-snapshot heartbeat, reclaim, or acquisition changes
@@ -170,7 +170,7 @@ spec 264's board/memory reconciliation behavior remain unchanged.
   adds the reconcile-side backstop.
 - Reconciliation of reopened issues — out of scope for spec 264 for the same
   reason (a reopened issue's claim state is a live-claim-decision question,
-  not a reconcile-pass question). ADR-0036 defines only how a ref version that
+  not a reconcile-pass question). ADR-0037 defines only how a ref version that
   changes after the closed snapshot is protected.
 - Replacing the git-CAS substrate or changing existing `ClaimStore.release()`
   semantics. The port gains two additive methods for standing reconciliation;
@@ -181,6 +181,6 @@ spec 264's board/memory reconciliation behavior remain unchanged.
 ## Traceability
 
 - Issue: #289
-- ADR: `docs/adrs/0036-conditional-claim-ref-reconciliation.md` (amends
+- ADR: `docs/adrs/0037-conditional-claim-ref-reconciliation.md` (amends
   ADR-0027, ADR-0030, and ADR-0034)
 - PR: #314

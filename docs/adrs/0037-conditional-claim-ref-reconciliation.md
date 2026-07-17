@@ -1,4 +1,4 @@
-# ADR-0036: Conditional claim-ref reconciliation
+# ADR-0037: Conditional claim-ref reconciliation
 
 - Status: accepted
 - Date: 2026-07-17
