@@ -48,7 +48,17 @@ subagents); do not review with a single generic pass.
   changed behavior has covering tests and the full suite is green. Then verify each
   acceptance criterion in the linked issue is demonstrably met and that every item of
   the issue's Definition of Done is satisfied — an unmet acceptance criterion or an
-  unsatisfied Definition of Done item is a blocker.
+  unsatisfied Definition of Done item is a blocker. Then run the contract parity gate
+  (`spec_contract_parity` skill — see "Contract-fidelity gates" in
+  `docs/solomon-workflow.md`): assemble the contract corpus — the spec document, the
+  issue's acceptance criteria (canonical; the spec's Acceptance Criteria section is a
+  mirror of them), and the ADRs the PR cites — and compare the deliverable against it
+  field by field (names, types, defaults, required flags, routes, state machines, error
+  shapes). A parity mismatch is a blocker regardless of code quality: engineering quality
+  alone can never earn approval, and the remediation direction is fixed — fix the
+  deliverable, never reinterpret the contract to match what was built. The review record
+  in step 4 carries the verdict as `Contract parity: <artifacts compared> — PASS|MISMATCH`
+  (or `could not run — <missing artifact>`, which is itself a process finding).
 - security agent: STRIDE pass per `threat_modeling_with_stride` plus an SAST sweep
   (`sast` skill) over the diff. Flag any secret, injection, or unmitigated boundary.
 - software_architect agent: apply the `architecture_review_gate` checklist against
