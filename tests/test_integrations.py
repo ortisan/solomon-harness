@@ -195,6 +195,67 @@ class TestGeminiCommands(unittest.TestCase):
             self.assertNotIn("mcp__solomon-memory__", body)
 
 
+class TestCodexSkills(unittest.TestCase):
+    def _generator(self):
+        path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
+        spec = importlib.util.spec_from_file_location("gen_codex_integrations", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_every_workflow_command_has_a_codex_skill(self):
+        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+        for name in sorted(os.listdir(cmd_dir)):
+            if not name.startswith("solomon-") or not name.endswith(".md"):
+                continue
+            skill_name = name[:-3]
+            rel = os.path.join(".agents", "skills", skill_name, "SKILL.md")
+            self.assertTrue(
+                os.path.isfile(os.path.join(WORKSPACE, rel)),
+                f"missing Codex skill for {name}",
+            )
+            body = _read(rel)
+            self.assertIn(f"name: {skill_name}", body)
+            self.assertIn("Use when", body)
+            self.assertNotIn("$ARGUMENTS", body)
+
+    def test_codex_skills_match_regenerated_source(self):
+        gen = self._generator()
+        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
+        for name in sorted(os.listdir(cmd_dir)):
+            if not name.startswith("solomon-") or not name.endswith(".md"):
+                continue
+            skill_name = name[:-3]
+            description, body = gen._parse_command_file(os.path.join(cmd_dir, name))
+            expected = gen.codex_skill_markdown(skill_name, description, body)
+            actual = _read(
+                os.path.join(".agents", "skills", skill_name, "SKILL.md")
+            )
+            self.assertEqual(
+                actual,
+                expected,
+                f"{skill_name} Codex skill is out of sync; run the generator",
+            )
+
+    def test_codex_skill_renderer_adapts_arguments(self):
+        gen = self._generator()
+        rendered = gen.codex_skill_markdown(
+            "solomon-start",
+            "Start an issue.",
+            "Begin issue #$ARGUMENTS.",
+        )
+        self.assertIn("name: solomon-start", rendered)
+        self.assertIn("Use when", rendered)
+        self.assertIn("Begin issue #ARGUMENTS.", rendered)
+        self.assertNotIn("$ARGUMENTS", rendered)
+
+    def test_readme_documents_codex_skill_invocation(self):
+        readme = _read("README.md")
+        self.assertIn("$solomon-workflow", readme)
+        self.assertIn("$solomon-start", readme)
+        self.assertIn("~/.agents/skills", readme)
+
+
 class TestCompileSyncsIntegrations(unittest.TestCase):
     def test_compile_command_regenerates_integrations(self):
         from unittest.mock import patch

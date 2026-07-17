@@ -1,14 +1,26 @@
-description = "Cut a release for a completed milestone (or an on-demand patch batch): run the library readiness gate, then open the chore/release prep PR for the human to merge (sre)."
+---
+name: solomon-release
+description: "Cut a release for a completed milestone (or an on-demand patch batch): run the library readiness gate, then open the chore/release prep PR for the human to merge (sre). Use when the user asks to run the corresponding Solomon stage or explicitly invokes $solomon-release."
+---
 
-prompt = '''
+# solomon-release
+
+Apply this workflow when the user invokes the skill or asks for the stage it governs. Treat `ARGUMENTS` in the workflow below as the arguments supplied with the skill invocation or elsewhere in the conversation.
+
+Codex compatibility rules:
+
+- References to `/solomon-*` identify Solomon workflow stages. In Codex, invoke a stage explicitly with its `$solomon-*` skill name.
+- When the workflow names Claude-specific Task or AskUserQuestion tools, use the equivalent sub-agent delegation or structured user-input capability available in the current Codex session.
+- Read specialist definitions and skills under `agents/<name>/` before acting in that role.
+
 Read `docs/solomon-workflow.md` first and follow the Deliver/release stage exactly. Drive this as the **sre** specialist; delegate the readiness gate and release mechanics to the `.claude/agents/sre` subagent via the Task tool, grounded in its `release_engineering_and_progressive_delivery` skill (the library readiness gate and the reversibility kernel). This is the `QA` → `Done` transition.
 
 This stage cuts a release for a **milestone**, never a single PR. A tag is cut when a GitHub milestone reaches 0 open issues with CI green on main; the routine per-PR squash-merge that closes each issue and burns down the milestone happens in `/solomon-review`'s own merge step (interactive-only, `uv run python -m solomon_harness.github merge`, ADR-0020) — this stage never merges an individual PR. The release object is the milestone: an **epic** milestone is titled with its SemVer minor (`v0.4.0`) and closing it cuts that MINOR; a **theme/hardening** milestone is titled by theme and closing it cuts a PATCH whose version is computed at cut time.
 
-Release target: **{{args}}** — a milestone title or number. Leave it empty to cut an on-demand PATCH for an accumulated batch (the escape valve) without waiting for a milestone to fully close. This is never a PR number.
+Release target: **ARGUMENTS** — a milestone title or number. Leave it empty to cut an on-demand PATCH for an accumulated batch (the escape valve) without waiting for a milestone to fully close. This is never a PR number.
 
 ## 1. Gather state
-- Read the latest incoming handoff with `get_latest_activity` and open its `contract_path`. The review → release contracts written as each milestone issue closed are supplementary context; open the artifacts they point to (PLAN.md, the diffs, the ADRs, the PRs) only when you actually need them, instead of re-deriving prior context.
+- Read the latest incoming handoff with `mcp__solomon-memory__get_latest_activity` and open its `contract_path`. The review → release contracts written as each milestone issue closed are supplementary context; open the artifacts they point to (PLAN.md, the diffs, the ADRs, the PRs) only when you actually need them, instead of re-deriving prior context.
 - Verify the milestone gate first (this is a board check, done here, not by the CLI): for a milestone target, `gh api repos/:owner/:repo/milestones --jq '.[] | select(.title=="<vX.Y.0 or theme>")'` and confirm `open_issues == 0`. An epic milestone titled `vX.Y.0` cuts a MINOR; a theme/hardening milestone cuts a PATCH. If it still has open issues, stop — the milestone gate is not met. (For the empty on-demand batch there is no milestone to check.)
 - Then compute the version with `uv run python -m solomon_harness.cli release plan` (read-only, headless-safe): it computes the SemVer bump from Conventional Commits in `git log <last-tag>..main --first-parent` (highest wins) and prints the planned version and the rendered CHANGELOG section. It computes the version; it does not itself query the milestone. Pre-1.0: a window containing any `feat` or a BREAKING CHANGE footer bumps MINOR; otherwise `fix`/`perf`/`refactor`/`revert` bumps PATCH; a window of only chore/docs/ci/test/style/build is non-releasable. If the window is non-releasable, stop and report — there is nothing to tag.
 - Confirm CI is green on main: `gh run list --branch main --limit 1 --json conclusion,status,headSha`. A red or in-progress main halts the release.
@@ -28,7 +40,7 @@ Carry forward only the **reversibility kernel** from progressive delivery, and c
 - Rollback is that revert PR auto-shipping the next patch; there is no separate rollback path to staff.
 - Memory-store schema changes (SurrealDB/SQLite) are backward-compatible expand/contract migrations.
 
-File each gap with `log_issue` (and `gh issue create` with `type:chore` + `priority:*` when it needs tracking on the board). A **NO-GO** or any blocking gap halts the release — report and stop. A **GO-WITH-CONDITIONS** records each condition, owner, and due date.
+File each gap with `mcp__solomon-memory__log_issue` (and `gh issue create` with `type:chore` + `priority:*` when it needs tracking on the board). A **NO-GO** or any blocking gap halts the release — report and stop. A **GO-WITH-CONDITIONS** records each condition, owner, and due date.
 
 ## 3. ADR re-check
 Re-evaluate architectural significance for anything that emerged across the milestone, using `docs/adrs/README.md` and the software_architect checklist. If significant, delegate the ADR to the software_architect subagent (`docs/adrs/NNNN-<slug>.md`), record it with `save_decision`, and link it in the prep PR. If not, note that no ADR is needed. The prep-PR body carries exactly one canonical, machine-checked line (`scripts/check-adr-gate.py` fails CI otherwise): `ADR: docs/adrs/NNNN-<slug>.md` or `ADR: not warranted — <reason>`.
@@ -50,13 +62,12 @@ After the prep PR is merged and CI has tagged and published:
 - **Autonomous audit trigger:** Run the autonomous audit trigger on the delivered release artifact to automate continuous benchmarking. Run:
   `uv run python -m solomon_harness.release audit-trigger <version>`
   This trigger is read-only and degrade-safe: any failure exits 0 and logs "audit skipped: sourcing unavailable".
-- Record the delivered release in the project memory: `save_release(version="vX.Y.Z", tag="vX.Y.Z", notes="<changelog section>", issue_github_id="<epic or representative issue>", milestone_id="<resolved milestone>", commit_sha="<chore(release) commit on main>")`. The `milestone_id` is now always resolvable from `release plan`.
-- `save_decision` for the release: title `Release vX.Y.Z`, the computed bump and the milestone scope, the readiness verdict and any conditions, outcome, author `sre`, branch **main** (not develop), and the `chore(release): vX.Y.Z` commit SHA.
+- Record the delivered release in the project memory: `mcp__solomon-memory__save_release(version="vX.Y.Z", tag="vX.Y.Z", notes="<changelog section>", issue_github_id="<epic or representative issue>", milestone_id="<resolved milestone>", commit_sha="<chore(release) commit on main>")`. The `milestone_id` is now always resolvable from `release plan`.
+- `mcp__solomon-memory__save_decision` for the release: title `Release vX.Y.Z`, the computed bump and the milestone scope, the readiness verdict and any conditions, outcome, author `sre`, branch **main** (not develop), and the `chore(release): vX.Y.Z` commit SHA.
 - Write the compact release → done handoff contract to `.solomon/handoffs/release-vX.Y.Z-to-done.md` using the template in `docs/solomon-workflow.md` (release notes, the version/tag, what shipped across the milestone, and any GO-WITH-CONDITIONS follow-ups).
-- `log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/release-vX.Y.Z-to-done.md", status="done", summary="<2-5 line synopsis of what was released and any follow-ups>")`; keep the returned handoff id.
-- `save_session` to checkpoint the released milestone and the readiness baseline for the next release; pass `issues=[<epic or representative issue>]` so the session carries the worked_on edge (ADR-0018), then `link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` to record the produced edge.
+- `mcp__solomon-memory__log_handoff(sender="sre", recipient="done", contract_type="release", contract_path=".solomon/handoffs/release-vX.Y.Z-to-done.md", status="done", summary="<2-5 line synopsis of what was released and any follow-ups>")`; keep the returned handoff id.
+- `mcp__solomon-memory__save_session` to checkpoint the released milestone and the readiness baseline for the next release; pass `issues=[<epic or representative issue>]` so the session carries the worked_on edge (ADR-0018), then `mcp__solomon-memory__link_session_handoff(session_id=<that session id>, handoff_id=<the returned handoff id>)` to record the produced edge.
 
 Report the released version and tag, the prep-PR merge commit, the milestone closed, the board move, and any GO-WITH-CONDITIONS follow-ups. Output direct, professional English, no emojis.
 
 Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
-'''

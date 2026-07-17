@@ -463,6 +463,17 @@ def test_scan_loops_write_the_canonical_adr_line():
         assert "ADR: not warranted — <reason>" in body, name
 
 
+def test_standing_reconcile_commands_use_the_locked_cli_projection():
+    for rel in (
+        os.path.join(".claude", "commands", "solomon-reconcile.md"),
+        os.path.join(".gemini", "commands", "solomon-reconcile.toml"),
+    ):
+        body = _read(rel)
+        assert "python -m solomon_harness.cli reconcile" in body, rel
+        assert "already reports CLOSED" in body, rel
+        assert "Never merge" in body, rel
+
+
 def test_start_release_and_review_carry_the_canonical_adr_line():
     canonical_link = "ADR: docs/adrs/NNNN-<slug>.md"
     canonical_skip = "ADR: not warranted — <reason>"

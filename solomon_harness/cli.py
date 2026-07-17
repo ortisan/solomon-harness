@@ -49,11 +49,11 @@ def _subagent_description(filepath: str) -> str:
 
 
 def _generate_integrations(workspace_root: str) -> None:
-    """Regenerate the host-tool integrations (.claude/agents, .gemini/commands).
+    """Regenerate Claude agents, Gemini commands, and Codex skills.
 
     Loaded from scripts/generate-integrations.py so the compile step keeps the
-    Claude subagents and Gemini commands in sync with the agents/ and
-    .claude/commands/ sources. A no-op when the script is absent.
+    host integrations in sync with the agents/ and .claude/commands/ sources. A
+    no-op when the script is absent.
     """
     import importlib.util
 
@@ -97,10 +97,10 @@ def handle_eval(harness_dir: str) -> None:
 def handle_run(harness_dir: str, task=None) -> None:
     """Show where the team stopped and point to the delivery workflows.
 
-    The harness does not run a model itself; the host tool (Claude Code or the
-    Gemini CLI) provides the execution loop and the /solomon-* workflows.
-    This command resumes context from the project memory and lists those
-    workflows. It no longer simulates task execution.
+    The harness does not run a model itself; Claude Code and Gemini expose the
+    workflows as /solomon-* commands, while Codex exposes them as $solomon-*
+    skills. This command resumes context from project memory and lists both
+    invocation forms. It no longer simulates task execution.
     """
     from solomon_harness.tools.database_client import DatabaseClient
 
@@ -113,17 +113,17 @@ def handle_run(harness_dir: str, task=None) -> None:
     from solomon_harness.voice import say
 
     with db_client as db:
-        try:
-            # Determine workspace root
-            project_root = harness_dir
-            found_root = False
-            while project_root and project_root != os.path.dirname(project_root):
-                if os.path.exists(os.path.join(project_root, ".git")):
-                    found_root = True
-                    break
-                project_root = os.path.dirname(project_root)
-            workspace_root = project_root if found_root else harness_dir
+        # Determine workspace root
+        project_root = harness_dir
+        found_root = False
+        while project_root and project_root != os.path.dirname(project_root):
+            if os.path.exists(os.path.join(project_root, ".git")):
+                found_root = True
+                break
+            project_root = os.path.dirname(project_root)
+        workspace_root = project_root if found_root else harness_dir
 
+        try:
             from solomon_harness.bootstrap import scan_project_structure
             scan_project_structure(workspace_root, db)
         except Exception as exc:
@@ -157,23 +157,23 @@ def handle_run(harness_dir: str, task=None) -> None:
         if task:
             print(
                 "\nTasks are not auto-run here. Start this one with a workflow, "
-                f'e.g.  /solomon-issue "{task}"'
+                f'e.g. /solomon-issue "{task}", or $solomon-issue in Codex.'
             )
 
-        print("\nDelivery workflows (run in Claude Code or the Gemini CLI):")
+        print("\nDelivery workflows (Claude/Gemini | Codex):")
         workflows = [
-            ("/solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
-            ("/solomon-loop", "autonomous parallel loop over Ready issues"),
-            ("/solomon-idea", "capture a product idea"),
-            ("/solomon-issue", "create a feature or story issue"),
-            ("/solomon-bug", "create a bug report"),
-            ("/solomon-refine", "refine an issue to Ready"),
-            ("/solomon-start", "start development: branch, plan, TDD, draft PR"),
-            ("/solomon-review", "review a pull request"),
-            ("/solomon-release", "deliver and release"),
+            ("solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
+            ("solomon-loop", "autonomous parallel loop over Ready issues"),
+            ("solomon-idea", "capture a product idea"),
+            ("solomon-issue", "create a feature or story issue"),
+            ("solomon-bug", "create a bug report"),
+            ("solomon-refine", "refine an issue to Ready"),
+            ("solomon-start", "start development: branch, plan, TDD, draft PR"),
+            ("solomon-review", "review a pull request"),
+            ("solomon-release", "deliver and release"),
         ]
         for name, desc in workflows:
-            print(f"  {name:<21} {desc}")
+            print(f"  /{name:<20} ${name:<20} {desc}")
         print("\nHeadless (CI/automation):  solomon-harness dev <stage> [args]")
 
 
@@ -439,7 +439,7 @@ def _fetch_gh_states(
 ) -> List[dict]:
     """Run a bulk ``gh <list_args> --state all`` query and return validated records.
 
-    Returns a list of ``{"number": "<int-as-str>", "state": <one of valid_states>}``.
+    Returns validated number/state records.
     gh output is treated strictly as data across the trust boundary (STRIDE): the
     number is coerced to ``str(int(...))`` and the state must be one of the accepted
     GitHub literals, so a malformed record is skipped rather than trusted, and no
@@ -451,6 +451,7 @@ def _fetch_gh_states(
     import json as _json
     import subprocess
 
+    from solomon_harness.github import GH_TIMEOUT_SECONDS
     from solomon_harness.subprocess_env import clean_git_env
 
     try:
@@ -458,11 +459,15 @@ def _fetch_gh_states(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
              "--json", "number,state"],
             cwd=workspace_root, capture_output=True, text=True, check=False,
-            env=clean_git_env(),
+            env=clean_git_env(), timeout=GH_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
             "gh CLI not found; install and authenticate the GitHub CLI."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"gh {kind_label} list timed out after {GH_TIMEOUT_SECONDS}s"
         ) from exc
     if proc.returncode != 0:
         raise RuntimeError(
@@ -506,6 +511,49 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     in that shared core.
     """
     return _fetch_gh_states(["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root)
+
+
+def _canonical_board_statuses(board_items: object) -> Dict[str, Optional[str]]:
+    """Index unambiguous issue statuses from the exact canonical board listing."""
+    if not isinstance(board_items, list):
+        return {}
+    candidates: Dict[str, List[str]] = {}
+    for board_item in board_items:
+        if not isinstance(board_item, dict):
+            continue
+        content = board_item.get("content")
+        status = board_item.get("status")
+        if not isinstance(content, dict) or content.get("type") != "Issue":
+            continue
+        if not isinstance(status, str):
+            continue
+        raw_number = content.get("number")
+        if isinstance(raw_number, bool) or not isinstance(raw_number, (int, str)):
+            continue
+        try:
+            number = str(int(raw_number))
+        except (TypeError, ValueError):
+            continue
+        candidates.setdefault(number, []).append(status)
+    return {
+        number: statuses[0] if len(statuses) == 1 else None
+        for number, statuses in candidates.items()
+    }
+
+
+def _fetch_reconcile_issue_states(workspace_root: str) -> List[dict]:
+    """Join GitHub issue state to the exact canonical Project card status."""
+    from solomon_harness.claim import fetch_board_items
+
+    issue_states = _fetch_gh_issue_states(workspace_root)
+    board_items = fetch_board_items(workspace_root)
+    if board_items is None:
+        raise RuntimeError("could not read canonical board items")
+    board_statuses = _canonical_board_statuses(board_items)
+    return [
+        {**entry, "board_status": board_statuses.get(str(entry["number"]))}
+        for entry in issue_states
+    ]
 
 
 def _fetch_gh_pr_states(workspace_root: str) -> List[dict]:
@@ -552,42 +600,90 @@ def _build_resolved_map(
     return resolved
 
 
-def reconcile_memory(db, gh_states: List[dict], dry_run: bool = False) -> dict:
-    """Set each GitHub-CLOSED issue's non-terminal memory row to "closed".
+def reconcile_memory(
+    db,
+    gh_states: List[dict],
+    dry_run: bool = False,
+    set_issue_status_fn=None,
+) -> dict:
+    """Set each GitHub-CLOSED issue's non-terminal memory row to "closed", and
+    move its board card to "Done".
 
-    GitHub is the source of truth (ADR-0006): a row is repaired only when GitHub
-    reports the issue CLOSED and the memory row exists and is not already
+    GitHub is the source of truth (ADR-0006): a memory row is repaired only when
+    GitHub reports the issue CLOSED and the row exists and is not already
     terminal; GitHub-open rows are left untouched. The write is a read-modify-
     write through the unchanged 5-arg ``log_issue`` (UPSERT on github_id),
     preserving the title, type and milestone. Idempotent: a second run finds the
-    rows terminal and writes nothing. With ``dry_run`` the stale ids are collected
-    and reported, and nothing is written.
+    rows terminal and writes nothing.
 
-    Returns ``{"repaired", "would_repair", "scanned"}``.
+    The board-card move is deliberately decoupled from the memory-repair gate
+    (#264, #280), but remains idempotent: it is attempted only for a
+    GitHub-CLOSED entry whose canonical ``board_status`` is absent or differs
+    from ``Done``. A live case showed memory already "closed" while the board
+    card was still stuck in "Code Review", which the memory gate alone would
+    never touch. ``set_issue_status_fn`` defaults to
+    ``solomon_harness.github.set_issue_status`` (mirroring this codebase's
+    ``claim_store``/``GitClaimStore`` default-construction convention); a caller
+    may inject a fake to avoid a live gh call. A board-move failure is recorded
+    per-issue in ``board_failures`` and never rolls back or blocks the memory
+    repair for that same issue, which may already have landed independently.
+    With ``dry_run`` no write and no board move is attempted: the stale memory
+    ids are collected in ``would_repair`` and only actual board drift is listed
+    in ``would_move_board`` (ADR-0034).
+
+    Returns ``{"repaired", "would_repair", "scanned", "board_moved",
+    "board_failures", "would_move_board"}``.
     """
     from solomon_harness.tools.database_client import is_terminal
 
+    if set_issue_status_fn is None:
+        from solomon_harness.github import set_issue_status as set_issue_status_fn
+
     would_repair: List[str] = []
     repaired = 0
+    board_moved = 0
+    board_failures: List[dict] = []
+    would_move_board: List[str] = []
     for entry in gh_states:
         if entry.get("state") != "CLOSED":
             continue
         number = entry["number"]
+
         row = db.get_issue(number)
-        if row is None or is_terminal(row.get("status")):
+        if row is not None and not is_terminal(row.get("status")):
+            would_repair.append(number)
+            if not dry_run:
+                db.log_issue(
+                    number,
+                    row.get("title"),
+                    row.get("type_"),
+                    "closed",
+                    row.get("milestone_id"),
+                )
+                repaired += 1
+
+        if entry.get("board_status") == "Done":
             continue
-        would_repair.append(number)
+
         if dry_run:
+            would_move_board.append(number)
             continue
-        db.log_issue(
-            number,
-            row.get("title"),
-            row.get("type_"),
-            "closed",
-            row.get("milestone_id"),
-        )
-        repaired += 1
-    return {"repaired": repaired, "would_repair": would_repair, "scanned": len(gh_states)}
+
+        move_result = set_issue_status_fn(int(number), "Done")
+        if move_result.get("ok"):
+            board_moved += 1
+        else:
+            board_failures.append(
+                {"issue": number, "ok": False, "error": move_result.get("error")}
+            )
+    return {
+        "repaired": repaired,
+        "would_repair": would_repair,
+        "scanned": len(gh_states),
+        "board_moved": board_moved,
+        "board_failures": board_failures,
+        "would_move_board": would_move_board,
+    }
 
 
 def normalize_memory_statuses(db, dry_run: bool = False) -> dict:
@@ -705,6 +801,25 @@ def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = F
 
 
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
+    """Run reconciliation under the repository's single-driver mutation lock."""
+    from solomon_harness.loop_lock import LoopLock, LoopLockHeld
+
+    lock = LoopLock(workspace_root, stage="reconcile")
+    try:
+        lock.acquire()
+    except LoopLockHeld as held:
+        print(
+            f"reconcile refused: another solomon driver holds the loop lock ({held}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        _handle_reconcile_locked(workspace_root, dry_run)
+    finally:
+        lock.release()
+
+
+def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
     """Reconcile the memory issue rows against GitHub (GitHub is the source of truth).
 
     Targets the shared SurrealDB only: on a SQLite-fallback backend it warns and
@@ -724,7 +839,7 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             )
             return
         try:
-            issue_states = _fetch_gh_issue_states(workspace_root)
+            issue_states = _fetch_reconcile_issue_states(workspace_root)
             pr_states = _fetch_gh_pr_states(workspace_root)
         except RuntimeError as exc:
             print(f"reconcile failed: {exc}", file=sys.stderr)
@@ -742,6 +857,12 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile --dry-run: {len(result['would_repair'])} issue(s) would be "
             f"set to closed ({result['scanned']} GitHub issues scanned){suffix}"
+        )
+        board_ids = ", ".join(f"#{n}" for n in result["would_move_board"])
+        board_suffix = f": {board_ids}" if board_ids else ""
+        print(
+            f"reconcile --dry-run: {len(result['would_move_board'])} board card(s) "
+            f"would move to Done{board_suffix}"
         )
         slugs = ", ".join(tracking["would_close"])
         track_suffix = f": {slugs}" if slugs else ""
@@ -762,6 +883,13 @@ def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
             f"reconcile: {result['repaired']} issue(s) set to closed "
             f"({result['scanned']} GitHub issues scanned)"
         )
+        print(f"reconcile: {result['board_moved']} board card(s) moved to Done")
+        for failure in result["board_failures"]:
+            print(
+                f"reconcile: board move failed for #{failure['issue']}: "
+                f"{failure['error']}",
+                file=sys.stderr,
+            )
         print(
             f"reconcile: {tracking['closed']} tracking row(s) set to done "
             f"({tracking['scanned_tracking']} tracking rows scanned)"
@@ -814,9 +942,9 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_parser = subparsers.add_parser(
         "reconcile",
         help=(
-            "Repair shared-memory issue/tracking rows from GitHub and canonicalize "
-            "non-terminal status tokens. Run from a fresh process against the shared "
-            "SurrealDB."
+            "Under the single-driver lock, repair closed-issue memory/tracking rows, "
+            "canonical board drift, and non-terminal status tokens. Run from a fresh "
+            "process against the shared SurrealDB."
         ),
     )
     reconcile_parser.add_argument(
@@ -892,7 +1020,13 @@ def build_parser() -> argparse.ArgumentParser:
         "loop-budget", help="Show today's autonomous-loop cost spend versus the ceiling"
     )
 
-    dev_parser = subparsers.add_parser("dev", help="Run a delivery workflow headless (workflow, loop, idea, issue, bug, refine, start, review, release)")
+    dev_parser = subparsers.add_parser(
+        "dev",
+        help=(
+            "Run a delivery workflow headless (workflow, loop, idea, issue, bug, "
+            "refine, start, review, release, reconcile)"
+        ),
+    )
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument(
         "dev_args", nargs=argparse.REMAINDER,
@@ -1193,4 +1327,3 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
 
 if __name__ == "__main__":
     main()
-

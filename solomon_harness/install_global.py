@@ -1,11 +1,11 @@
 """Install the harness once into the user-global locations so projects share it.
 
 The chosen model keeps zero per-project duplication: the agent subagents and the
-``/solomon-*`` commands live in the user-global ``~/.claude`` (and ``~/.gemini``)
-so every project sees them, and the single memory backend lives in the shared
-``~/.solomon-harness`` home. A project then carries only its ``.agent/config.json``
-(its tenant). This module performs that global install; it merges rather than
-clobbers, and is idempotent.
+``/solomon-*`` commands live in the user-global ``~/.claude`` and ``~/.gemini``;
+Codex receives the same workflows as ``$solomon-*`` skills under
+``~/.agents/skills``. The single memory backend lives in the shared
+``~/.solomon-harness`` home. This module performs that global install; it merges
+rather than clobbers, and is idempotent.
 """
 
 import json
@@ -56,6 +56,41 @@ def _copy_dir_contents(src: str, dest: str, suffixes: tuple) -> List[str]:
                 except OSError:
                     pass
                     
+    return copied
+
+
+def _copy_skill_dirs(src: str, dest: str, prefix: str = "solomon-") -> List[str]:
+    """Replace managed skill directories while preserving unrelated skills."""
+    copied: List[str] = []
+    if not os.path.isdir(src):
+        return copied
+    os.makedirs(dest, exist_ok=True)
+    source_names = {
+        name
+        for name in os.listdir(src)
+        if name.startswith(prefix)
+        and os.path.isfile(os.path.join(src, name, "SKILL.md"))
+    }
+
+    for name in sorted(source_names):
+        source = os.path.join(src, name)
+        target = os.path.join(dest, name)
+        if os.path.islink(target) or os.path.isfile(target):
+            os.remove(target)
+        elif os.path.isdir(target):
+            shutil.rmtree(target)
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        copied.append(name)
+
+    for name in os.listdir(dest):
+        target = os.path.join(dest, name)
+        if not name.startswith(prefix) or name in source_names:
+            continue
+        if os.path.islink(target) or os.path.isfile(target):
+            os.remove(target)
+        elif os.path.isdir(target):
+            shutil.rmtree(target)
+
     return copied
 
 
@@ -131,11 +166,34 @@ def _register_mcp(add_args: List[str], cli: str, server: str = "solomon-memory")
         return False
 
 
+def _register_codex_mcp(command: List[str], server: str = "solomon-memory") -> Optional[bool]:
+    """Best-effort Codex MCP registration using Codex's scope-free syntax."""
+    if not shutil.which("codex"):
+        return None
+    try:
+        subprocess.run(
+            ["codex", "mcp", "remove", server],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        proc = subprocess.run(
+            ["codex", "mcp", "add", server, "--", *command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def install_global(
     *,
     source_root: Optional[str] = None,
     claude_dir: Optional[str] = None,
     gemini_dir: Optional[str] = None,
+    codex_skills_dir: Optional[str] = None,
     home_dir: Optional[str] = None,
     register_mcp: bool = True,
 ) -> dict:
@@ -147,6 +205,7 @@ def install_global(
     source_root = source_root or _repo_root()
     claude_dir = claude_dir or os.path.expanduser("~/.claude")
     gemini_dir = gemini_dir or os.path.expanduser("~/.gemini")
+    codex_skills_dir = codex_skills_dir or os.path.expanduser("~/.agents/skills")
     home_dir = home_dir or harness_home()
 
     result: Dict = {"ok": True}
@@ -194,6 +253,12 @@ def install_global(
         os.path.join(source_root, ".gemini", "commands"),
         os.path.join(gemini_dir, "commands"),
         (".toml",),
+    )
+
+    # 3.25. Codex discovers reusable workflows as $-invoked skills.
+    result["codex_skills"] = _copy_skill_dirs(
+        os.path.join(source_root, ".agents", "skills"),
+        codex_skills_dir,
     )
 
     # 3.5. New Antigravity/Gemini CLI extension format.
@@ -278,6 +343,9 @@ def install_global(
              sys.executable, "-m", "solomon_harness.mcp_server"],
             "claude",
         )
+        result["mcp_codex"] = _register_codex_mcp(
+            [sys.executable, "-m", "solomon_harness.mcp_server"]
+        )
 
     return result
 
@@ -290,6 +358,7 @@ def describe(result: dict) -> str:
     lines.append(f"  shared home: agents={result.get('home_agents', False)} compose={result.get('home_compose', False)}{port_note}")
     lines.append(f"  ~/.claude: {len(result.get('claude_agents', []))} agents, {len(result.get('claude_commands', []))} commands")
     lines.append(f"  ~/.gemini: {len(result.get('gemini_commands', []))} legacy commands, extension={result.get('gemini_extension', False)}")
+    lines.append(f"  ~/.agents/skills: {len(result.get('codex_skills', []))} Codex skills")
     agy_imported = result.get("agy_imported")
     if agy_imported is True:
         lines.append("  ~/.gemini (Antigravity): successfully imported and converted extension to plugins/skills")
@@ -305,4 +374,9 @@ def describe(result: dict) -> str:
         lines.append("  MCP (claude): claude CLI not found; register manually")
     else:
         lines.append(f"  MCP (claude, user scope): {'registered' if mcp_c else 'registration failed'}")
+    mcp_codex = result.get("mcp_codex")
+    if mcp_codex is None:
+        lines.append("  MCP (codex): codex CLI not found; register manually")
+    else:
+        lines.append(f"  MCP (codex): {'registered' if mcp_codex else 'registration failed'}")
     return "\n".join(lines)
