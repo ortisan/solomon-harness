@@ -46,6 +46,43 @@ class TestGhWrapper(unittest.TestCase):
             github._gh(["repo", "view"], parse_json=True)
         self.assertEqual(captured.get("timeout"), github.GH_TIMEOUT_SECONDS)
 
+    def test_gh_preserves_explicit_context_across_a_healed_retry(self):
+        """Repository-scoped callers keep their cwd and scrubbed environment on
+        both attempts, including when the retry injects a healed token."""
+        safe_env = {"PATH": "/usr/bin", "GIT_TERMINAL_PROMPT": "0"}
+        gh_calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "auth", "token"]:
+                self.assertEqual(kwargs.get("cwd"), "/safe/worktree")
+                self.assertEqual(kwargs.get("env"), safe_env)
+                return _Proc(0, "healed-token-42")
+            gh_calls.append(kwargs)
+            if len(gh_calls) == 1:
+                return _Proc(1, "", "Bad credentials")
+            return _Proc(0, "done")
+
+        with patch.dict(
+            "os.environ",
+            {"GIT_DIR": "/wrong/repo", "GH_REPO": "attacker/other"},
+            clear=True,
+        ):
+            with patch("subprocess.run", side_effect=fake_run):
+                result = github._gh(
+                    ["issue", "edit", "99"],
+                    cwd="/safe/worktree",
+                    env=safe_env,
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(gh_calls), 2)
+        self.assertEqual(gh_calls[0]["cwd"], "/safe/worktree")
+        self.assertEqual(gh_calls[0]["env"], safe_env)
+        self.assertEqual(gh_calls[1]["cwd"], "/safe/worktree")
+        self.assertEqual(gh_calls[1]["env"]["GH_TOKEN"], "healed-token-42")
+        self.assertNotIn("GIT_DIR", gh_calls[1]["env"])
+        self.assertNotIn("GH_REPO", gh_calls[1]["env"])
+
     def test_gh_timeout_is_handled_as_a_failed_call(self):
         """A gh subprocess that exceeds the timeout is treated as a failed call:
         _gh returns the ok:False shape and never raises."""

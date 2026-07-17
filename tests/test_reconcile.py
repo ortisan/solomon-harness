@@ -247,6 +247,270 @@ class TestReconcileMemory(unittest.TestCase):
         client.close()
 
 
+class _FakeClaimStore:
+    def __init__(self, versions, release_results=None, fetch_error="", events=None):
+        self.versions = versions
+        self.release_results = release_results or {}
+        self.fetch_error = fetch_error
+        self.events = events
+        self.fetch_version_calls = 0
+        self.release_calls = []
+
+    def fetch_versions(self):
+        self.fetch_version_calls += 1
+        if self.events is not None:
+            self.events.append("claim snapshot")
+        return {
+            "ok": not self.fetch_error,
+            "versions": {} if self.fetch_error else self.versions,
+            "error": self.fetch_error,
+        }
+
+    def release_if_version(self, issue_number, expected_version):
+        self.release_calls.append((issue_number, expected_version))
+        return self.release_results.get(
+            issue_number,
+            {"status": "released", "error": ""},
+        )
+
+
+class TestReconcileClaims(unittest.TestCase):
+    def test_rejects_noncanonical_issue_aliases_at_the_policy_boundary(self):
+        store = _FakeClaimStore({1: "sha-1"})
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [
+                {"number": True, "state": "CLOSED", "board_status": "Done"},
+                {"number": "01", "state": "CLOSED", "board_status": "Done"},
+            ],
+        )
+
+        self.assertEqual(store.release_calls, [])
+        self.assertEqual(result["released"], 0)
+
+    def test_uses_the_supplied_claim_snapshot_without_reading_a_newer_one(self):
+        store = _FakeClaimStore({173: "newer-sha"})
+        snapshot = {"ok": True, "versions": {173: "observed-sha"}, "error": ""}
+
+        result = cli.reconcile_claims(
+            store,
+            snapshot,
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(store.fetch_version_calls, 0)
+        self.assertEqual(store.release_calls, [(173, "observed-sha")])
+        self.assertEqual(result["released"], 1)
+
+    def test_closed_claim_is_force_released_and_counted(self):
+        store = _FakeClaimStore({173: "sha-173"})
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(store.fetch_version_calls, 1)
+        self.assertEqual(store.release_calls, [(173, "sha-173")])
+        self.assertEqual(
+            result,
+            {
+                "released": 1,
+                "already_absent": 0,
+                "release_failures": [],
+                "release_abort_error": "",
+                "deferred_releases": [],
+                "would_release": [],
+                "snapshot_error": "",
+                "scanned": 1,
+            },
+        )
+
+    def test_open_and_unclaimed_issues_are_not_released(self):
+        store = _FakeClaimStore({200: "sha-200"})
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [
+                {"number": "200", "state": "OPEN", "board_status": "In Progress"},
+                {"number": "201", "state": "CLOSED", "board_status": "Done"},
+            ],
+        )
+
+        self.assertEqual(store.fetch_version_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["scanned"], 2)
+
+    def test_dry_run_reports_closed_claim_without_releasing_it(self):
+        store = _FakeClaimStore({173: "sha-173"})
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+            dry_run=True,
+        )
+
+        self.assertEqual(store.fetch_version_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["would_release"], [173])
+        self.assertEqual(result["release_failures"], [])
+
+    def test_failed_release_is_recorded_and_does_not_stop_later_claims(self):
+        store = _FakeClaimStore(
+            {
+                173: "sha-173",
+                201: "sha-201",
+            },
+            release_results={
+                173: {"status": "changed", "error": ""},
+                201: {"status": "released", "error": ""},
+            },
+        )
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [
+                {"number": "173", "state": "CLOSED", "board_status": "Done"},
+                {"number": "201", "state": "CLOSED", "board_status": "Done"},
+            ],
+        )
+
+        self.assertEqual(
+            store.release_calls,
+            [(173, "sha-173"), (201, "sha-201")],
+        )
+        self.assertEqual(result["released"], 1)
+        self.assertEqual(
+            result["release_failures"],
+            [
+                {
+                    "issue": 173,
+                    "ok": False,
+                    "status": "changed",
+                    "error": "",
+                }
+            ],
+        )
+
+    def test_shared_origin_failure_aborts_the_pass_and_defers_later_claims(self):
+        for error in (
+            "claim origin unavailable",
+            "claim origin returned malformed refs",
+        ):
+            with self.subTest(error=error):
+                store = _FakeClaimStore(
+                    {173: "sha-173", 201: "sha-201"},
+                    release_results={
+                        173: {"status": "failed", "error": error},
+                        201: {"status": "released", "error": ""},
+                    },
+                )
+
+                result = cli.reconcile_claims(
+                    store,
+                    store.fetch_versions(),
+                    [
+                        {
+                            "number": "173",
+                            "state": "CLOSED",
+                            "board_status": "Done",
+                        },
+                        {
+                            "number": "201",
+                            "state": "CLOSED",
+                            "board_status": "Done",
+                        },
+                    ],
+                )
+
+                self.assertEqual(store.release_calls, [(173, "sha-173")])
+                self.assertEqual(result["release_abort_error"], error)
+                self.assertEqual(result["deferred_releases"], [201])
+
+    def test_release_budget_defers_work_before_starting_another_remote_delete(self):
+        store = _FakeClaimStore(
+            {173: "sha-173", 201: "sha-201"},
+            release_results={173: {"status": "changed", "error": ""}},
+        )
+        ticks = iter([0.0, 0.0, 61.0])
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [
+                {"number": "173", "state": "CLOSED", "board_status": "Done"},
+                {"number": "201", "state": "CLOSED", "board_status": "Done"},
+            ],
+            release_budget_seconds=60.0,
+            monotonic=lambda: next(ticks),
+        )
+
+        self.assertEqual(store.release_calls, [(173, "sha-173")])
+        self.assertIn("budget exhausted", result["release_abort_error"])
+        self.assertEqual(result["deferred_releases"], [201])
+
+    def test_missing_ref_after_snapshot_is_counted_as_already_absent(self):
+        store = _FakeClaimStore(
+            {173: "sha-173"},
+            release_results={173: {"status": "missing", "error": ""}},
+        )
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(result["released"], 0)
+        self.assertEqual(result["already_absent"], 1)
+        self.assertEqual(result["release_failures"], [])
+
+    def test_missing_ref_does_not_stop_a_later_deterministic_release(self):
+        store = _FakeClaimStore(
+            {173: "sha-173", 201: "sha-201"},
+            release_results={173: {"status": "missing", "error": ""}},
+        )
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [
+                {"number": "173", "state": "CLOSED", "board_status": "Done"},
+                {"number": "201", "state": "CLOSED", "board_status": "Done"},
+            ],
+        )
+
+        self.assertEqual(
+            store.release_calls,
+            [(173, "sha-173"), (201, "sha-201")],
+        )
+        self.assertEqual(result["already_absent"], 1)
+        self.assertEqual(result["released"], 1)
+        self.assertEqual(result["release_abort_error"], "")
+
+    def test_snapshot_failure_is_explicit_and_never_attempts_release(self):
+        store = _FakeClaimStore({}, fetch_error="claim origin unavailable")
+
+        result = cli.reconcile_claims(
+            store,
+            store.fetch_versions(),
+            [{"number": "173", "state": "CLOSED", "board_status": "Done"}],
+        )
+
+        self.assertEqual(store.fetch_version_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertEqual(result["snapshot_error"], "claim origin unavailable")
+        self.assertEqual(result["released"], 0)
+
+
 class TestNormalizeMemoryStatuses(unittest.TestCase):
     """The one-shot status normalization pass (#173 AC3).
 
@@ -529,7 +793,14 @@ class TestFetchGhIssueStates(unittest.TestCase):
             [
                 {"number": 6, "state": "CLOSED"},
                 {"number": 100, "state": "OPEN"},
+                {"number": "101", "state": "OPEN"},
                 {"number": "nope", "state": "CLOSED"},  # bad number -> skipped
+                {"number": True, "state": "CLOSED"},  # bool alias -> skipped
+                {"number": "01", "state": "CLOSED"},  # leading zero -> skipped
+                {"number": " 1 ", "state": "CLOSED"},  # whitespace -> skipped
+                {"number": 0, "state": "CLOSED"},  # non-positive -> skipped
+                {"number": -1, "state": "CLOSED"},  # non-positive -> skipped
+                {"number": 1.0, "state": "CLOSED"},  # float alias -> skipped
                 {"number": 7, "state": "WEIRD"},  # bad state -> skipped
                 {"state": "CLOSED"},  # missing number -> skipped
             ]
@@ -541,6 +812,7 @@ class TestFetchGhIssueStates(unittest.TestCase):
             [
                 {"number": "6", "state": "CLOSED"},
                 {"number": "100", "state": "OPEN"},
+                {"number": "101", "state": "OPEN"},
             ],
         )
 
@@ -580,10 +852,14 @@ class TestFetchGhIssueStates(unittest.TestCase):
         self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
 
     def test_strips_inherited_git_env_before_shelling_out(self):
-        # A leaked GIT_DIR/GIT_WORK_TREE (e.g. from a git hook or another
-        # worktree) must not be forwarded to the gh subprocess.
+        # Leaked git context or GH_REPO (e.g. from a hook or another worktree)
+        # must not be forwarded to the gh subprocess.
         payload = json.dumps([{"number": 6, "state": "CLOSED"}])
-        leaked = {"GIT_DIR": "/tmp/leaked/.git", "GIT_WORK_TREE": "/tmp/leaked"}
+        leaked = {
+            "GIT_DIR": "/tmp/leaked/.git",
+            "GIT_WORK_TREE": "/tmp/leaked",
+            "GH_REPO": "attacker/other",
+        }
         with patch.dict(os.environ, leaked):
             with patch("subprocess.run", return_value=_Proc(0, payload)) as run:
                 cli._fetch_gh_issue_states(".")
@@ -591,6 +867,7 @@ class TestFetchGhIssueStates(unittest.TestCase):
         env = kwargs.get("env")
         self.assertIsNotNone(env, "gh subprocess must receive an explicit, scrubbed env")
         self.assertFalse(any(k.startswith("GIT_") for k in env if k != "GIT_TERMINAL_PROMPT"))
+        self.assertNotIn("GH_REPO", env)
 
     def test_warns_when_gh_returns_the_issue_cap(self):
         """When gh returns exactly the --limit cap, reconcile may miss closed issues
@@ -808,6 +1085,12 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
         self.inner.log_issue("6", "Stale closed", "bug", "in_progress", None)
         self.inner.log_issue("100", "Still open", "feature", "in_progress", None)
         self.proxy = _ShareStoreProxy(self.inner)
+        claim_versions = patch(
+            "solomon_harness.claim.fetch_claim_ref_versions",
+            return_value={"ok": True, "versions": {}, "error": ""},
+        )
+        claim_versions.start()
+        self.addCleanup(claim_versions.stop)
 
     def tearDown(self):
         self.inner.close()
@@ -948,6 +1231,173 @@ class TestHandleReconcileEndToEnd(unittest.TestCase):
             cli.handle_reconcile(self.temp_dir.name, dry_run=True)
         self.assertIn("1 board card(s) would move to Done", out.getvalue())
 
+    def test_dry_run_reports_claims_from_the_existing_issue_snapshot(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "100", "state": "OPEN", "board_status": "In Progress"},
+        ]
+        store = _FakeClaimStore({6: "sha-6"})
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ) as fetch_issue_states,
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=True)
+
+        fetch_issue_states.assert_called_once_with(self.temp_dir.name)
+        self.assertEqual(store.fetch_version_calls, 1)
+        self.assertEqual(store.release_calls, [])
+        self.assertIn("1 claim ref(s) would be released: #6", out.getvalue())
+
+    def test_claim_ref_snapshot_precedes_the_github_issue_snapshot(self):
+        events = []
+        store = _FakeClaimStore({}, events=events)
+
+        def fetch_issue_states(_workspace_root):
+            events.append("github snapshot")
+            return [{"number": "6", "state": "CLOSED", "board_status": "Done"}]
+
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(cli, "_fetch_reconcile_issue_states", fetch_issue_states),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=True)
+
+        self.assertEqual(events[:2], ["claim snapshot", "github snapshot"])
+
+    def test_live_run_reports_claim_release_failure_and_continues(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "8", "state": "CLOSED", "board_status": "Done"},
+        ]
+        store = _FakeClaimStore(
+            {
+                6: "sha-6",
+                8: "sha-8",
+            },
+            release_results={
+                6: {"status": "changed", "error": ""},
+                8: {"status": "released", "error": ""},
+            },
+        )
+        out = io.StringIO()
+        err = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+
+        self.assertEqual(store.release_calls, [(6, "sha-6"), (8, "sha-8")])
+        self.assertIn("1 claim ref(s) released", out.getvalue())
+        self.assertIn("claim release failed for #6 (changed)", err.getvalue())
+
+    def test_live_run_aborts_after_origin_loss_and_exits_nonzero(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+            {"number": "8", "state": "CLOSED", "board_status": "Done"},
+        ]
+        store = _FakeClaimStore(
+            {6: "sha-6", 8: "sha-8"},
+            release_results={
+                6: {"status": "failed", "error": "claim origin unavailable"},
+            },
+        )
+        err = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stderr(err),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(store.release_calls, [(6, "sha-6")])
+        self.assertIn("release pass aborted", err.getvalue())
+        self.assertIn("deferred: #8", err.getvalue())
+
+    def test_live_run_reports_a_claim_that_disappeared_after_the_snapshot(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+        ]
+        store = _FakeClaimStore(
+            {6: "sha-6"},
+            release_results={6: {"status": "missing", "error": ""}},
+        )
+        out = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stdout(out),
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+
+        self.assertIn("1 claim ref(s) already absent", out.getvalue())
+
+    def test_claim_snapshot_failure_is_reported_and_exits_nonzero(self):
+        issue_states = [
+            {"number": "6", "state": "CLOSED", "board_status": "Done"},
+        ]
+        store = _FakeClaimStore({}, fetch_error="claim origin unavailable")
+        err = io.StringIO()
+        with (
+            patch(
+                "solomon_harness.tools.database_client.DatabaseClient",
+                return_value=self.proxy,
+            ),
+            patch.object(
+                cli, "_fetch_reconcile_issue_states", return_value=issue_states
+            ),
+            patch.object(cli, "_fetch_gh_pr_states", return_value=[]),
+            patch("solomon_harness.claim.GitClaimStore", return_value=store),
+            contextlib.redirect_stderr(err),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            cli.handle_reconcile(self.temp_dir.name, dry_run=False)
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn(
+            "claim snapshot failed: claim origin unavailable",
+            err.getvalue(),
+        )
+
     def test_converged_board_card_is_not_written_by_command_path(self):
         self.inner.log_issue("6", "Stale closed", "bug", "closed", None)
         out = io.StringIO()
@@ -981,6 +1431,12 @@ class TestHandleReconcileTracking(unittest.TestCase):
         self.inner = DatabaseClient(db_path=self.db_path)
         self.inner.log_issue("68-R-01", "RAID R-01 (#68)", "raid", "in_progress", None)
         self.proxy = _ShareStoreProxy(self.inner)
+        claim_versions = patch(
+            "solomon_harness.claim.fetch_claim_ref_versions",
+            return_value={"ok": True, "versions": {}, "error": ""},
+        )
+        claim_versions.start()
+        self.addCleanup(claim_versions.stop)
 
     def tearDown(self):
         self.inner.close()
