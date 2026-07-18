@@ -36,11 +36,12 @@ subagents); do not review with a single generic pass.
   PR body).
 - **Cross-round finding dedup** (epic #341): pull the findings logged for this PR
   in prior review rounds and pass the already-triaged ones (each keyed by its
-  `dedup_key` = file + approximate line + category) to every lens as context. A
-  finding a human already marked `invalid`, or one already `resolved`, is not
-  re-flagged unless the code at that `file:line` actually changed since the prior
-  `<reviewed-sha>`. The human decision points and the managed body record are
-  unchanged.
+  `dedup_key`, computed with `solomon_harness.review_dedup.finding_dedup_key(file,
+  line, category)` = file + bucketed line + category) to every lens as context. A
+  finding a human already marked `invalid`, or one already `resolved`
+  (`review_dedup.is_suppressed`), is not re-flagged unless the code at that
+  `file:line` actually changed since the prior `<reviewed-sha>`. The human
+  decision points and the managed body record are unchanged.
 
 ## 2. Assemble and run the lenses (architect gate first, then qa and security in parallel)
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the

@@ -1036,6 +1036,35 @@ class TestRunStageNoOpDetection(unittest.TestCase):
         mock_snapshot.assert_not_called()
 
 
+class TestRemediationCapGate(unittest.TestCase):
+    """run_stage refuses a locked stage+target that hit the consecutive-round
+    cap, returning exit 3 without dispatching the engine (#341 package 5)."""
+
+    def test_cap_reached_returns_three_without_dispatch(self):
+        root = _git_workspace_with_command("review", "---\nallowed-tools: Bash\n---\nbody")
+        with (
+            patch("solomon_harness.loop_log.remediation_limit_reached", return_value=True),
+            patch("subprocess.run", side_effect=_answering_ps_probes([])) as mock_run,
+        ):
+            rc = workflows.run_stage(root, "review", ["342"], engine="claude")
+        self.assertEqual(rc, 3)
+        self.assertEqual(_engine_calls(mock_run), [])
+
+    def test_below_cap_proceeds(self):
+        root = _git_workspace_with_command("review", "---\nallowed-tools: Bash\n---\nbody")
+
+        class _Proc:
+            returncode = 0
+
+        with (
+            patch("solomon_harness.loop_log.remediation_limit_reached", return_value=False),
+            patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run,
+        ):
+            rc = workflows.run_stage(root, "review", ["342"], engine="claude")
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(_engine_calls(mock_run)), 1)
+
+
 class TestRunStageStallParking(unittest.TestCase):
     """A start run the stall watchdog kills is retried once, then parked with
     its claim and worktree preserved (#341 packages 2 and 4)."""

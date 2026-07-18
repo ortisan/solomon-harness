@@ -30,6 +30,30 @@ def _call_tool_json(server, name, arguments):
     return json.loads(result[0].text)
 
 
+def _surreal_test_creds():
+    """Live-SurrealDB credentials resolved like the client, not a hardcoded root.
+
+    The store uses a per-machine generated password, so a probe or setUp that
+    signs in with root/root silently skips every live test on a migrated machine.
+    Mirror DatabaseClient: SURREAL_USER/PASS env, then the generated home password,
+    then root.
+    """
+    try:
+        from solomon_harness.home import generated_memory_password
+
+        generated = generated_memory_password()
+    except Exception:
+        generated = None
+    return {
+        "username": os.environ.get("SURREAL_USER") or "root",
+        "password": os.environ.get("SURREAL_PASS") or generated or "root",
+    }
+
+
+# Resolved once at import, before any test patches os.path.isfile.
+_SURREAL_CREDS = _surreal_test_creds()
+
+
 def _surreal_reachable(url):
     """Best-effort probe: True only if a SurrealDB server signs in at ``url``.
 
@@ -52,7 +76,7 @@ def _surreal_reachable(url):
         probe = surrealdb.Surreal(url)
         if hasattr(probe, "connect"):
             probe.connect()
-        probe.signin({"username": "root", "password": "root"})
+        probe.signin(_SURREAL_CREDS)
         probe.close()
         return True
     except Exception:
@@ -237,7 +261,7 @@ class TestMcpServerBuilds(unittest.TestCase):
         "record_metric", "query_metric", "aggregate_metric",
         "loop_run_throughput", "loop_run_failure_rate",
         # Vector (SurrealDB-only).
-        "semantic_search",
+        "semantic_search", "search_decisions",
     }
 
     def test_build_server_registers_expected_tools(self):
@@ -353,7 +377,7 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
             raw = surrealdb.Surreal(SURREAL_LIVE_URL)
             if hasattr(raw, "connect"):
                 raw.connect()
-            raw.signin({"username": "root", "password": "root"})
+            raw.signin(_SURREAL_CREDS)
             # REMOVE DATABASE requires a bound namespace on the connection.
             raw.use("solomon", tenant)
             raw.query(f"REMOVE DATABASE `{tenant}`;")
@@ -408,6 +432,25 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         )
         self.assertEqual(len(found["results"]), 1)
         self.assertEqual(found["results"][0]["key"], "note-1")
+
+    def test_call_tool_vector_search_decisions(self):
+        """search_decisions round-trips through call_tool, returning the nearest
+        decision first, so a marshaling bug in the MCP wrapper is caught."""
+        self._call_tool_json(
+            "save_decision",
+            {"title": "hexagonal ports and adapters", "rationale": "isolate the domain",
+             "outcome": "adopt hexagonal", "author": "arch"},
+        )
+        self._call_tool_json(
+            "save_decision",
+            {"title": "pizza pasta", "rationale": "italian food", "outcome": "takeout",
+             "author": "chef"},
+        )
+        found = self._call_tool_json(
+            "search_decisions", {"query": "hexagonal architecture domain", "k": 1}
+        )
+        self.assertEqual(len(found["results"]), 1)
+        self.assertEqual(found["results"][0]["title"], "hexagonal ports and adapters")
 
     def _call_tool_json(self, name, arguments):
         return _call_tool_json(self.server, name, arguments)
