@@ -582,6 +582,20 @@ class DatabaseClient:
         "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
         "DEFINE INDEX IF NOT EXISTS decisions_created_at "
         "ON decisions FIELDS created_at;",
+        # Time-ordered hot paths. get_latest_activity reads the newest sessions
+        # and handoffs row (ORDER BY timestamp DESC LIMIT 1) on every session
+        # start; without these the planner does a TableScan plus sort that grows
+        # with the ledger. Indexing the ordered field turns each into an
+        # IndexScan, the plan decisions_created_at already gets. A new index name
+        # applies to existing tenants on the next connect, so no backfill.
+        "DEFINE INDEX IF NOT EXISTS sessions_timestamp "
+        "ON sessions FIELDS timestamp;",
+        "DEFINE INDEX IF NOT EXISTS handoffs_timestamp "
+        "ON handoffs FIELDS timestamp;",
+        # loop_run_throughput / loop_run_failure_rate filter and group loop_runs
+        # by created_at.
+        "DEFINE INDEX IF NOT EXISTS loop_runs_created_at "
+        "ON loop_runs FIELDS created_at;",
         # Timeseries: composite index on (name, time) for metrics.
         "DEFINE INDEX IF NOT EXISTS metrics_name_time "
         "ON metrics FIELDS name, time;",
