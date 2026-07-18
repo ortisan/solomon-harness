@@ -91,6 +91,9 @@ _INIT_DEFINES = (
     "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status; "
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
+    "DEFINE INDEX IF NOT EXISTS sessions_timestamp ON sessions FIELDS timestamp; "
+    "DEFINE INDEX IF NOT EXISTS handoffs_timestamp ON handoffs FIELDS timestamp; "
+    "DEFINE INDEX IF NOT EXISTS loop_runs_created_at ON loop_runs FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
     f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32;"
 )
@@ -460,6 +463,22 @@ class TestMultiModelLive(unittest.TestCase):
         self.assertIn("IndexScan", plan)
         self.assertIn("sessions_timestamp", plan)
         self.assertNotIn("TableScan", plan)
+
+    def test_loop_run_since_filter_uses_the_created_at_index(self):
+        # loop_run_throughput only gains from the index on the since-filtered path
+        # (an unfiltered aggregation must visit every row); this proves the
+        # throughput query's range read resolves to an IndexScan on the new index.
+        self.client._bootstrap_surreal_schema()
+        plan = json.dumps(
+            self.raw.query(
+                "SELECT time::group(created_at, 'day') AS bucket, count() "
+                "FROM loop_runs WHERE created_at >= d'2000-01-01T00:00:00Z' "
+                "GROUP BY bucket EXPLAIN"
+            ),
+            default=str,
+        )
+        self.assertIn("IndexScan", plan)
+        self.assertIn("loop_runs_created_at", plan)
 
     def test_unique_github_id_index_is_enforced(self):
         import surrealdb
