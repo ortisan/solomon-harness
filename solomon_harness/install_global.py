@@ -15,8 +15,12 @@ import subprocess
 import sys
 from typing import Dict, List, Optional
 
-from solomon_harness.home import assigned_memory_port, harness_home
-from solomon_harness.memory import _set_published_port
+from solomon_harness.home import (
+    assigned_memory_password,
+    assigned_memory_port,
+    harness_home,
+)
+from solomon_harness.memory import _set_password, _set_published_port
 
 MEMORY_UP_CMD = "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"
 RUN_CMD = "uv run python -m solomon_harness.cli run 2>/dev/null || true"
@@ -231,6 +235,7 @@ def install_global(
         # re-introduce the 8000 collision this whole design exists to avoid.
         port = assigned_memory_port(home_dir)
         content = _set_published_port(content, port)
+        content = _set_password(content, assigned_memory_password(home_dir))
         with open(os.path.join(home_dir, "docker-compose.yml"), "w", encoding="utf-8") as f:
             f.write(content)
         result["home_compose"] = True
