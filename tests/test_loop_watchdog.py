@@ -107,5 +107,48 @@ class TestStallMonitor(unittest.TestCase):
         self.assertFalse(proc.killed)
 
 
+class TestRealSubprocessGroupKill(unittest.TestCase):
+    """The reader-unblock guarantee: a stalled engine that forked a descendant
+    holding the stdout pipe must still let the reader see EOF, which only
+    happens if the whole process group is killed (#356 review blocker)."""
+
+    def test_group_kill_unblocks_a_pipe_held_by_a_descendant(self):
+        import subprocess
+        import sys
+
+        # Parent forks a child that inherits stdout, then both sit idle. A
+        # direct-child-only kill would leave the child holding the pipe write
+        # end, so a blocking read would never see EOF.
+        script = (
+            "import os, time, sys\n"
+            "if os.fork() == 0:\n"
+            "    time.sleep(120)\n"
+            "    os._exit(0)\n"
+            "time.sleep(120)\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        cfg = loop_watchdog.WatchdogConfig(idle_timeout=0.2, child_backstop=1.0, terminal_cap=5.0)
+        mon = loop_watchdog.StallMonitor(proc, cfg, poll_interval=0.05).start()
+
+        read_done = threading.Event()
+
+        def drain():
+            proc.stdout.read()  # blocks until every pipe writer is gone
+            read_done.set()
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+
+        self.assertTrue(read_done.wait(timeout=8.0), "reader never saw EOF: group kill failed")
+        mon.stop()
+        self.assertTrue(mon.stalled)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@
 
 - Persona: <persona from personas.md>
 - Journey: J-NN-<slug>
-- Tour: <exactly one tour — e.g. the money tour, the landmark tour, the bad-neighborhood tour>
+- Tour: <exactly one tour from the persona_driven_exploratory_testing catalog — Feature, Money, Garbage, Back-button/interrupt, Landmark, or Locale/configuration>
 - Time-box: <30 | 60 | 90> minutes
 - Scenarios in scope: <state.csv ids>
 
