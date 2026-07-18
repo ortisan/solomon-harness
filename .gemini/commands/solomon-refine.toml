@@ -63,10 +63,13 @@ Steps:
     where the spec stops being a product sketch and becomes something a model can
     implement without asking. Open the issue's spec `docs/specs/<n>-<slug>.md`
     (created at `/solomon-issue`) and resolve **every** `TBD (refine)`:
-    - **Implementation Pointers** — read the code and state the exact `file:line`
+    - **Implementation Pointers** — cite a dedicated read-only exploration pass
+      (dispatch an `Explore` subagent scoped to the change's area, per the
+      `scoped_subagent_dispatch` contract), then state the exact `file:line`
       targets the change touches, the current behavior versus the expected
-      behavior at each, and the concrete approach. No guessing left for the
-      implementer.
+      behavior at each, and the concrete approach. The pointers must trace to
+      that exploration's findings, not the refining agent's unaided memory — no
+      guessing left for the implementer.
     - **Verification** — the exact command(s) that prove the change works (the
       test invocation, a manual repro, the check to eyeball).
     - Fill any other section still on a placeholder, then flip the header to

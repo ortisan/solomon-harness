@@ -174,3 +174,41 @@ def test_gemini_mirrors_carry_the_new_command_wiring():
         os.path.join(WORKSPACE, ".gemini", "commands", "solomon-start.md")
     ) else _flat(os.path.join(".gemini", "commands", "solomon-start.toml"))
     assert "state.csv" in start
+
+
+# --- pkg 5: bounded remediation rounds ---------------------------------------
+
+
+def test_remediation_cap_helper_and_doc_wiring():
+    from solomon_harness import loop_log
+
+    assert hasattr(loop_log, "consecutive_runs_for_target")
+    assert hasattr(loop_log, "remediation_limit_reached")
+    doc = _flat(os.path.join("docs", "solomon-workflow.md"))
+    assert "remediation_limit_reached" in doc
+    assert "consecutive-round cap" in doc
+
+
+# --- pkg 15: cross-round finding dedup ---------------------------------------
+
+
+def test_review_carries_cross_round_dedup():
+    low = _flat(os.path.join(".claude", "commands", "solomon-review.md"))
+    assert "dedup_key" in low
+    assert "cross-round finding dedup" in low
+    assert "invalid" in low and "resolved" in low
+
+
+# --- pkg 16: blocked-issue skip + refine exploration -------------------------
+
+
+def test_blocked_issue_skip_documented():
+    doc = _flat(os.path.join("docs", "solomon-workflow.md"))
+    assert "issues_blocked_by" in doc
+    assert "skips any candidate" in doc
+
+
+def test_refine_cites_an_exploration_pass():
+    low = _flat(os.path.join(".claude", "commands", "solomon-refine.md"))
+    assert "read-only exploration pass" in low
+    assert "scoped_subagent_dispatch" in low

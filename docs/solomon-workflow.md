@@ -60,6 +60,14 @@ and the normal move-to-`Done` decision. ADR-0034 permits one narrower automated
 action: repairing a derived board projection after GitHub already reports the
 issue `CLOSED`; it cannot close, merge, release, or act on an open issue.
 
+Selection guards (epic #341). Before proposing a `Ready` issue for development,
+the resume scan skips any candidate whose `issues_blocked_by` returns an open
+blocker, logging the skipped issue and its blocker rather than starting work that
+cannot finish. Before re-proposing the same PR/issue for another remediation
+round, it consults `loop_log.remediation_limit_reached` (the consecutive-round
+cap, default 6): at the cap it stops re-proposing that target and surfaces it to
+the human instead of burning further rounds.
+
 At the start of every Claude Code or Antigravity CLI session, the harness surfaces the
 project status (latest activity and open issues) through a SessionStart hook that
 runs `solomon-harness run`. This hook automatically checks memory for pending tasks

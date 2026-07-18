@@ -43,6 +43,13 @@ subagents); do not review with a single generic pass.
   re-deriving the whole context. Then `mcp__solomon-memory__get_open_issues` for known
   debt and the design this change claims to implement (link any ADR referenced in the
   PR body).
+- **Cross-round finding dedup** (epic #341): pull the findings logged for this PR
+  in prior review rounds and pass the already-triaged ones (each keyed by its
+  `dedup_key` = file + approximate line + category) to every lens as context. A
+  finding a human already marked `invalid`, or one already `resolved`, is not
+  re-flagged unless the code at that `file:line` actually changed since the prior
+  `<reviewed-sha>`. The human decision points and the managed body record are
+  unchanged.
 
 ## 2. Assemble and run the lenses (architect gate first, then qa and security in parallel)
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
@@ -124,7 +131,11 @@ Each lens returns findings tagged blocker, major, or minor.
   ready). If `gh pr review --approve` is refused because the reviewer authored the PR
   (single-maintainer self-review), the posted comment is the approval of record and
   `gh pr ready` is still what advances the PR; run it regardless.
-- File each blocker/major as a tracked issue with `mcp__solomon-memory__log_issue`.
+- File each blocker/major as a tracked issue with `mcp__solomon-memory__log_issue`,
+  and record each finding with its `dedup_key` (file + approximate line + category)
+  and a lifecycle field — `pending` → `valid`/`invalid` → `resolved`, where
+  `invalid` is a legitimate, documented rejection — so the next round's dedup
+  (step 1) can suppress a finding already triaged unless its code changed.
 
 ## 5. Persist to memory
 - `mcp__solomon-memory__save_decision` with the review outcome (title, rationale,
