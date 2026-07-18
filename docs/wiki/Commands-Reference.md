@@ -11,7 +11,7 @@ Runs a task end-to-end, or continues from a previous execution. It scans the rep
 * **Arguments:** Optional focus (e.g., issue or PR number).
 * **Primary Agent:** Orchestrator (hierarchical coordinator).
 * **Workflows:**
-  1. Checks for approved PRs to trigger release.
+  1. Checks for approved PRs to complete their merge through review (ADR-0020), and for completed milestones (0 open issues, CI green) to trigger a release.
   2. Checks for open PRs needing review to trigger review.
   3. Checks for in-progress branches to resume coding.
   4. Checks for ready issues to start implementation.
@@ -102,3 +102,9 @@ Identifies redundant or duplicated code blocks to suggest clean abstractions.
 * **Arguments:** None.
 * **Primary Agent:** `software_engineer`
 * **Workflows:** Scans files to flag duplicate logic, writing refactoring proposals for DRY compliance.
+
+### `/solomon-reconcile` (State Reconciliation)
+Repairs stale memory and canonical-board projections for issues GitHub already reports closed.
+* **Arguments:** Optional `--dry-run`.
+* **Primary Agents:** `loop_engineer`, `software_engineer`
+* **Workflows:** Runs under the single-driver lock; a converged run performs no board write and the stage never merges, closes, or releases.

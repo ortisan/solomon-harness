@@ -39,3 +39,6 @@ Drive development using the `solomon-*` workflows in Claude Code, AGY, or Codex:
 * Run **`/solomon-issue <summary>`** to create a new ticket in the Backlog.
 * Run **`/solomon-start <issue_id>`** to begin implementing an issue using TDD.
 * Run **`/solomon-release <issue_id>`** to merge and release.
+
+Codex examples: **`$solomon-workflow`**, **`$solomon-issue <summary>`**, and
+**`$solomon-start <issue_id>`**.

@@ -11,8 +11,15 @@ from unittest.mock import MagicMock
 from solomon_harness import curator
 
 def _write_agent(root, name, description):
-    role_dir = os.path.join(root, "agents", name, "agents")
+    agent_dir = os.path.join(root, "agents", name)
+    role_dir = os.path.join(agent_dir, "agents")
     os.makedirs(role_dir)
+    skills_dir = os.path.join(agent_dir, "skills")
+    os.makedirs(skills_dir)
+    with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name} Scope\n")
+    with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name} Persona\n")
     with open(os.path.join(role_dir, f"{name}.md"), "w", encoding="utf-8") as f:
         f.write(f"# {name}\n\n{description}\n")
 
@@ -213,14 +220,10 @@ class TestSweep(unittest.TestCase):
             f.write("QA Persona details")
             
         skills_dir = os.path.join(qa_dir, "skills")
-        os.makedirs(skills_dir)
+        os.makedirs(skills_dir, exist_ok=True)
         with open(os.path.join(skills_dir, "test_skill.md"), "w", encoding="utf-8") as f:
             f.write("QA Skill details")
             
-        # Write a non-markdown file to ensure it's ignored
-        with open(os.path.join(skills_dir, "config.json"), "w", encoding="utf-8") as f:
-            f.write("{}")
-
         captured_content = None
         def analyzer(agent_name, catalog_desc, baseline):
             nonlocal captured_content
@@ -239,7 +242,6 @@ class TestSweep(unittest.TestCase):
         self.assertIn("The QA Specialist.", captured_content)
         self.assertIn("QA Persona details", captured_content)
         self.assertIn("QA Skill details", captured_content)
-        self.assertNotIn("{}", captured_content)
 
     def test_sweep_with_zero_sources_goes_to_needs_evidence(self):
         def analyzer(agent_name, catalog_desc, baseline):

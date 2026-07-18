@@ -162,8 +162,9 @@ These are the project defaults; deviating from one requires an ADR.
 6. Release and Documentation: publish releases and sync the wiki using
    `scripts/wiki-sync.sh`.
 
-This lifecycle is driven by the `/solomon-*` workflows, orchestrated by
-`/solomon-workflow`: it scans the project memory and the GitHub board for where work
+This lifecycle is driven by the `/solomon-*` workflows in Claude/Gemini and
+their `$solomon-*` Codex skill counterparts, orchestrated by `solomon-workflow`:
+it scans the project memory and the GitHub board for where work
 stopped and proposes the next step (development, review, release, or — when nothing
 is in flight — creating a feature, bug, or refinement). At the start or first
 invocation of every Claude, AGY, or Codex session, the native lifecycle adapter
@@ -197,6 +198,10 @@ context and persist what it did. Reach it through the harness:
 - `DatabaseClient(harness_dir=...)` reads and writes memory from code.
 - Backend configuration comes from `.agents/solomon/config/project.json`; SurrealDB
   credentials can be overridden with `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS`.
+- `HARNESS_DB_PATH` forces the SQLite backend at the given file path, overriding a
+  configured SurrealDB provider even when the shared server is reachable. Use it to
+  isolate tests and ad-hoc runs from the real multi-tenant store; the write-through
+  mirror follows to a `memory-mirror` sibling of that path.
 
 The memory is also exposed as the `solomon-memory` MCP server
 (`solomon_harness/mcp_server.py`, run with `python -m solomon_harness.mcp_server`),

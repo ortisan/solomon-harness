@@ -270,6 +270,69 @@ class TestGetLatestActivityPreservesContractPath(ResilienceTestBase):
         )
         self.assertEqual(activity["contract_path"], "/some/path/plan.md")
 
+    def test_handoff_summary_survives_contract_file_deletion(self):
+        # Issue #295: summary is the documented fallback for when contract_path
+        # no longer resolves (its worktree torn down after merge). A resume via
+        # get_latest_activity must still surface the non-empty summary, and
+        # must not raise just because the file the path points to is gone.
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+        contract_path = os.path.join(
+            self.temp_dir.name, "issue-214-start-to-review.md"
+        )
+        with open(contract_path, "w", encoding="utf-8") as f:
+            f.write("# Handoff: start -> review - issue #214\n")
+
+        client.log_handoff(
+            sender="software_engineer",
+            recipient="qa",
+            contract_type="pull_request",
+            contract_path=contract_path,
+            status="open",
+            summary="qa approved PR #214, merged to main",
+        )
+
+        os.remove(contract_path)
+        self.assertFalse(os.path.exists(contract_path))
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity)
+        self.assertEqual(
+            activity.get("summary"), "qa approved PR #214, merged to main"
+        )
+        self.assertEqual(activity.get("contract_path"), contract_path)
+
+    def test_session_wins_still_surfaces_handoff_summary(self):
+        # Issue #305: the session-wins branch (the routine case, since every
+        # /solomon-* command logs a handoff immediately followed by a session
+        # save) already surfaces the latest handoff's contract_path, but was
+        # silently dropping its summary. That nullifies #295's guarantee on
+        # the path that fires most of the time. Both fields must survive
+        # together when the session row wins the timestamp comparison.
+        client = DatabaseClient(db_path=self.sqlite_db_path)
+
+        client.log_handoff(
+            sender="software_engineer",
+            recipient="qa",
+            contract_type="pull_request",
+            contract_path="/some/path/plan.md",
+            status="open",
+            summary="qa approved PR #214",
+        )
+        client.save_session(
+            session_id="sess-305",
+            agent_name="qa",
+            task="Review PR #214",
+            messages=[],
+        )
+
+        activity = client.get_latest_activity()
+
+        self.assertIsNotNone(activity)
+        self.assertEqual(activity["type"], "session")
+        self.assertEqual(activity.get("summary"), "qa approved PR #214")
+        self.assertEqual(activity.get("contract_path"), "/some/path/plan.md")
+
 
 class TestQueryErrorIsNotConnectionLoss(ResilienceTestBase):
     def test_run_surreal_classifies_transport_versus_query_error(self):

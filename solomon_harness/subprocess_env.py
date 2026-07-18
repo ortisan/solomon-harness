@@ -33,3 +33,16 @@ def clean_git_env(workspace_root: Optional[str] = None) -> Dict[str, str]:
     if workspace_root:
         env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(os.path.abspath(workspace_root))
     return env
+
+
+def clean_gh_env(workspace_root: Optional[str] = None) -> Dict[str, str]:
+    """Return an environment safe for a repository-scoped ``gh`` command.
+
+    ``gh`` honors ``GH_REPO`` ahead of repository discovery. A caller that has
+    already selected a workspace must therefore remove that override as well as
+    the ambient ``GIT_*`` context, otherwise a mutating issue command can target
+    a different repository from the git operation that preceded it.
+    """
+    env = clean_git_env(workspace_root)
+    env.pop("GH_REPO", None)
+    return env

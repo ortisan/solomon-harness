@@ -14,8 +14,8 @@ from solomon_harness.layout import PathConfinementError
 
 STAGES = [
     "workflow", "loop", "idea", "issue", "bug", "refine", "start", "review", "release",
-    # Standing maintenance loops (Phase 3): generative, open draft PRs only.
-    "scan-arch", "scan-dedup",
+    # Standing maintenance stages: generative scans plus state convergence.
+    "scan-arch", "scan-dedup", "reconcile",
 ]
 
 # Renamed stages, still accepted on input with a deprecation notice:
@@ -322,7 +322,8 @@ def run_stage(
         return 1
 
     # Governed-autonomy gate (portable across all hosts): the maturity ladder, the
-    # permanent human gate for merge/release/Done, and the kill-switch. At the
+    # permanent human gate for merge/release/terminal decisions (ADR-0034 only
+    # permits closed-issue projection repair), and the kill-switch. At the
     # default "human" level this allows everything, so behavior is unchanged.
     from solomon_harness.loop_policy import LoopPolicy
 

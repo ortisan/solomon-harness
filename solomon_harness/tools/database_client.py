@@ -731,6 +731,22 @@ class DatabaseClient:
         self._db_path_is_project_state = False
         self._mirror_root_is_project_state = False
 
+        # HARNESS_DB_PATH must force SQLite isolation exactly like an explicit
+        # db_path argument: it has to set self.db_path BEFORE _init_backend runs,
+        # because _init_backend only enters the SurrealDB branch when
+        # ``self.db_path is None``. Reading it later (inside _resolve_sqlite_path)
+        # is too late -- with the shared SurrealDB reachable the backend is already
+        # chosen, and writes land in the real multi-tenant store, so the env var
+        # silently fails to isolate (issue #40). Resolve to an absolute path and
+        # create its parent up front so the SQLite connect never races a missing
+        # directory. An empty value is ignored (treated as unset).
+        if self.db_path is None:
+            env_db = os.environ.get("HARNESS_DB_PATH")
+            if env_db:
+                abs_db = os.path.abspath(env_db)
+                os.makedirs(os.path.dirname(abs_db), exist_ok=True)
+                self.db_path = abs_db
+
         # SurrealDB connection params captured so the connection can be rebuilt
         # mid-session after a drop, not only at construction (issue #37).
         self._surreal_class: Any = None
@@ -3553,8 +3569,9 @@ class DatabaseClient:
         Returns:
             A dictionary with keys 'type', 'agent', 'task', 'status', 'timestamp'
             (and 'contract_path', pointing to the latest handoff contract
-            artifact if any handoff has been logged), or None if no activity
-            exists.
+            artifact, plus 'summary', the latest handoff's persisted "what this
+            stage did" text, both surfaced if any handoff has been logged), or
+            None if no activity exists.
         """
         latest_session = None
         if self.backend == "surrealdb":
@@ -3644,6 +3661,7 @@ class DatabaseClient:
             # "Handoff contracts") is never silently dropped by that ordering.
             if latest_handoff is not None:
                 result["contract_path"] = latest_handoff.get("contract_path")
+                result["summary"] = latest_handoff.get("summary")
             # The linked issue numbers from the session's worked_on edges
             # (ADR-0018), added only when edges exist so consumers pinned on
             # the exact legacy shape are untouched by pre-edge rows.

@@ -120,6 +120,18 @@ In Claude Code, AGY, or Codex, drive the lifecycle with the same workflow names:
 /solomon-release   17
 ```
 
+In Codex, use the generated skills. Codex reserves slash commands for its own
+command namespaces, so the equivalent explicit invocation uses `$`:
+
+```text
+$solomon-workflow  (end-to-end / continue)
+$solomon-issue     add rate limiting to the public API
+$solomon-refine    42
+$solomon-start     42
+$solomon-review    17
+$solomon-release   17
+```
+
 Or headlessly, for CI and automation:
 
 ```bash
@@ -143,16 +155,16 @@ the specialists that drive it:
 Ideas → Backlog → Ready → In Progress → Code Review → QA → Done
 ```
 
-| Workflow | Stage | Driving agents |
+| Workflow (Claude/Gemini; Codex) | Stage | Driving agents |
 | --- | --- | --- |
-| `/solomon-workflow` | run a task end-to-end or continue | loop_engineer |
-| `/solomon-idea` | capture an idea | product_owner |
-| `/solomon-issue` | create a feature/story; a vague demand first passes the Socratic elicitation gate, and every issue gets a `docs/specs/` spec doc | product_owner |
-| `/solomon-bug` | create a bug | qa, software_engineer |
-| `/solomon-refine` | ready an issue | product_owner, scrum_master |
-| `/solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
-| `/solomon-review` | review gates (auto-runs at the end of start) | qa, security, software_architect, plus up to two diff-selected domain lenses |
-| `/solomon-release` | deliver and release | sre, software_engineer |
+| `/solomon-workflow`; `$solomon-workflow` | run a task end-to-end or continue | loop_engineer |
+| `/solomon-idea`; `$solomon-idea` | capture an idea | product_owner |
+| `/solomon-issue`; `$solomon-issue` | create a feature/story; a vague demand first passes the Socratic elicitation gate, and every issue gets a `docs/specs/` spec doc | product_owner |
+| `/solomon-bug`; `$solomon-bug` | create a bug | qa, software_engineer |
+| `/solomon-refine`; `$solomon-refine` | ready an issue | product_owner, scrum_master |
+| `/solomon-start`; `$solomon-start` | branch, plan, TDD, draft PR | scrum_master, software_engineer, software_architect |
+| `/solomon-review`; `$solomon-review` | review gates (auto-runs at the end of start) | qa, security, software_architect, plus up to two diff-selected domain lenses |
+| `/solomon-release`; `$solomon-release` | deliver and release | sre, software_engineer |
 
 The conventions every workflow follows (board columns, Git Flow branches, labels,
 the memory handoff contract, the ADR trigger) live in
@@ -218,7 +230,7 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 
 ### Delivery workflows
 
-Eleven `/solomon-*` commands — currently counted from the source checkout's
+Twelve `/solomon-*` commands — currently counted from the source checkout's
 `.claude/commands/solomon-*.md` compatibility catalog and guarded by
 `tests/test_readme_sync.py` — are normalized during installation into
 `.agents/solomon/workflows`. `compile` produces small workflow skills that point
@@ -227,9 +239,12 @@ drive the lifecycle table above; `/solomon-loop` runs the autonomous parallel
 loop over Ready issues; and the remaining two,
 `/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
 scan the codebase for architectural drift and duplication (see
-`docs/solomon-workflow.md`). They orchestrate the specialist agents, the `gh` CLI, the
-GitHub board, and the project memory, and confirm before any outward-facing action
-(creating issues/PRs, merging, releasing).
+`docs/solomon-workflow.md`); and `/solomon-reconcile` is the locked standing
+projection repair for issues GitHub already reports closed. They orchestrate the
+specialist agents, the `gh` CLI, the GitHub board, and project memory. Lifecycle
+authority remains human-gated: creation, merge, close, and release require the
+normal workflow decision; reconcile only repairs an already-terminal projection
+(ADR-0034).
 
 ### Project memory and MCP
 

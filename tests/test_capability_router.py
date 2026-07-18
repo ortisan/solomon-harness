@@ -8,8 +8,15 @@ from solomon_harness import capability_router as cr
 
 
 def _write_agent(root, name, description):
-    role_dir = os.path.join(root, "agents", name, "agents")
+    agent_dir = os.path.join(root, "agents", name)
+    role_dir = os.path.join(agent_dir, "agents")
     os.makedirs(role_dir)
+    skills_dir = os.path.join(agent_dir, "skills")
+    os.makedirs(skills_dir)
+    with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name} Scope\n")
+    with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name} Persona\n")
     with open(os.path.join(role_dir, f"{name}.md"), "w", encoding="utf-8") as f:
         f.write(f"# {name}\n\n{description}\n")
 
@@ -112,6 +119,12 @@ class TestRoute(CapabilityRouterTestBase):
 
 
 class TestCatalog(CapabilityRouterTestBase):
+    def _write_minimal_skill(self, agent_dir):
+        skills_dir = os.path.join(agent_dir, "skills")
+        os.makedirs(skills_dir)
+        with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
+            f.write("# Scope\n")
+
     def test_load_catalog_returns_sorted_agents_with_descriptions(self):
         catalog = cr.load_catalog(self.root)
         self.assertEqual([a.name for a in catalog], ["qa", "security", "software_engineer"])
@@ -120,8 +133,12 @@ class TestCatalog(CapabilityRouterTestBase):
         self.assertTrue(by_name["security"].startswith("The Security Specialist"))
 
     def test_role_file_with_only_a_heading_has_empty_description(self):
-        role_dir = os.path.join(self.root, "agents", "blankrole", "agents")
+        agent_dir = os.path.join(self.root, "agents", "blankrole")
+        role_dir = os.path.join(agent_dir, "agents")
         os.makedirs(role_dir)
+        self._write_minimal_skill(agent_dir)
+        with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+            f.write("# Blank Role Persona\n")
         with open(os.path.join(role_dir, "blankrole.md"), "w", encoding="utf-8") as f:
             f.write("# blankrole\n")
         catalog = cr.load_catalog(self.root)
@@ -130,8 +147,12 @@ class TestCatalog(CapabilityRouterTestBase):
         self.assertEqual(by_name["blankrole"], "")
 
     def test_role_file_with_giant_line_is_read_capped(self):
-        role_dir = os.path.join(self.root, "agents", "giantline", "agents")
+        agent_dir = os.path.join(self.root, "agents", "giantline")
+        role_dir = os.path.join(agent_dir, "agents")
         os.makedirs(role_dir)
+        self._write_minimal_skill(agent_dir)
+        with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+            f.write("# Giant Line Persona\n")
         giant_desc = "A" * 20000
         with open(os.path.join(role_dir, "giantline.md"), "w", encoding="utf-8") as f:
             f.write(f"# giantline\n\n{giant_desc}\n")
@@ -142,8 +163,12 @@ class TestCatalog(CapabilityRouterTestBase):
         self.assertEqual(len(by_name["giantline"]), 8192)
 
     def test_symlink_role_file_rejected(self):
-        role_dir = os.path.join(self.root, "agents", "symlinked_agent", "agents")
+        agent_dir = os.path.join(self.root, "agents", "symlinked_agent")
+        role_dir = os.path.join(agent_dir, "agents")
         os.makedirs(role_dir)
+        self._write_minimal_skill(agent_dir)
+        with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+            f.write("# Symlinked Agent Persona\n")
         target_file = os.path.join(self.root, "target.md")
         with open(target_file, "w", encoding="utf-8") as f:
             f.write("# symlinked_agent\n\nsome description\n")
@@ -153,8 +178,12 @@ class TestCatalog(CapabilityRouterTestBase):
             cr.load_catalog(self.root)
 
     def test_path_confinement_violation_rejected(self):
-        role_dir = os.path.join(self.root, "agents", "evil_agent", "agents")
+        agent_dir = os.path.join(self.root, "agents", "evil_agent")
+        role_dir = os.path.join(agent_dir, "agents")
         os.makedirs(role_dir)
+        self._write_minimal_skill(agent_dir)
+        with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
+            f.write("# Evil Agent Persona\n")
         outside_dir = tempfile.mkdtemp(prefix="outside-")
         try:
             outside_role = os.path.join(outside_dir, "evil_agent.md")

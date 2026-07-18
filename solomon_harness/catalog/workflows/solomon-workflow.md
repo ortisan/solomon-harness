@@ -25,14 +25,15 @@ Gather these and summarize them concisely:
 
 ## 2. Decide the next step (first match wins)
 
-1. A pull request that is **approved** → `/solomon-release <pr>`.
+1. A pull request that is **approved** → `/solomon-review <pr>`; its merge step completes the `QA` → `Done` transition (ADR-0020). `/solomon-release` is never dispatched by an individual PR's state.
 2. A pull request **open and awaiting review** → `/solomon-review <pr>`.
-3. An issue **In Progress** with a branch but no PR yet, and **not claimed by another live session** → resume with `/solomon-start <issue>` (continue the TDD loop and open the PR).
-4. A **Ready** or **Backlog** issue with a capability gap detected in its context (missing agent/skill in catalog) → run `/solomon-start <issue>` or `/solomon-refine <issue>` to invoke the capability broker and acquire the capability.
-5. A **Ready** issue (refined, Definition of Ready met) → `/solomon-start <issue>`.
-6. A **Backlog** issue not yet refined → `/solomon-refine <issue>`.
-7. An **Idea** worth promoting → `/solomon-issue` (or `/solomon-refine`).
-8. **Nothing in progress and the backlog is empty** → there is no work to advance; ask the user whether to create one — `/solomon-idea`, `/solomon-issue`, or `/solomon-bug` — and what it is about.
+3. A **milestone** whose issues are all `Done` (0 open) with CI green on `main` → `/solomon-release <milestone>`; dispatched by milestone state, never by a PR number.
+4. An issue **In Progress** with a branch but no PR yet, and **not claimed by another live session** → resume with `/solomon-start <issue>` (continue the TDD loop and open the PR).
+5. A **Ready** or **Backlog** issue with a capability gap detected in its context (missing agent/skill in catalog) → run `/solomon-start <issue>` or `/solomon-refine <issue>` to invoke the capability broker and acquire the capability.
+6. A **Ready** issue (refined, Definition of Ready met) → `/solomon-start <issue>`.
+7. A **Backlog** issue not yet refined → `/solomon-refine <issue>`.
+8. An **Idea** worth promoting → `/solomon-issue` (or `/solomon-refine`).
+9. **Nothing in progress and the backlog is empty** → there is no work to advance; ask the user whether to create one — `/solomon-idea`, `/solomon-issue`, or `/solomon-bug` — and what it is about.
 
 If `{{arguments}}` names a specific issue or PR, evaluate that item and pick its next step.
 
@@ -68,4 +69,6 @@ Present the next step and execution options as a decision card with the followin
 ## 4. Record
 
 - `project-memory save_decision` — the loop's recommendation and the chosen action, so the next session resumes from it.
-- `project-memory log_handoff` — when the chosen workflow hands off to the next stage.
+- `project-memory log_handoff` — when the chosen workflow hands off to the next stage,
+  passing `summary="<2-5 line synopsis of what this stage did>"` so a resume survives worktree
+  teardown.

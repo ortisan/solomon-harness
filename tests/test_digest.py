@@ -121,6 +121,136 @@ class TestBuildDigest(unittest.TestCase):
         self.assertIn("Last loop:", text)
         self.assertIn("Open issues: 0 GitHub issues, 1 tracking items", text)
 
+    def test_gather_digest_filters_claimed_issues(self):
+        """ADR-0027: a session-start digest must not offer an issue another
+        session already claimed, or the double-pick race #215 closed reopens
+        at exactly the seam that suggests next steps to the human (#297)."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Free issue", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class FakeClaimStore:
+            def filter_unclaimed(self, issue_numbers):
+                return [51]
+
+        text = "\n".join(
+            digest.gather_digest(
+                ".", FakeDB(), fetch_github=False, claim_store=FakeClaimStore()
+            )
+        )
+        self.assertIn("#51", text)
+        self.assertIn("Free issue", text)
+        self.assertNotIn("#50", text)
+        self.assertNotIn("Taken issue", text)
+
+    def test_gather_digest_parity_when_nothing_claimed(self):
+        """No regression when nothing is claimed: a pass-through claim store
+        must render the identical digest to the no-claim_store call path."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Free issue", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class PassThroughClaimStore:
+            def filter_unclaimed(self, issue_numbers):
+                return list(issue_numbers)
+
+        baseline = digest.build_digest(
+            resume=None,
+            open_issues=FakeDB().get_open_issues(),
+            last_loop_run=None,
+            prs=None,
+        )
+        text = digest.gather_digest(
+            ".", FakeDB(), fetch_github=False, claim_store=PassThroughClaimStore()
+        )
+        self.assertEqual(text, baseline)
+
+    def test_gather_digest_everything_claimed_renders_cleanly(self):
+        """Boundary: every open issue claimed by another session still
+        renders a complete digest, with zero 'Start development' suggestions."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Also taken", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class AllClaimedStore:
+            def filter_unclaimed(self, issue_numbers):
+                return []
+
+        text = "\n".join(
+            digest.gather_digest(
+                ".", FakeDB(), fetch_github=False, claim_store=AllClaimedStore()
+            )
+        )
+        self.assertIn("No pending tasks found in memory.", text)
+        self.assertNotIn("Start development", text)
+        self.assertNotIn("#50", text)
+        self.assertNotIn("#51", text)
+
+    def test_gather_digest_degrades_on_claim_store_failure(self):
+        """Failure path: a claim store that raises must degrade to the
+        unfiltered issue list rather than blocking or crashing SessionStart,
+        and the degradation must actually be logged (not silently absorbed)."""
+        import io
+        from unittest.mock import patch
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "50", "title": "Taken issue", "status": "ready"},
+                    {"github_id": "51", "title": "Free issue", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class BrokenClaimStore:
+            def filter_unclaimed(self, issue_numbers):
+                raise RuntimeError("claims unreachable")
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            text = "\n".join(
+                digest.gather_digest(
+                    ".", FakeDB(), fetch_github=False, claim_store=BrokenClaimStore()
+                )
+            )
+        self.assertIn("#50", text)
+        self.assertIn("#51", text)
+        self.assertIn("claim-aware issue filtering degraded", stderr_capture.getvalue())
+
     def test_build_digest_flags_sqlite_fallback(self):
         """When memory is on the SQLite fallback (SurrealDB unreachable), the
         digest must say so loudly, so fallback rows are never mistaken for the
@@ -184,6 +314,32 @@ class TestBuildDigest(unittest.TestCase):
         text = "\n".join(digest.build_digest(resume=None, open_issues=[], last_loop_run=None, prs=prs))
         self.assertIn("We found a pending task: Review open PR #15", text)
         self.assertIn("1. Single Step (Recommended): Run /solomon-review 15", text)
+
+    def test_codex_digest_uses_skill_invocations_only(self):
+        prs = [{"number": 12, "title": "fix auth", "reviewDecision": "APPROVED", "isDraft": False}]
+        last_loop = {
+            "stage": "start",
+            "target": "11",
+            "status": "ok",
+            "created_at": "2026-07-17T10:00:00Z",
+        }
+        issues = [{"github_id": "45", "title": "fix login", "status": "backlog"}]
+
+        text = "\n".join(
+            digest.build_digest(
+                resume=None,
+                open_issues=issues,
+                last_loop_run=last_loop,
+                prs=prs,
+                host="codex",
+            )
+        )
+
+        self.assertIn("Last loop: $solomon-start 11", text)
+        self.assertIn("Run $solomon-release 12", text)
+        self.assertIn("$solomon-refine 45", text)
+        self.assertIn("$solomon-idea", text)
+        self.assertNotIn("/solomon-", text)
 
     def test_digest_shows_no_pending_task_options(self):
         # No pending tasks -> lists github open issues (ideas/backlog) and their refine/issue commands

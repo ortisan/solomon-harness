@@ -11,6 +11,7 @@ SOLOMON_WORKFLOW_NAMES = (
     "idea",
     "issue",
     "loop",
+    "reconcile",
     "refine",
     "release",
     "review",
