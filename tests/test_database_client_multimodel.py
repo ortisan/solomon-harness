@@ -113,7 +113,6 @@ _INIT_DEFINES = (
     "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION; "
     "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION; "
     "DEFINE INDEX IF NOT EXISTS issues_github_id ON issues FIELDS github_id UNIQUE; "
-    "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status; "
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
@@ -501,6 +500,12 @@ class TestTimeOrderedIndexesAreDefined(unittest.TestCase):
         for expected in self._EXPECTED:
             self.assertIn(expected, joined)
 
+    def test_schema_removes_the_dead_status_index(self):
+        # The dead issues_status index is dropped, not defined (ADR-0042).
+        joined = " ".join(DatabaseClient._SURREAL_SCHEMA_STATEMENTS)
+        self.assertIn("REMOVE INDEX IF EXISTS issues_status ON issues", joined)
+        self.assertNotIn("DEFINE INDEX IF NOT EXISTS issues_status", joined)
+
 
 @unittest.skipUnless(SURREAL_AVAILABLE, "SurrealDB not reachable at " + SURREAL_URL)
 class TestMultiModelLive(unittest.TestCase):
@@ -558,8 +563,22 @@ class TestMultiModelLive(unittest.TestCase):
         info = self.raw.query("INFO FOR TABLE issues")
         indexes = info["indexes"]
         self.assertIn("issues_github_id", indexes)
-        self.assertIn("issues_status", indexes)
         self.assertIn("UNIQUE", indexes["issues_github_id"])
+        # issues_status was the only status index and it served no read (ADR-0042);
+        # the schema drops it, so it must not be present.
+        self.assertNotIn("issues_status", indexes)
+
+    def test_bootstrap_removes_the_dead_status_index(self):
+        # An existing tenant that already carries issues_status has it dropped by
+        # the production bootstrap on the next connect.
+        self.raw.query("DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;")
+        self.assertIn(
+            "issues_status", self.raw.query("INFO FOR TABLE issues")["indexes"]
+        )
+        self.client._bootstrap_surreal_schema()
+        self.assertNotIn(
+            "issues_status", self.raw.query("INFO FOR TABLE issues")["indexes"]
+        )
 
     def test_time_ordered_indexes_are_defined(self):
         # The production bootstrap (not the test's partial _INIT_DEFINES mirror)
