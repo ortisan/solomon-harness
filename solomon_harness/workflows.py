@@ -140,7 +140,9 @@ def _record_loop_run(
     zero-exit start that changed nothing). When ``elapsed_seconds`` is given, the
     stage's wall-clock is also emitted as a ``stage_duration_seconds`` metric
     tagged with the stage and outcome, giving the timeseries layer a real producer
-    the delivery-metrics read consumes."""
+    the delivery-metrics read consumes. One sample per run_stage call: a ``loop``
+    stage run with ``--concurrency N`` times the whole N-iteration span, not one
+    iteration, matching the one-row-per-call granularity of the loop_run ledger."""
     outcome = status or ("ok" if rc == 0 else "failed")
     try:
         from solomon_harness.tools.database_client import DatabaseClient

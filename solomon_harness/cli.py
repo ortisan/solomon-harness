@@ -1002,19 +1002,22 @@ def handle_metrics(workspace_root: str, window: Optional[int]) -> None:
         print(f"    {'stage':<12} {'count':>6} {'mean':>8} {'p95':>8} {'max':>8}")
         for stage, s in stages.items():
             print(
-                f"    {stage:<12} {s['count']:>6} {s['mean_seconds']:>8.1f} "
-                f"{s['p95_seconds']:>8.1f} {s['max_seconds']:>8.1f}"
+                f"    {stage:<12} {s['count']:>6} {s['meanSeconds']:>8.1f} "
+                f"{s['p95Seconds']:>8.1f} {s['maxSeconds']:>8.1f}"
             )
     else:
         print("  Stage durations: no stage_duration_seconds samples yet.")
-    rate = payload.get("loopRunFailureRate") or {}
-    if rate.get("total"):
-        print(
-            f"  Loop runs: {rate['total']} total, {rate['failures']} failed "
-            f"({rate['failure_rate'] * 100:.0f}% failure rate)."
-        )
+    if not payload.get("loopRunsAvailable", True):
+        print("  Loop runs: unavailable on this backend (SurrealDB required).")
     else:
-        print("  Loop runs: none recorded in range.")
+        rate = payload.get("loopRunFailureRate") or {}
+        if rate.get("total"):
+            print(
+                f"  Loop runs: {rate['total']} total, {rate['failures']} failed "
+                f"({rate['failure_rate'] * 100:.0f}% failure rate)."
+            )
+        else:
+            print("  Loop runs: none recorded in range.")
 
 
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:

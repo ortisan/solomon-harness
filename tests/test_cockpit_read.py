@@ -1967,18 +1967,24 @@ class TestDeliveryMetrics(unittest.TestCase):
         m = cockpit_read.compose_delivery_metrics(_MetricsClient(points))
         sd = m["stageDurations"]
         self.assertEqual(sd["start"]["count"], 2)
-        self.assertAlmostEqual(sd["start"]["mean_seconds"], 50.0)
-        self.assertEqual(sd["start"]["max_seconds"], 58.0)
+        self.assertAlmostEqual(sd["start"]["meanSeconds"], 50.0)
+        self.assertEqual(sd["start"]["p95Seconds"], 58.0)
+        self.assertEqual(sd["start"]["maxSeconds"], 58.0)
         self.assertEqual(sd["review"]["count"], 1)
+        # Keys are camelCase, matching the module's other payloads.
+        self.assertNotIn("mean_seconds", sd["start"])
+        self.assertTrue(m["loopRunsAvailable"])
 
-    def test_compose_degrades_when_loop_aggregations_raise(self):
+    def test_compose_degrades_visibly_when_loop_aggregations_raise(self):
         # A SQLite-fallback client raises on the loop-run aggregations; the stage
-        # panel must still render and the loop stats degrade to empty.
+        # panel still renders and loopRunsAvailable flags the degradation so a zero
+        # is never read as real data.
         points = [{"tags": {"stage": "dev"}, "value": 10.0}]
         m = cockpit_read.compose_delivery_metrics(
             _MetricsClient(points, raise_loop=True)
         )
         self.assertIn("dev", m["stageDurations"])
+        self.assertFalse(m["loopRunsAvailable"])
         self.assertEqual(m["loopRunThroughput"], [])
         self.assertEqual(m["loopRunFailureRate"]["total"], 0)
 

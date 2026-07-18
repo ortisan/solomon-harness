@@ -886,10 +886,13 @@ def compose_delivery_metrics(client: Any, since: Optional[str] = None) -> Dict[s
     """Compose the single-tenant delivery-metrics payload (read-only).
 
     Reads the ``stage_duration_seconds`` points the workflow producer emits and
-    groups them by their ``stage`` tag into count/mean/p95/max seconds, then adds
-    the loop-run throughput and failure rate. The loop-run aggregations are
-    SurrealDB-only; on a SQLite fallback they degrade to empty rather than raising,
-    so the stage-duration panel still renders.
+    groups them by their ``stage`` tag into count/mean/p95/max seconds (a stage-loop
+    run's sample is the sum across its iterations, matching one row per run_stage),
+    then adds the loop-run throughput and failure rate. The loop-run aggregations are
+    SurrealDB-only; on a SQLite fallback they cannot be computed, so ``loopRunsAvailable``
+    is False and the aggregations are empty rather than raising -- a distinct signal
+    from a genuinely empty range, so a consumer never reads "unavailable" as "zero".
+    All keys are camelCase, matching this module's other payloads.
     """
     points = client.query_metric("stage_duration_seconds", since=since, limit=10000)
     by_stage: Dict[str, List[float]] = {}
@@ -902,17 +905,20 @@ def compose_delivery_metrics(client: Any, since: Optional[str] = None) -> Dict[s
         ordered = sorted(vals)
         stage_durations[stage] = {
             "count": len(vals),
-            "mean_seconds": sum(vals) / len(vals),
-            "p95_seconds": _percentile(ordered, 0.95),
-            "max_seconds": ordered[-1],
+            "meanSeconds": sum(vals) / len(vals),
+            "p95Seconds": _percentile(ordered, 0.95),
+            "maxSeconds": ordered[-1],
         }
+    loop_runs_available = True
     try:
         throughput = client.loop_run_throughput(bucket="day", since=since)
         failure_rate = client.loop_run_failure_rate(since=since)
     except Exception:
+        loop_runs_available = False
         throughput, failure_rate = [], {"total": 0, "failures": 0, "failure_rate": 0.0}
     return {
         "stageDurations": stage_durations,
+        "loopRunsAvailable": loop_runs_available,
         "loopRunThroughput": throughput,
         "loopRunFailureRate": failure_rate,
     }
