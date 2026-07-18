@@ -74,7 +74,7 @@ so pre-fix data does not vanish from the metric (#165).
 
 ### Targeted DEFINE FIELD ASSERT policy
 
-Tables stay SCHEMALESS. One `DEFINE FIELD IF NOT EXISTS ... ASSERT $value =
+Tables stay SCHEMALESS. One `DEFINE FIELD OVERWRITE ... ASSERT $value =
 NONE OR $value IN [...]` per stateful field (issues.status, handoffs.status,
 sessions.status, loop_runs.status, milestones.state), each executed as its own
 `query()` call in `_bootstrap_surreal_schema` (the SDK only surfaces the first
