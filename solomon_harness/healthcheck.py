@@ -58,8 +58,13 @@ def _db_config(workspace_root: str) -> Dict:
     return {}
 
 
-def check_memory(workspace_root: str) -> Dict:
-    """Is the configured memory backend serving, or has it degraded (and why)?"""
+def check_memory(workspace_root: str, db_status: Optional[Dict] = None) -> Dict:
+    """Is the configured memory backend serving, or has it degraded (and why)?
+
+    ``db_status`` is a ``backend_status()`` result from an already-open client;
+    when given, it is trusted instead of opening a second connection (the
+    SessionStart hot path already holds one).
+    """
     db = _db_config(workspace_root)
     provider = db.get("provider", "surrealdb")
     if provider != "surrealdb":
@@ -68,7 +73,7 @@ def check_memory(workspace_root: str) -> Dict:
     configured = db.get("database")
     tenant = configured if configured not in (None, "", "harness") else derive_tenant(workspace_root)
     if memory.is_serving(host, port):
-        return _memory_status_from_client(workspace_root, host, port, tenant)
+        return _memory_status_from_client(workspace_root, host, port, tenant, db_status)
     if memory._tcp_open(host, port):
         return _check(
             "Memory backend", WARN,
@@ -83,24 +88,28 @@ def check_memory(workspace_root: str) -> Dict:
 
 
 def _memory_status_from_client(
-    workspace_root: str, host: str, port: int, tenant: Optional[str]
+    workspace_root: str, host: str, port: int, tenant: Optional[str],
+    db_status: Optional[Dict] = None,
 ) -> Dict:
     """Report the harness's actual connection, not just that the port answers.
 
     A reachable server that rejects the configured credentials or database still
-    degrades DatabaseClient to SQLite; backend_status() is the authority.
+    degrades DatabaseClient to SQLite; backend_status() is the authority. Reuses a
+    supplied ``db_status`` to avoid opening a second connection.
     """
-    from solomon_harness.tools.database_client import DatabaseClient
+    status = db_status
+    if status is None:
+        from solomon_harness.tools.database_client import DatabaseClient
 
-    try:
-        with DatabaseClient(harness_dir=workspace_root) as db:
-            status = db.backend_status()
-    except Exception as exc:
-        return _check(
-            "Memory backend", WARN,
-            f"SurrealDB answers on {host}:{port} but the harness connection failed: {exc}",
-            "Check the configured credentials and database in .agent/config.json.",
-        )
+        try:
+            with DatabaseClient(harness_dir=workspace_root) as db:
+                status = db.backend_status()
+        except Exception as exc:
+            return _check(
+                "Memory backend", WARN,
+                f"SurrealDB answers on {host}:{port} but the harness connection failed: {exc}",
+                "Check the configured credentials and database in .agent/config.json.",
+            )
     if status.get("degraded"):
         return _check(
             "Memory backend", WARN,
@@ -236,12 +245,12 @@ def check_git_config(workspace_root: str) -> Dict:
     return _check("Git config", OK, "clean (no stray core.worktree or core.bare=true)")
 
 
-def run_checks(workspace_root: Optional[str] = None) -> List[Dict]:
+def run_checks(workspace_root: Optional[str] = None, db_status: Optional[Dict] = None) -> List[Dict]:
     workspace_root = workspace_root or os.getcwd()
     specs = [
         ("Docker", check_docker),
         ("Shared home", check_shared_home),
-        ("Memory backend", lambda: check_memory(workspace_root)),
+        ("Memory backend", lambda: check_memory(workspace_root, db_status)),
         ("Memory reconcile", lambda: check_pending_reconcile(workspace_root)),
         ("Global install", check_global_install),
         ("GitHub auth", check_github),

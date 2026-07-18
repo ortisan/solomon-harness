@@ -47,6 +47,19 @@ class TestHealthcheckMemory(unittest.TestCase):
         result = self._run({"backend": "surrealdb", "degraded": False, "fallback_reason": None})
         self.assertEqual(result["status"], healthcheck.OK)
 
+    def test_supplied_db_status_avoids_a_second_client(self):
+        with patch.object(
+            healthcheck, "_db_config",
+            return_value={"provider": "surrealdb", "url": "ws://localhost:8099/rpc"},
+        ), patch.object(healthcheck.memory, "is_serving", return_value=True), patch(
+            "solomon_harness.tools.database_client.DatabaseClient"
+        ) as client_cls:
+            result = healthcheck.check_memory(
+                "/x", db_status={"backend": "surrealdb", "degraded": False, "fallback_reason": None}
+            )
+        self.assertEqual(result["status"], healthcheck.OK)
+        client_cls.assert_not_called()
+
     def test_foreign_process_on_port_reports_warn(self):
         with patch.object(
             healthcheck, "_db_config",
