@@ -455,10 +455,10 @@ def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
     
     curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
-    
+
     with patch("subprocess.run", side_effect=Exception("Sourcing tool is down")):
         rc = release.cmd_audit_trigger(repo, version="1.0.0")
-        
+
         assert rc == 0
         out_err = capsys.readouterr()
         combined = out_err.out + out_err.err

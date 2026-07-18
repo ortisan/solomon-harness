@@ -150,8 +150,17 @@ def _target_issue_from_args(args: List[str]) -> Optional[int]:
     return None
 
 
-def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, session_id: str) -> None:
-    """Append one auditable loop-run entry; best-effort, never fails the stage."""
+def _record_loop_run(
+    workspace_root: str,
+    stage: str,
+    args: List[str],
+    rc: int,
+    session_id: str,
+    status: Optional[str] = None,
+) -> None:
+    """Append one auditable loop-run entry; best-effort, never fails the stage.
+    ``status`` overrides the rc-derived vocabulary (today ``"skipped"``: a
+    zero-exit start that changed nothing)."""
     try:
         from solomon_harness.tools.database_client import DatabaseClient
 
@@ -160,7 +169,7 @@ def _record_loop_run(workspace_root: str, stage: str, args: List[str], rc: int, 
                 stage=stage,
                 target=" ".join(args),
                 decision=f"ran /solomon-{stage}",
-                status="ok" if rc == 0 else "failed",
+                status=status or ("ok" if rc == 0 else "failed"),
                 session_id=session_id,
                 target_issue=_target_issue_from_args(args),
             )
@@ -530,6 +539,7 @@ def run_stage(
     # Pessimistic default so the finally's failed-run claim release covers an
     # exception thrown before the engine ever assigns a real exit code.
     rc = 1
+    run_skipped = False
     try:
         try:
             from solomon_harness.engine_adapters import build_engine_command
@@ -551,6 +561,7 @@ def run_stage(
                 json_output=capture_cost,
                 allowed_tools=allowed_tools,
                 add_dirs=add_dirs,
+                orchestrator_model=policy.orchestrator_model,
             )
 
             from solomon_harness.subprocess_env import clean_git_env
@@ -567,6 +578,12 @@ def run_stage(
                 # foreign competing driver.
                 child_env["SOLOMON_SESSION_ID"] = lock.session_id
                 child_env[SHELL_CAPABILITY_ENV] = shell_capability
+
+            noop_baseline = None
+            if stage == "start":
+                from solomon_harness import worktree as _worktree
+
+                noop_baseline = _worktree.workspace_snapshot(workspace_root)
 
             # rc stays at its pessimistic 1 until the engine reports a real
             # exit code: re-initializing it to 0 here would make the finally's
@@ -668,9 +685,41 @@ def run_stage(
                 file=sys.stderr,
             )
             rc = 1
+        if rc == 0 and noop_baseline is not None:
+            from solomon_harness import worktree as _worktree
+
+            if not _worktree.workspace_changed(workspace_root, noop_baseline):
+                # A PR-protected issue means work was delivered remotely (the
+                # manual-mode resume opens a PR without moving local refs), so
+                # the run is a real success and the claim must stay.
+                protected = False
+                if claimed_issue_number is not None:
+                    try:
+                        if claim_store is None:
+                            from solomon_harness import claim as _claim
+
+                            claim_store = _claim.GitClaimStore(workspace_root)
+                        protected = bool(claim_store.pr_protected(claimed_issue_number))
+                    except Exception:
+                        protected = True
+                if not protected:
+                    run_skipped = True
+                    print(
+                        f"/solomon-{stage} {' '.join(args)} exited 0 with no "
+                        "workspace changes; recording the run as skipped and "
+                        "releasing the claim.",
+                        file=sys.stderr,
+                    )
         if lock is not None:
-            _record_loop_run(workspace_root, stage, args, rc, lock.session_id)
-        if rc == 0 and stage in LOCKED_STAGES:
+            _record_loop_run(
+                workspace_root,
+                stage,
+                args,
+                rc,
+                lock.session_id,
+                status="skipped" if run_skipped else None,
+            )
+        if rc == 0 and stage in LOCKED_STAGES and not run_skipped:
             from solomon_harness import notify
 
             notify.send(workspace_root, f"stage:{stage}", f"/solomon-{stage} {' '.join(args)} -> ok")
@@ -683,14 +732,15 @@ def run_stage(
         if (
             claim_acquired
             and claimed_issue_number is not None
-            and rc != 0
+            and (rc != 0 or run_skipped)
             and (claim_lost_event is None or not claim_lost_event.is_set())
         ):
             # A failed `start` must not hold the issue for the rest of the
             # TTL: release the claim this session took (never force -- if the
             # claim moved on, release_claim refuses and the new holder keeps
             # it). A successful start keeps its claim: the draft PR now
-            # protects the issue and the merge path releases it.
+            # protects the issue and the merge path releases it. A skipped
+            # no-op start releases too: nothing protects the issue.
             try:
                 if claim_store is None:
                     from solomon_harness import claim as _claim

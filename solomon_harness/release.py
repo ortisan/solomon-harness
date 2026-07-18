@@ -39,6 +39,7 @@ from solomon_harness.engine_adapters import (
     build_engine_environment,
 )
 from solomon_harness.layout import HarnessPaths, PathConfinementError, confined_path
+from solomon_harness.subprocess_env import clean_git_env
 
 # Bump levels, ordered so ``max`` selects the strongest signal in a commit window.
 _NONE, _PATCH, _MINOR, _MAJOR = 0, 1, 2, 3
@@ -423,7 +424,8 @@ def render_release_wiki_page(
 
 def _git(args: List[str], cwd: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=cwd, text=True, capture_output=True, check=True
+        ["git", *args], cwd=cwd, text=True, capture_output=True, check=True,
+        env=clean_git_env(cwd),
     ).stdout
 
 
@@ -668,6 +670,45 @@ def _gather_release_context(workspace_root: str, version: str) -> dict:
 
 # --- CLI handlers ---------------------------------------------------------
 
+def milestone_collision(version: Optional[str], milestones: List[dict]) -> Optional[str]:
+    """Return the title of an OPEN milestone reserving ``version`` with open issues.
+
+    Cutting a tag whose epic milestone is not yet at 0 open issues is the
+    v0.5.0/v0.6.0/v0.8.0 drift (ADR-0004): the computed version equals a reserved
+    epic milestone title while that milestone still carries open work. A milestone
+    titled ``vX.Y.Z`` or ``X.Y.Z`` equal to ``version`` with ``open_issues > 0``
+    collides; one already at 0 open issues does not (it is ready to release, no
+    collision). Returns None when there is no collision.
+    """
+    if not version:
+        return None
+    targets = {f"v{version}", str(version)}
+    for m in milestones or []:
+        entry = m or {}
+        title = str(entry.get("title") or "").strip()
+        if title in targets and int(entry.get("open_issues") or 0) > 0:
+            return title
+    return None
+
+
+def _milestone_collision_message(workspace_root: str, version: Optional[str]) -> Optional[str]:
+    """Fetch open milestones (degrading gracefully) and return a collision error, or None."""
+    try:
+        from solomon_harness import github
+
+        milestones = github.list_open_github_milestones()
+    except Exception:
+        return None  # gh unavailable or unscoped: degrade, never block the release
+    colliding = milestone_collision(version, milestones)
+    if not colliding:
+        return None
+    return (
+        f"version {version} collides with the open milestone {colliding!r}, which still has "
+        f"open issues. Close its remaining issues (or renumber the release) before cutting "
+        f"{version} -- releasing now would tag a milestone that is not done (ADR-0004)."
+    )
+
+
 def cmd_plan(workspace_root: str) -> int:
     try:
         info = plan(workspace_root)
@@ -682,6 +723,10 @@ def cmd_plan(workspace_root: str) -> int:
             f"({info['commit_count']} commit(s), all non-releasable). No tag would be cut."
         )
         return 0
+    collision = _milestone_collision_message(workspace_root, info["next"])
+    if collision:
+        print(f"release plan: {collision}", file=sys.stderr)
+        return 1
     print(f"Planned release: {info['level']} bump {base} -> {info['next']}  (since {tag})")
     print()
     print(render_changelog_section(info["next"], "YYYY-MM-DD", info["commits"]))
@@ -764,6 +809,10 @@ def cmd_check(workspace_root: str) -> int:
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
+    collision = _milestone_collision_message(workspace_root, version)
+    if collision:
+        print(f"release check: {collision}", file=sys.stderr)
+        return 1
     print(f"release check OK: v{version} is consistent (pyproject == CHANGELOG, tag not yet cut).")
     return 0
 
@@ -814,6 +863,10 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
     except ValueError as exc:
         print(f"release prep: {exc}", file=sys.stderr)
         return 1
+    collision = _milestone_collision_message(workspace_root, new_version)
+    if collision:
+        print(f"release prep: {collision}", file=sys.stderr)
+        return 1
     branch = f"chore/release-v{new_version}"
     # The date is stamped by the caller's environment at prep time.
     today = subprocess.run(
@@ -842,6 +895,7 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
         ["gh", "pr", "create", "--base", "main", "--head", branch,
          "--title", f"chore(release): v{new_version}", "--body", body],
         cwd=workspace_root, text=True, capture_output=True, check=False,
+        env=clean_git_env(workspace_root),
     )
     print(proc.stdout or proc.stderr)
     return proc.returncode
@@ -929,7 +983,12 @@ def cmd_audit_trigger(workspace_root: str, version: Optional[str] = None) -> int
             return 0
 
         engine = (os.environ.get("SOLOMON_ENGINE") or "claude").lower()
-        cmd = build_engine_command(engine, root)
+        from solomon_harness.loop_policy import LoopPolicy
+
+        audit_policy = LoopPolicy.from_config(workspace_root)
+        cmd = build_engine_command(
+            engine, root, orchestrator_model=audit_policy.orchestrator_model
+        )
         from solomon_harness.loop_lock import (
             SHELL_CAPABILITY_ENV,
             LoopLock,

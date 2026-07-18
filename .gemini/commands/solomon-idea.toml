@@ -8,7 +8,7 @@ is **product_owner**.
 First, read `docs/solomon-workflow.md` and follow its conventions exactly
 (board columns, labels, the memory handoff contract). Then adopt the
 product_owner agent and apply the `product_discovery_and_jtbd` skill — delegate
-the shaping to the `product_owner` subagent via the Task tool.
+the shaping to the `product_owner` subagent through the host's native specialist-delegation mechanism.
 
 Raw idea from the user: `{{args}}`
 
@@ -32,7 +32,7 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
    refine and re-show.
 
 3. **Create the issue** using the Idea body template from the workflow doc. Ensure the
-   standard labels exist first with `uv run python -m solomon_harness.github ensure-labels`:
+   standard labels exist first with `uv run python -I -m solomon_harness.github ensure-labels`:
    ```bash
    gh issue create --title "Idea: <concise title>" --label "type:idea" \
      --body "<JTBD / Opportunity / Riskiest assumption / Evidence to promote>"
@@ -41,8 +41,8 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
 
 4. **Place it on the board** in the Ideas column:
    ```bash
-   uv run python -m solomon_harness.github ensure-board
-   uv run python -m solomon_harness.github set-status --issue <n> --status "Ideas"
+   uv run python -I -m solomon_harness.github ensure-board
+   uv run python -I -m solomon_harness.github set-status --issue <n> --status "Ideas"
    ```
 
 5. **Persist to memory** per the handoff contract:
@@ -51,10 +51,10 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
    - `save_decision(...)` only if a notable framing call was made (e.g. the chosen
      core job or the named riskiest assumption); otherwise skip.
    - **Hand off to refine.** Write the compact handoff contract to
-     `.solomon/handoffs/issue-<n>-idea-to-refine.md` using the template in
+     `.agents/solomon/state/handoffs/issue-<n>-idea-to-refine.md` using the template in
      `docs/solomon-workflow.md`, then call `log_handoff(sender="product_owner",
      recipient="refine", contract_type="idea",
-     contract_path=".solomon/handoffs/issue-<n>-idea-to-refine.md", status="open",
+     contract_path=".agents/solomon/state/handoffs/issue-<n>-idea-to-refine.md", status="open",
      summary="<2-5 line synopsis of the captured idea's JTBD and riskiest assumption>")`.
 
 6. **Output the issue URL** and a one-line recap (JTBD + riskiest assumption).
@@ -65,5 +65,5 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
    Definition of Ready and a Definition of Done at refinement (`/solomon-refine`) once
    it is promoted to the backlog. Do not force a Definition of Ready onto a raw idea.
 
-Present every decision, confirmation, and next-step choice to the user as enumerated options (AskUserQuestion in Claude Code; a numbered list ending in "Other" in the Gemini CLI) — never an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
+Present every decision, confirmation, and next-step choice through the host's native enumerable input mechanism, or as a numbered list ending in "Other" when structured input is unavailable — never as an open prose question or a command to copy. This is the non-negotiable Enumerable decisions rule in `agents/AGENTS.md`.
 '''

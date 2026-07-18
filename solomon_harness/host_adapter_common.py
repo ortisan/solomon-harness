@@ -68,14 +68,13 @@ def is_harness_source_checkout(root: Path) -> bool:
     """Prove that ``root`` is the Git-owned solomon-harness source tree."""
 
     workspace = root.resolve()
-    environment = clean_git_env(os.fspath(workspace))
 
     def git(*arguments: str, capture: bool = False) -> subprocess.CompletedProcess[str] | None:
         try:
             return subprocess.run(  # noqa: S603 - private callers supply fixed Git argv
                 ["git", "-C", os.fspath(workspace), *arguments],  # noqa: S607 - operator PATH
                 check=False,
-                env=environment,
+                env=clean_git_env(os.fspath(workspace)),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -375,14 +374,11 @@ class _Recorder:
         return False
 
     def _git(self, *arguments: str, capture: bool = False) -> subprocess.CompletedProcess[str] | None:
-        environment = dict(os.environ)
-        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-            environment.pop(key, None)
         try:
             return subprocess.run(  # noqa: S603 - private callers supply fixed Git argv
                 ["git", "-C", str(self.root), *arguments],  # noqa: S607 - operator PATH
                 check=False,
-                env=environment,
+                env=clean_git_env(str(self.root)),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -843,6 +839,9 @@ def _specialist_markdown(
         "---\n"
         f"name: {specialist.name}\n"
         f"description: {_yaml_string(specialist.description)}\n"
+        # Pin every specialist subagent to Sonnet so a Task-tool delegation never
+        # silently inherits the orchestrating session's model (e.g. Opus) — #218.
+        "model: sonnet\n"
         "---\n\n"
         f"<!-- {_GENERATED_MARKER} -->\n"
         f"Read `{rule_path}`, `{directory}/persona.md`, "

@@ -114,6 +114,12 @@ Steps:
 6. Apply the update: `gh issue edit <n> --body-file <tmp>` (write the refined body
    to the scratchpad first, do not paste a giant inline string). Re-confirm labels
    and milestone are correct.
+   - If the issue belongs to an epic milestone (`vX.Y.0`), write the milestone
+     lifecycle through in one call:
+     `uv run python -I -m solomon_harness.github assign-milestone --issue <n> --milestone "vX.Y.0"`.
+     This creates the GitHub milestone if it does not exist, assigns the issue to
+     it, and mirrors a memory milestone row (idempotent — safe to re-run). The
+     release gate depends on this being written, not on manual bookkeeping (#176).
 
 7. Move the board card `Backlog` → `Ready`:
    - `uv run python -I -m solomon_harness.github ensure-board`

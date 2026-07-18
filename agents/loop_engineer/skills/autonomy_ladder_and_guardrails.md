@@ -14,7 +14,7 @@ The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop ma
 - **L2 (assisted):** `workflow`, `loop`, `idea`, `issue`, `bug`, `refine`, `start`, `review`, `scan-arch`, and `scan-dedup` may create work and draft PRs, never merge.
 - **L3 (unattended):** the same stage set as L2 may run on a cadence, and every stage except `workflow` requires the single-driver lock; `run_stage` enforces this.
 
-`decide_stage` evaluates in a fixed order: the kill-switch denies first (even at `human`); `human` then allows everything; `HUMAN_GATED_STAGES = {"release"}` denies at every non-human level; then the level's allow-set applies; anything left — including an unknown or typo'd level — fails closed (`LoopPolicy` keeps a mistyped `l2` verbatim so it denies, never silently becomes `human`). A denied stage exits `3` from `run_stage`, printed as `Blocked by loop autonomy policy (level ...)`, never silently.
+`decide_stage` evaluates in a fixed order: the kill-switch denies first (even at `human`); `HUMAN_GATED_STAGES = {"release"}` denies next, at EVERY level including `human` — on the dev automation path a release is never autonomous; `human` then allows everything else; then the level's allow-set applies; anything left — including an unknown or typo'd level — fails closed (`LoopPolicy` keeps a mistyped `l2` verbatim so it denies, never silently becomes `human`). A denied stage exits `3` from `run_stage`, printed as `Blocked by loop autonomy policy (level ...)`, never silently.
 
 ## Configuration
 
@@ -46,8 +46,8 @@ Worked scenario for a runaway cadence: run `solomon-harness loop-stop`; the next
 
 ## Definition of done
 
-- [ ] `human` is unrestricted; L1 report-only; L2/L3 draft-only; an invalid level denies (exit 3 from `run_stage`).
-- [ ] Merge, release, and Done are denied at every non-human level; L3 mutating stages hold the lock.
+- [ ] `human` is unrestricted except the permanently human-gated stages; L1 report-only (`workflow` only); L2/L3 draft-only; an invalid level denies (exit 3 from `run_stage`).
+- [ ] Merge, release, and Done are denied at every level of the dev automation path; L3 mutating stages hold the lock.
 - [ ] The kill-switch halts all stages (all worktrees, even `human`) and is clearable; `loop-policy` shows the full state.
 - [ ] The denylist is enforced through native Claude, AGY, and Codex pre-tool hooks; the checker split is surfaced; secrets stay in env.
 - [ ] Changes ship with covering tests in `tests/test_loop_policy.py`.

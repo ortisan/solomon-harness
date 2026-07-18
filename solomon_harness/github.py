@@ -17,9 +17,10 @@ import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     from solomon_harness.claim import ClaimStore
@@ -713,6 +714,202 @@ def record_terminal_status(issue_number) -> None:
     record_status_write_through(issue_number, "Done")
 
 
+# --- Milestone lifecycle seams (#176) ---------------------------------------
+# All degrade gracefully: on any gh failure they return a falsy/empty value and
+# never raise, so a release is never blocked by a milestone operation (DoR).
+
+
+def list_open_github_milestones(gh: Optional[Callable[..., Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Return open milestones as ``[{title, number, open_issues}]`` (empty on failure)."""
+    runner = gh or _gh
+    nwo = repo_name_with_owner()
+    if not nwo:
+        return []
+    res = runner(["api", f"repos/{nwo}/milestones?state=open&per_page=100"], parse_json=True)
+    data = res.get("data") if res.get("ok") else None
+    if not isinstance(data, list):
+        return []
+    return [
+        {
+            "title": m.get("title"),
+            "number": m.get("number"),
+            "open_issues": m.get("open_issues", 0),
+        }
+        for m in data
+        if isinstance(m, dict)
+    ]
+
+
+def _find_github_milestone_number(
+    title: str, runner: Callable[..., Dict[str, Any]]
+) -> Optional[int]:
+    """Return the number of the milestone with this exact title (any state), or None."""
+    nwo = repo_name_with_owner()
+    if not nwo:
+        return None
+    res = runner(["api", f"repos/{nwo}/milestones?state=all&per_page=100"], parse_json=True)
+    data = res.get("data") if res.get("ok") else None
+    if not isinstance(data, list):
+        return None
+    for m in data:
+        if isinstance(m, dict) and m.get("title") == title:
+            return m.get("number")
+    return None
+
+
+def ensure_github_milestone(
+    title: str,
+    description: str = "",
+    gh: Optional[Callable[..., Dict[str, Any]]] = None,
+) -> Optional[int]:
+    """Return the milestone number for ``title``, creating it if it does not exist.
+
+    Idempotent: an existing milestone (any state) is returned as-is, never
+    duplicated. Returns None if gh is unavailable or lacks the scope to create it.
+    """
+    runner = gh or _gh
+    existing = _find_github_milestone_number(title, runner)
+    if existing is not None:
+        return existing
+    nwo = repo_name_with_owner()
+    if not nwo:
+        return None
+    res = runner(
+        ["api", f"repos/{nwo}/milestones", "-f", f"title={title}", "-f", f"description={description}"],
+        parse_json=True,
+    )
+    data = res.get("data") if res.get("ok") else None
+    return data.get("number") if isinstance(data, dict) else None
+
+
+def assign_issue_to_github_milestone(
+    issue_number: Any,
+    title: str,
+    gh: Optional[Callable[..., Dict[str, Any]]] = None,
+) -> bool:
+    """Assign an issue to the milestone titled ``title``. Returns True on success."""
+    runner = gh or _gh
+    res = runner(["issue", "edit", str(issue_number), "--milestone", title])
+    return bool(res.get("ok"))
+
+
+def close_github_milestone(
+    title: str, gh: Optional[Callable[..., Dict[str, Any]]] = None
+) -> bool:
+    """Close the milestone titled ``title`` on GitHub. Returns True on success.
+
+    Never raises: a missing milestone or a gh scope failure warns via the return
+    value so a release close-out is not blocked (DoR).
+    """
+    runner = gh or _gh
+    number = _find_github_milestone_number(title, runner)
+    if number is None:
+        return False
+    nwo = repo_name_with_owner()
+    res = runner(
+        ["api", "-X", "PATCH", f"repos/{nwo}/milestones/{number}", "-f", "state=closed"],
+        parse_json=True,
+    )
+    return bool(res.get("ok"))
+
+
+def _mirror_milestone(workspace_root: str, title: str, close: bool) -> bool:
+    """Write the milestone through to project memory; best-effort (never raises)."""
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            if close:
+                db.close_milestone(title)
+            else:
+                db.ensure_milestone(title)
+        return True
+    except Exception as exc:  # memory outage must never block a milestone op
+        logging.warning(f"Milestone memory write-through failed for {title!r}: {exc}")
+        return False
+
+
+def assign_milestone_everywhere(workspace_root: str, issue_number: Any, title: str) -> Dict[str, Any]:
+    """Create/get the GitHub milestone, assign the issue, and mirror to memory (#176, AC1)."""
+    number = ensure_github_milestone(title)
+    assigned = assign_issue_to_github_milestone(issue_number, title) if number is not None else False
+    memory = _mirror_milestone(workspace_root, title, close=False)
+    return {
+        "ok": bool(number is not None and assigned),
+        "milestone": title,
+        "milestone_number": number,
+        "assigned": assigned,
+        "memory": memory,
+    }
+
+
+def close_milestone_everywhere(workspace_root: str, title: str) -> Dict[str, Any]:
+    """Close the GitHub milestone and write memory terminal (#176, AC2).
+
+    Degrades gracefully: a gh scope or memory failure is reported via the flags,
+    never raised, so a release close-out is never blocked (DoR).
+    """
+    github_closed = close_github_milestone(title)
+    memory = _mirror_milestone(workspace_root, title, close=True)
+    return {
+        "ok": bool(github_closed),
+        "milestone": title,
+        "github_closed": github_closed,
+        "memory": memory,
+    }
+
+
+_VERSION_TITLE = re.compile(r"^v?\d+\.\d+\.\d+$")
+
+
+def _all_github_milestone_titles(gh: Optional[Callable[..., Dict[str, Any]]] = None) -> set:
+    """Every GitHub milestone title (open and closed); empty set on failure."""
+    runner = gh or _gh
+    nwo = repo_name_with_owner()
+    if not nwo:
+        return set()
+    res = runner(["api", f"repos/{nwo}/milestones?state=all&per_page=100"], parse_json=True)
+    data = res.get("data") if res.get("ok") else None
+    if not isinstance(data, list):
+        return set()
+    return {str(m.get("title")) for m in data if isinstance(m, dict) and m.get("title")}
+
+
+def reconcile_milestones(workspace_root: str) -> Dict[str, Any]:
+    """One-shot drift repair (#176): close open GitHub milestones already at 0 open
+    issues, and prune junk memory milestone rows ("Sprint 1", "M1", "m") that never
+    matched a real GitHub milestone. Idempotent; degrades gracefully when gh is down.
+
+    A memory row is kept when its title is a SemVer (``vX.Y.Z``) or matches any real
+    GitHub milestone (open or closed), so legitimate epic and theme milestones are
+    never pruned; only titles that are neither are removed.
+    """
+    result: Dict[str, Any] = {"closed": [], "pruned": [], "kept": []}
+    for m in list_open_github_milestones():
+        title = m.get("title")
+        if title and int(m.get("open_issues") or 0) == 0:
+            outcome = close_milestone_everywhere(workspace_root, title)
+            result["closed"].append({"title": title, "ok": outcome["ok"]})
+    real_titles = _all_github_milestone_titles()
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
+
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            for row in db.list_milestones():
+                title = str(row.get("title") or "").strip()
+                if not title:
+                    continue
+                if _VERSION_TITLE.match(title) or title in real_titles:
+                    result["kept"].append(title)
+                    continue
+                db.delete_milestone_by_title(title)
+                result["pruned"].append(title)
+    except Exception as exc:
+        logging.warning(f"Milestone memory reconcile skipped: {exc}")
+    result["ok"] = True
+    return result
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="solomon GitHub board helper")
     sub = parser.add_subparsers(dest="command")
@@ -750,6 +947,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_pr_create.add_argument("--base", default="main")
     p_pr_create.add_argument("--title", required=True)
     p_pr_create.add_argument("--body", required=True)
+
+    p_assign_ms = sub.add_parser(
+        "assign-milestone",
+        help="Ensure a milestone, assign an issue to it, and mirror it to memory (#176)",
+    )
+    p_assign_ms.add_argument("--issue", type=int, required=True)
+    p_assign_ms.add_argument("--milestone", required=True)
+    p_assign_ms.add_argument("--workspace", default=os.getcwd())
+
+    p_close_ms = sub.add_parser(
+        "close-milestone",
+        help="Close a milestone on GitHub and write its terminal state to memory (#176)",
+    )
+    p_close_ms.add_argument("--milestone", required=True)
+    p_close_ms.add_argument("--workspace", default=os.getcwd())
+
+    p_reconcile_ms = sub.add_parser(
+        "reconcile-milestones",
+        help="One-shot: close open zeroed milestones and prune junk memory rows (#176)",
+    )
+    p_reconcile_ms.add_argument("--workspace", default=os.getcwd())
 
     args = parser.parse_args(argv)
 
@@ -791,6 +1009,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = merge_pr_and_close(args.pr, args.issue)
     elif args.command == "pr-create":
         result = create_pull_request(draft=args.draft, base=args.base, title=args.title, body=args.body)
+    elif args.command == "assign-milestone":
+        result = assign_milestone_everywhere(args.workspace, args.issue, args.milestone)
+    elif args.command == "close-milestone":
+        result = close_milestone_everywhere(args.workspace, args.milestone)
+    elif args.command == "reconcile-milestones":
+        result = reconcile_milestones(args.workspace)
     else:
         parser.print_help()
         return 1

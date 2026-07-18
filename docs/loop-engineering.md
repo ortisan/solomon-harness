@@ -19,7 +19,7 @@ machinery that makes a cadence safe.
 | State / memory | Strong | SurrealDB + SQLite, handoff contracts |
 | Connectors (MCP) | Partial | `solomon-memory` MCP + `gh`; no notification egress |
 | Worktrees | Partial / fragile | `core.bare` flip, orphan accumulation |
-| Automations / scheduling | Absent | `/solomon-workflow` is manual, one confirmed step per run |
+| Automations / scheduling | Partial | `dev loop --concurrency N` batches sequential headless ticks under the lock; cadence itself comes from a host scheduler |
 
 ## Hard constraints
 

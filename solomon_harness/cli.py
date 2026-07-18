@@ -161,7 +161,12 @@ def handle_run(harness_dir: str, task=None) -> None:
         try:
             from solomon_harness.healthcheck import pending_summary, run_checks
 
-            pending = pending_summary(run_checks(harness_dir))
+            memory_status = None
+            try:
+                memory_status = db.backend_status()
+            except Exception:
+                memory_status = None
+            pending = pending_summary(run_checks(harness_dir, db_status=memory_status))
             if pending:
                 print(say("\nPending initialization (run 'solomon-harness healthcheck' for detail):"))
                 for item in pending:

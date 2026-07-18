@@ -167,6 +167,10 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   suite and the repository validators, not a subset. Reproduce the report in the PR body
   summary; a claim without fresh cited evidence does not proceed to push.
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
+- Headless `dev start` (non-interactive): do not block on that confirmation — proceed to
+  push and open the draft PR, printing `Push/PR: proceeding (non-interactive default)`.
+  The merge stays impossible headlessly (loop-guard hook, merge-helper refusal), so the
+  human gate is unaffected.
 - Open a draft PR: `uv run python -I -m solomon_harness.cli github pr-create --draft --base develop --title "<conventional title>" --body "..."`.
   The body must contain `Closes #{{arguments}}`, summarize the change, and carry the
   canonical ADR line from step 4 — `ADR: docs/adrs/NNNN-<slug>.md` or

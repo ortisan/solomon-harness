@@ -232,7 +232,7 @@ class HostAdaptersTest(unittest.TestCase):
             self.assertEqual(matrix[host]["specialists"], expected["specialists"])
             self.assertEqual(matrix[host]["workflows"], expected["workflows"])
             self.assertEqual(matrix[host]["capabilities"], expected["capabilities"])
-        self.assertEqual(len(expected["specialists"]), 28)
+        self.assertEqual(len(expected["specialists"]), 29)
         self.assertEqual(len(expected["workflows"]), 11)
 
         self.assertEqual(matrix["claude"]["status"], "configured")
@@ -270,8 +270,8 @@ class HostAdaptersTest(unittest.TestCase):
         )
         self.assertEqual(set(codex["hooks"]), {"PreToolUse", "SessionStart"})
         self.assertFalse((self.root / ".gemini").exists())
-        self.assertEqual(len(list((self.root / ".claude" / "agents").glob("*.md"))), 28)
-        self.assertEqual(len(list((self.root / ".codex" / "agents").glob("*.toml"))), 28)
+        self.assertEqual(len(list((self.root / ".claude" / "agents").glob("*.md"))), 29)
+        self.assertEqual(len(list((self.root / ".codex" / "agents").glob("*.toml"))), 29)
         self.assertEqual(len(list((paths.root / ".agents" / "skills").glob("solomon-*/SKILL.md"))), 11)
 
     def test_bridges_are_thin_parseable_and_reference_the_core(self) -> None:
@@ -392,7 +392,7 @@ class HostAdaptersTest(unittest.TestCase):
         configs = sorted(
             (self.root / ".agents" / "solomon" / "agents").glob("*/.agent/config.json")
         )
-        self.assertEqual(len(configs), 28)
+        self.assertEqual(len(configs), 29)
         for path in configs:
             self.assertNotIn("models", json.loads(path.read_text(encoding="utf-8")), path)
 

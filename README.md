@@ -176,7 +176,7 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-eight role-specific agents, each defined in this source checkout under
+Twenty-nine role-specific agents, each defined in this source checkout under
 `agents/<name>/` (`persona.md`, the role profile
 `agents/<name>/agents/<name>.md`, `skills/`, and source metadata in
 `agents/<name>/.agent/config.json`). `init` installs the neutral catalog
@@ -214,6 +214,7 @@ table or the count drifts from that directory listing.
 | `legacy_modernizer` | dependency/risk-ordered legacy modernization planning, human-gated delegation |
 | `loop_engineer` | autonomous-loop mechanics: single-driver lock, autonomy ladder, run-log, cost budget |
 | `practice_curator` | benchmarks delivered work and agent guidance against the state of the art |
+| `peer_reviewer` | independent peer review of AI work: claim verification, adversarial re-testing, verdicts |
 | `research_analyst` | fundamental/qualitative research: DCF, multiples, sum-of-the-parts, sources playbook |
 
 The shared rules, the memory guide, and the agent index are the single source of

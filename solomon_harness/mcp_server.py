@@ -84,6 +84,16 @@ def build_server() -> Any:
         return service.list_milestones()
 
     @server.tool()
+    def ensure_milestone(title: str, description: str = "", due_date: str = "") -> dict:
+        """Return the milestone id for this title, creating it (open) if it is new. Idempotent."""
+        return service.ensure_milestone(title, description, due_date)
+
+    @server.tool()
+    def close_milestone(title: str) -> dict:
+        """Write the milestone's state through to closed (terminal). Idempotent."""
+        return service.close_milestone(title)
+
+    @server.tool()
     def save_release(
         version: str,
         tag: str = "",

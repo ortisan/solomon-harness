@@ -73,6 +73,13 @@ workflow or specialist feature that the other two cannot reach.
 - Avoid typical AI cliches such as "delve", "leverage", "testament to", "feel free
   to", "dive into", "in summary", or other redundant and flowery terms. Get
   straight to the point professionally.
+- The concrete pattern catalogs behind these rules are the `humanizer` and
+  `stop-slop` skills installed at `.claude/skills/humanizer/` and
+  `.claude/skills/stop-slop/`. Apply them to every prose deliverable a human will
+  read — PR descriptions, ADRs, wiki pages, reports, commit messages — before
+  handing it over: scan for the listed tells (inflated significance, -ing
+  padding, rule-of-three cadence, em-dash overuse, filler, hedging, generic
+  upbeat conclusions) and rewrite the hits.
 - Decisions and next steps are enumerated, never prose to copy. Whenever you offer the
   user a choice — which option, which target, or the closing "what next" at the end of a
   turn — present it as a numbered, selectable menu (in Claude Code, the AskUserQuestion
@@ -308,6 +315,7 @@ from, and the generated `## Active Skills` / `## External Skills` lists.
 - `long_run_strategist` — long-horizon (weeks to years) systematic strategy design: trend following and momentum, factor models, portfolio construction and allocation, position sizing and risk budgeting, rebalancing and turnover control, long-horizon backtest hygiene, costs/taxes/capacity; hands backtest validation to quant_trader and fundamental views to research_analyst.
 - `ml_engineer` — model training and validation, cross-validation, out-of-sample tests, leakage checks, statistical hypothesis testing, deep learning and deep reinforcement learning engineering, strategy-spec intake from the trading agents, and didactic reporting (absorbs data science).
 - `observability` — logging, metrics, tracing, monitoring dashboards, OpenTelemetry.
+- `peer_reviewer` — independent second-opinion review of AI-produced work (diffs, plans, ADRs, specs, reports): verifies claims against evidence, adversarially re-tests findings, adjudicates severities, and returns an advisory approve-or-request-changes verdict to the human gate.
 - `practice_curator` — benchmarks delivered work and the agents' own guidance against the state of the art (software, architecture, ML/DRL, trading) and proposes reviewed updates; cited sources, one target agent per change.
 - `product_owner` — PRDs, requirements, user stories, scope and deliverables.
 - `qa` — unit, integration and E2E tests, mocking external services, UAT, QA reports.

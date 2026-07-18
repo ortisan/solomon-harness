@@ -7,6 +7,41 @@
       "url": "https://github.com/anthropics/skills",
       "note": "Anthropic's public Agent Skills. Adjust the URL if the repository moves.",
       "pin": "35414756ca55738e050562e272a6bbc6273aa926"
+    },
+    {
+      "name": "humanizer",
+      "type": "git",
+      "url": "https://github.com/blader/humanizer",
+      "note": "MIT. Removes signs of AI-generated writing, based on Wikipedia's 'Signs of AI writing'. Installed verbatim at .claude/skills/humanizer/.",
+      "pin": "1b48564898e999219882660237fde01bf4843a0f"
+    },
+    {
+      "name": "stop-slop",
+      "type": "git",
+      "url": "https://github.com/hardikpandya/stop-slop",
+      "note": "MIT. Removes predictable AI prose tells; complements humanizer. Installed verbatim at .claude/skills/stop-slop/.",
+      "pin": "8da1f030185bdfe8471220585162991eaeb970e9"
+    },
+    {
+      "name": "superpowers",
+      "type": "git",
+      "url": "https://github.com/obra/superpowers",
+      "note": "MIT. Software-engineering methodology skills (TDD, systematic debugging, code review discipline).",
+      "pin": "d884ae04edebef577e82ff7c4e143debd0bbec99"
+    },
+    {
+      "name": "wshobson-agents",
+      "type": "git",
+      "url": "https://github.com/wshobson/agents",
+      "note": "MIT. Broad plugin catalogue: llm-application-dev, c4-architecture, quantitative-trading, tdd-workflows.",
+      "pin": "b6af3711058190e4b5c5274b9758498fe626ec5a"
+    },
+    {
+      "name": "claude-trading-skills",
+      "type": "git",
+      "url": "https://github.com/agiprolabs/claude-trading-skills",
+      "note": "MIT. Deep quantitative-trading skill pack (Kelly criterion, cointegration, microstructure, mean reversion).",
+      "pin": "938a6ee84eed8f2b51cfb5055eaaddc8c596028d"
     }
   ]
 }

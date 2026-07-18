@@ -174,7 +174,7 @@ class PackagingPayloadTest(unittest.TestCase):
                 if name.startswith("agents/") and name.endswith("/persona.md")
             }
             self.assertEqual(len(workflows), 11)
-            self.assertEqual(len(specialists), 28)
+            self.assertEqual(len(specialists), 29)
             self.assertEqual(
                 {Path(name).parts[0] for name in payload},
                 {

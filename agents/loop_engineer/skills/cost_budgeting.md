@@ -26,7 +26,7 @@ Ceiling 5.00; a morning of scan iterations records 5.20 across the ledger. The n
 
 ## Post-hoc, so pair it with a pre-flight cap
 
-The ceiling is post-hoc by nature: cost is known only after the engine runs, so it reacts after a spend, not before — one expensive tick can overshoot the ceiling before the next check trips. For a hard stop, pair it with a per-cycle cap upstream (max ticks via `dev loop-auto --concurrency N`, or wall-clock on the host scheduler), and keep `solomon-harness loop-stop` as the immediate halt when spend is running away right now.
+The ceiling is post-hoc by nature: cost is known only after the engine runs, so it reacts after a spend, not before — one expensive tick can overshoot the ceiling before the next check trips. For a hard stop, pair it with a per-cycle cap upstream (max ticks via `dev loop --concurrency N`, or wall-clock on the host scheduler), and keep `solomon-harness loop-stop` as the immediate halt when spend is running away right now.
 
 ## Common pitfalls
 
@@ -40,7 +40,7 @@ The ceiling is post-hoc by nature: cost is known only after the engine runs, so 
 ## Definition of done
 
 - [ ] Per-stage cost is captured from the engine's reported actuals at L2/L3 and recorded to the ledger.
-- [ ] Reaching `daily_cost_ceiling_usd` degrades the automation path to report-only (exit 3; `loop` still allowed), never a human.
+- [ ] Reaching `daily_cost_ceiling_usd` degrades the automation path to report-only (exit 3; `workflow` still allowed), never a human.
 - [ ] The ledger is anchored at the git common dir so all worktrees share one budget; an unset or non-positive ceiling disables the check.
 - [ ] `solomon-harness loop-budget` reports spend versus ceiling and the ledger path; host cost asymmetry is documented.
 - [ ] Changes ship with covering tests in `tests/test_loop_budget.py`.

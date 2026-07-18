@@ -76,6 +76,7 @@ class LoopPolicy:
         denylist: Optional[List[str]] = None,
         maker_model: Optional[str] = None,
         checker_model: Optional[str] = None,
+        orchestrator_model: Optional[str] = None,
         daily_cost_ceiling: Optional[float] = None,
     ) -> None:
         self.workspace_root = workspace_root
@@ -85,6 +86,7 @@ class LoopPolicy:
         self.denylist = list(denylist) if denylist is not None else list(DEFAULT_DENYLIST)
         self.maker_model = maker_model
         self.checker_model = checker_model
+        self.orchestrator_model = orchestrator_model
         self.daily_cost_ceiling = daily_cost_ceiling
 
     # -- construction -------------------------------------------------------
@@ -93,12 +95,16 @@ class LoopPolicy:
         resolved_env: Mapping[str, str] = os.environ if env is None else env
         cfg = _read_loop_config(workspace_root)
         level = resolved_env.get("SOLOMON_LOOP_AUTONOMY") or cfg.get("autonomy") or "human"
+        orchestrator_model = (
+            resolved_env.get("SOLOMON_ORCHESTRATOR_MODEL") or cfg.get("orchestrator_model")
+        )
         return cls(
             workspace_root,
             level=str(level),
             denylist=cfg.get("denylist"),
             maker_model=cfg.get("maker_model"),
             checker_model=cfg.get("checker_model"),
+            orchestrator_model=orchestrator_model,
             daily_cost_ceiling=cfg.get("daily_cost_ceiling_usd"),
         )
 

@@ -1,6 +1,6 @@
 ---
 name: context-reset-discipline
-description: Governs the Ralph-loop tick contract of disposable context, reading the handoff contract and run-log from disk, bounding each tick to one task, and externalizing state via `dev loop-auto` before the tick ends. Use when reviewing a headless loop tick, or a tick that carried state across iterations.
+description: Governs the Ralph-loop tick contract of disposable context, reading the handoff contract and run-log from disk, bounding each tick to one task, and externalizing state via `dev loop` before the tick ends. Use when reviewing a headless loop tick, or a tick that carried state across iterations.
 ---
 
 # Context-Reset Discipline
@@ -24,7 +24,7 @@ Read at tick start, from durable state only: the SessionStart digest (`solomon-h
 
 ## Why the reset is a feature
 
-A long session degrades as the window fills with dead ends and stale file contents. Throwing the session away each tick and resuming from the filesystem + git keeps each tick sharp and makes resumption the normal path, not a recovery path. The raw infinite `while` loop, though, is forbidden here: cadence comes from a host primitive, one tick per interval, each under the single-driver lock — never a self-hosted runner. `dev loop-auto` deliberately stays a finite, human-sized batch (N iterations, stop on first failure) so the ledger and the review gate keep pace with the loop.
+A long session degrades as the window fills with dead ends and stale file contents. Throwing the session away each tick and resuming from the filesystem + git keeps each tick sharp and makes resumption the normal path, not a recovery path. The raw infinite `while` loop, though, is forbidden here: cadence comes from a host primitive, one tick per interval, each under the single-driver lock — never a self-hosted runner. `dev loop` deliberately stays a finite, human-sized batch (N iterations, stop on first failure) so the ledger and the review gate keep pace with the loop.
 
 ## Common pitfalls
 
@@ -41,4 +41,4 @@ A long session degrades as the window fills with dead ends and stale file conten
 - [ ] A tick advances exactly one stage and commits an independently reviewable unit.
 - [ ] The exit condition is checkable; merge/release ticks require explicit human approval.
 - [ ] All state is externalized (contract, ledger, git) before the tick ends.
-- [ ] Cadence is a host primitive, one tick per interval, under the single-driver lock; headless batches go through `dev loop-auto`, fresh subprocess per iteration, stop on first failure.
+- [ ] Cadence is a host primitive, one tick per interval, under the single-driver lock; headless batches go through `dev loop`, fresh subprocess per iteration, stop on first failure.

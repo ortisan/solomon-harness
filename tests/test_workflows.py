@@ -530,6 +530,54 @@ class TestRunStageDriverLock(unittest.TestCase):
         )
 
 
+class TestRunStageOrchestratorModel(unittest.TestCase):
+    """The headless engine invocation is the orchestrator: it may be pinned to
+    a different model than the specialist subagents it delegates to via the
+    Task tool (each subagent pins its own model in `.claude/agents/<name>.md`,
+    see scripts/generate-integrations.py). Configured via `loop.orchestrator_model`
+    in `.agent/config.json` (or the SOLOMON_ORCHESTRATOR_MODEL env override)."""
+
+    def test_passes_model_flag_to_claude_engine_when_configured(self):
+        root = _workspace_with_loop(
+            "start", "---\nx\n---\nDo work on $ARGUMENTS", {"orchestrator_model": "opus"}
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            rc = workflows.run_stage(root, "start", ["42"], engine="claude")
+        self.assertEqual(rc, 0)
+        args, _kwargs = mock_run.call_args
+        cmd = args[0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "opus")
+
+    def test_omits_model_flag_when_not_configured(self):
+        root = _workspace_with_command("start", "---\nx\n---\nDo work on $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "start", ["42"], engine="claude")
+        args, _kwargs = mock_run.call_args
+        self.assertNotIn("--model", args[0])
+
+    def test_omits_model_flag_for_non_claude_engine(self):
+        root = _workspace_with_loop(
+            "start", "---\nx\n---\nDo work on $ARGUMENTS", {"orchestrator_model": "opus"}
+        )
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", return_value=_Proc()) as mock_run:
+            workflows.run_stage(root, "start", ["42"], engine="agy")
+        args, _kwargs = mock_run.call_args
+        self.assertNotIn("--model", args[0])
+
+
 class TestRunStageSessionIdPropagation(unittest.TestCase):
     """#197: the loop-driven `claude -p` child must inherit the driver's own
     session_id, so a nested `solomon-harness dev <stage>` it shells out to
@@ -975,6 +1023,187 @@ class TestLoopInjectsAutonomousModeDirective(unittest.TestCase):
         _, kwargs = calls[0]
         self.assertNotIn(workflows.LOOP_AUTONOMOUS_MODE_DIRECTIVE, kwargs["input"])
         self.assertNotIn("headless", kwargs["input"].lower())
+
+
+class TestWorkspaceSnapshot(unittest.TestCase):
+    """The refs+status fingerprint behind no-op start detection (#347)."""
+
+    def test_snapshot_is_stable_when_nothing_changes(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        self.assertIsNotNone(before)
+        self.assertFalse(worktree.workspace_changed(root, before))
+
+    def test_snapshot_detects_a_new_branch(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        subprocess.run(["git", "branch", "feature/x"], cwd=root, check=True)
+        self.assertTrue(worktree.workspace_changed(root, before))
+
+    def test_snapshot_detects_a_dirty_workspace(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        with open(os.path.join(root, "new.txt"), "w", encoding="utf-8") as f:
+            f.write("x")
+        self.assertTrue(worktree.workspace_changed(root, before))
+
+    def test_snapshot_detects_a_deleted_file(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        os.remove(os.path.join(root, ".keep"))
+        self.assertTrue(worktree.workspace_changed(root, before))
+
+    def test_snapshot_detects_an_advanced_ref(self):
+        from solomon_harness import worktree
+
+        root = _git_workspace_with_command("start", "---\n---\nbody")
+        before = worktree.workspace_snapshot(root)
+        with open(os.path.join(root, "advance.txt"), "w", encoding="utf-8") as f:
+            f.write("x")
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "advance"], cwd=root, check=True)
+        self.assertTrue(worktree.workspace_changed(root, before))
+
+    def test_snapshot_is_none_outside_git(self):
+        from solomon_harness import worktree
+
+        root = _workspace_with_command("start", "---\n---\nbody")
+        self.assertIsNone(worktree.workspace_snapshot(root))
+        self.assertTrue(worktree.workspace_changed(root, None))
+
+
+def _dispatching_fake_run(engine_rc=0, on_engine=None):
+    """side_effect for subprocess.run: ps probes, the claude engine, and a
+    generic ok-process for every other shell-out."""
+
+    class _Generic:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    class _Ps:
+        returncode = 0
+        stdout = "boot\n"
+
+    class _Engine:
+        returncode = engine_rc
+
+    def run(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "ps":
+            return _Ps()
+        if cmd and cmd[0] == "claude":
+            if on_engine is not None:
+                on_engine()
+            return _Engine()
+        return _Generic()
+
+    return run
+
+
+class TestRunStageNoOpDetection(unittest.TestCase):
+    """A start run that exits 0 having changed nothing is recorded as skipped,
+    releases its claim, and sends no ok notification (#347)."""
+
+    def setUp(self):
+        self.root = _git_workspace_with_command("start", "---\nallowed-tools: Bash\n---\nbody")
+
+    def _store(self, mock_store_cls):
+        store = mock_store_cls.return_value
+        store.get.return_value = None
+        store.pr_protected.return_value = False
+        store.acquire.return_value = True
+        return store
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_noop_start_is_skipped_releases_claim_and_stays_quiet(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+
+        with patch("subprocess.run", side_effect=_dispatching_fake_run()):
+            rc = workflows.run_stage(self.root, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_record.call_args.kwargs.get("status"), "skipped")
+        store.release.assert_called_once_with(99, session_id=unittest.mock.ANY)
+        mock_notify.assert_not_called()
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_start_that_creates_a_branch_stays_ok(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+        root = self.root
+
+        def create_branch():
+            subprocess.Popen(["git", "-C", root, "branch", "feature/did-work"]).wait()
+
+        with patch("subprocess.run", side_effect=_dispatching_fake_run(on_engine=create_branch)):
+            rc = workflows.run_stage(root, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        self.assertIsNone(mock_record.call_args.kwargs.get("status"))
+        store.release.assert_not_called()
+        mock_notify.assert_called_once()
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_noop_in_a_non_git_workspace_stays_ok(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+        root = _workspace_with_command("start", "---\nallowed-tools: Bash\n---\nbody")
+
+        with patch("subprocess.run", side_effect=_dispatching_fake_run()):
+            rc = workflows.run_stage(root, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        self.assertIsNone(mock_record.call_args.kwargs.get("status"))
+        store.release.assert_not_called()
+        mock_notify.assert_called_once()
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_pr_protected_issue_is_never_classified_skipped(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+        store.pr_protected.side_effect = [False, True]
+
+        with patch("subprocess.run", side_effect=_dispatching_fake_run()):
+            rc = workflows.run_stage(self.root, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        self.assertIsNone(mock_record.call_args.kwargs.get("status"))
+        store.release.assert_not_called()
+        mock_notify.assert_called_once()
+
+    @patch("solomon_harness.worktree.workspace_snapshot")
+    def test_non_start_stages_take_no_snapshot(self, mock_snapshot):
+        root = _git_workspace_with_command("review", "---\nallowed-tools: Bash\n---\nbody")
+
+        class _Proc:
+            returncode = 0
+
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])):
+            rc = workflows.run_stage(root, "review", ["7"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        mock_snapshot.assert_not_called()
 
 
 if __name__ == "__main__":

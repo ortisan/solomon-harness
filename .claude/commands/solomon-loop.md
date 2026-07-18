@@ -1,5 +1,5 @@
 ---
-description: Fully autonomous parallel loop - spawn multiple agents to start, develop, test, review and open PRs for ready issues
+description: Headless batch loop - run N sequential workflow iterations over ready issues, human-gated at merge
 argument-hint: (optional) --issues 42,43
 allowed-tools: Bash(gh:*), Bash(git:*), Bash(uv run:*), Task, Read, AskUserQuestion, mcp__solomon-memory__get_memory
 ---

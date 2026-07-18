@@ -58,15 +58,16 @@ class TestLoopRunLedger(unittest.TestCase):
 
 
 class TestLoopRunStatusVocabulary(unittest.TestCase):
-    """Canonical loop-run vocabulary {ok, failed}, normalized on write (#165).
+    """Canonical loop-run vocabulary {ok, failed, skipped}, normalized on
+    write (#165, ADR-0039).
 
     The writer (workflows.py) stores 'ok'/'failed' while the aggregator counted
     'failure', so every failed run was invisible to the failure rate. The fix is
     on the client seam: normalize at save_loop_run, count both tokens on read.
     """
 
-    def test_canonical_vocabulary_is_ok_failed(self):
-        self.assertEqual(LOOP_RUN_STATUSES, ("ok", "failed"))
+    def test_canonical_vocabulary_is_ok_failed_skipped(self):
+        self.assertEqual(LOOP_RUN_STATUSES, ("ok", "failed", "skipped"))
 
     def test_normalize_maps_legacy_tokens_to_canonical(self):
         for legacy, canonical in (
@@ -82,6 +83,9 @@ class TestLoopRunStatusVocabulary(unittest.TestCase):
             self.assertEqual(normalize_loop_run_status(legacy), canonical, legacy)
 
     def test_normalize_passes_unknown_tokens_through_lowercased(self):
+        self.assertEqual(normalize_loop_run_status("Bogus"), "bogus")
+
+    def test_skipped_is_canonical_and_survives_the_write_seam(self):
         self.assertEqual(normalize_loop_run_status("Skipped"), "skipped")
 
     def test_normalize_none_stays_none(self):
@@ -92,10 +96,12 @@ class TestLoopRunStatusVocabulary(unittest.TestCase):
         with DatabaseClient(db_path=os.path.join(tmp, "h.db")) as db:
             db.save_loop_run(stage="dev", target="1", decision="d", status="failure", session_id="s")
             db.save_loop_run(stage="dev", target="2", decision="d", status="success", session_id="s")
+            db.save_loop_run(stage="dev", target="3", decision="d", status="skipped", session_id="s")
             rows = db.list_loop_runs()
         by_target = {row["target"]: row["status"] for row in rows}
         self.assertEqual(by_target["1"], "failed")
         self.assertEqual(by_target["2"], "ok")
+        self.assertEqual(by_target["3"], "skipped")
 
 
 class TestLoopRunFailureRateCountsLegacyRows(unittest.TestCase):
@@ -122,6 +128,14 @@ class TestLoopRunFailureRateCountsLegacyRows(unittest.TestCase):
         self.assertIn("'failed'", query)
         self.assertIn("'failure'", query)
         self.assertIn("IN", query)
+
+    def test_failure_rate_filter_excludes_skipped(self):
+        fake = FakeSurreal(result=[[{"total": 5, "failures": 2}]])
+        client = self._surreal_client(fake)
+
+        client.loop_run_failure_rate()
+
+        self.assertNotIn("'skipped'", fake.calls[0][0])
 
 
 class TestLogFeed(unittest.TestCase):

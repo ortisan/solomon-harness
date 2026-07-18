@@ -38,6 +38,7 @@ def build_engine_command(
     add_dirs: Iterable[os.PathLike[str] | str] = (),
     session_id: Optional[str] = None,
     print_timeout: str = "20m0s",
+    orchestrator_model: Optional[str] = None,
 ) -> list[str]:
     """Build a host-native headless argv.
 
@@ -70,6 +71,8 @@ def build_engine_command(
                 value = ", ".join(str(tool) for tool in allowed_tools)
             if value.strip():
                 command.extend(["--allowed-tools", value])
+        if orchestrator_model:
+            command.extend(["--model", orchestrator_model])
         for directory in extra_dirs:
             command.extend(["--add-dir", directory])
         return command

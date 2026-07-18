@@ -215,5 +215,38 @@ class TestFromConfig(unittest.TestCase):
         self.assertFalse(p.decide_stage("release").allowed)
 
 
+class TestOrchestratorModel(unittest.TestCase):
+    """The headless engine invocation (the orchestrator session `dev loop`/`dev
+    <stage>` launches) is pinned to a model independent of each specialist
+    subagent's own `model:` pin in its `.claude/agents/<name>.md` frontmatter
+    (e.g. an Opus orchestrator delegating to Sonnet subagents)."""
+
+    def _root_with_loop(self, block):
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, ".agent"))
+        with open(os.path.join(root, ".agent", "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"agent_name": "x", "loop": block}, f)
+        return root
+
+    def test_defaults_to_none(self):
+        p = _policy("human")
+        self.assertIsNone(p.orchestrator_model)
+
+    def test_reads_orchestrator_model_from_config(self):
+        root = self._root_with_loop({"orchestrator_model": "opus"})
+        p = LoopPolicy.from_config(root, env={})
+        self.assertEqual(p.orchestrator_model, "opus")
+
+    def test_env_overrides_orchestrator_model(self):
+        root = self._root_with_loop({"orchestrator_model": "opus"})
+        p = LoopPolicy.from_config(root, env={"SOLOMON_ORCHESTRATOR_MODEL": "haiku"})
+        self.assertEqual(p.orchestrator_model, "haiku")
+
+    def test_none_when_not_configured(self):
+        root = tempfile.mkdtemp()
+        p = LoopPolicy.from_config(root, env={})
+        self.assertIsNone(p.orchestrator_model)
+
+
 if __name__ == "__main__":
     unittest.main()

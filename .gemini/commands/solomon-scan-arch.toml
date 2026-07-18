@@ -37,7 +37,7 @@ lock — this stage acquires it automatically through `run_stage`.
 ## 3. Record and hand off
 
 - `save_decision` — the finding acted on and why, so the run is auditable.
-- Write a one-line run note to `.solomon/scan-runs/scan-arch-<date>.md`.
+- Write a one-line run note to `.agents/solomon/state/scan-runs/scan-arch-<date>.md`.
 - The draft PR enters the unchanged `/solomon-review` gate; a human approves any
   merge. Never advance past the draft PR yourself.
 '''
