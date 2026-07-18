@@ -263,12 +263,12 @@ class TestSchemaAsserts(unittest.TestCase):
         ("status", "issues", ("'in_progress'", "'code_review'", "'qa'", "'closed'")),
         ("status", "handoffs", ("'open'", "'accepted'", "'done'")),
         ("status", "sessions", ("'active'", "'done'")),
-        ("status", "loop_runs", ("'ok'", "'failed'")),
+        ("status", "loop_runs", ("'ok'", "'failed'", "'skipped'")),
         ("state", "milestones", ("'open'", "'closed'")),
     )
 
     def _statement_for(self, field, table):
-        needle = f"DEFINE FIELD IF NOT EXISTS {field} ON {table} "
+        needle = f"DEFINE FIELD OVERWRITE {field} ON {table} "
         matches = [s for s in DatabaseClient._SURREAL_SCHEMA_STATEMENTS if needle in s]
         self.assertEqual(len(matches), 1, f"expected one assert statement for {table}.{field}")
         return matches[0]
@@ -281,6 +281,16 @@ class TestSchemaAsserts(unittest.TestCase):
             self.assertIn("$value = NONE", statement)
             for token in tokens:
                 self.assertIn(token, statement, f"{table}.{field} must allow {token}")
+
+    def test_stateful_asserts_overwrite_so_a_grown_vocabulary_migrates(self):
+        # IF NOT EXISTS is a no-op on a pre-existing field, so a database made
+        # before a vocabulary grew (ADR-0039 added 'skipped') would keep the
+        # old ASSERT and reject the new token. OVERWRITE re-applies the current
+        # vocabulary on every connect; verified live against SurrealDB.
+        for field, table, _ in self.STATEFUL_FIELDS:
+            statement = self._statement_for(field, table)
+            self.assertIn("OVERWRITE", statement)
+            self.assertNotIn("IF NOT EXISTS", statement)
 
     def test_issue_assert_keeps_legacy_literals_writable(self):
         # Replays and legacy flows still write open/done/Done; the assert must
