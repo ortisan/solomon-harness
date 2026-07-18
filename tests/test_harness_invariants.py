@@ -433,6 +433,25 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         self.assertEqual(len(found["results"]), 1)
         self.assertEqual(found["results"][0]["key"], "note-1")
 
+    def test_call_tool_vector_search_decisions(self):
+        """search_decisions round-trips through call_tool, returning the nearest
+        decision first, so a marshaling bug in the MCP wrapper is caught."""
+        self._call_tool_json(
+            "save_decision",
+            {"title": "hexagonal ports and adapters", "rationale": "isolate the domain",
+             "outcome": "adopt hexagonal", "author": "arch"},
+        )
+        self._call_tool_json(
+            "save_decision",
+            {"title": "pizza pasta", "rationale": "italian food", "outcome": "takeout",
+             "author": "chef"},
+        )
+        found = self._call_tool_json(
+            "search_decisions", {"query": "hexagonal architecture domain", "k": 1}
+        )
+        self.assertEqual(len(found["results"]), 1)
+        self.assertEqual(found["results"][0]["title"], "hexagonal ports and adapters")
+
     def _call_tool_json(self, name, arguments):
         return _call_tool_json(self.server, name, arguments)
 

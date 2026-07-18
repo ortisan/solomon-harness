@@ -128,6 +128,9 @@ class _RecordingEmbedder:
     def __init__(self, vector=None):
         self.calls = []
         self._vector = vector if vector is not None else [0.25] * EMBEDDING_DIM
+        # Declaring dim keeps _embedder_dim from probing (which would record a
+        # spurious "probe" call), so tests can assert on exactly what was embedded.
+        self.dim = len(self._vector)
 
     def embed(self, text):
         self.calls.append(text)
@@ -217,33 +220,39 @@ class _EmptyEmbedder:
         return []
 
 
-class TestEmbedderPlug(unittest.TestCase):
-    """The config-driven embedder plug resolves safely, default is unchanged."""
+class _FixedVecEmbedder:
+    """A dim-less embedder returning a fixed 384-long vector (dim-from-probe test)."""
 
-    def test_plug_imports_a_module_class_path(self):
-        plugged = DatabaseClient._load_embedder_plug(
-            "solomon_harness.tools.database_client:HashingEmbedder"
+    def embed(self, text):
+        return [0.1] * 384
+
+
+class TestEmbedderRegistry(unittest.TestCase):
+    """models.embedding SELECTS a vetted embedder by name; it never imports code."""
+
+    def test_unknown_name_keeps_the_default(self):
+        # The shipped config value, an unregistered name, and even a "module:Class"
+        # -shaped string all resolve to no embedder -- nothing is imported -- so the
+        # caller keeps the lexical HashingEmbedder default.
+        self.assertIsNone(DatabaseClient._registered_embedder("text-embedding-004"))
+        self.assertIsNone(DatabaseClient._registered_embedder(None))
+        self.assertIsNone(DatabaseClient._registered_embedder("some.module:SomeClass"))
+
+    def test_registered_name_is_instantiated(self):
+        self.assertIsInstance(
+            DatabaseClient._registered_embedder("hashing"), HashingEmbedder
         )
-        self.assertIsInstance(plugged, HashingEmbedder)
 
-    def test_plug_without_colon_is_not_a_plug(self):
-        # A bare model name (e.g. the config's text-embedding-004) has no
-        # dependency-free implementation, so it is not a plug: the default wins.
-        self.assertIsNone(DatabaseClient._load_embedder_plug("text-embedding-004"))
-        self.assertIsNone(DatabaseClient._load_embedder_plug(None))
-
-    def test_plug_unimportable_falls_back(self):
-        self.assertIsNone(DatabaseClient._load_embedder_plug("no.such.module:Nope"))
-
-    def test_plug_failing_probe_falls_back(self):
+    def test_safe_probe_rejects_an_empty_vector(self):
         self.assertIsNone(DatabaseClient._safe_probe(_EmptyEmbedder()))
 
-    def test_embedder_dim_follows_the_embedder(self):
+    def test_embedder_dim_prefers_the_dim_attribute(self):
         self.assertEqual(DatabaseClient._embedder_dim(HashingEmbedder(dim=16)), 16)
-        self.assertEqual(
-            DatabaseClient._embedder_dim(HashingEmbedder(dim=EMBEDDING_DIM)),
-            EMBEDDING_DIM,
-        )
+
+    def test_embedder_dim_falls_back_to_the_probe_length(self):
+        # A dim-less embedder is sized from the real vector it produces, so the HNSW
+        # index can never be built at 256 while the embedder emits 384-long vectors.
+        self.assertEqual(DatabaseClient._embedder_dim(_FixedVecEmbedder()), 384)
 
 
 class TestDecisionVectors(unittest.TestCase):
@@ -685,6 +694,37 @@ class TestMultiModelLive(unittest.TestCase):
         after = self.client.search_decisions("legacy widget refactor", k=1)
         self.assertTrue(after)
         self.assertEqual(after[0]["title"], "legacy widget refactor")
+
+    def test_get_and_list_decisions_omit_the_embedding(self):
+        # The 256-float vector is index fodder; a reader (and the MCP tool result it
+        # feeds) must never receive it.
+        did = self.client.log_decision("t", "r", "o", "a", "main", "s1")
+        fetched = self.client.get_decision(did)
+        self.assertIsNotNone(fetched)
+        self.assertNotIn("embedding", fetched)
+        listed = self.client.list_decisions(limit=5)
+        self.assertTrue(listed)
+        self.assertTrue(all("embedding" not in d for d in listed))
+
+    def test_reindex_skips_non_semantic_memory_rows(self):
+        # A code-index row carries full file content and never gets an embedding;
+        # reindex embeds the un-embedded semantic row but must skip the code-index
+        # one (the query pre-filters by category). Rows are created raw, without an
+        # embedding, since save_memory would embed the semantic one on write.
+        self.raw.query(
+            "CREATE memory:sem SET key = 'note', "
+            "value = 'hexagonal ports adapters', category = 'notes';"
+        )
+        self.raw.query(
+            "CREATE memory:code SET key = 'src/app.py', "
+            "value = 'def main(): pass', category = 'codebase_index';"
+        )
+        counts = self.client.reindex_embeddings(tables=("memory",))
+        self.assertEqual(counts["memory"], 1)
+        sem = self.raw.query("SELECT embedding FROM memory:sem;")
+        code = self.raw.query("SELECT embedding FROM memory:code;")
+        self.assertIsNotNone(sem[0]["embedding"])
+        self.assertIsNone(code[0].get("embedding"))
 
 
 if __name__ == "__main__":

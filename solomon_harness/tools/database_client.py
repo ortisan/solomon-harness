@@ -4,7 +4,6 @@ import sqlite3
 import logging
 import sys
 import functools
-import importlib
 import threading
 import datetime
 import glob
@@ -13,6 +12,7 @@ import re
 import uuid
 from contextlib import contextmanager
 from typing import (
+    Callable,
     Generator,
     Any,
     Dict,
@@ -36,7 +36,10 @@ class Embedder(Protocol):
 
     The contract is intentionally narrow so a real semantic model (sentence
     transformers, an API embedder, etc.) can be dropped in to replace the default
-    lexical embedder without touching the database client.
+    lexical embedder without touching the database client. An embedder MAY expose
+    an integer ``dim`` attribute; the HNSW index is built at that dimension, or at
+    the length of a probe vector when ``dim`` is absent, so an embedder whose
+    vectors are not 256-long is indexed correctly.
     """
 
     def embed(self, text: str) -> List[float]:
@@ -80,6 +83,16 @@ class HashingEmbedder:
         if norm > 0.0:
             vec = [v / norm for v in vec]
         return vec
+
+
+# The vetted embedders that models.embedding may SELECT by name. The config value
+# is a key into this registry, never an importable path, so a git-tracked
+# .agent/config.json can never name arbitrary code to run (ADR-0041). To expose a
+# real model-backed embedder, add a reviewed factory here and ship its integration;
+# a caller can also inject any embedder object directly via DatabaseClient(embedder=).
+_EMBEDDER_REGISTRY: Dict[str, Callable[[], Embedder]] = {
+    "hashing": HashingEmbedder,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -660,23 +673,36 @@ class DatabaseClient:
     def _init_embedder(self, embedder: Optional[Embedder]) -> None:
         """Choose the embedder that vectorizes memory and decisions.
 
-        Precedence: an explicitly injected embedder, then a model plugged via the
-        config's models.embedding as a "module:Class" import path, else the
-        dependency-free lexical HashingEmbedder. Any import or probe failure falls
-        back to the default, so the store never fails to open.
+        Precedence: an explicitly injected embedder, then a vetted embedder selected
+        by name from models.embedding, else the dependency-free lexical
+        HashingEmbedder. models.embedding is a key into the embedder registry, never
+        an importable path, so the config can never name arbitrary code to run.
         """
-        plugged = embedder or self._load_embedder_plug(
+        selected = embedder or self._registered_embedder(
             getattr(self, "_embedding_model", None)
         )
-        self._embedder: Embedder = plugged or HashingEmbedder()
+        self._embedder: Embedder = selected or HashingEmbedder()
         self._embedding_dim = self._embedder_dim(self._embedder)
+
+    @staticmethod
+    def _registered_embedder(name: Optional[str]) -> Optional[Embedder]:
+        """Instantiate the vetted embedder registered under ``name``, or None.
+
+        A name absent from ``_EMBEDDER_REGISTRY`` (including the config default
+        text-embedding-004, which ships no dependency-free implementation) resolves
+        to None so the caller keeps the lexical HashingEmbedder default. Only names
+        already present in the reviewed registry can be selected; no config value is
+        ever imported or executed.
+        """
+        factory = _EMBEDDER_REGISTRY.get(str(name or "").strip().lower())
+        return factory() if factory is not None else None
 
     @staticmethod
     def _safe_probe(embedder: Embedder) -> Optional[List[float]]:
         """Embed a probe string, returning the vector only if it is a real list."""
         try:
             vec = embedder.embed("probe")
-        except Exception:  # noqa: BLE001 - any failure means the plug is unusable
+        except Exception:  # noqa: BLE001 - any failure means the embedder is unusable
             return None
         if not isinstance(vec, (list, tuple)) or len(vec) == 0:
             return None
@@ -686,37 +712,20 @@ class DatabaseClient:
             return None
 
     @classmethod
-    def _load_embedder_plug(cls, spec: Optional[str]) -> Optional[Embedder]:
-        """Resolve a "module:Class" embedder spec, or None to keep the default.
-
-        A bare model name (no colon, e.g. the config's text-embedding-004) has no
-        dependency-free implementation, so it is not a plug. An unimportable path
-        or an instance that fails its probe also falls back to the default.
-        """
-        if not spec or ":" not in str(spec):
-            return None
-        module_name, _, class_name = str(spec).partition(":")
-        try:
-            candidate = getattr(importlib.import_module(module_name), class_name)()
-        except Exception as exc:  # noqa: BLE001 - fall back rather than fail to open
-            logging.warning(f"Embedder plug {spec!r} unavailable; using the default: {exc}")
-            return None
-        if cls._safe_probe(candidate) is None:
-            logging.warning(f"Embedder plug {spec!r} failed its probe; using the default")
-            return None
-        return candidate
-
-    @classmethod
     def _embedder_dim(cls, embedder: Embedder) -> int:
-        """The HNSW dimension for an embedder, from its optional ``dim`` attribute.
+        """The HNSW dimension for an embedder: its ``dim`` attribute, else the real
+        length of a probe vector, else EMBEDDING_DIM (256).
 
-        HashingEmbedder exposes ``dim``; a pluggable model embedder should expose an
-        integer ``dim`` too so its index is built at the right size. Absent (or
-        non-positive), the store assumes EMBEDDING_DIM (256). Read as an attribute,
-        never by probing, so construction never triggers a model inference.
+        Deriving from the actual probe vector when ``dim`` is absent means a model
+        embedder that emits, say, 768-long vectors can never be indexed at 256 and
+        then fail on the first write. HashingEmbedder exposes ``dim``, so it is never
+        probed and construction stays cheap on the default path.
         """
         dim = getattr(embedder, "dim", None)
-        return int(dim) if isinstance(dim, int) and dim > 0 else EMBEDDING_DIM
+        if isinstance(dim, int) and dim > 0:
+            return int(dim)
+        probe = cls._safe_probe(embedder)
+        return len(probe) if probe else EMBEDDING_DIM
 
     def _init_connection_state(self, db_path: Optional[str]) -> None:
         """Set the backend defaults and the rebuildable SurrealDB params."""
@@ -2059,8 +2068,11 @@ class DatabaseClient:
             """
             # Decisions are inherently semantic, so unlike memory there is no
             # category gate: every decision is embedded from its title, rationale,
-            # and outcome. Computed here (not in the durability mirror), so a
-            # replayed decision is re-embedded on reconcile like any live write.
+            # and outcome. The embedding is NOT stored in the durability mirror, and
+            # _replay re-UPSERTs the mirrored fields verbatim, so a decision written
+            # during a primary outage lands without an embedding on reconcile and is
+            # searchable only after a `reindex-embeddings` pass -- the same property
+            # memory embeddings have had since ADR-0016.
             params = {"id": self._rid("decisions", record_id), **fields}
             params["embedding"] = self._embedder.embed(
                 f"{fields.get('title', '')} {fields.get('rationale', '')} "
@@ -3399,7 +3411,10 @@ class DatabaseClient:
             A dictionary containing the record details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM $id"
+            # OMIT embedding: the 256-float vector is index fodder, never useful to a
+            # reader, so it must not ride along in the returned record (and thence
+            # into an MCP tool result an agent pays tokens for).
+            query = "SELECT * OMIT embedding FROM $id"
             try:
                 res = self._run_surreal(
                     query, {"id": self._parse_rid(decision_id)}
@@ -4084,7 +4099,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    "SELECT * FROM decisions ORDER BY created_at DESC LIMIT $limit",
+                    "SELECT * OMIT embedding FROM decisions "
+                    "ORDER BY created_at DESC LIMIT $limit",
                     {"limit": int(limit)},
                 )
                 return self._extract_list(res)
@@ -4710,12 +4726,29 @@ class DatabaseClient:
         self._require_surreal("embedding reindex")
         return {table: self._reindex_table(table) for table in tables}
 
+    # Per-table reindex reads: only the id and the fields that feed the embedding
+    # (never SELECT *, which would pull each memory row's full file content), and
+    # for memory a category pre-filter so the code-index and board-history rows --
+    # which never carry an embedding -- are not re-fetched on every run.
+    _REINDEX_QUERIES: Dict[str, str] = {
+        "decisions": "SELECT id, title, rationale, outcome FROM decisions "
+        "WHERE embedding IS NONE;",
+        "memory": "SELECT id, key, value FROM memory "
+        "WHERE embedding IS NONE AND category NOT IN $excluded;",
+    }
+
     def _reindex_table(self, table: str) -> int:
-        """Re-embed every ``embedding IS NONE`` row of one table; returns the count."""
+        """Re-embed every un-embedded semantic row of one table; returns the count."""
         table = self._safe_ident(table, "table name")
-        rows = self._extract_list(
-            self._run_surreal(f"SELECT * FROM {table} WHERE embedding IS NONE;")
+        query = self._REINDEX_QUERIES.get(table)
+        if query is None:
+            return 0
+        params = (
+            {"excluded": list(NON_SEMANTIC_MEMORY_CATEGORIES)}
+            if table == "memory"
+            else None
         )
+        rows = self._extract_list(self._run_surreal(query, params))
         count = 0
         for row in rows:
             text = self._embedding_text(table, row)

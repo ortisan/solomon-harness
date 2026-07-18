@@ -236,7 +236,8 @@ Antigravity CLI (`.gemini/settings.json`),
 with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
 `log_issue`/`get_open_issues`/`get_issue`, `create_milestone`/`list_milestones`,
 `save_release`/`get_release`/`list_releases`, `save_backtest`,
-`save_session`/`get_session`, `log_handoff`, and `get_latest_activity`.
+`save_session`/`get_session`, `log_handoff`, `get_latest_activity`, and the
+vector search tools `semantic_search` (memory) and `search_decisions` (decisions).
 
 The SurrealDB backend is a single shared instance per machine, defined in
 `~/.solomon-harness/docker-compose.yml` and managed by `solomon_harness/memory.py`.
