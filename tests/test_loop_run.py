@@ -66,8 +66,8 @@ class TestLoopRunStatusVocabulary(unittest.TestCase):
     on the client seam: normalize at save_loop_run, count both tokens on read.
     """
 
-    def test_canonical_vocabulary_is_ok_failed_skipped(self):
-        self.assertEqual(LOOP_RUN_STATUSES, ("ok", "failed", "skipped"))
+    def test_canonical_vocabulary_is_ok_failed_skipped_parked(self):
+        self.assertEqual(LOOP_RUN_STATUSES, ("ok", "failed", "skipped", "parked"))
 
     def test_normalize_maps_legacy_tokens_to_canonical(self):
         for legacy, canonical in (
