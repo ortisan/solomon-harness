@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import tempfile
 
+from solomon_harness.subprocess_env import clean_git_env
+
 
 def _pinned_clone(source: dict, dest: str) -> None:
     """Clone ``source`` at its recorded full-SHA pin into ``dest``, fail-closed.
@@ -36,12 +38,13 @@ def _pinned_clone(source: dict, dest: str) -> None:
         raise ValueError("pin must be a full commit SHA")
 
     os.makedirs(dest, exist_ok=True)
-    subprocess.run(["git", "init", "-q", dest], check=True)
-    subprocess.run(["git", "-C", dest, "remote", "add", "origin", url], check=True)
-    subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", pin], check=True, capture_output=True)
-    subprocess.run(["git", "-C", dest, "checkout", "-q", pin], check=True, capture_output=True)
+    env = clean_git_env(dest)
+    subprocess.run(["git", "init", "-q", dest], check=True, env=env)
+    subprocess.run(["git", "-C", dest, "remote", "add", "origin", url], check=True, env=env)
+    subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", pin], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", dest, "checkout", "-q", pin], check=True, capture_output=True, env=env)
 
-    proc = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
+    proc = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env)
     current_head = proc.stdout.strip()
     if current_head != pin:
         raise ValueError(f"HEAD mismatch: checked out {current_head}, expected {pin}")
