@@ -38,5 +38,8 @@ automatically through `run_stage`.
 
 - `save_decision` — the duplication unified (or filed) and why.
 - Write a one-line run note to `.agents/solomon/state/scan-runs/scan-dedup-<date>.md`.
+- QA honesty rule (`persona_driven_exploratory_testing`): if `docs/qa/state.csv`
+  exists and this change is user-visible, reset the affected rows to `untested`;
+  a pure refactor states "no user-visible change" explicitly.
 - The draft PR enters the unchanged `/solomon-review` gate; a human approves any
   merge. Never advance past the draft PR yourself.

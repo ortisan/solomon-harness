@@ -85,6 +85,14 @@ move-to-`Done` decision. ADR-0034 permits one narrower automated action: repairi
 a derived board projection after GitHub already reports the issue `CLOSED`; it
 cannot close, merge, release, or act on an open issue.
 
+Selection guards (epic #341). Before proposing a `Ready` issue for development,
+the resume scan skips any candidate whose `issues_blocked_by` returns an open
+blocker, logging the skipped issue and its blocker rather than starting work that
+cannot finish. Before re-proposing the same PR/issue for another remediation
+round, it consults `loop_log.remediation_limit_reached` (the consecutive-round
+cap, default 6): at the cap it stops re-proposing that target and surfaces it to
+the human instead of burning further rounds.
+
 At the start or first invocation of every Claude, AGY, or Codex session, the
 harness surfaces project status (latest activity and open issues) through the
 host's native lifecycle event. Claude and Codex use their session-start surface;

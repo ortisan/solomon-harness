@@ -1206,5 +1206,121 @@ class TestRunStageNoOpDetection(unittest.TestCase):
         mock_snapshot.assert_not_called()
 
 
+class TestRemediationCapGate(unittest.TestCase):
+    """run_stage refuses a locked stage+target that hit the consecutive-round
+    cap, returning exit 3 without dispatching the engine (#341 package 5)."""
+
+    def test_cap_reached_returns_three_without_dispatch(self):
+        root = _git_workspace_with_command("review", "---\nallowed-tools: Bash\n---\nbody")
+        with (
+            patch("solomon_harness.loop_log.remediation_limit_reached", return_value=True),
+            patch("subprocess.run", side_effect=_answering_ps_probes([])) as mock_run,
+        ):
+            rc = workflows.run_stage(root, "review", ["342"], engine="claude")
+        self.assertEqual(rc, 3)
+        self.assertEqual(_engine_calls(mock_run), [])
+
+    def test_below_cap_proceeds(self):
+        root = _git_workspace_with_command("review", "---\nallowed-tools: Bash\n---\nbody")
+
+        class _Proc:
+            returncode = 0
+
+        with (
+            patch("solomon_harness.loop_log.remediation_limit_reached", return_value=False),
+            patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])) as mock_run,
+        ):
+            rc = workflows.run_stage(root, "review", ["342"], engine="claude")
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(_engine_calls(mock_run)), 1)
+
+
+class TestRunStageStallParking(unittest.TestCase):
+    """A start run the stall watchdog kills is retried once, then parked with
+    its claim and worktree preserved (#341 packages 2 and 4)."""
+
+    def setUp(self):
+        self.root = _git_workspace_with_command("start", "---\nallowed-tools: Bash\n---\nbody")
+
+    def _store(self, mock_store_cls):
+        store = mock_store_cls.return_value
+        store.get.return_value = None
+        store.pr_protected.return_value = False
+        store.acquire.return_value = True
+        return store
+
+    def _stalling_run(self, engine_calls):
+        def run(cmd, *args, **kwargs):
+            if cmd and cmd[0] == "ps":
+                class _Ps:
+                    returncode = 0
+                    stdout = "boot\n"
+                return _Ps()
+            if cmd and cmd[0] == "claude":
+                engine_calls.append(1)
+                raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+            class _Ok:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Ok()
+        return run
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_persistent_stall_retries_once_then_parks_and_keeps_the_claim(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+        engine_calls = []
+
+        with patch("subprocess.run", side_effect=self._stalling_run(engine_calls)):
+            rc = workflows.run_stage(self.root, "start", ["99"], engine="claude")
+
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(len(engine_calls), 2)
+        self.assertEqual(mock_record.call_args.kwargs.get("status"), "parked")
+        store.release.assert_not_called()
+        mock_notify.assert_not_called()
+
+    @patch("solomon_harness.notify.send")
+    @patch("solomon_harness.workflows._record_loop_run")
+    @patch("solomon_harness.claim.GitClaimStore")
+    def test_stall_then_clean_retry_is_a_normal_success(
+        self, mock_store_cls, mock_record, mock_notify
+    ):
+        store = self._store(mock_store_cls)
+        state = {"first": True}
+
+        def run(cmd, *args, **kwargs):
+            if cmd and cmd[0] == "ps":
+                class _Ps:
+                    returncode = 0
+                    stdout = "boot\n"
+                return _Ps()
+            if cmd and cmd[0] == "claude":
+                if state["first"]:
+                    state["first"] = False
+                    raise subprocess.TimeoutExpired(cmd, 1)
+                with open(os.path.join(self.root, "delivered.txt"), "w", encoding="utf-8") as f:
+                    f.write("x")
+                class _Ok:
+                    returncode = 0
+                return _Ok()
+            class _G:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _G()
+
+        with patch("subprocess.run", side_effect=run):
+            rc = workflows.run_stage(self.root, "start", ["99"], engine="claude")
+
+        self.assertEqual(rc, 0)
+        self.assertIsNone(mock_record.call_args.kwargs.get("status"))
+        store.release.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

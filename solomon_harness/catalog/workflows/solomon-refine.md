@@ -69,10 +69,14 @@ Steps:
     where the spec stops being a product sketch and becomes something a model can
     implement without asking. Open the issue's spec `docs/specs/<n>-<slug>.md`
     (created at `/solomon-issue`) and resolve **every** `TBD (refine)`:
-    - **Implementation Pointers** — read the code and state the exact `file:line`
+    - **Implementation Pointers** — cite a dedicated read-only exploration pass
+      (dispatch a scoped read-only exploration subagent through the host's native
+      delegation mechanism, per the `scoped_subagent_dispatch` contract), then
+      state the exact `file:line`
       targets the change touches, the current behavior versus the expected
-      behavior at each, and the concrete approach. No guessing left for the
-      implementer.
+      behavior at each, and the concrete approach. The pointers must trace to
+      that exploration's findings, not the refining agent's unaided memory — no
+      guessing left for the implementer.
     - **Verification** — the exact command(s) that prove the change works (the
       test invocation, a manual repro, the check to eyeball).
     - Fill any other section still on a placeholder, then flip the header to
@@ -86,12 +90,19 @@ Steps:
       same bar in the issue body: suspected `file:line`, current vs expected, and
       the verification command.
 
-3. Slice into thin vertical increments (product_owner). If the issue is too large
+3. Slice into thin vertical increments (product_owner). Apply the vertical-slice
+   sizing rule (`scope_boundaries`): prefer fewer, larger, complete-vertical-slice
+   issues and split only at a dependency, parallelization, or domain boundary —
+   never on file/line count or a complexity rating. If the issue is too large
    to finish in one sprint, propose child issues — each independently shippable and
    testable. List the proposed split and **confirm with the user before creating**
    any sub-issues. On approval, `gh issue create` each child with `type:feature`,
    the matching `priority:*` / `area:*` labels, the same milestone, and a
    `Parent: #<n>` line; track sub-issues back in the parent body.
+   When the split itself is contested (two viable strategies, or a specialist bar
+   conflicting with product scope), you may offer the opt-in council debate
+   (`council_debate`) as an enumerated choice — never automatically — and feed its
+   Recommended Path Forward back through the enumerated-decision menu.
 
 4. Add a Definition of Ready checklist and a rough estimate (scrum_master): INVEST
    check, testable acceptance criteria, the spec is implementation-ready

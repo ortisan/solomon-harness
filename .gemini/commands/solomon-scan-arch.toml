@@ -38,6 +38,9 @@ lock — this stage acquires it automatically through `run_stage`.
 
 - `save_decision` — the finding acted on and why, so the run is auditable.
 - Write a one-line run note to `.agents/solomon/state/scan-runs/scan-arch-<date>.md`.
+- QA honesty rule (`persona_driven_exploratory_testing`): if `docs/qa/state.csv`
+  exists and this fix is user-visible, reset the affected rows to `untested`;
+  a pure refactor states "no user-visible change" explicitly.
 - The draft PR enters the unchanged `/solomon-review` gate; a human approves any
   merge. Never advance past the draft PR yourself.
 '''

@@ -23,6 +23,39 @@ def _epoch(value: Any) -> float:
         return 0.0
 
 
+def consecutive_runs_for_target(
+    db: Any, target: str, stage: str, limit: int = 6
+) -> int:
+    """Count how many of the most recent loop runs were the same stage+target,
+    consecutively from newest, capped at ``limit`` (#341 package 5).
+
+    The autonomous resume scan reads this before re-proposing a target: a return
+    value at or above ``limit`` means the same PR/issue has been driven through
+    the same stage that many times in a row with nothing else in between, so the
+    loop must stop re-proposing it and surface the target to a human instead of
+    burning further rounds. Anything other than an exact stage+target match at
+    the head breaks the streak, so an intervening different run resets the count.
+    """
+    try:
+        rows = db.list_loop_runs(max(limit * 2, limit)) or []
+    except Exception:
+        return 0
+    streak = 0
+    for row in rows:
+        if str(row.get("stage", "")) == stage and str(row.get("target", "")) == target:
+            streak += 1
+            if streak >= limit:
+                break
+        else:
+            break
+    return streak
+
+
+def remediation_limit_reached(db: Any, target: str, stage: str, limit: int = 6) -> bool:
+    """True when the same stage+target has hit the consecutive-round cap."""
+    return consecutive_runs_for_target(db, target, stage, limit) >= limit
+
+
 def gather_feed(db: Any, last: int = 20) -> List[Dict[str, str]]:
     """Collect recent loop runs, decisions and handoffs as feed entries."""
     entries: List[Dict[str, str]] = []

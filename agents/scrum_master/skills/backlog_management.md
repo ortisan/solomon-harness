@@ -33,6 +33,43 @@ Operating rules that hold every week:
 - Groom weekly: re-rank by priority, kill stale `future` items, split oversized stories, and confirm top-of-backlog items meet Definition of Ready for the next two sprints.
 - Label and route: triage each new issue to the owning specialist (quant_trader, ml_engineer, qa, security, software_engineer, etc.) and log the handoff with `log_handoff` so the routing is auditable.
 
+## Vertical-slice sizing
+
+Splitting an oversized item is the product_owner's scope call, not a Scrum
+Master shortcut — see the product_owner's `scope_boundaries` skill,
+"Vertical-slice sizing" section, for the full rule and its worked reasoning.
+This is the flow-side mirror of that rule, so grooming enforces the same bar
+rather than a looser one.
+
+The rule in one line: default to fewer, larger, complete-vertical-slice
+issues (implementation, wiring, and covering tests, shipped end to end);
+split only at a dependency, a parallelization opportunity, or a domain
+boundary. File or line count is never a split reason, and complexity rates
+risk, not size — a critical-complexity slice that is genuinely one coherent
+unit of work still gets one issue, with the response to its risk showing up
+in the RAID block and the review lens count, not in an artificial seam.
+
+During weekly grooming, the Scrum Master's job is to catch violations of this
+rule, not to perform the split: an item that was divided because its diff
+"looked big" or because a high/critical complexity tag made someone nervous
+is a signal to merge the pieces back and route the merged item to the
+product_owner for a real slicing pass against the three named boundaries.
+Conversely, an item at 13 points with no dependency, parallelization, or
+domain seam is not evidence the rule is wrong — it is evidence the story
+needs the product_owner's slicing pass before it can enter a sprint at all;
+do not accept it into a sprint un-split just because grooming ran out of time
+to find the seam.
+
+The INVEST "Small" property and this rule are the same constraint viewed from
+two ends: INVEST asks whether an item fits one sprint; vertical-slice sizing
+asks where the item's real boundaries are. An item can fail "Small" for two
+different reasons, and the fix differs: it may genuinely span two
+dependency-ordered contracts (split it, each piece independently Ready), or
+it may just be a large-but-coherent slice that was never actually oversized
+(do not split it — flag the sprint-capacity conversation instead, since
+splitting a coherent slice to fit a sprint just relocates the same work
+across two sprints with an artificial seam in between).
+
 ## Ordering and the product_owner handoff
 
 Order is a value decision, so it belongs to the product_owner; readiness is a flow decision, so it belongs to the Scrum Master. Keep the seam explicit.
@@ -88,6 +125,7 @@ The original 13-point "make it faster" epic was split: this 5-point caching slic
 - Refining the whole backlog to the same fine grain, wasting effort detailing items that may be discarded; keep depth proportional to proximity.
 - Acceptance criteria written as prose instead of Given/When/Then, leaving no testable boundary for the failing test the implementer must write first.
 - Routing an issue without logging the handoff, so the owning specialist and the reason are lost by the next session.
+- Splitting an oversized item on file count or a high complexity rating instead of routing it back to the product_owner for a real dependency/parallelization/domain slicing pass (`scope_boundaries`, "Vertical-slice sizing").
 
 ## Definition of done
 
@@ -98,3 +136,4 @@ The original 13-point "make it faster" epic was split: this 5-point caching slic
 - [ ] Refinement runs continuously at ~5-10 percent of capacity; stale `future` items are killed each week.
 - [ ] Definition of Ready (entry) and Definition of Done (exit) are documented and applied as separate gates.
 - [ ] Each new issue is routed to the owning specialist and the handoff is logged with `log_handoff`.
+- [ ] Any split of an oversized item cites a dependency, parallelization, or domain boundary (per `scope_boundaries`'s vertical-slice sizing rule), never file/line count or a complexity rating.

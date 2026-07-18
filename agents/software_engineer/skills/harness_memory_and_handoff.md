@@ -51,9 +51,42 @@ The store is SurrealDB-primary with a SQLite fallback (`solomon_harness/tools/da
 
 Start a task by reading the record, not the code. `get_latest_activity()` returns the most recent session or handoff and is your entry point. From there: `get_session(session_id)` to restore a checkpoint, `get_open_issues()` to pick up known defects, and `get_decision(decision_id)` to recover the rationale behind code you are about to change so you do not unknowingly reverse a deliberate choice. If a decision blocks what you intend, supersede it with a new `save_decision` that references the old one rather than silently overriding it.
 
+## Promotion gate and compaction
+
+Not every fact belongs in shared memory, and not every checkpoint should stay in its most verbose form once a task closes. Two disciplines keep the store useful instead of noisy: a promotion gate before a fact becomes its own `save_decision` or `save_memory` row, and a compaction pass before a `save_session` checkpoint is left as the resume point for closed work.
+
+### The promotion gate
+
+Before promoting a fact out of your current task state into a durable record, ask all three questions. All three must be "yes," or the fact stays local to your `save_session` messages and is never written as its own row:
+
+1. Will another task or agent need this to avoid a mistake or re-deriving it from scratch?
+2. Is it durable across runs — still true next week, not just for the rest of this session?
+3. Is it NOT already derivable by reading the repo, `docs/specs/`, `docs/adrs/`, or the open issue itself?
+
+Clears the gate: a discovered constraint that binds more than one future task (the shape of this project's own memory entries such as "the memory MCP write socket dies mid-session; recover with a fresh process, not the SQLite fallback"); a cross-cutting design tradeoff made mid-implementation, which goes to `save_decision` with rejected alternatives; an open risk a future task must account for, which goes to `log_issue` when actionable or `save_memory` when it is a standing fact with no task of its own yet.
+
+Fails the gate, stays in the current `save_session` messages only: which files you touched this session, the debugging steps that led to the root cause, a restated snapshot of acceptance criteria already in the issue, a workaround scoped only to this branch.
+
+### Compaction: preserve, remove, rewrite
+
+`save_session` upserts on `session_id`, so its `messages` keep growing across every checkpoint in a long task unless you actively compact them. Apply this taxonomy before each write, and especially before the final one that closes the task:
+
+- **Preserve:** current state (done / next), durable decisions already anchored via `save_decision`, open risks, and handoff pointers.
+- **Remove:** repetition across earlier checkpoints, notes a later checkpoint has superseded, command transcripts and raw tool output, and anything already derivable from the diff, the issue body, or `docs/specs/`.
+- **Rewrite:** what survives becomes short factual bullets — done / next / red-green position / files / linked ids — never a chronological narrative of what happened in what order.
+
+### How compaction acts on this project's memory model
+
+Solomon's memory has no separate "compact" call; compaction is something you do through how the existing tools are used:
+
+- **Decisions compact through `supersede_decision`, not silent overwrite.** When a later decision replaces an earlier one's rationale, call `supersede_decision(new_decision_id, old_decision_id, reason)` instead of writing an unrelated `save_decision` and leaving the stale row to be mistaken for current guidance. `supersedes_chain(decision_id)` then lets the next agent walk the lineage instead of finding two contradictory rows with no link between them.
+- **Sessions compact by rewriting the checkpoint, not accumulating it.** Because `save_session` upserts on `session_id`, the discipline is behavioral: each call's `messages` should already be the preserve-set, not the preserve-set appended onto every prior call's raw content. The closing `save_session(..., status="done")` call is where the remove/rewrite pass matters most — it is the row `get_session` and `get_latest_activity` surface to the next agent, so a closed task must not leave its noisiest mid-task checkpoint as the permanent resume record.
+
 ## Common pitfalls
 
 - A `save_decision` with no rejected alternatives in `rationale`. It records what, not why, and is useless to the next agent. Reject it.
+- Promoting a fact into `save_decision` or `save_memory` that fails the three-question gate — most often something already sitting in the issue body or the diff, which just duplicates a source of truth instead of adding one.
+- Accumulating every `save_session` call's raw messages instead of compacting to preserve/remove/rewrite before the next checkpoint, so the final row on a long task is an unreadable transcript instead of a resumable summary.
 - Logging trivial choices, flooding the decision log so the real tradeoffs are buried. Decisions are for the non-obvious few.
 - Unstable `session_id` or `github_id`, so retries create duplicate rows instead of upserting. Derive them from the branch or issue.
 - A `log_handoff` whose `contract_path` points at a missing or empty file, or a file with no "how to verify" steps. The pointer is worthless without the contract.
@@ -72,3 +105,5 @@ Start a task by reading the record, not the code. `get_latest_activity()` return
 - [ ] The handoff was logged only after the change's `definition_of_done` held and the suite ran green.
 - [ ] No secrets, tokens, or credentials appear in any memory value, session message, or decision rationale.
 - [ ] The task began with `get_latest_activity` and the relevant `get_session`/`get_open_issues`/`get_decision` reads, so prior context was honored rather than re-derived.
+- [ ] Every fact promoted to `save_decision` or `save_memory` cleared the three-question promotion gate; a superseding decision was recorded with `supersede_decision`, not a duplicate, unlinked row.
+- [ ] The closing `save_session` checkpoint was compacted (preserve/remove/rewrite), not left as an accumulated raw transcript of every prior checkpoint.

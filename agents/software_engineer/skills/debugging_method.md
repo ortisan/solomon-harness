@@ -22,6 +22,20 @@ Work the loop in order. Skipping a step is how a session turns into hours of sho
 
 When the cause is non-obvious or the fix encodes a design decision, record it in project memory with `save_decision` so the next agent sees the rationale instead of rediscovering it.
 
+## When three fixes fail, question the architecture
+
+Three failed fix attempts is not a signal to try a fourth. It is a different kind of signal entirely: the hypothesis-and-test loop in step 4 above is working as designed, and it keeps converging on "wrong." That is not a stubborn bug, it is a wrong architecture, and no amount of guessing resolves it.
+
+Watch for the pattern across attempts, not within one:
+
+- Each fix reveals new shared state, coupling, or the same class of problem in a different place — the bug keeps "moving" rather than closing.
+- Implementing the fix that would actually work requires touching far more of the system than the bug should ever justify.
+- Each attempted fix creates a new symptom somewhere else, so the net count of open problems does not shrink.
+
+When any of these hold after the third failed attempt: stop. Do not write a fourth fix. State plainly what you observe ("three fixes, each surfaced the same shared-state problem one layer over") and escalate — bring it to the human reviewer or to `software_architect` for a design discussion, rather than attempting fix four unilaterally. If the discussion concludes the pattern itself is unsound, that conclusion is an architectural decision: record it with `save_decision`, including the three attempts that failed and why, so the next person does not repeat them. Resume the debugging method only once the fixed target is the redesigned shape, not the original one.
+
+This escalation threshold is deliberately mechanical — count the attempts, do not rely on a feeling of frustration to trigger it. A feeling arrives inconsistently; a count of three does not.
+
 ## git bisect: finding the commit that broke it
 
 When something worked last week and fails today, `git bisect` finds the exact breaking commit by binary search over history. Mark a known-good and known-bad commit; git checks out the midpoint, you test, you mark it, and it converges.
@@ -84,6 +98,10 @@ At the prompt, `order.lines` is `[]` even though the saved order had two lines. 
 - Running `git bisect` without a reliable per-commit test, so you mark commits by eye and converge on the wrong one; and forgetting `git bisect reset`, leaving HEAD detached.
 - Fixing the symptom downstream (re-deriving a value, clamping a result) instead of the upstream cause, so the same root defect breaks the next caller.
 - Closing the bug without adding the regression test, so the next refactor reintroduces it with nothing to catch it.
+- "Emergency, no time for process" — systematic is faster than guess-and-check thrashing; a reproduce-isolate-hypothesize pass typically resolves in the time a second guessed fix would have taken, without the risk of a second bug layered on top.
+- "It's simple, I don't need the full method" — simple-looking bugs have root causes too, and the method costs almost nothing to run on a simple case; skipping it is where the "quick" fix that reappears next week comes from.
+- "One more fix attempt" after two have already failed — three failed attempts means the architecture is wrong, not that the next guess will land; see "When three fixes fail, question the architecture" above instead of reaching for a fourth.
+- "I'll add the regression test after confirming the fix works" — a fix confirmed only by eyeballing the symptom is not confirmed; write the failing test first so the confirmation is the test turning green, not a feeling.
 
 ## Definition of done
 
