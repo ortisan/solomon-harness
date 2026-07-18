@@ -384,12 +384,12 @@ def _pinned_clone(source: dict, dest: str) -> None:
         raise ValueError("pin must be a full commit SHA")
 
     os.makedirs(dest, exist_ok=True)
-    subprocess.run(["git", "init", "-q", dest], check=True)
-    subprocess.run(["git", "-C", dest, "remote", "add", "origin", url], check=True)
-    subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", pin], check=True, capture_output=True)
-    subprocess.run(["git", "-C", dest, "checkout", "-q", pin], check=True, capture_output=True)
-    
-    proc = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-q", dest], check=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    subprocess.run(["git", "-C", dest, "remote", "add", "origin", url], check=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", pin], check=True, capture_output=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    subprocess.run(["git", "-C", dest, "checkout", "-q", pin], check=True, capture_output=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+
+    proc = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], check=True, capture_output=True, text=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
     current_head = proc.stdout.strip()
     if current_head != pin:
         raise ValueError(f"HEAD mismatch: checked out {current_head}, expected {pin}")
