@@ -690,6 +690,11 @@ def test_bootstrap_reports_nonblocking_legacy_conflicts_and_completes(
 
     monkeypatch.setattr(prereqs, "check_prerequisites", lambda **_kwargs: True)
     monkeypatch.setattr(install_layout, "install_project", lambda _root: _WarningResult())
+    # Isolate the per-machine harness home so bootstrap's memory setup writes the
+    # generated SurrealDB credentials into a throwaway dir, never the real
+    # ~/.solomon-harness — a leaked credentials.json there makes the live
+    # SurrealDB integration tests sign in with a non-root password (#350).
+    monkeypatch.setenv("SOLOMON_HARNESS_HOME", str(tmp_path / "harness-home"))
 
     bootstrap.bootstrap_project(str(tmp_path), non_interactive=True)
 
