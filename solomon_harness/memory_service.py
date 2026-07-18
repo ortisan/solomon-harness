@@ -356,3 +356,8 @@ class MemoryService:
                 query, k=k, category=category, ef=ef
             )
         }
+
+    def search_decisions(
+        self, query: str, k: int = 5, ef: int = 64
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return {"results": self.client.search_decisions(query, k=k, ef=ef)}

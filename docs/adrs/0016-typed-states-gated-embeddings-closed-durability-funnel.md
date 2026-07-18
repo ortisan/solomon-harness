@@ -4,6 +4,7 @@
 - Date: 2026-07-04
 - Deciders: software_architect, software_engineer, dba
 - Issue: #165, #166
+- Amended: ADR-0041 (2026-07-18) extends the gated-embedding vector layer to the decisions table and makes the embedder registry-selectable.
 
 ## Context and problem statement
 

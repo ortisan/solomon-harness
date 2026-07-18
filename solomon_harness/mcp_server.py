@@ -300,6 +300,11 @@ def build_server() -> Any:
         """Return the k memory entries nearest to a query (SurrealDB-only)."""
         return service.semantic_search(query, k, category, ef)
 
+    @server.tool()
+    def search_decisions(query: str, k: int = 5, ef: int = 64) -> dict:
+        """Return the k decisions nearest to a query via the vector index (SurrealDB-only)."""
+        return service.search_decisions(query, k, ef)
+
     return server
 
 
