@@ -3497,9 +3497,9 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             # A deliberate TableScan (ADR-0042): the "open = not terminal" predicate
             # is a negation no index can serve, and a derived indexed boolean would
-            # have to be maintained across every status-write path (with a live-tenant
-            # backfill) at the risk of silently dropping issues. At 360 rows the scan
-            # is sub-millisecond; revisit the derived index only past ~10^4 issues.
+            # need a live-tenant backfill IF NOT EXISTS cannot apply, at the risk of
+            # silently dropping issues. At 360 rows the scan is a few milliseconds;
+            # revisit the derived index only past ~10^4 issues.
             query = (
                 "SELECT * FROM issues "
                 "WHERE status IS NONE OR status IS NULL OR status NOT IN $terminal"

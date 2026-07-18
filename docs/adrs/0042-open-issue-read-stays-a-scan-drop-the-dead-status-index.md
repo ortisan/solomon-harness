@@ -16,12 +16,12 @@ Separately, the `issues_status` index (`ON issues FIELDS status`) is dead. Its o
 ## Decision drivers
 
 - Correctness and simplicity over speculative performance. A derived index that can silently return the wrong open set is worse than a cheap scan.
-- The read is not hot in cost terms: 360 issues today, a trivial predicate, sub-millisecond. The cockpit already full-scans every issue via `list_issues` on the same board render, so the open-issue read is not the bottleneck.
+- The read is not hot in cost terms: 360 issues today, a trivial predicate, a few milliseconds (measured ~2-5ms against the live tenant). The cockpit already full-scans every issue via `list_issues` on the same board render, so the open-issue read is not the bottleneck.
 - Every maintained-but-unread index is pure write-time cost and a false signal to a future reader that a query is served.
 
 ## Considered options
 
-- Add a derived `open` (or `terminal`) boolean, index it, and rewrite the read to `WHERE open = true`. Rejected: the boolean must be recomputed on every status write, and there is more than one (the `log_issue` UPSERT and the board-transition `UPDATE ... SET status`), on both the SurrealDB and SQLite backends, plus a live-tenant backfill. A single missed path silently drops issues from `get_open_issues` with no error. The maintenance surface and consistency risk outweigh the bounded-growth benefit at this scale.
+- Add a derived `open` (or `terminal`) boolean, index it, and rewrite the read to `WHERE open = true`. Rejected: the boolean must be recomputed on every issue write (`_db_log_issue`, on both the SurrealDB and SQLite backends, through which the board-transition write-through also funnels) and, critically, a live-tenant backfill of the 360 existing rows that `IF NOT EXISTS` cannot apply. A row written or backfilled without the field silently drops from `get_open_issues` with no error. The migration and consistency risk outweigh the bounded-growth benefit at this scale.
 - A functional/expression index on `NOT is_terminal(status)`. Rejected: SurrealDB has no expression-index support; the negation cannot be indexed directly either way.
 - Keep the read as a scan and remove the dead index (chosen).
 
