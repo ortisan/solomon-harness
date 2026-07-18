@@ -237,7 +237,7 @@ class TestMcpServerBuilds(unittest.TestCase):
         "record_metric", "query_metric", "aggregate_metric",
         "loop_run_throughput", "loop_run_failure_rate",
         # Vector (SurrealDB-only).
-        "semantic_search",
+        "semantic_search", "search_decisions",
     }
 
     def test_build_server_registers_expected_tools(self):

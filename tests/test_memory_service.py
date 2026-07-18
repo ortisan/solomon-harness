@@ -73,6 +73,8 @@ _INIT_DEFINES = (
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+    f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32; "
+    "DEFINE INDEX IF NOT EXISTS decisions_embedding ON decisions "
     f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32;"
 )
 
@@ -230,6 +232,10 @@ class TestMemoryService(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "requires the SurrealDB backend"):
             self.svc.semantic_search("anything")
 
+    def test_search_decisions_requires_surreal(self):
+        with self.assertRaisesRegex(RuntimeError, "requires the SurrealDB backend"):
+            self.svc.search_decisions("anything")
+
 
 @unittest.skipUnless(SURREAL_AVAILABLE, "SurrealDB not reachable at " + SURREAL_URL)
 class TestMemoryServiceMultiModelLive(unittest.TestCase):
@@ -330,6 +336,16 @@ class TestMemoryServiceMultiModelLive(unittest.TestCase):
         hits = self.svc.semantic_search("italian pizza dinner", k=3)["results"]
         self.assertTrue(hits)
         self.assertEqual(hits[0]["key"], "food")
+
+    def test_search_decisions_returns_nearest(self):
+        self.svc.save_decision(
+            "hexagonal ports and adapters", "isolate the domain", "adopt hexagonal",
+            "arch", "main", "s1",
+        )
+        self.svc.save_decision("pizza pasta", "italian food", "takeout", "chef", "main", "s2")
+        hits = self.svc.search_decisions("hexagonal architecture domain", k=2)["results"]
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["title"], "hexagonal ports and adapters")
 
 
 if __name__ == "__main__":

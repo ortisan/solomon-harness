@@ -91,6 +91,8 @@ _INIT_DEFINES = (
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+    f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32; "
+    "DEFINE INDEX IF NOT EXISTS decisions_embedding ON decisions "
     f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32;"
 )
 
@@ -181,6 +183,97 @@ class TestEmbedderWiring(unittest.TestCase):
         self.assertIn("embedding: $embedding", query)
         self.assertEqual(params["embedding"], [0.5] * EMBEDDING_DIM)
         self.assertEqual(params["value"], "hello world")
+
+
+class _EmptyEmbedder:
+    """An embedder whose probe returns an empty vector, so it fails validation."""
+
+    def embed(self, text):
+        return []
+
+
+class TestEmbedderPlug(unittest.TestCase):
+    """The config-driven embedder plug resolves safely, default is unchanged."""
+
+    def test_plug_imports_a_module_class_path(self):
+        plugged = DatabaseClient._load_embedder_plug(
+            "solomon_harness.tools.database_client:HashingEmbedder"
+        )
+        self.assertIsInstance(plugged, HashingEmbedder)
+
+    def test_plug_without_colon_is_not_a_plug(self):
+        # A bare model name (e.g. the config's text-embedding-004) has no
+        # dependency-free implementation, so it is not a plug: the default wins.
+        self.assertIsNone(DatabaseClient._load_embedder_plug("text-embedding-004"))
+        self.assertIsNone(DatabaseClient._load_embedder_plug(None))
+
+    def test_plug_unimportable_falls_back(self):
+        self.assertIsNone(DatabaseClient._load_embedder_plug("no.such.module:Nope"))
+
+    def test_plug_failing_probe_falls_back(self):
+        self.assertIsNone(DatabaseClient._safe_probe(_EmptyEmbedder()))
+
+    def test_embedder_dim_follows_the_embedder(self):
+        self.assertEqual(DatabaseClient._embedder_dim(HashingEmbedder(dim=16)), 16)
+        self.assertEqual(
+            DatabaseClient._embedder_dim(HashingEmbedder(dim=EMBEDDING_DIM)),
+            EMBEDDING_DIM,
+        )
+
+
+class TestDecisionVectors(unittest.TestCase):
+    """Decisions are embedded on write, indexed at the active dim, and searchable."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        os.environ["HARNESS_MIRROR_ROOT"] = os.path.join(self.temp_dir.name, "mirror")
+
+    def tearDown(self):
+        os.environ.pop("HARNESS_MIRROR_ROOT", None)
+        self.temp_dir.cleanup()
+
+    def _client(self, **kwargs):
+        return DatabaseClient(db_path=os.path.join(self.temp_dir.name, "h.db"), **kwargs)
+
+    def test_vector_index_statements_use_the_active_dim(self):
+        client = self._client(embedder=HashingEmbedder(dim=16))
+        joined = " ".join(client._vector_index_statements())
+        self.assertIn("memory_embedding ON memory", joined)
+        self.assertIn("decisions_embedding ON decisions", joined)
+        self.assertIn("DIMENSION 16", joined)
+        self.assertNotIn(f"DIMENSION {EMBEDDING_DIM}", joined)
+
+    def test_surreal_decision_write_embeds_title_rationale_outcome(self):
+        fake = _RecordingEmbedder(vector=[0.5] * EMBEDDING_DIM)
+        client = self._client(embedder=fake)
+        client.backend = "surrealdb"
+        client._run_surreal = MagicMock(return_value=[{"id": "decisions:d1"}])
+        client.log_decision("t", "r", "o", "a", "main", "sha")
+        self.assertEqual(fake.calls, ["t r o"])
+        query, params = client._run_surreal.call_args[0]
+        self.assertIn("embedding: $embedding", query)
+        self.assertEqual(params["embedding"], [0.5] * EMBEDDING_DIM)
+
+    def test_sqlite_decision_write_does_not_embed(self):
+        fake = _RecordingEmbedder()
+        client = self._client(embedder=fake)
+        client.log_decision("t", "r", "o", "a", "main", "sha")
+        self.assertEqual(fake.calls, [])
+
+    def test_search_decisions_builds_knn_query_and_requires_surreal(self):
+        fake = _RecordingEmbedder()
+        client = self._client(embedder=fake)
+        with self.assertRaisesRegex(RuntimeError, "requires the SurrealDB backend"):
+            client.search_decisions("hexagonal ports")
+        client.backend = "surrealdb"
+        client._run_surreal = MagicMock(return_value=[])
+        client.search_decisions("hexagonal ports", k=3, ef=32)
+        query, params = client._run_surreal.call_args[0]
+        self.assertIn("FROM decisions", query)
+        self.assertIn("<|3,32|>", query)
+        self.assertIn("vector::distance::knn()", query)
+        self.assertIn("ORDER BY distance", query)
+        self.assertEqual(len(params["q"]), EMBEDDING_DIM)
 
 
 class TestMultiModelUnit(unittest.TestCase):
@@ -528,6 +621,45 @@ class TestMultiModelLive(unittest.TestCase):
         hits = self.client.semantic_search("shared term", k=5, category="fruit")
         self.assertTrue(hits)
         self.assertTrue(all(h["category"] == "fruit" for h in hits))
+
+    def test_decisions_embedding_index_is_defined_by_bootstrap(self):
+        # Prove the production schema bootstrap (not the test's _INIT_DEFINES
+        # mirror) builds the decisions vector index on an existing tenant.
+        self.client._bootstrap_surreal_schema()
+        info = self.raw.query("INFO FOR TABLE decisions")
+        self.assertIn("decisions_embedding", info["indexes"])
+
+    def test_decisions_are_vector_searchable(self):
+        self.client.log_decision(
+            "hexagonal ports and adapters", "isolate the domain from IO",
+            "adopt hexagonal architecture", "arch", "main", "s1",
+        )
+        self.client.log_decision(
+            "pizza pasta", "italian food choices", "order takeout", "chef", "main", "s2",
+        )
+        hits = self.client.search_decisions("hexagonal architecture domain", k=2)
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["title"], "hexagonal ports and adapters")
+        distances = [h["distance"] for h in hits]
+        self.assertEqual(distances, sorted(distances))
+
+    def test_reindex_backfills_a_decision_written_without_an_embedding(self):
+        # A decision written before the vector index (or replayed from the mirror)
+        # carries no embedding and is absent from search until reindexed.
+        self.raw.query(
+            "CREATE decisions:legacy SET title = 'legacy widget refactor', "
+            "rationale = 'old code cleanup', outcome = 'refactor the widget', "
+            "created_at = time::now();"
+        )
+        before = self.client.search_decisions("legacy widget refactor", k=5)
+        self.assertFalse(any(h["title"] == "legacy widget refactor" for h in before))
+
+        counts = self.client.reindex_embeddings(tables=("decisions",))
+        self.assertEqual(counts["decisions"], 1)
+
+        after = self.client.search_decisions("legacy widget refactor", k=1)
+        self.assertTrue(after)
+        self.assertEqual(after[0]["title"], "legacy widget refactor")
 
 
 if __name__ == "__main__":

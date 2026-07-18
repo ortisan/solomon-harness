@@ -4,6 +4,7 @@ import sqlite3
 import logging
 import sys
 import functools
+import importlib
 import threading
 import datetime
 import glob
@@ -584,10 +585,9 @@ class DatabaseClient:
         # Timeseries: composite index on (name, time) for metrics.
         "DEFINE INDEX IF NOT EXISTS metrics_name_time "
         "ON metrics FIELDS name, time;",
-        # Vector: HNSW index over the 256-dim memory embedding.
-        "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
-        f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
-        "DIST COSINE TYPE F32;",
+        # Vector: the HNSW indexes over the memory and decision embeddings are built
+        # at connect time from the active embedder's dimension (_vector_index_
+        # statements), not here, because the dimension follows a pluggable embedder.
         # Typed states (ADR-0016): one targeted ASSERT per stateful field. The
         # tables stay SCHEMALESS elsewhere. Harness code normalizes on write
         # (normalize_status and friends, below every consumer), so these can
@@ -644,7 +644,6 @@ class DatabaseClient:
                 semantic search. Defaults to :class:`HashingEmbedder`, a dependency-free
                 lexical embedder; pass a model-backed embedder for true semantic search.
         """
-        self._init_embedder(embedder)
         self._init_connection_state(db_path)
         self._resolve_roots(harness_dir)
 
@@ -652,14 +651,72 @@ class DatabaseClient:
         # front, so every write funnels to the same gitignored local store.
         self._mirror_root = self._resolve_mirror_root(mirror_root)
 
+        # _load_config captures models.embedding, so the embedder is resolved after
+        # it and before _init_backend, whose schema bootstrap needs _embedding_dim.
         db_config = self._load_config()
+        self._init_embedder(embedder)
         self._init_backend(db_config)
 
     def _init_embedder(self, embedder: Optional[Embedder]) -> None:
-        """Choose the embedder that vectorizes memory for the vector index."""
-        # The embedder that vectorizes memory for the HNSW vector index. The default
-        # is lexical (token overlap), swappable for a real semantic model.
-        self._embedder: Embedder = embedder or HashingEmbedder()
+        """Choose the embedder that vectorizes memory and decisions.
+
+        Precedence: an explicitly injected embedder, then a model plugged via the
+        config's models.embedding as a "module:Class" import path, else the
+        dependency-free lexical HashingEmbedder. Any import or probe failure falls
+        back to the default, so the store never fails to open.
+        """
+        plugged = embedder or self._load_embedder_plug(
+            getattr(self, "_embedding_model", None)
+        )
+        self._embedder: Embedder = plugged or HashingEmbedder()
+        self._embedding_dim = self._embedder_dim(self._embedder)
+
+    @staticmethod
+    def _safe_probe(embedder: Embedder) -> Optional[List[float]]:
+        """Embed a probe string, returning the vector only if it is a real list."""
+        try:
+            vec = embedder.embed("probe")
+        except Exception:  # noqa: BLE001 - any failure means the plug is unusable
+            return None
+        if not isinstance(vec, (list, tuple)) or len(vec) == 0:
+            return None
+        try:
+            return [float(x) for x in vec]
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _load_embedder_plug(cls, spec: Optional[str]) -> Optional[Embedder]:
+        """Resolve a "module:Class" embedder spec, or None to keep the default.
+
+        A bare model name (no colon, e.g. the config's text-embedding-004) has no
+        dependency-free implementation, so it is not a plug. An unimportable path
+        or an instance that fails its probe also falls back to the default.
+        """
+        if not spec or ":" not in str(spec):
+            return None
+        module_name, _, class_name = str(spec).partition(":")
+        try:
+            candidate = getattr(importlib.import_module(module_name), class_name)()
+        except Exception as exc:  # noqa: BLE001 - fall back rather than fail to open
+            logging.warning(f"Embedder plug {spec!r} unavailable; using the default: {exc}")
+            return None
+        if cls._safe_probe(candidate) is None:
+            logging.warning(f"Embedder plug {spec!r} failed its probe; using the default")
+            return None
+        return candidate
+
+    @classmethod
+    def _embedder_dim(cls, embedder: Embedder) -> int:
+        """The HNSW dimension for an embedder, from its optional ``dim`` attribute.
+
+        HashingEmbedder exposes ``dim``; a pluggable model embedder should expose an
+        integer ``dim`` too so its index is built at the right size. Absent (or
+        non-positive), the store assumes EMBEDDING_DIM (256). Read as an attribute,
+        never by probing, so construction never triggers a model inference.
+        """
+        dim = getattr(embedder, "dim", None)
+        return int(dim) if isinstance(dim, int) and dim > 0 else EMBEDDING_DIM
 
     def _init_connection_state(self, db_path: Optional[str]) -> None:
         """Set the backend defaults and the rebuildable SurrealDB params."""
@@ -756,6 +813,12 @@ class DatabaseClient:
                     break
                 except (OSError, json.JSONDecodeError) as exc:
                     logging.error(f"Failed to read configuration at {candidate}: {exc}")
+
+        # The optional embedder plug: models.embedding is a "module:Class" import
+        # path when a real embedder is installed, else a bare model name (or absent)
+        # that resolves to the dependency-free HashingEmbedder. Read here so the
+        # constructor can build the embedder after config is loaded.
+        self._embedding_model = config.get("models", {}).get("embedding")
 
         db_config = config.get("database", {})
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
@@ -1406,6 +1469,25 @@ class DatabaseClient:
         """
         for statement in self._SURREAL_SCHEMA_STATEMENTS:
             self.db.query(statement)
+        for statement in self._vector_index_statements():
+            self.db.query(statement)
+
+    def _vector_index_statements(self) -> List[str]:
+        """The HNSW index DDL for memory and decisions at the active embedder dim.
+
+        Built per instance (not in the static schema list) so the DIMENSION follows
+        a pluggable embedder. With the default HashingEmbedder this is 256, so the
+        DDL is byte-identical to the pre-pluggable schema and applies cleanly to an
+        existing tenant. A plugged embedder of a different dimension requires a
+        one-time index rebuild, which this does not perform automatically.
+        """
+        dim = getattr(self, "_embedding_dim", EMBEDDING_DIM)
+        return [
+            f"DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+            f"FIELDS embedding HNSW DIMENSION {dim} DIST COSINE TYPE F32;",
+            f"DEFINE INDEX IF NOT EXISTS decisions_embedding ON decisions "
+            f"FIELDS embedding HNSW DIMENSION {dim} DIST COSINE TYPE F32;",
+        ]
 
     @staticmethod
     def _is_connection_error(exc: Exception) -> bool:
@@ -1971,10 +2053,19 @@ class DatabaseClient:
                 author: $author,
                 branch: $branch,
                 commit_sha: $commit_sha,
+                embedding: $embedding,
                 created_at: time::now()
             };
             """
+            # Decisions are inherently semantic, so unlike memory there is no
+            # category gate: every decision is embedded from its title, rationale,
+            # and outcome. Computed here (not in the durability mirror), so a
+            # replayed decision is re-embedded on reconcile like any live write.
             params = {"id": self._rid("decisions", record_id), **fields}
+            params["embedding"] = self._embedder.embed(
+                f"{fields.get('title', '')} {fields.get('rationale', '')} "
+                f"{fields.get('outcome', '')}".strip()
+            )
             try:
                 res = self._run_surreal(query, params)
                 return self._extract_id(res)
@@ -4579,6 +4670,84 @@ class DatabaseClient:
         )
         res = self._run_surreal(sql, params)
         return self._extract_list(res)
+
+    @_resilient
+    def search_decisions(self, query: str, k: int = 5, ef: int = 64) -> List[Dict[str, Any]]:
+        """Return the ``k`` decisions nearest to ``query`` (SurrealDB-only).
+
+        Cosine distance over each decision's embedding via the HNSW index and the
+        ``<|k, EF|>`` KNN operator, the decisions-table analogue of
+        :meth:`semantic_search`. With the default :class:`HashingEmbedder` this is
+        lexical nearness; swap in a model-backed embedder for true meaning. Results
+        are ``[{"title", "rationale", "outcome", "author", "branch", "commit_sha",
+        "distance"}, ...]`` nearest first. Decisions written before the vector index
+        existed only appear after :meth:`reindex_embeddings`.
+        """
+        self._require_surreal("decision search")
+        knn = f"<|{int(k)},{int(ef)}|>"
+        sql = (
+            f"SELECT title, rationale, outcome, author, branch, commit_sha, "
+            f"vector::distance::knn() AS distance "
+            f"FROM decisions WHERE embedding {knn} $q ORDER BY distance;"
+        )
+        res = self._run_surreal(sql, {"q": self._embedder.embed(query)})
+        return self._extract_list(res)
+
+    @_resilient
+    def reindex_embeddings(
+        self, tables: Sequence[str] = ("decisions", "memory")
+    ) -> Dict[str, int]:
+        """Backfill missing embeddings with the active embedder (SurrealDB-only).
+
+        Rows written before their vector index existed, or replayed from the
+        durability mirror (which does not carry embeddings), have no embedding and
+        are absent from the HNSW index. This recomputes and stores the embedding for
+        every such row so it becomes searchable. Idempotent: rows that already carry
+        an embedding are skipped. Returns a per-table count of rows re-embedded. Run
+        it after swapping the embedder, or once to index decisions written before
+        this feature.
+        """
+        self._require_surreal("embedding reindex")
+        return {table: self._reindex_table(table) for table in tables}
+
+    def _reindex_table(self, table: str) -> int:
+        """Re-embed every ``embedding IS NONE`` row of one table; returns the count."""
+        table = self._safe_ident(table, "table name")
+        rows = self._extract_list(
+            self._run_surreal(f"SELECT * FROM {table} WHERE embedding IS NONE;")
+        )
+        count = 0
+        for row in rows:
+            text = self._embedding_text(table, row)
+            if text is None:
+                continue
+            self._run_surreal(
+                "UPDATE $id SET embedding = $embedding;",
+                {"id": self._parse_rid(row.get("id")), "embedding": self._embedder.embed(text)},
+            )
+            count += 1
+        return count
+
+    @staticmethod
+    def _embedding_text(table: str, row: Dict[str, Any]) -> Optional[str]:
+        """The text to embed for a row, or None when the row must stay unindexed.
+
+        Decisions always embed (title/rationale/outcome). Memory embeds only the
+        semantic categories, matching the save_memory gate, so the code index and
+        board history are never pulled into the vector index by a reindex.
+        """
+        if table == "decisions":
+            text = (
+                f"{row.get('title', '')} {row.get('rationale', '')} "
+                f"{row.get('outcome', '')}".strip()
+            )
+            return text or None
+        if table == "memory":
+            if not is_semantic_category(row.get("category")):
+                return None
+            text = f"{row.get('key', '')} {row.get('value', '')}".strip()
+            return text or None
+        return None
 
     def close(self) -> None:
         """Closes the database client and any open connections."""
