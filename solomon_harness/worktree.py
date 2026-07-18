@@ -44,13 +44,18 @@ class WorktreeConflict(WorktreeError):
 
 
 def _run_git(repo_root: str, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
+    """Single git-exec primitive for this module, Popen-backed: run_stage's
+    tests mock subprocess.run as the engine, and worktree reads must keep
+    real git access while the engine is faked."""
+    popen = subprocess.Popen(
         ["git", "-C", repo_root, *args],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
         env=clean_git_env(),
     )
+    out, err = popen.communicate()
+    proc = subprocess.CompletedProcess(popen.args, popen.returncode, out, err)
     if check and proc.returncode != 0:
         raise WorktreeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc
@@ -200,3 +205,32 @@ def repair_git_config(repo_root: str) -> None:
     """Repair the local git config by unsetting stray core.worktree and setting core.bare to false."""
     _run_git(repo_root, ["config", "--local", "--unset", "core.worktree"], check=False)
     _run_git(repo_root, ["config", "--local", "core.bare", "false"], check=False)
+
+
+def workspace_snapshot(repo_root: str) -> Optional[dict]:
+    """Fingerprint of the local branch refs and working-tree status, or None
+    outside git. Start-stage work lands in a sibling worktree, so shared refs
+    are where real work shows up; porcelain status covers direct edits."""
+    if not os.path.exists(os.path.join(repo_root, ".git")):
+        return None
+    try:
+        refs = _run_git(
+            repo_root,
+            ["for-each-ref", "refs/heads", "--format=%(refname) %(objectname)"],
+        ).stdout
+        status = _run_git(repo_root, ["status", "--porcelain"]).stdout
+    except Exception:
+        return None
+    return {"refs": refs, "status": status}
+
+
+def workspace_changed(repo_root: str, baseline: Optional[dict]) -> bool:
+    """True when the repository moved since ``baseline``; fail-open on a
+    missing baseline or snapshot failure so a broken git never demotes a real
+    success to a skipped no-op."""
+    if baseline is None:
+        return True
+    current = workspace_snapshot(repo_root)
+    if current is None:
+        return True
+    return current != baseline
