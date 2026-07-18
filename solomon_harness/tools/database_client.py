@@ -12,6 +12,7 @@ import re
 import uuid
 from contextlib import contextmanager
 from typing import (
+    Callable,
     Generator,
     Any,
     Dict,
@@ -35,7 +36,10 @@ class Embedder(Protocol):
 
     The contract is intentionally narrow so a real semantic model (sentence
     transformers, an API embedder, etc.) can be dropped in to replace the default
-    lexical embedder without touching the database client.
+    lexical embedder without touching the database client. An embedder MAY expose
+    an integer ``dim`` attribute; the HNSW index is built at that dimension, or at
+    the length of a probe vector when ``dim`` is absent, so an embedder whose
+    vectors are not 256-long is indexed correctly.
     """
 
     def embed(self, text: str) -> List[float]:
@@ -79,6 +83,16 @@ class HashingEmbedder:
         if norm > 0.0:
             vec = [v / norm for v in vec]
         return vec
+
+
+# The vetted embedders that models.embedding may SELECT by name. The config value
+# is a key into this registry, never an importable path, so a git-tracked
+# .agent/config.json can never name arbitrary code to run (ADR-0041). To expose a
+# real model-backed embedder, add a reviewed factory here and ship its integration;
+# a caller can also inject any embedder object directly via DatabaseClient(embedder=).
+_EMBEDDER_REGISTRY: Dict[str, Callable[[], Embedder]] = {
+    "hashing": HashingEmbedder,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -375,50 +389,6 @@ def person_key_or_unassigned(key: Optional[str]) -> str:
     return key if key is not None else UNASSIGNED_PERSON_KEY
 
 
-class SpectronFallbackClient:
-    """Fallback client for Spectron REST API when the python package doesn't export it."""
-
-    def __init__(self, context: str, endpoint: str, api_key: str, timeout: float = 30.0, max_retries: int = 3):
-        self.context = context
-        self.endpoint = endpoint.rstrip('/')
-        self.api_key = api_key
-        self.timeout = timeout
-        self.max_retries = max_retries
-        import requests
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        })
-
-    def remember(self, fact: str, scope: Optional[List[str]] = None) -> Any:
-        url = f"{self.endpoint}/api/v1/{self.context}/facts"
-        payload: Dict[str, Any] = {"fact": fact}
-        if scope:
-            payload["scope"] = scope
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json()
-
-    def recall(self, query: str, scope: Optional[List[str]] = None) -> Any:
-        url = f"{self.endpoint}/api/v1/{self.context}/query"
-        payload: Dict[str, Any] = {"query": query}
-        if scope:
-            payload["scope"] = scope
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        
-        data = resp.json()
-        class MockHit:
-            def __init__(self, text):
-                self.text = text
-        class MockResponse:
-            def __init__(self, hits):
-                self.hits = hits
-        hits = [MockHit(h.get("text", "")) for h in data.get("hits", [])]
-        return MockResponse(hits)
-
-
 def _resolve_database(configured: Optional[str], project_root: str) -> str:
     """Resolve the SurrealDB database name for a project.
 
@@ -584,13 +554,26 @@ class DatabaseClient:
         "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
         "DEFINE INDEX IF NOT EXISTS decisions_created_at "
         "ON decisions FIELDS created_at;",
+        # Time-ordered hot paths. get_latest_activity reads the newest sessions
+        # and handoffs row (ORDER BY timestamp DESC LIMIT 1) on every session
+        # start; without these the planner does a TableScan plus sort that grows
+        # with the ledger. Indexing the ordered field turns each into an
+        # IndexScan, the plan decisions_created_at already gets. A new index name
+        # applies to existing tenants on the next connect, so no backfill.
+        "DEFINE INDEX IF NOT EXISTS sessions_timestamp "
+        "ON sessions FIELDS timestamp;",
+        "DEFINE INDEX IF NOT EXISTS handoffs_timestamp "
+        "ON handoffs FIELDS timestamp;",
+        # loop_run_throughput / loop_run_failure_rate filter and group loop_runs
+        # by created_at.
+        "DEFINE INDEX IF NOT EXISTS loop_runs_created_at "
+        "ON loop_runs FIELDS created_at;",
         # Timeseries: composite index on (name, time) for metrics.
         "DEFINE INDEX IF NOT EXISTS metrics_name_time "
         "ON metrics FIELDS name, time;",
-        # Vector: HNSW index over the 256-dim memory embedding.
-        "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
-        f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} "
-        "DIST COSINE TYPE F32;",
+        # Vector: the HNSW indexes over the memory and decision embeddings are built
+        # at connect time from the active embedder's dimension (_vector_index_
+        # statements), not here, because the dimension follows a pluggable embedder.
         # Typed states (ADR-0016): one targeted ASSERT per stateful field. The
         # tables stay SCHEMALESS elsewhere. Harness code normalizes on write
         # (normalize_status and friends, below every consumer), so these can
@@ -647,7 +630,6 @@ class DatabaseClient:
                 semantic search. Defaults to :class:`HashingEmbedder`, a dependency-free
                 lexical embedder; pass a model-backed embedder for true semantic search.
         """
-        self._init_embedder(embedder)
         self._init_connection_state(db_path)
         self._resolve_roots(harness_dir)
 
@@ -655,22 +637,73 @@ class DatabaseClient:
         # front, so every write funnels to the same gitignored local store.
         self._mirror_root = self._resolve_mirror_root(mirror_root)
 
+        # _load_config captures models.embedding, so the embedder is resolved after
+        # it and before _init_backend, whose schema bootstrap needs _embedding_dim.
         db_config = self._load_config()
+        self._init_embedder(embedder)
         self._init_backend(db_config)
 
     def _init_embedder(self, embedder: Optional[Embedder]) -> None:
-        """Choose the embedder that vectorizes memory for the vector index."""
-        # The embedder that vectorizes memory for the HNSW vector index. The default
-        # is lexical (token overlap), swappable for a real semantic model.
-        self._embedder: Embedder = embedder or HashingEmbedder()
+        """Choose the embedder that vectorizes memory and decisions.
+
+        Precedence: an explicitly injected embedder, then a vetted embedder selected
+        by name from models.embedding, else the dependency-free lexical
+        HashingEmbedder. models.embedding is a key into the embedder registry, never
+        an importable path, so the config can never name arbitrary code to run.
+        """
+        selected = embedder or self._registered_embedder(
+            getattr(self, "_embedding_model", None)
+        )
+        self._embedder: Embedder = selected or HashingEmbedder()
+        self._embedding_dim = self._embedder_dim(self._embedder)
+
+    @staticmethod
+    def _registered_embedder(name: Optional[str]) -> Optional[Embedder]:
+        """Instantiate the vetted embedder registered under ``name``, or None.
+
+        A name absent from ``_EMBEDDER_REGISTRY`` (including the config default
+        text-embedding-004, which ships no dependency-free implementation) resolves
+        to None so the caller keeps the lexical HashingEmbedder default. Only names
+        already present in the reviewed registry can be selected; no config value is
+        ever imported or executed.
+        """
+        factory = _EMBEDDER_REGISTRY.get(str(name or "").strip().lower())
+        return factory() if factory is not None else None
+
+    @staticmethod
+    def _safe_probe(embedder: Embedder) -> Optional[List[float]]:
+        """Embed a probe string, returning the vector only if it is a real list."""
+        try:
+            vec = embedder.embed("probe")
+        except Exception:  # noqa: BLE001 - any failure means the embedder is unusable
+            return None
+        if not isinstance(vec, (list, tuple)) or len(vec) == 0:
+            return None
+        try:
+            return [float(x) for x in vec]
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _embedder_dim(cls, embedder: Embedder) -> int:
+        """The HNSW dimension for an embedder: its ``dim`` attribute, else the real
+        length of a probe vector, else EMBEDDING_DIM (256).
+
+        Deriving from the actual probe vector when ``dim`` is absent means a model
+        embedder that emits, say, 768-long vectors can never be indexed at 256 and
+        then fail on the first write. HashingEmbedder exposes ``dim``, so it is never
+        probed and construction stays cheap on the default path.
+        """
+        dim = getattr(embedder, "dim", None)
+        if isinstance(dim, int) and dim > 0:
+            return int(dim)
+        probe = cls._safe_probe(embedder)
+        return len(probe) if probe else EMBEDDING_DIM
 
     def _init_connection_state(self, db_path: Optional[str]) -> None:
         """Set the backend defaults and the rebuildable SurrealDB params."""
         self.backend = "sqlite"
         self.db = None
-        # Typed Any: assigned a Spectron or SpectronFallbackClient by
-        # _init_spectron when configured, else stays None.
-        self.spectron: Any = None
         self.db_path = db_path
         # The explicit db_path argument (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
@@ -760,6 +793,12 @@ class DatabaseClient:
                 except (OSError, json.JSONDecodeError) as exc:
                     logging.error(f"Failed to read configuration at {candidate}: {exc}")
 
+        # The optional embedder plug: models.embedding is a "module:Class" import
+        # path when a real embedder is installed, else a bare model name (or absent)
+        # that resolves to the dependency-free HashingEmbedder. Read here so the
+        # constructor can build the embedder after config is loaded.
+        self._embedding_model = config.get("models", {}).get("embedding")
+
         db_config = config.get("database", {})
         self.busy_timeout_seconds = float(db_config.get("busy_timeout_seconds", 5.0))
 
@@ -838,7 +877,6 @@ class DatabaseClient:
                         # every statement has actually succeeded.
                         self._bootstrap_surreal_schema()
                         self.backend = "surrealdb"
-                        self._init_spectron(db_config)
                     except Exception as e:
                         sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
                         sys.stderr.write(
@@ -880,39 +918,6 @@ class DatabaseClient:
             if self.db_path is None:
                 self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
-
-    def _init_spectron(self, db_config: Dict[str, Any]) -> None:
-        """Connect the optional Spectron client when URL and API key are set."""
-        # Initialize Spectron if URL and API Key are configured
-        spectron_url = os.environ.get(
-            "SPECTRON_URL", db_config.get("spectron_url")
-        )
-        spectron_api_key = os.environ.get(
-            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-        )
-        spectron_context = os.environ.get(
-            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-        )
-        if spectron_url and spectron_api_key:
-            try:
-                try:
-                    # Spectron ships only in newer surrealdb builds;
-                    # the except below handles its absence at runtime.
-                    from surrealdb import Spectron  # type: ignore[attr-defined]
-                    self.spectron = Spectron(
-                        context=spectron_context,
-                        endpoint=spectron_url,
-                        api_key=spectron_api_key
-                    )
-                except (ImportError, AttributeError):
-                    self.spectron = SpectronFallbackClient(
-                        context=spectron_context,
-                        endpoint=spectron_url,
-                        api_key=spectron_api_key
-                    )
-            except Exception as e:
-                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                self.spectron = None
 
     def backend_status(self) -> Dict[str, Any]:
         """Report which backend serves this client, publicly (issue #163).
@@ -1409,6 +1414,25 @@ class DatabaseClient:
         """
         for statement in self._SURREAL_SCHEMA_STATEMENTS:
             self.db.query(statement)
+        for statement in self._vector_index_statements():
+            self.db.query(statement)
+
+    def _vector_index_statements(self) -> List[str]:
+        """The HNSW index DDL for memory and decisions at the active embedder dim.
+
+        Built per instance (not in the static schema list) so the DIMENSION follows
+        a pluggable embedder. With the default HashingEmbedder this is 256, so the
+        DDL is byte-identical to the pre-pluggable schema and applies cleanly to an
+        existing tenant. A plugged embedder of a different dimension requires a
+        one-time index rebuild, which this does not perform automatically.
+        """
+        dim = getattr(self, "_embedding_dim", EMBEDDING_DIM)
+        return [
+            f"DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+            f"FIELDS embedding HNSW DIMENSION {dim} DIST COSINE TYPE F32;",
+            f"DEFINE INDEX IF NOT EXISTS decisions_embedding ON decisions "
+            f"FIELDS embedding HNSW DIMENSION {dim} DIST COSINE TYPE F32;",
+        ]
 
     @staticmethod
     def _is_connection_error(exc: Exception) -> bool:
@@ -1974,10 +1998,22 @@ class DatabaseClient:
                 author: $author,
                 branch: $branch,
                 commit_sha: $commit_sha,
+                embedding: $embedding,
                 created_at: time::now()
             };
             """
+            # Decisions are inherently semantic, so unlike memory there is no
+            # category gate: every decision is embedded from its title, rationale,
+            # and outcome. The embedding is NOT stored in the durability mirror, and
+            # _replay re-UPSERTs the mirrored fields verbatim, so a decision written
+            # during a primary outage lands without an embedding on reconcile and is
+            # searchable only after a `reindex-embeddings` pass -- the same property
+            # memory embeddings have had since ADR-0016.
             params = {"id": self._rid("decisions", record_id), **fields}
+            params["embedding"] = self._embedder.embed(
+                f"{fields.get('title', '')} {fields.get('rationale', '')} "
+                f"{fields.get('outcome', '')}".strip()
+            )
             try:
                 res = self._run_surreal(query, params)
                 return self._extract_id(res)
@@ -2033,12 +2069,6 @@ class DatabaseClient:
         value = fields["value"]
         category = fields["category"]
         if self.backend == "surrealdb":
-            if self.spectron is not None:
-                try:
-                    self.spectron.remember(fact=value, scope=[category, key])
-                except Exception as e:
-                    logging.warning(f"Failed to save memory in Spectron: {e}")
-
             # Upsert by a deterministic record id derived from the key, so
             # re-saving the same key updates in place. The embedding is computed
             # here (not stored in the durability mirror) so the vector index stays
@@ -2134,14 +2164,6 @@ class DatabaseClient:
             The memory value string or None if not found.
         """
         if self.backend == "surrealdb":
-            if self.spectron is not None:
-                try:
-                    res = self.spectron.recall(key)
-                    if res and hasattr(res, "hits") and res.hits:
-                        return res.hits[0].text
-                except Exception as e:
-                    logging.warning(f"Failed to recall memory from Spectron: {e}")
-
             query = "SELECT `value` FROM memory WHERE key = $key"
             try:
                 res = self._run_surreal(query, {"key": key})
@@ -3311,7 +3333,10 @@ class DatabaseClient:
             A dictionary containing the record details or None.
         """
         if self.backend == "surrealdb":
-            query = "SELECT * FROM $id"
+            # OMIT embedding: the 256-float vector is index fodder, never useful to a
+            # reader, so it must not ride along in the returned record (and thence
+            # into an MCP tool result an agent pays tokens for).
+            query = "SELECT * OMIT embedding FROM $id"
             try:
                 res = self._run_surreal(
                     query, {"id": self._parse_rid(decision_id)}
@@ -3996,7 +4021,8 @@ class DatabaseClient:
         if self.backend == "surrealdb":
             try:
                 res = self.db.query(
-                    "SELECT * FROM decisions ORDER BY created_at DESC LIMIT $limit",
+                    "SELECT * OMIT embedding FROM decisions "
+                    "ORDER BY created_at DESC LIMIT $limit",
                     {"limit": int(limit)},
                 )
                 return self._extract_list(res)
@@ -4582,6 +4608,101 @@ class DatabaseClient:
         )
         res = self._run_surreal(sql, params)
         return self._extract_list(res)
+
+    @_resilient
+    def search_decisions(self, query: str, k: int = 5, ef: int = 64) -> List[Dict[str, Any]]:
+        """Return the ``k`` decisions nearest to ``query`` (SurrealDB-only).
+
+        Cosine distance over each decision's embedding via the HNSW index and the
+        ``<|k, EF|>`` KNN operator, the decisions-table analogue of
+        :meth:`semantic_search`. With the default :class:`HashingEmbedder` this is
+        lexical nearness; swap in a model-backed embedder for true meaning. Results
+        are ``[{"title", "rationale", "outcome", "author", "branch", "commit_sha",
+        "distance"}, ...]`` nearest first. Decisions written before the vector index
+        existed only appear after :meth:`reindex_embeddings`.
+        """
+        self._require_surreal("decision search")
+        knn = f"<|{int(k)},{int(ef)}|>"
+        sql = (
+            f"SELECT title, rationale, outcome, author, branch, commit_sha, "
+            f"vector::distance::knn() AS distance "
+            f"FROM decisions WHERE embedding {knn} $q ORDER BY distance;"
+        )
+        res = self._run_surreal(sql, {"q": self._embedder.embed(query)})
+        return self._extract_list(res)
+
+    @_resilient
+    def reindex_embeddings(
+        self, tables: Sequence[str] = ("decisions", "memory")
+    ) -> Dict[str, int]:
+        """Backfill missing embeddings with the active embedder (SurrealDB-only).
+
+        Rows written before their vector index existed, or replayed from the
+        durability mirror (which does not carry embeddings), have no embedding and
+        are absent from the HNSW index. This recomputes and stores the embedding for
+        every such row so it becomes searchable. Idempotent: rows that already carry
+        an embedding are skipped. Returns a per-table count of rows re-embedded. Run
+        it after swapping the embedder, or once to index decisions written before
+        this feature.
+        """
+        self._require_surreal("embedding reindex")
+        return {table: self._reindex_table(table) for table in tables}
+
+    # Per-table reindex reads: only the id and the fields that feed the embedding
+    # (never SELECT *, which would pull each memory row's full file content), and
+    # for memory a category pre-filter so the code-index and board-history rows --
+    # which never carry an embedding -- are not re-fetched on every run.
+    _REINDEX_QUERIES: Dict[str, str] = {
+        "decisions": "SELECT id, title, rationale, outcome FROM decisions "
+        "WHERE embedding IS NONE;",
+        "memory": "SELECT id, key, value FROM memory "
+        "WHERE embedding IS NONE AND category NOT IN $excluded;",
+    }
+
+    def _reindex_table(self, table: str) -> int:
+        """Re-embed every un-embedded semantic row of one table; returns the count."""
+        table = self._safe_ident(table, "table name")
+        query = self._REINDEX_QUERIES.get(table)
+        if query is None:
+            return 0
+        params = (
+            {"excluded": list(NON_SEMANTIC_MEMORY_CATEGORIES)}
+            if table == "memory"
+            else None
+        )
+        rows = self._extract_list(self._run_surreal(query, params))
+        count = 0
+        for row in rows:
+            text = self._embedding_text(table, row)
+            if text is None:
+                continue
+            self._run_surreal(
+                "UPDATE $id SET embedding = $embedding;",
+                {"id": self._parse_rid(row.get("id")), "embedding": self._embedder.embed(text)},
+            )
+            count += 1
+        return count
+
+    @staticmethod
+    def _embedding_text(table: str, row: Dict[str, Any]) -> Optional[str]:
+        """The text to embed for a row, or None when the row must stay unindexed.
+
+        Decisions always embed (title/rationale/outcome). Memory embeds only the
+        semantic categories, matching the save_memory gate, so the code index and
+        board history are never pulled into the vector index by a reindex.
+        """
+        if table == "decisions":
+            text = (
+                f"{row.get('title', '')} {row.get('rationale', '')} "
+                f"{row.get('outcome', '')}".strip()
+            )
+            return text or None
+        if table == "memory":
+            if not is_semantic_category(row.get("category")):
+                return None
+            text = f"{row.get('key', '')} {row.get('value', '')}".strip()
+            return text or None
+        return None
 
     def close(self) -> None:
         """Closes the database client and any open connections."""

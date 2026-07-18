@@ -14,6 +14,7 @@ both layers of the contract:
   coverage holds in CI where no SurrealDB is running.
 """
 
+import json
 import os
 import socket
 import sys
@@ -34,6 +35,31 @@ from solomon_harness.tools.database_client import (  # noqa: E402
 )
 
 SURREAL_URL = os.environ.get("SURREAL_URL", "ws://localhost:8099/rpc")
+
+
+def _surreal_test_creds():
+    """Live-SurrealDB credentials resolved like the client, not a hardcoded root.
+
+    The store uses a per-machine generated password, so a probe or setUp that
+    signs in with root/root silently skips every live test on a migrated machine.
+    Mirror DatabaseClient: SURREAL_USER/PASS env, then the generated home password,
+    then root.
+    """
+    try:
+        from solomon_harness.home import generated_memory_password
+
+        generated = generated_memory_password()
+    except Exception:
+        generated = None
+    return {
+        "username": os.environ.get("SURREAL_USER") or "root",
+        "password": os.environ.get("SURREAL_PASS") or generated or "root",
+    }
+
+
+# Resolved once at import, before any test patches os.path.isfile: reusing the
+# cached value keeps credential resolution out of the per-test monkeypatches.
+_SURREAL_CREDS = _surreal_test_creds()
 
 
 def _host_port(url):
@@ -60,7 +86,7 @@ def _surreal_reachable():
         db = surrealdb.Surreal(SURREAL_URL)
         if hasattr(db, "connect"):
             db.connect()
-        db.signin({"username": "root", "password": "root"})
+        db.signin(_SURREAL_CREDS)
         db.use("solomon", "test_mm_probe")
         db.close()
         return True
@@ -91,6 +117,8 @@ _INIT_DEFINES = (
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+    f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32; "
+    "DEFINE INDEX IF NOT EXISTS decisions_embedding ON decisions "
     f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32;"
 )
 
@@ -101,6 +129,9 @@ class _RecordingEmbedder:
     def __init__(self, vector=None):
         self.calls = []
         self._vector = vector if vector is not None else [0.25] * EMBEDDING_DIM
+        # Declaring dim keeps _embedder_dim from probing (which would record a
+        # spurious "probe" call), so tests can assert on exactly what was embedded.
+        self.dim = len(self._vector)
 
     def embed(self, text):
         self.calls.append(text)
@@ -181,6 +212,103 @@ class TestEmbedderWiring(unittest.TestCase):
         self.assertIn("embedding: $embedding", query)
         self.assertEqual(params["embedding"], [0.5] * EMBEDDING_DIM)
         self.assertEqual(params["value"], "hello world")
+
+
+class _EmptyEmbedder:
+    """An embedder whose probe returns an empty vector, so it fails validation."""
+
+    def embed(self, text):
+        return []
+
+
+class _FixedVecEmbedder:
+    """A dim-less embedder returning a fixed 384-long vector (dim-from-probe test)."""
+
+    def embed(self, text):
+        return [0.1] * 384
+
+
+class TestEmbedderRegistry(unittest.TestCase):
+    """models.embedding SELECTS a vetted embedder by name; it never imports code."""
+
+    def test_unknown_name_keeps_the_default(self):
+        # The shipped config value, an unregistered name, and even a "module:Class"
+        # -shaped string all resolve to no embedder -- nothing is imported -- so the
+        # caller keeps the lexical HashingEmbedder default.
+        self.assertIsNone(DatabaseClient._registered_embedder("text-embedding-004"))
+        self.assertIsNone(DatabaseClient._registered_embedder(None))
+        self.assertIsNone(DatabaseClient._registered_embedder("some.module:SomeClass"))
+
+    def test_registered_name_is_instantiated(self):
+        self.assertIsInstance(
+            DatabaseClient._registered_embedder("hashing"), HashingEmbedder
+        )
+
+    def test_safe_probe_rejects_an_empty_vector(self):
+        self.assertIsNone(DatabaseClient._safe_probe(_EmptyEmbedder()))
+
+    def test_embedder_dim_prefers_the_dim_attribute(self):
+        self.assertEqual(DatabaseClient._embedder_dim(HashingEmbedder(dim=16)), 16)
+
+    def test_embedder_dim_falls_back_to_the_probe_length(self):
+        # A dim-less embedder is sized from the real vector it produces, so the HNSW
+        # index can never be built at 256 while the embedder emits 384-long vectors.
+        self.assertEqual(DatabaseClient._embedder_dim(_FixedVecEmbedder()), 384)
+
+
+class TestDecisionVectors(unittest.TestCase):
+    """Decisions are embedded on write, indexed at the active dim, and searchable."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        os.environ["HARNESS_MIRROR_ROOT"] = os.path.join(self.temp_dir.name, "mirror")
+
+    def tearDown(self):
+        os.environ.pop("HARNESS_MIRROR_ROOT", None)
+        self.temp_dir.cleanup()
+
+    def _client(self, **kwargs):
+        return DatabaseClient(db_path=os.path.join(self.temp_dir.name, "h.db"), **kwargs)
+
+    def test_vector_index_statements_use_the_active_dim(self):
+        client = self._client(embedder=HashingEmbedder(dim=16))
+        joined = " ".join(client._vector_index_statements())
+        self.assertIn("memory_embedding ON memory", joined)
+        self.assertIn("decisions_embedding ON decisions", joined)
+        self.assertIn("DIMENSION 16", joined)
+        self.assertNotIn(f"DIMENSION {EMBEDDING_DIM}", joined)
+
+    def test_surreal_decision_write_embeds_title_rationale_outcome(self):
+        fake = _RecordingEmbedder(vector=[0.5] * EMBEDDING_DIM)
+        client = self._client(embedder=fake)
+        client.backend = "surrealdb"
+        client._run_surreal = MagicMock(return_value=[{"id": "decisions:d1"}])
+        client.log_decision("t", "r", "o", "a", "main", "sha")
+        self.assertEqual(fake.calls, ["t r o"])
+        query, params = client._run_surreal.call_args[0]
+        self.assertIn("embedding: $embedding", query)
+        self.assertEqual(params["embedding"], [0.5] * EMBEDDING_DIM)
+
+    def test_sqlite_decision_write_does_not_embed(self):
+        fake = _RecordingEmbedder()
+        client = self._client(embedder=fake)
+        client.log_decision("t", "r", "o", "a", "main", "sha")
+        self.assertEqual(fake.calls, [])
+
+    def test_search_decisions_builds_knn_query_and_requires_surreal(self):
+        fake = _RecordingEmbedder()
+        client = self._client(embedder=fake)
+        with self.assertRaisesRegex(RuntimeError, "requires the SurrealDB backend"):
+            client.search_decisions("hexagonal ports")
+        client.backend = "surrealdb"
+        client._run_surreal = MagicMock(return_value=[])
+        client.search_decisions("hexagonal ports", k=3, ef=32)
+        query, params = client._run_surreal.call_args[0]
+        self.assertIn("FROM decisions", query)
+        self.assertIn("<|3,32|>", query)
+        self.assertIn("vector::distance::knn()", query)
+        self.assertIn("ORDER BY distance", query)
+        self.assertEqual(len(params["q"]), EMBEDDING_DIM)
 
 
 class TestMultiModelUnit(unittest.TestCase):
@@ -352,6 +480,28 @@ class TestMultiModelUnit(unittest.TestCase):
         self.assertEqual(len(rows), 2)
 
 
+class TestTimeOrderedIndexesAreDefined(unittest.TestCase):
+    """The time-ordered hot paths carry a supporting index (CI-safe).
+
+    get_latest_activity orders sessions and handoffs by ``timestamp``, and the
+    loop-run aggregations filter/group loop_runs by ``created_at``. Without an
+    index each is a table scan plus sort on every session start. This asserts the
+    production schema declares the index; the live class proves the planner uses
+    it.
+    """
+
+    _EXPECTED = (
+        "DEFINE INDEX IF NOT EXISTS sessions_timestamp ON sessions FIELDS timestamp",
+        "DEFINE INDEX IF NOT EXISTS handoffs_timestamp ON handoffs FIELDS timestamp",
+        "DEFINE INDEX IF NOT EXISTS loop_runs_created_at ON loop_runs FIELDS created_at",
+    )
+
+    def test_schema_statements_declare_time_indexes(self):
+        joined = " ".join(DatabaseClient._SURREAL_SCHEMA_STATEMENTS)
+        for expected in self._EXPECTED:
+            self.assertIn(expected, joined)
+
+
 @unittest.skipUnless(SURREAL_AVAILABLE, "SurrealDB not reachable at " + SURREAL_URL)
 class TestMultiModelLive(unittest.TestCase):
     """Live round-trips against a throwaway SurrealDB tenant."""
@@ -366,7 +516,7 @@ class TestMultiModelLive(unittest.TestCase):
         self.raw = surrealdb.Surreal(SURREAL_URL)
         if hasattr(self.raw, "connect"):
             self.raw.connect()
-        self.raw.signin({"username": "root", "password": "root"})
+        self.raw.signin(_SURREAL_CREDS)
         self.raw.use("solomon", self.dbname)
         self.raw.query(_INIT_DEFINES)
         self.client.backend = "surrealdb"
@@ -410,6 +560,33 @@ class TestMultiModelLive(unittest.TestCase):
         self.assertIn("issues_github_id", indexes)
         self.assertIn("issues_status", indexes)
         self.assertIn("UNIQUE", indexes["issues_github_id"])
+
+    def test_time_ordered_indexes_are_defined(self):
+        # The production bootstrap (not the test's partial _INIT_DEFINES mirror)
+        # is what must create these, so drive it directly against the tenant.
+        self.client._bootstrap_surreal_schema()
+        for table, index in (
+            ("sessions", "sessions_timestamp"),
+            ("handoffs", "handoffs_timestamp"),
+            ("loop_runs", "loop_runs_created_at"),
+        ):
+            info = self.raw.query(f"INFO FOR TABLE {table}")
+            self.assertIn(index, info["indexes"], f"{index} missing on {table}")
+
+    def test_latest_activity_query_uses_the_timestamp_index(self):
+        # get_latest_activity orders sessions by timestamp DESC LIMIT 1. With the
+        # index the planner must switch from TableScan + sort to an IndexScan, the
+        # same plan decisions already gets on its created_at index.
+        self.client._bootstrap_surreal_schema()
+        for i in range(3):
+            self.client.save_session(f"s{i}", "agent", "task", [])
+        plan = json.dumps(
+            self.raw.query("SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1 EXPLAIN"),
+            default=str,
+        )
+        self.assertIn("IndexScan", plan)
+        self.assertIn("sessions_timestamp", plan)
+        self.assertNotIn("TableScan", plan)
 
     def test_unique_github_id_index_is_enforced(self):
         import surrealdb
@@ -528,6 +705,76 @@ class TestMultiModelLive(unittest.TestCase):
         hits = self.client.semantic_search("shared term", k=5, category="fruit")
         self.assertTrue(hits)
         self.assertTrue(all(h["category"] == "fruit" for h in hits))
+
+    def test_decisions_embedding_index_is_defined_by_bootstrap(self):
+        # Prove the production schema bootstrap (not the test's _INIT_DEFINES
+        # mirror) builds the decisions vector index on an existing tenant.
+        self.client._bootstrap_surreal_schema()
+        info = self.raw.query("INFO FOR TABLE decisions")
+        self.assertIn("decisions_embedding", info["indexes"])
+
+    def test_decisions_are_vector_searchable(self):
+        self.client.log_decision(
+            "hexagonal ports and adapters", "isolate the domain from IO",
+            "adopt hexagonal architecture", "arch", "main", "s1",
+        )
+        self.client.log_decision(
+            "pizza pasta", "italian food choices", "order takeout", "chef", "main", "s2",
+        )
+        hits = self.client.search_decisions("hexagonal architecture domain", k=2)
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["title"], "hexagonal ports and adapters")
+        distances = [h["distance"] for h in hits]
+        self.assertEqual(distances, sorted(distances))
+
+    def test_reindex_backfills_a_decision_written_without_an_embedding(self):
+        # A decision written before the vector index (or replayed from the mirror)
+        # carries no embedding and is absent from search until reindexed.
+        self.raw.query(
+            "CREATE decisions:legacy SET title = 'legacy widget refactor', "
+            "rationale = 'old code cleanup', outcome = 'refactor the widget', "
+            "created_at = time::now();"
+        )
+        before = self.client.search_decisions("legacy widget refactor", k=5)
+        self.assertFalse(any(h["title"] == "legacy widget refactor" for h in before))
+
+        counts = self.client.reindex_embeddings(tables=("decisions",))
+        self.assertEqual(counts["decisions"], 1)
+
+        after = self.client.search_decisions("legacy widget refactor", k=1)
+        self.assertTrue(after)
+        self.assertEqual(after[0]["title"], "legacy widget refactor")
+
+    def test_get_and_list_decisions_omit_the_embedding(self):
+        # The 256-float vector is index fodder; a reader (and the MCP tool result it
+        # feeds) must never receive it.
+        did = self.client.log_decision("t", "r", "o", "a", "main", "s1")
+        fetched = self.client.get_decision(did)
+        self.assertIsNotNone(fetched)
+        self.assertNotIn("embedding", fetched)
+        listed = self.client.list_decisions(limit=5)
+        self.assertTrue(listed)
+        self.assertTrue(all("embedding" not in d for d in listed))
+
+    def test_reindex_skips_non_semantic_memory_rows(self):
+        # A code-index row carries full file content and never gets an embedding;
+        # reindex embeds the un-embedded semantic row but must skip the code-index
+        # one (the query pre-filters by category). Rows are created raw, without an
+        # embedding, since save_memory would embed the semantic one on write.
+        self.raw.query(
+            "CREATE memory:sem SET key = 'note', "
+            "value = 'hexagonal ports adapters', category = 'notes';"
+        )
+        self.raw.query(
+            "CREATE memory:code SET key = 'src/app.py', "
+            "value = 'def main(): pass', category = 'codebase_index';"
+        )
+        counts = self.client.reindex_embeddings(tables=("memory",))
+        self.assertEqual(counts["memory"], 1)
+        sem = self.raw.query("SELECT embedding FROM memory:sem;")
+        code = self.raw.query("SELECT embedding FROM memory:code;")
+        self.assertIsNotNone(sem[0]["embedding"])
+        self.assertIsNone(code[0].get("embedding"))
 
 
 if __name__ == "__main__":
