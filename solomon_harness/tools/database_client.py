@@ -549,7 +549,12 @@ class DatabaseClient:
         # key, so it is unique by construction.
         "DEFINE INDEX IF NOT EXISTS issues_github_id "
         "ON issues FIELDS github_id UNIQUE;",
-        "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
+        # issues_status is dropped, not defined: it served no read (get_open_issues
+        # is a NOT-IN negation no B-tree can satisfy, and the cockpit buckets by
+        # status in Python), so it was pure write-time cost (ADR-0042). REMOVE IF
+        # EXISTS drops it from an existing tenant on the next connect and is a
+        # no-op on a fresh one.
+        "REMOVE INDEX IF EXISTS issues_status ON issues;",
         "DEFINE INDEX IF NOT EXISTS decisions_created_at "
         "ON decisions FIELDS created_at;",
         # Time-ordered hot paths. get_latest_activity reads the newest sessions
@@ -3490,6 +3495,11 @@ class DatabaseClient:
             field is additive -- the stored row and the returned set are unchanged.
         """
         if self.backend == "surrealdb":
+            # A deliberate TableScan (ADR-0042): the "open = not terminal" predicate
+            # is a negation no index can serve, and a derived indexed boolean would
+            # have to be maintained across every status-write path (with a live-tenant
+            # backfill) at the risk of silently dropping issues. At 360 rows the scan
+            # is sub-millisecond; revisit the derived index only past ~10^4 issues.
             query = (
                 "SELECT * FROM issues "
                 "WHERE status IS NONE OR status IS NULL OR status NOT IN $terminal"
