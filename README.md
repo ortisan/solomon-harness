@@ -324,6 +324,7 @@ table.
 | `compile` | Compile agent harnesses and regenerate host-tool integrations |
 | `index` | Index the project codebase into the memory |
 | `reindex-embeddings` | Backfill missing vector embeddings on decisions and memory (SurrealDB only) |
+| `metrics [--window <days>]` | Report delivery metrics: per-stage durations and loop-run throughput/failure rate |
 | `wiki` | Refresh the living code-overview wiki page from the index |
 | `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
 | `memory-down` | Stop the shared memory backend |
