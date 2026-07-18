@@ -231,7 +231,8 @@ def _normalize_token(value: Optional[str], aliases: Dict[str, str]) -> Optional[
 
 
 def normalize_loop_run_status(status: Optional[str]) -> Optional[str]:
-    """Map a loop-run status to its canonical token (ok or failed).
+    """Map a loop-run status to its canonical token (ok, failed, skipped, or
+    parked — see LOOP_RUN_STATUSES).
 
     Legacy spellings collapse (success/passed -> ok, failure/error -> failed);
     an unknown token passes through lowercased; None passes through so an
@@ -3895,9 +3896,9 @@ class DatabaseClient:
         worktree gets a separate database and a cross-worktree count would be
         invisible.
 
-        ``status`` is normalized to the canonical loop-run vocabulary (ok or
-        failed) at this write seam, so the aggregators can count one token
-        (#165, ADR-0016).
+        ``status`` is normalized to the canonical loop-run vocabulary
+        (LOOP_RUN_STATUSES) at this write seam, so the aggregators can count one
+        token (#165, ADR-0016/0039).
 
         ``target_issue`` is the GitHub issue number this run advanced, when the
         stage carries one. It is stored on the row and also written as a
