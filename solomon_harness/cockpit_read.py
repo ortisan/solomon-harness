@@ -874,6 +874,80 @@ def velocity_payload(
         return payload
 
 
+def _percentile(sorted_vals: List[float], pct: float) -> float:
+    """Nearest-rank percentile of an ascending list (0.0 on empty)."""
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, int(pct * len(sorted_vals)))
+    return sorted_vals[idx]
+
+
+def compose_delivery_metrics(client: Any, since: Optional[str] = None) -> Dict[str, Any]:
+    """Compose the single-tenant delivery-metrics payload (read-only).
+
+    Reads the ``stage_duration_seconds`` points the workflow producer emits and
+    groups them by their ``stage`` tag into count/mean/p95/max seconds (a stage-loop
+    run's sample is the sum across its iterations, matching one row per run_stage),
+    then adds the loop-run throughput and failure rate. The loop-run aggregations are
+    SurrealDB-only; on a SQLite fallback they cannot be computed, so ``loopRunsAvailable``
+    is False and the aggregations are empty rather than raising -- a distinct signal
+    from a genuinely empty range, so a consumer never reads "unavailable" as "zero".
+    All keys are camelCase, matching this module's other payloads.
+    """
+    points = client.query_metric("stage_duration_seconds", since=since, limit=10000)
+    by_stage: Dict[str, List[float]] = {}
+    for point in points:
+        tags = point.get("tags") or {}
+        stage = str(tags.get("stage", "unknown"))
+        by_stage.setdefault(stage, []).append(float(point.get("value", 0.0)))
+    stage_durations: Dict[str, Any] = {}
+    for stage, vals in sorted(by_stage.items()):
+        ordered = sorted(vals)
+        stage_durations[stage] = {
+            "count": len(vals),
+            "meanSeconds": sum(vals) / len(vals),
+            "p95Seconds": _percentile(ordered, 0.95),
+            "maxSeconds": ordered[-1],
+        }
+    loop_runs_available = True
+    try:
+        throughput = client.loop_run_throughput(bucket="day", since=since)
+        failure_rate = client.loop_run_failure_rate(since=since)
+    except Exception:
+        loop_runs_available = False
+        throughput, failure_rate = [], {"total": 0, "failures": 0, "failure_rate": 0.0}
+    return {
+        "stageDurations": stage_durations,
+        "loopRunsAvailable": loop_runs_available,
+        "loopRunThroughput": throughput,
+        "loopRunFailureRate": failure_rate,
+    }
+
+
+def metrics_payload(
+    window_days: Optional[int] = None,
+    now: Optional[datetime] = None,
+    harness_dir: Optional[str] = None,
+    client_factory: Optional[Callable[[], Any]] = None,
+) -> Dict[str, Any]:
+    """Single-tenant delivery-metrics payload over an optional day window.
+
+    ``window_days`` bounds the sample to the last N days (all history when None);
+    ``now`` is injected for deterministic tests. Read-only: opens one fresh client
+    and closes it.
+    """
+    factory = client_factory or (lambda: DatabaseClient(harness_dir=harness_dir))
+    since: Optional[str] = None
+    if window_days is not None:
+        current = now or datetime.now(timezone.utc)
+        since = (current - timedelta(days=int(window_days))).isoformat()
+    client = factory()
+    try:
+        return compose_delivery_metrics(client, since=since)
+    finally:
+        client.close()
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """JSON CLI for the Node-to-Python read bridge.
 
@@ -915,6 +989,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     velocity_parser.add_argument(
         "--window", type=int, required=True, help="the velocity window in days"
     )
+    metrics_parser = sub.add_parser(
+        "metrics", help="render this tenant's delivery metrics (stage durations, loop runs)"
+    )
+    metrics_parser.add_argument(
+        "--window", type=int, default=None, help="bound the sample to the last N days"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "projects":
@@ -934,6 +1014,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     elif args.command == "velocity":
         print(
             json.dumps(velocity_payload(args.window, harness_dir=args.harness_dir))
+        )
+    elif args.command == "metrics":
+        print(
+            json.dumps(
+                metrics_payload(window_days=args.window, harness_dir=args.harness_dir)
+            )
         )
     return 0
 
