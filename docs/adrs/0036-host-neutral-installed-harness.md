@@ -1,10 +1,10 @@
-# ADR-0034: install a host-neutral harness with generated host adapters
+# ADR-0036: install a host-neutral harness with generated host adapters
 
 - Status: accepted
 - Date: 2026-07-15
 - Deciders: maintainer, software_architect, loop_engineer, security, qa
 - Issue: #240
-- Amended: 2026-07-16 by ADR-0035, which defines consumer-owned agent
+- Amended: 2026-07-16 by ADR-0039, which defines consumer-owned agent
   extensions below the installed canonical catalog.
 
 ## Context and problem statement

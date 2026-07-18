@@ -362,8 +362,14 @@ def test_agent_discovery_falls_back_to_legacy_agents(tmp_path: Path) -> None:
 
 def test_stack_detection_ignores_the_canonical_harness_payload(tmp_path: Path) -> None:
     paths = HarnessPaths(tmp_path)
-    _write_agent(paths.agents, "qa")
-    _write_agent(paths.agents, "flutter")
+    for name in ("qa", "flutter"):
+        _write_agent(paths.agents, name)
+        (paths.agents / name / "persona.md").write_text(
+            f"# {name} Persona\n", encoding="utf-8"
+        )
+        skills = paths.agents / name / "skills"
+        skills.mkdir(parents=True, exist_ok=True)
+        (skills / "scope.md").write_text("# Scope\n", encoding="utf-8")
     harness_source = paths.solomon / "fixtures" / "main.dart"
     harness_source.parent.mkdir(parents=True)
     harness_source.write_text("void main() {}\n", encoding="utf-8")

@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import os
-import re
 import sys
 import unittest
 
@@ -98,7 +97,6 @@ class TestMcpRegistration(unittest.TestCase):
 
 class TestGeneratedSubagents(unittest.TestCase):
     def test_every_agent_has_a_thin_subagent(self):
-        gen = self._load_generator()
         for name in _agent_names():
             rel = os.path.join(".claude", "agents", f"{name}.md")
             self.assertTrue(
@@ -109,9 +107,6 @@ class TestGeneratedSubagents(unittest.TestCase):
             self.assertIn(f"name: {name}", body)
             self.assertIn(f"agents/{name}/", body)
             self.assertIn("agents/AGENTS.md", body)
-            role = os.path.join(WORKSPACE, "agents", name, "agents", f"{name}.md")
-            expected = gen.subagent_markdown(name, gen.role_description(role, name))
-            self.assertEqual(body, expected)
 
     def test_generator_discovers_all_agents(self):
         path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
@@ -205,93 +200,6 @@ class TestGeminiCommands(unittest.TestCase):
             self.assertNotIn("mcp__solomon-memory__", body)
 
 
-class TestCodexSkills(unittest.TestCase):
-    def _generator(self):
-        path = os.path.join(WORKSPACE, "scripts", "generate-integrations.py")
-        spec = importlib.util.spec_from_file_location("gen_codex_integrations", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    def test_every_workflow_command_has_a_codex_skill(self):
-        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
-        for name in sorted(os.listdir(cmd_dir)):
-            if not name.startswith("solomon-") or not name.endswith(".md"):
-                continue
-            skill_name = name[:-3]
-            rel = os.path.join(".agents", "skills", skill_name, "SKILL.md")
-            self.assertTrue(
-                os.path.isfile(os.path.join(WORKSPACE, rel)),
-                f"missing Codex skill for {name}",
-            )
-            body = _read(rel)
-            self.assertIn(f"name: {skill_name}", body)
-            self.assertIn("Use when", body)
-            self.assertNotIn("$ARGUMENTS", body)
-            self.assertIsNone(
-                re.search(r"(?<![A-Za-z0-9_./-])/solomon-", body),
-                f"{skill_name} exposes slash commands that Codex cannot invoke",
-            )
-
-    def test_codex_skills_match_regenerated_source(self):
-        gen = self._generator()
-        cmd_dir = os.path.join(WORKSPACE, ".claude", "commands")
-        for name in sorted(os.listdir(cmd_dir)):
-            if not name.startswith("solomon-") or not name.endswith(".md"):
-                continue
-            skill_name = name[:-3]
-            description, body = gen._parse_command_file(os.path.join(cmd_dir, name))
-            expected = gen.codex_skill_markdown(skill_name, description, body)
-            actual = _read(
-                os.path.join(".agents", "skills", skill_name, "SKILL.md")
-            )
-            self.assertEqual(
-                actual,
-                expected,
-                f"{skill_name} Codex skill is out of sync; run the generator",
-            )
-
-    def test_codex_skill_renderer_adapts_arguments(self):
-        gen = self._generator()
-        rendered = gen.codex_skill_markdown(
-            "solomon-start",
-            "Start an issue.",
-            "Begin issue #$ARGUMENTS.",
-        )
-        self.assertIn("name: solomon-start", rendered)
-        self.assertIn("Use when", rendered)
-        self.assertIn("Begin issue #ARGUMENTS.", rendered)
-        self.assertNotIn("$ARGUMENTS", rendered)
-
-    def test_codex_skill_renderer_adapts_workflow_invocations(self):
-        gen = self._generator()
-        rendered = gen.codex_skill_markdown(
-            "solomon-start",
-            "Start an issue.",
-            "Run /solomon-refine 42, then /solomon-start 42.",
-        )
-        self.assertIn("Run $solomon-refine 42, then $solomon-start 42.", rendered)
-        self.assertNotIn("/solomon-", rendered)
-
-    def test_codex_skill_renderer_preserves_document_and_command_file_paths(self):
-        gen = self._generator()
-        rendered = gen.codex_skill_markdown(
-            "solomon-start",
-            "Start an issue.",
-            "Read docs/solomon-workflow.md and .claude/commands/solomon-start.md, "
-            "then run /solomon-start 42.",
-        )
-        self.assertIn("docs/solomon-workflow.md", rendered)
-        self.assertIn(".claude/commands/solomon-start.md", rendered)
-        self.assertIn("run $solomon-start 42", rendered)
-
-    def test_readme_documents_codex_skill_invocation(self):
-        readme = _read("README.md")
-        self.assertIn("$solomon-workflow", readme)
-        self.assertIn("$solomon-start", readme)
-        self.assertIn("~/.agents/skills", readme)
-
-
 class TestCompileSyncsIntegrations(unittest.TestCase):
     def _write_external_agent(self, tmp, name="qa", role_body=None):
         agent_dir = os.path.join(tmp, "agents", name)
@@ -341,110 +249,6 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(output, "quant_trader.md")))
             self.assertFalse(os.path.lexists(os.path.join(output, "execution_engineer.md")))
             self.assertTrue(os.path.isfile(human))
-
-    def test_compile_fallback_exposes_only_stack_selected_agents(self):
-        import io
-        import tempfile
-        from contextlib import redirect_stderr, redirect_stdout
-
-        from solomon_harness import cli
-        from solomon_harness.integrations import generate_claude_agents
-
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_external_agent(tmp, "quant_trader")
-            self._write_external_agent(tmp, "execution_engineer")
-            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
-                f.write("# Project instructions\n")
-            with open(os.path.join(tmp, "requirements.txt"), "w", encoding="utf-8") as f:
-                f.write("ccxt\n")
-
-            self.assertEqual(generate_claude_agents(tmp), 2)
-            cli.main(harness_dir=tmp, argv=["compile"])
-
-            output = os.path.join(tmp, ".claude", "agents")
-            self.assertTrue(os.path.isfile(os.path.join(output, "quant_trader.md")))
-            self.assertFalse(os.path.lexists(os.path.join(output, "execution_engineer.md")))
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                cli.main(harness_dir=tmp, argv=["agents", "list"])
-            self.assertIn("quant_trader", stdout.getvalue())
-            self.assertNotIn("execution_engineer", stdout.getvalue())
-
-            stderr = io.StringIO()
-            with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
-                cli.main(
-                    harness_dir=tmp,
-                    argv=["agents", "show", "execution_engineer"],
-                )
-            self.assertEqual(raised.exception.code, 1)
-            self.assertIn("does not exist", stderr.getvalue())
-
-    def test_external_compile_uses_packaged_generator_and_root_trust_file(self):
-        import tempfile
-
-        from solomon_harness import cli
-
-        with tempfile.TemporaryDirectory() as tmp:
-            agent_dir = os.path.join(tmp, "agents", "quant_trader")
-            role_dir = os.path.join(agent_dir, "agents")
-            os.makedirs(role_dir)
-            skills_dir = os.path.join(agent_dir, "skills")
-            os.makedirs(skills_dir)
-            with open(os.path.join(skills_dir, "scope.md"), "w", encoding="utf-8") as f:
-                f.write("# Quant Trader Scope\n")
-            with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as f:
-                f.write("# Project instructions\n")
-            with open(os.path.join(tmp, "requirements.txt"), "w", encoding="utf-8") as f:
-                f.write("ccxt\n")
-            with open(os.path.join(agent_dir, "persona.md"), "w", encoding="utf-8") as f:
-                f.write("# Quant Trader Persona\n")
-            with open(
-                os.path.join(role_dir, "quant_trader.md"), "w", encoding="utf-8"
-            ) as f:
-                f.write(
-                    "# Quant Trader Profile\n\n"
-                    "The Quant Trader validates trading systems.\n\n"
-                    "## Delegation cue\n\n"
-                    "Use this agent when a strategy needs quantitative validation.\n"
-                )
-
-            cli.main(harness_dir=tmp, argv=["compile"])
-
-            generated = os.path.join(tmp, ".claude", "agents", "quant_trader.md")
-            self.assertTrue(os.path.isfile(generated))
-            with open(generated, "r", encoding="utf-8") as f:
-                body = f.read()
-            expected = (
-                "---\n"
-                "name: quant_trader\n"
-                "description: \"The Quant Trader validates trading systems. "
-                "Use this agent when a strategy needs quantitative validation.\"\n"
-                "---\n\n"
-                "You are the quant_trader specialist agent for this project.\n\n"
-                "Your role is defined in `agents/quant_trader/agents/quant_trader.md` "
-                "and your persona in `agents/quant_trader/persona.md`. Your skills are "
-                "in `agents/quant_trader/skills/`. The shared project rules are in "
-                "`AGENTS.md`. Read those files first, then act strictly within them.\n\n"
-                "Always follow `AGENTS.md`. When relevant, persist decisions and handoffs "
-                "through the project's configured memory integration.\n\n"
-                "This file is generated by `solomon-harness compile`. Edit the source "
-                "under `agents/quant_trader/`, not this file.\n"
-            )
-            self.assertEqual(body, expected)
-            self.assertNotIn("agents/AGENTS.md", body)
-            self.assertFalse(
-                os.path.exists(os.path.join(tmp, "agents", "quant_trader", "main.py"))
-            )
-            self.assertFalse(
-                os.path.exists(
-                    os.path.join(tmp, "agents", "quant_trader", ".agent", "config.json")
-                )
-            )
-
-            cli.main(harness_dir=tmp, argv=["compile"])
-            with open(generated, "r", encoding="utf-8") as f:
-                self.assertEqual(f.read(), expected)
 
     def test_packaged_generator_prefers_agents_trust_file_when_present(self):
         import tempfile

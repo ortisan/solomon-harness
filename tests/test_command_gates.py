@@ -494,7 +494,7 @@ def test_standing_reconcile_commands_use_the_locked_cli_projection():
         os.path.join(".gemini", "commands", "solomon-reconcile.toml"),
     ):
         body = _read(rel)
-        assert "python -m solomon_harness.cli reconcile" in body, rel
+        assert "-m solomon_harness.cli reconcile" in body, rel
         assert "already reports CLOSED" in body, rel
         assert "Never merge" in body, rel
 

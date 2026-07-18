@@ -1,17 +1,17 @@
-# ADR-0035: register new agents directly in the installed harness
+# ADR-0039: register new agents directly in the installed harness
 
 - Status: accepted
 - Date: 2026-07-16
 - Deciders: maintainer, software_architect, practice_curator, agent_builder, security
 - Issue: maintainer request on 2026-07-16
-- Amends: ADR-0008 and ADR-0034
+- Amends: ADR-0008 and ADR-0036
 
 ## Context and problem statement
 
 The capability broker treated both acquisition kinds as reviewed repository
 changes. Even when a gap required only a new local specialist, `create_agent`
 entered `apply_proposal`, created a branch and commit in the consumer project,
-and opened a pull request. ADR-0034 has since established
+and opened a pull request. ADR-0036 has since established
 `.agents/solomon/agents` as the canonical specialist catalog of an installed
 harness. A harness-local scaffold and a pinned external-content adaptation now
 have different trust and ownership boundaries and should not share one GitHub
@@ -108,7 +108,7 @@ registration and tell the user to start a new session.
 ## More information
 
 This decision amends ADR-0008's blanket reviewed-PR acquisition rule and
-ADR-0034's installed ownership model. Its fitness functions cover the broker
+ADR-0036's installed ownership model. Its fitness functions cover the broker
 CLI result shape, unchanged Git refs, absence of GitHub calls, package-roster
 preservation, adapter ownership, upgrade preservation, rollback, and session
 restart reporting. This decision is also recorded in project memory via

@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,12 +16,6 @@ from solomon_harness.layout import (
     find_workspace_root,
 )
 
-
-from solomon_harness import skill_acquisition
-
-# The mechanical copy lives in the acquisition chokepoint; re-exported so existing
-# callers/tests that reference ``skills.install_skill`` keep resolving (#108).
-install_skill = skill_acquisition.install_skill
 
 def get_workspace_root(start_dir: Optional[str] = None) -> str:
     """Locate workspace root from start_dir or current working directory."""
@@ -80,6 +75,67 @@ def _validate_skill_name(name: str) -> None:
         raise ValueError("invalid skill name")
 
 
+def _reject_tree_symlinks(path: str) -> None:
+    """Reject links before copying external instruction content."""
+    if os.path.islink(path):
+        raise ValueError("Symlinks are rejected in imported skills")
+    if not os.path.isdir(path):
+        return
+    with os.scandir(path) as entries:
+        for entry in entries:
+            if entry.is_symlink():
+                raise ValueError("Symlinks are rejected in imported skills")
+            if entry.is_dir(follow_symlinks=False):
+                _reject_tree_symlinks(entry.path)
+
+
+def install_skill(
+    src_path: str,
+    agent_skills_dir: str,
+    name: str,
+    workspace_root: Optional[str] = None,
+) -> str:
+    """Installs a skill into an agent's skills directory.
+
+    A standalone ``<name>.md`` is copied to ``<agent_skills_dir>/<name>.md``.
+    A packaged ``SKILL.md`` is treated as a folder skill: its whole parent
+    directory is copied to ``<agent_skills_dir>/<name>/`` so sibling assets and
+    scripts are preserved. Returns the path that was written.
+    """
+    _validate_skill_name(name)
+    _reject_tree_symlinks(src_path)
+    skills_path = (
+        confined_path(workspace_root, agent_skills_dir)
+        if workspace_root is not None
+        else os.path.abspath(agent_skills_dir)
+    )
+    agent_skills_dir = os.fspath(skills_path)
+    os.makedirs(agent_skills_dir, exist_ok=True)
+    if os.path.basename(src_path) == "SKILL.md":
+        source_dir = os.path.dirname(src_path)
+        _reject_tree_symlinks(source_dir)
+        target_dir = os.path.join(agent_skills_dir, name)
+        if workspace_root is not None:
+            target_dir = os.fspath(confined_path(workspace_root, target_dir))
+        if os.path.isdir(target_dir):
+            shutil.rmtree(target_dir)
+        shutil.copytree(source_dir, target_dir)
+        return target_dir
+    target = os.path.join(agent_skills_dir, f"{name}.md")
+    if workspace_root is not None:
+        target = os.fspath(confined_path(workspace_root, target))
+    shutil.copy2(src_path, target)
+    return target
+
+
+def _clone(source: dict, dest: str) -> None:
+    """Pinned, fail-closed clone: reject an unpinned or non-full-SHA source and
+    verify HEAD equals the recorded pin before any content is trusted (#108)."""
+    from solomon_harness.curator import _pinned_clone
+
+    _pinned_clone(source, dest)
+
+
 def _reconcile_host_adapters(root: str) -> Any:
     """Keep the install manifest and all three native adapters synchronized."""
     paths = HarnessPaths(root)
@@ -111,7 +167,7 @@ def cmd_list(root: str, source_name: str) -> int:
         return 1
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            skill_acquisition._pinned_clone(source, tmp)
+            _clone(source, tmp)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -154,30 +210,49 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
             file=sys.stderr,
         )
         return 1
-    # The one guarded chokepoint: pinned clone + scan/quarantine/confine + install.
-    # There is no unpinned or unscanned path into agents/<name>/skills/ (#108).
-    try:
-        target = skill_acquisition.acquire_skill(
-            root, source, skill, os.fspath(skills_dir)
-        )
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    except subprocess.CalledProcessError as exc:
-        print(f"Error: failed to fetch {source.get('url')}: {exc.stderr}", file=sys.stderr)
-        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            _clone(source, tmp)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        except subprocess.CalledProcessError as exc:
+            print(f"Error: failed to clone {source.get('url')}: {exc.stderr}", file=sys.stderr)
+            return 1
+        skills = discover_skill_files(tmp)
+        if skill not in skills:
+            print(f"Error: skill '{skill}' not found in {source_name}. Run 'list {source_name}'.", file=sys.stderr)
+            return 1
+        try:
+            target = install_skill(
+                skills[skill],
+                os.fspath(skills_dir),
+                skill,
+                workspace_root=root,
+            )
+        except (PathConfinementError, ValueError, OSError) as exc:
+            print(f"Error: failed to install skill: {exc}", file=sys.stderr)
+            return 1
 
-    # After a successful install, keep the install manifest and every native host
-    # adapter synchronized so the new skill propagates to all hosts.
     try:
+        doc_script = confined_read_path(paths.root, doc_script)
         if doc_script.is_file():
             subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
                 [sys.executable, os.fspath(doc_script)],
                 cwd=os.fspath(paths.resolve_agents().parent),
                 check=True,
             )
+    except (OSError, PathConfinementError, subprocess.SubprocessError) as exc:
+        print(f"Error: failed to refresh skill documentation: {exc}", file=sys.stderr)
+        return 1
 
+    # Propagate the new skill to every host adapter. A bare project with neither
+    # an install manifest nor a source checkout has nothing to compile, so that
+    # case is a successful no-op rather than a failure.
+    try:
         compile_result = _reconcile_host_adapters(root)
+    except FileNotFoundError:
+        compile_result = None
     except (
         OSError,
         PathConfinementError,
@@ -186,7 +261,7 @@ def cmd_add(root: str, source_name: str, skill: str, agent: str) -> int:
     ) as exc:
         print(f"Error: failed to reconcile host adapters: {exc}", file=sys.stderr)
         return 1
-    if compile_result.conflicts:
+    if compile_result is not None and compile_result.conflicts:
         print(
             "Warning: preserved conflicting host adapter files: "
             + ", ".join(compile_result.conflicts),

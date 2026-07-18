@@ -5,7 +5,7 @@ description: Governs how the practice_curator routes a free-text demand to the b
 
 # Capability Broker
 
-Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-gated acquisition. Routing and gap detection are read-only and deterministic. An external skill adaptation uses a reviewed draft PR; a new agent is registered directly in the installed harness catalog without changing the consumer project's Git history. This skill fixes the contract recorded in ADR-0008 and amended by ADR-0035.
+Governs how the practice_curator acts as a proxy for incoming demands: resolve a free-text demand to the best-fit existing agent, or report a structured capability gap, and on a gap drive a human-gated acquisition. Routing and gap detection are read-only and deterministic. An external skill adaptation uses a reviewed draft PR; a new agent is registered directly in the installed harness catalog without changing the consumer project's Git history. This skill fixes the contract recorded in ADR-0008 and amended by ADR-0039.
 
 ## The verdict contract
 
@@ -36,7 +36,7 @@ The demand→agent match is supplied by the host LLM (the harness's model), pass
 - Returning a "route" to an agent that is not in the catalog — a matcher contract violation; the core rejects it (fails closed) rather than routing to a non-existent agent.
 - Treating a missing-skill case as a brand-new agent — if a `nearest_agent` covers the domain, the action is `adapt_skill`, not `create_agent`.
 - Letting the matcher reach into the network or a model from inside the core — keep the match behind the injected port so the core stays deterministic and testable.
-- Sending `create_agent` through the reviewed-PR path — this changes the consumer repository for a harness-local registration and violates ADR-0035.
+- Sending `create_agent` through the reviewed-PR path — this changes the consumer repository for a harness-local registration and violates ADR-0039.
 - Applying `adapt_skill` without a human-approved single-agent draft PR — external content still requires the reviewed path and security verdict.
 
 ## Definition of done

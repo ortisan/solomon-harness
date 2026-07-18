@@ -288,7 +288,7 @@ class HarnessPaths:
 
     @property
     def legacy_memory(self) -> Path:
-        """Pre-layout runtime state used by releases before ADR-0034."""
+        """Pre-layout runtime state used by releases before ADR-0036."""
 
         return self.root / "memory"
 

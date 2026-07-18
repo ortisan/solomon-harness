@@ -666,6 +666,9 @@ def scaffold_agents(
         return
     package_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = os.path.join(package_dir, "templates", "harness")
+    # Resolve (and symlink-reject) the bundled payload templates before any
+    # capability gate, so an unsafe template is rejected even for a project that
+    # would otherwise receive no scaffolding.
     main_src = os.fspath(
         confined_read_path(package_dir, os.path.join(template_dir, "main.py"))
     )
@@ -674,6 +677,15 @@ def scaffold_agents(
             package_dir, os.path.join(template_dir, ".agent", "config.json")
         )
     )
+    # Capability-only projects carry no local runtime and no install manifest;
+    # they receive no executable or configuration scaffolding (issue #315). A
+    # managed installed extension (manifest present) or a source checkout with a
+    # local ``solomon_harness/cli.py`` runtime is required before anything is written.
+    local_runtime = os.path.isfile(
+        os.path.join(os.fspath(paths.root), "solomon_harness", "cli.py")
+    )
+    if not paths.manifest.is_file() and not local_runtime:
+        return
     installed_extension = paths.manifest.is_file()
 
     names = (
@@ -689,7 +701,13 @@ def scaffold_agents(
         if not os.path.isfile(role_path):
             continue  # not an agent directory
 
+        # Confine both destinations before writing either, so a single unsafe
+        # target (e.g. a symlinked ``.agent`` directory or ``main.py``) rejects
+        # the agent without leaving a partial write behind (issue #315 atomicity).
         main_dst = os.fspath(confined_path(paths.root, os.path.join(agent_dir, "main.py")))
+        config_dst = os.fspath(
+            confined_path(paths.root, os.path.join(agent_dir, ".agent", "config.json"))
+        )
         if os.path.isfile(main_src) and not os.path.isfile(main_dst):
             if installed_extension:
                 create_install_file(
@@ -701,9 +719,6 @@ def scaffold_agents(
             else:
                 shutil.copy2(main_src, main_dst)
 
-        config_dst = os.fspath(
-            confined_path(paths.root, os.path.join(agent_dir, ".agent", "config.json"))
-        )
         if os.path.isfile(config_src) and not os.path.isfile(config_dst):
             with open(config_src, "r", encoding="utf-8") as f:
                 content = f.read().replace("{{AGENT_NAME}}", name)

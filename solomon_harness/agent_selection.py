@@ -182,8 +182,13 @@ def _signals(workspace_root: str) -> Set[str]:
 
 def select_agents(workspace_root: str) -> List[str]:
     """Return the sorted list of agents to enable for the project at workspace_root."""
-    agents_dir = os.path.join(workspace_root, "agents")
-    available = _discover_agents(workspace_root)
+    from solomon_harness.integrations import discover_agents as discover_compilable_agents
+
+    agents_dir = os.fspath(HarnessPaths(workspace_root).resolve_agents())
+    # Stack selection uses the strict "compilable agent" definition (#315): a
+    # present but incomplete catalog fails closed instead of enabling a
+    # half-formed agent the compiler cannot safely activate.
+    available = set(discover_compilable_agents(agents_dir))
     catalog_present = bool(available) or os.path.lexists(agents_dir)
     if catalog_present and not available:
         return []

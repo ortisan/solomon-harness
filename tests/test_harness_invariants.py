@@ -155,7 +155,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
                 f.write("# QA Profile\n")
             os.symlink(outside, os.path.join(root, "agents", "qa"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.lexists(os.path.join(outside, "main.py")))
             self.assertFalse(os.path.lexists(os.path.join(outside, ".agent")))
@@ -170,7 +170,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
             escaped = os.path.join(root, "escaped-main.py")
             os.symlink(escaped, os.path.join(agent_dir, "main.py"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.exists(escaped))
             self.assertFalse(os.path.lexists(os.path.join(agent_dir, ".agent")))
@@ -189,7 +189,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
                 f.write("do not trust\n")
             os.symlink(outside, os.path.join(config_dir, "config.json"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
             with open(outside, "r", encoding="utf-8") as f:
@@ -206,7 +206,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
             agent_dir = os.path.join(root, "agents", "qa")
             os.symlink(outside, os.path.join(agent_dir, ".agent"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
             self.assertEqual(os.listdir(outside), [])

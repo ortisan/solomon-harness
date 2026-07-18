@@ -123,7 +123,7 @@ or cutting a release.
 ## Traceability
 
 - Issue: #240
-- ADR: docs/adrs/0034-host-neutral-installed-harness.md
+- ADR: docs/adrs/0036-host-neutral-installed-harness.md
 - PR: #288
 
 ## Implementation Evidence

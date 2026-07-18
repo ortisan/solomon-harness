@@ -4,7 +4,7 @@
 - Date: 2026-06-29
 - Deciders: software_architect, product_owner, practice_curator, software_engineer, security
 - Issue: #46 (slice A of epic #43)
-- Amended: 2026-07-16 by ADR-0035, which moves `create_agent` to direct
+- Amended: 2026-07-16 by ADR-0039, which moves `create_agent` to direct
   registration in the installed harness while retaining reviewed PRs for
   `adapt_skill`.
 
