@@ -465,6 +465,7 @@ def run_stage(
     # exception thrown before the engine ever assigns a real exit code.
     rc = 1
     run_skipped = False
+    run_stalled = False
     try:
         try:
             if engine == "agy":
@@ -513,12 +514,20 @@ def run_stage(
 
                 noop_baseline = _worktree.workspace_snapshot(workspace_root)
 
+            from solomon_harness import loop_watchdog
+            from solomon_harness.loop_policy import _read_loop_config
+
+            wcfg = loop_watchdog.WatchdogConfig.from_loop_block(_read_loop_config(workspace_root))
+
             # rc stays at its pessimistic 1 until the engine reports a real
             # exit code: re-initializing it to 0 here would make the finally's
             # failed-run claim release read any mid-run exception (engine
             # missing, KeyboardInterrupt) as a success and keep the claim for
             # the whole TTL.
-            for i in range(iterations):
+            stall_retry_used = False
+            while True:
+              run_stalled = False
+              for i in range(iterations):
                 if iterations > 1:
                     log_progress(f"-- {prompt_stage} iteration {i + 1}/{iterations} --")
                 proc: Any = None
@@ -535,6 +544,7 @@ def run_stage(
                             returncode = getattr(mocked_res, "returncode", 0)
                             def wait(self): pass
                         proc = DummyProc()
+                        monitor = None
                     else:
                         proc = subprocess.Popen(
                             cmd,
@@ -547,6 +557,7 @@ def run_stage(
                         if proc.stdin:
                             proc.stdin.write(prompt)
                             proc.stdin.close()
+                        monitor = loop_watchdog.StallMonitor(proc, wcfg).start()
                     stdout_buf = []
                     stderr_buf = []
                     import threading
@@ -554,6 +565,8 @@ def run_stage(
                     def read_stderr():
                         for chunk in iter(lambda: proc.stderr.read(1024), ""):
                             stderr_buf.append(chunk)
+                            if monitor is not None:
+                                monitor.mark_activity()
                             sys.stderr.write(chunk.replace("\r\n", "\n").replace("\n", "\r\n"))
                             sys.stderr.flush()
 
@@ -562,11 +575,20 @@ def run_stage(
 
                     for chunk in iter(lambda: proc.stdout.read(1024), ""):
                         stdout_buf.append(chunk)
+                        if monitor is not None:
+                            monitor.mark_activity()
                         sys.stdout.write(chunk.replace("\r\n", "\n").replace("\n", "\r\n"))
                         sys.stdout.flush()
 
                     proc.wait()
                     t.join(timeout=1.0)
+                    if monitor is not None:
+                        monitor.stop()
+                        if monitor.stalled:
+                            run_stalled = True
+                            print(f"Stall watchdog killed /solomon-{stage}: {monitor.reason}.", file=sys.stderr)
+                            rc = 1
+                            break
                     out = "".join(stdout_buf)
                     from solomon_harness import loop_budget
 
@@ -574,12 +596,30 @@ def run_stage(
                     if cost is not None:
                         loop_budget.record(workspace_root, cost, stage=stage)
                 else:
-                    proc = subprocess.run(cmd, input=prompt, text=True, check=False, env=child_env)
+                    try:
+                        proc = subprocess.run(
+                            cmd, input=prompt, text=True, check=False, env=child_env,
+                            timeout=wcfg.terminal_cap,
+                        )
+                    except subprocess.TimeoutExpired:
+                        run_stalled = True
+                        print(
+                            f"Stall watchdog killed /solomon-{stage}: terminal cap "
+                            f"{wcfg.terminal_cap:.0f}s exceeded.",
+                            file=sys.stderr,
+                        )
+                        rc = 1
+                        break
                 rc = proc.returncode
                 if rc != 0:
                     # A failed iteration stops the run rather than plowing ahead —
                     # consistent with the single confirmed step `loop` takes today.
                     break
+              if run_stalled and stage == "start" and not stall_retry_used:
+                  stall_retry_used = True
+                  log_progress("Engine stalled; retrying once before parking the run.")
+                  continue
+              break
         except FileNotFoundError:
             print(f"Error: '{engine}' is not installed or not authenticated.", file=sys.stderr)
             rc = 1  # keep the local in sync so the finally releases the claim
@@ -619,6 +659,13 @@ def run_stage(
                         "releasing the claim.",
                         file=sys.stderr,
                     )
+        if run_stalled:
+            print(
+                f"/solomon-{stage} {' '.join(args)} was killed by the stall "
+                "watchdog after a retry; parking the run for human triage "
+                "(claim and worktree preserved).",
+                file=sys.stderr,
+            )
         if lock is not None:
             _record_loop_run(
                 workspace_root,
@@ -626,7 +673,7 @@ def run_stage(
                 args,
                 rc,
                 lock.session_id,
-                status="skipped" if run_skipped else None,
+                status="parked" if run_stalled else ("skipped" if run_skipped else None),
             )
         if rc == 0 and stage in LOCKED_STAGES and not run_skipped:
             from solomon_harness import notify
@@ -641,7 +688,7 @@ def run_stage(
         if (
             claim_acquired
             and claimed_issue_number is not None
-            and (rc != 0 or run_skipped)
+            and ((rc != 0 and not run_stalled) or run_skipped)
             and (claim_lost_event is None or not claim_lost_event.is_set())
         ):
             # A failed `start` must not hold the issue for the rest of the
@@ -649,7 +696,9 @@ def run_stage(
             # claim moved on, release_claim refuses and the new holder keeps
             # it). A successful start keeps its claim: the draft PR now
             # protects the issue and the merge path releases it. A skipped
-            # no-op start releases too: nothing protects the issue.
+            # no-op start releases too: nothing protects the issue. A parked
+            # (stall-killed) run keeps its claim so a human triages it; the
+            # claim TTL is the backstop against a permanent hold.
             try:
                 if claim_store is None:
                     from solomon_harness import claim as _claim

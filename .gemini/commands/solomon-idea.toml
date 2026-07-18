@@ -29,7 +29,12 @@ If `{{args}}` is empty, ask the user for the idea in one line and stop.
 
 2. **Show the shaped idea to the user and confirm** before creating anything.
    Creating a GitHub issue is outward-facing; get an explicit go-ahead. On request,
-   refine and re-show.
+   refine and re-show. When the framing is genuinely contested — the single-reading
+   criterion fails with two comparably plausible framings, or the user asks to
+   stress-test it — offer the opt-in council debate (`council_debate` skill) as an
+   enumerated choice (recommended first, never automatic): its four phases resolve
+   the framing, and its Recommended Path Forward returns as an `AskUserQuestion`
+   menu, never prose, before the idea is shaped.
 
 3. **Create the issue** using the Idea body template from the workflow doc. Ensure the
    standard labels exist first with `uv run python -m solomon_harness.github ensure-labels`:

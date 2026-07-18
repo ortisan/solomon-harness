@@ -30,6 +30,7 @@ Use this agent when a new specialist agent needs to be scaffolded end to end —
 
 The following specific skills are actively configured for this agent:
 - [scope_and_mandate](skills/scope_and_mandate.md) — Governs the creation, scaffolding, and registration of new specialist agents — the mandated agents/<name>/ directory layout, path-traversal and snake_case-name confinement checks, and the registry updates to agents/AGENTS.md, README.md, and the compiled host-tool integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+- [skill_authoring_craft](skills/skill_authoring_craft.md) — Governs the craft of a skill's body — the words and structure decided once scope_and_mandate.md's scaffolding mechanics and agents/AGENTS.md's format contract are already satisfied — covering predictability as the root virtue, the information-hierarchy ladder for placing content in-skill or behind a pointer into docs/adrs, docs/specs, or an external skill source, the sentence-level no-op pruning test, leading words as token-efficient anchors, and the named failure modes (premature completion, duplication, sediment, sprawl, no-op, negation). Use when drafting a new skill's body, reviewing an existing skill for bloat or drift, or judging whether a specific sentence earns its place in a skill file.
 
 ## External Skills
 

@@ -263,7 +263,7 @@ class TestSchemaAsserts(unittest.TestCase):
         ("status", "issues", ("'in_progress'", "'code_review'", "'qa'", "'closed'")),
         ("status", "handoffs", ("'open'", "'accepted'", "'done'")),
         ("status", "sessions", ("'active'", "'done'")),
-        ("status", "loop_runs", ("'ok'", "'failed'", "'skipped'")),
+        ("status", "loop_runs", ("'ok'", "'failed'", "'skipped'", "'parked'")),
         ("state", "milestones", ("'open'", "'closed'")),
     )
 

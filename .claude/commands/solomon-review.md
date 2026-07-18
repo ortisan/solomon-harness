@@ -34,6 +34,13 @@ subagents); do not review with a single generic pass.
   re-deriving the whole context. Then `mcp__solomon-memory__get_open_issues` for known
   debt and the design this change claims to implement (link any ADR referenced in the
   PR body).
+- **Cross-round finding dedup** (epic #341): pull the findings logged for this PR
+  in prior review rounds and pass the already-triaged ones (each keyed by its
+  `dedup_key` = file + approximate line + category) to every lens as context. A
+  finding a human already marked `invalid`, or one already `resolved`, is not
+  re-flagged unless the code at that `file:line` actually changed since the prior
+  `<reviewed-sha>`. The human decision points and the managed body record are
+  unchanged.
 
 ## 2. Assemble and run the lenses (architect gate first, then qa and security in parallel)
 - qa agent: verify the test pyramid (`the_test_pyramid_target_distribution`) and the
@@ -59,6 +66,11 @@ subagents); do not review with a single generic pass.
   deliverable, never reinterpret the contract to match what was built. The review record
   in step 4 carries the verdict as `Contract parity: <artifacts compared> — PASS|MISMATCH`
   (or `could not run — <missing artifact>`, which is itself a process finding).
+  Finally run the AI test-hygiene scan (`ai_test_hygiene_scan` skill) over the test
+  diff since the PR base: a fired RF-1 (inserted skip/only/xfail) or RF-3 (a mock added
+  on a dependency the RTM declared Integration/E2E) is a blocker, and RF-2 (an assertion
+  weakened during the PR) or RF-4 (unjustified snapshot drift) on a P0/P1 criterion is a
+  blocker; isolate any red test 3-5x on the same SHA before classifying it.
 - security agent: STRIDE pass per `threat_modeling_with_stride` plus an SAST sweep
   (`sast` skill) over the diff. Flag any secret, injection, or unmitigated boundary.
 - software_architect agent: apply the `architecture_review_gate` checklist against
@@ -67,7 +79,11 @@ subagents); do not review with a single generic pass.
   Run the mechanical body gate first — `gh pr view <n> --json body --jq .body > <tmp> &&
   uv run python scripts/check-adr-gate.py --body-file <tmp>` — a violation is a blocker;
   then judge whether the line's CONTENT is honest (a skip reason that hides a
-  significant change is still a blocker).
+  significant change is still a blocker). When the line names an ADR, run the
+  gate's ADR-reconciliation step (`architecture_review_gate`, "ADR reconciliation"):
+  diff the named ADR's Decision Outcome section against the actual diff and record
+  `matches-as-designed` or `[DEVIATION] <mismatch>` inside the same `save_decision`
+  review record — never trust the ADR prose unexamined.
 - Domain lenses (conditional): `gh pr diff $ARGUMENTS --name-only | uv run python -m solomon_harness.review_roster`
   prints up to two extra specialists (auth_engineer, dba, sre, loop_engineer, frontend,
   observability, practice_curator, documenter) selected deterministically
@@ -106,7 +122,11 @@ Each lens returns findings tagged blocker, major, or minor.
   ready). If `gh pr review --approve` is refused because the reviewer authored the PR
   (single-maintainer self-review), the posted comment is the approval of record and
   `gh pr ready` is still what advances the PR; run it regardless.
-- File each blocker/major as a tracked issue with `mcp__solomon-memory__log_issue`.
+- File each blocker/major as a tracked issue with `mcp__solomon-memory__log_issue`,
+  and record each finding with its `dedup_key` (file + approximate line + category)
+  and a lifecycle field — `pending` → `valid`/`invalid` → `resolved`, where
+  `invalid` is a legitimate, documented rejection — so the next round's dedup
+  (step 1) can suppress a finding already triaged unless its code changed.
 
 ## 5. Persist to memory
 - `mcp__solomon-memory__save_decision` with the review outcome (title, rationale,

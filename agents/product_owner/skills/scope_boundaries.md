@@ -66,6 +66,68 @@ Assumptions / dependencies (owner):
 
 The value is in the "Out of scope" block. Without it, "export statement" quietly grows into CSV, date ranges, email delivery, and branded templates, and the team misses the date building things nobody actually asked for.
 
+## Vertical-slice sizing
+
+Slicing work into issues is a scope decision, not an estimation nuance, and it
+sits with the product_owner alongside the in-scope/out-of-scope lists: an
+issue's boundary is where a testable, demonstrable slice of value begins and
+ends, and that boundary is drawn by whoever draws the scope line, not by
+whoever happens to be estimating capacity that week.
+
+Default to fewer, larger issues, each a complete vertical slice: the
+implementation, its wiring into the rest of the system, and the tests that
+cover it, delivered end to end as one unit a reviewer can judge against one
+set of acceptance criteria. A slice that stops at "the function exists" and
+defers wiring or tests to a follow-on issue is not a vertical slice — it is a
+horizontal layer wearing a story's clothing, and it ships nothing a user or
+the system can observe until its undated follow-on lands.
+
+Split an issue only at a real boundary, never to make a number look smaller:
+
+- **Dependency** — a contract (an interface, a schema, a protocol) must exist
+  and be agreed before its consumers can be built against it. The
+  contract-defining slice is its own issue; everything that consumes it is a
+  separate, dependent issue.
+- **Parallelization** — two slices touch disjoint parts of the system and can
+  genuinely proceed as independent, concurrently running work. If they would
+  collide on the same files or the same reviewer's attention regardless of
+  who works on them, they are not parallelizable and do not need separating.
+- **Domain** — the slices require genuinely different toolchains,
+  deliverables, or specialist ownership: a backend contract versus its
+  frontend consumer, a migration versus the application code that reads it.
+  A domain split is real when the Definition of Ready would otherwise ask one
+  issue to carry two different owners' acceptance criteria.
+
+What is never a split reason:
+
+- **File or line count.** An issue that touches twenty files because they
+  form one coherent slice is correctly sized; splitting it to make the diff
+  smaller breaks a vertical slice into artificial layers that ship no value
+  on their own and multiplies the ramp-up cost of re-deriving context across
+  issues that were never actually independent.
+- **A high complexity or risk rating.** Complexity rates implementation
+  risk — the likelihood of rework, the need for coordination, the blast
+  radius of getting it wrong — never size. A critical-complexity change
+  (cross-cutting, high regression risk) still gets exactly one issue if it is
+  one coherent slice; the response to high complexity is more scrutiny at
+  refinement and review — a tighter RAID entry, a sharper acceptance-criteria
+  pass, an extra reviewer lens — not a smaller issue that hides the same risk
+  behind an artificial seam. Splitting a high-risk change across issues does
+  not reduce the risk; it relocates the seam to where the risk resurfaces,
+  now with two half-finished pieces on the board instead of one coherent,
+  reviewable change.
+
+A useful check when a story feels too big to write one Given/When/Then block
+for: ask whether the discomfort is actually a missing dependency (something
+else must exist first), a genuine parallel opportunity (two people could work
+on disjoint pieces right now), or a domain seam (two different specialists
+own two different acceptance bars). If none of the three apply, the story is
+not oversized — it is substantial, and substantial is not a defect. Ten-plus
+issues out of one refinement pass on what was described as a single feature
+almost always means slices that belong together were separated for no reason
+beyond each one "looking smaller"; merge them back before presenting the
+split to the team.
+
 ## Scope-change protocol
 
 Scope will change; uncontrolled change is the failure, not change itself. When new scope appears mid-sprint, run it through a fixed protocol rather than absorbing it:
@@ -85,6 +147,8 @@ Defend the boundary. Saying no to out-of-scope work, or "yes, and here is what i
 - Unowned assumptions and dependencies. An assumption with no owner is a latent blocker; when it breaks mid-sprint nobody is accountable for resolving it.
 - Specifying the "how". Dictating implementation oversteps the role, demotivates engineers, and makes you accountable for technical outcomes you do not control.
 - Treating change as failure. Refusing all change is as damaging as accepting all of it; the protocol exists so change is priced and chosen, not blocked or smuggled.
+- Splitting an issue by file count or line count instead of a real boundary. A twenty-file diff that is one coherent slice is correctly sized; the split just breaks the vertical slice into unshippable layers.
+- Splitting an issue because its complexity or risk rating is high. Complexity rates risk, not size; a high rating calls for more scrutiny at review, not a smaller issue that hides the same risk behind an artificial seam.
 
 ## Definition of done
 
@@ -97,3 +161,4 @@ Defend the boundary. Saying no to out-of-scope work, or "yes, and here is what i
 - [ ] No acceptance criterion was widened silently to absorb new scope.
 - [ ] The PRD does not specify implementation; it states outcomes the responsible specialist or engineer owns.
 - [ ] Every requirement that survived is testable; any that is not was sent back to discovery rather than shipped as prose.
+- [ ] Every issue is a complete vertical slice (implementation, wiring, and covering tests); any split cites a dependency, parallelization, or domain boundary, never file/line count or a complexity rating.
