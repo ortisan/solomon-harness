@@ -68,7 +68,7 @@ def check_memory(workspace_root: str) -> Dict:
     configured = db.get("database")
     tenant = configured if configured not in (None, "", "harness") else derive_tenant(workspace_root)
     if memory.is_serving(host, port):
-        return _check("Memory backend", OK, f"SurrealDB serving on {host}:{port} (tenant: {tenant})")
+        return _memory_status_from_client(workspace_root, host, port, tenant)
     if memory._tcp_open(host, port):
         return _check(
             "Memory backend", WARN,
@@ -80,6 +80,35 @@ def check_memory(workspace_root: str) -> Dict:
         f"SurrealDB not running on {host}:{port}; using SQLite fallback (tenant: {tenant})",
         "Start Docker, then run 'solomon-harness memory-up'.",
     )
+
+
+def _memory_status_from_client(
+    workspace_root: str, host: str, port: int, tenant: Optional[str]
+) -> Dict:
+    """Report the harness's actual connection, not just that the port answers.
+
+    A reachable server that rejects the configured credentials or database still
+    degrades DatabaseClient to SQLite; backend_status() is the authority.
+    """
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    try:
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            status = db.backend_status()
+    except Exception as exc:
+        return _check(
+            "Memory backend", WARN,
+            f"SurrealDB answers on {host}:{port} but the harness connection failed: {exc}",
+            "Check the configured credentials and database in .agent/config.json.",
+        )
+    if status.get("degraded"):
+        return _check(
+            "Memory backend", WARN,
+            f"SurrealDB answers on {host}:{port} but the harness connection degraded: "
+            f"{status.get('fallback_reason')}; using SQLite fallback",
+            "Check the configured credentials and database in .agent/config.json.",
+        )
+    return _check("Memory backend", OK, f"SurrealDB serving on {host}:{port} (tenant: {tenant})")
 
 
 def pending_reconcile_count(workspace_root: str) -> int:

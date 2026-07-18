@@ -87,6 +87,7 @@ def build_digest(
     backend: str = "surrealdb",
     per_issue: Optional[List[Dict[str, Any]]] = None,
     host: str = "unknown",
+    degraded: Optional[bool] = None,
 ) -> List[str]:
     """Render the digest lines from already-collected facts (pure).
 
@@ -108,7 +109,8 @@ def build_digest(
         rendered_arguments = str(arguments).strip() if arguments is not None else ""
         return workflow_invocation(stage, rendered_arguments, host=host)
 
-    if backend == "sqlite":
+    show_fallback_banner = degraded if degraded is not None else backend == "sqlite"
+    if show_fallback_banner:
         lines.append(
             "NOTE: memory is on the SQLite fallback (SurrealDB unreachable). "
             "The board below is the local fallback and may be stale."
@@ -431,7 +433,13 @@ def gather_digest(
     # client to the SQLite fallback, and the banner must reflect where the facts
     # above actually came from.
     backend = getattr(db, "backend", "surrealdb")
+    degraded = None
+    if hasattr(db, "backend_status"):
+        try:
+            degraded = bool(db.backend_status().get("degraded"))
+        except Exception:
+            degraded = None
     return build_digest(
         resume, open_issues, last_loop, prs, backend=backend, per_issue=per_issue,
-        host=host,
+        host=host, degraded=degraded,
     )
