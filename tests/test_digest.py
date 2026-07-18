@@ -599,3 +599,37 @@ class TestBuildDigest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBlockedIssueSkip(unittest.TestCase):
+    """The resume scan skips a Ready issue with an open blocker (#341 pkg 16)."""
+
+    def _db(self, blockers):
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "60", "title": "Blocked", "status": "ready"},
+                    {"github_id": "61", "title": "Free", "status": "ready"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+            def issues_blocked_by(self, gid):
+                return blockers.get(str(gid), [])
+
+        return FakeDB()
+
+    def test_blocked_ready_issue_is_not_proposed(self):
+        db = self._db({"60": [{"github_id": "5", "status": "in_progress"}]})
+        text = "\n".join(digest.gather_digest(".", db, fetch_github=False))
+        self.assertIn("#61", text)
+        self.assertNotIn("Start development on Ready issue #60", text)
+
+    def test_a_terminal_blocker_does_not_block(self):
+        db = self._db({"60": [{"github_id": "5", "status": "closed"}]})
+        ids = digest._blocked_ready_ids(db, db.get_open_issues())
+        self.assertEqual(ids, set())

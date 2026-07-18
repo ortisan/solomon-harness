@@ -2,12 +2,15 @@
 
 A headless `/solomon-*` run that wedges holds the single-driver lock forever,
 because ``LoopLock.is_stale`` treats a live same-host process as never stale.
-This watchdog bounds a run by three nested time budgets — a fast per-attempt
-idle timeout, a child backstop that must exceed idle so the fast watchdog heals
-first, and an absolute terminal cap — and kills the process when any is
-exceeded, so the lock is always released.
+This watchdog bounds a run by a fast per-attempt idle timeout and an absolute
+terminal cap, killing the process (and its whole process group, so a descendant
+that inherited the output pipe cannot keep it open and wedge the reader) when
+either is exceeded. The child backstop is the grace period between terminate and
+kill, not an independent trip condition.
 """
 
+import os
+import signal
 import threading
 import time
 from typing import Any, Optional
@@ -41,11 +44,14 @@ class WatchdogConfig:
     @classmethod
     def from_loop_block(cls, block: Optional[dict]) -> "WatchdogConfig":
         block = block or {}
-        return cls(
-            idle_timeout=_positive_float(block.get("stall_idle_seconds"), DEFAULT_IDLE_TIMEOUT),
-            child_backstop=_positive_float(block.get("stall_backstop_seconds"), DEFAULT_CHILD_BACKSTOP),
-            terminal_cap=_positive_float(block.get("stall_terminal_seconds"), DEFAULT_TERMINAL_CAP),
-        )
+        idle = _positive_float(block.get("stall_idle_seconds"), DEFAULT_IDLE_TIMEOUT)
+        backstop = _positive_float(block.get("stall_backstop_seconds"), DEFAULT_CHILD_BACKSTOP)
+        terminal = _positive_float(block.get("stall_terminal_seconds"), DEFAULT_TERMINAL_CAP)
+        # The backstop is the terminate-to-kill grace; a misconfig that puts it
+        # at or below idle would yield a non-positive wait, so clamp it above.
+        backstop = max(backstop, idle + 5.0)
+        terminal = max(terminal, backstop)
+        return cls(idle_timeout=idle, child_backstop=backstop, terminal_cap=terminal)
 
 
 class StallMonitor:
@@ -98,20 +104,36 @@ class StallMonitor:
                 return
             self._stop_event.wait(self._poll_interval)
 
+    def _signal_group(self, sig: int) -> bool:
+        # Signal the whole process group so a descendant that inherited the
+        # output pipe dies too, letting the reader see EOF. Falls back to the
+        # direct child when there is no group (or on a platform without killpg).
+        pid = getattr(self._proc, "pid", None)
+        if pid is not None and hasattr(os, "killpg"):
+            try:
+                os.killpg(os.getpgid(pid), sig)
+                return True
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        return False
+
     def _kill(self) -> None:
+        grace = max(self._config.child_backstop - self._config.idle_timeout, 5.0)
+        if not self._signal_group(signal.SIGTERM):
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
         try:
-            self._proc.terminate()
-        except Exception:
-            pass
-        try:
-            self._proc.wait(timeout=self._config.child_backstop - self._config.idle_timeout or 5.0)
+            self._proc.wait(timeout=grace)
         except Exception:
             pass
         if self._proc.poll() is None:
-            try:
-                self._proc.kill()
-            except Exception:
-                pass
+            if not self._signal_group(signal.SIGKILL):
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
 
     def stop(self) -> None:
         self._stop_event.set()
