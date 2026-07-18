@@ -158,8 +158,9 @@ def test_council_debate_skill_and_opt_in_wiring():
     assert "the-thinker" in low  # named only to forbid inventing it
     assert "council_debate" in _profile("product_owner")
     idea = _flat(os.path.join(".claude", "commands", "solomon-idea.md"))
-    assert "council" in idea
-    assert "askuserquestion" in idea
+    # Pin the council opt-in in the same clause (askuserquestion pre-existed for
+    # the unrelated enumerable-decisions convention) — #356 review.
+    assert "council_debate" in idea or "opt-in council debate" in idea
     refine = _flat(os.path.join(".claude", "commands", "solomon-refine.md"))
     assert "council" in refine
 
@@ -187,6 +188,10 @@ def test_remediation_cap_helper_and_doc_wiring():
     doc = _flat(os.path.join("docs", "solomon-workflow.md"))
     assert "remediation_limit_reached" in doc
     assert "consecutive-round cap" in doc
+    # The cap is a code-enforced gate in run_stage, not doc-only guidance
+    # (#356 review blocker): run_stage must call it and return 3 at the cap.
+    wf = _read(os.path.join("solomon_harness", "workflows.py"))
+    assert "remediation_limit_reached" in wf
 
 
 # --- pkg 15: cross-round finding dedup ---------------------------------------
@@ -196,16 +201,30 @@ def test_review_carries_cross_round_dedup():
     low = _flat(os.path.join(".claude", "commands", "solomon-review.md"))
     assert "dedup_key" in low
     assert "cross-round finding dedup" in low
-    assert "invalid" in low and "resolved" in low
+    # Pin the distinctive lifecycle sentence, not the bare words (a pre-existing
+    # "unresolved" substring made "resolved" hollow) — #356 review.
+    assert "pending` → `valid`/`invalid` → `resolved`" in _read(
+        os.path.join(".claude", "commands", "solomon-review.md")
+    )
+    # A real, tested code artifact backs the contract, not prose alone.
+    from solomon_harness import review_dedup
+
+    assert callable(review_dedup.finding_dedup_key)
+    assert review_dedup.LIFECYCLE_STATES == ("pending", "valid", "invalid", "resolved")
 
 
 # --- pkg 16: blocked-issue skip + refine exploration -------------------------
 
 
-def test_blocked_issue_skip_documented():
+def test_blocked_issue_skip_wired_into_selection():
     doc = _flat(os.path.join("docs", "solomon-workflow.md"))
     assert "issues_blocked_by" in doc
     assert "skips any candidate" in doc
+    # The selection code actually consults issues_blocked_by (#356 review):
+    # the digest ready-issue scan filters blocked candidates.
+    dg = _read(os.path.join("solomon_harness", "digest.py"))
+    assert "_blocked_ready_ids" in dg
+    assert "issues_blocked_by" in dg
 
 
 def test_refine_cites_an_exploration_pass():

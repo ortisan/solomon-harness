@@ -231,7 +231,8 @@ def _normalize_token(value: Optional[str], aliases: Dict[str, str]) -> Optional[
 
 
 def normalize_loop_run_status(status: Optional[str]) -> Optional[str]:
-    """Map a loop-run status to its canonical token (ok or failed).
+    """Map a loop-run status to its canonical token (ok, failed, skipped, or
+    parked — see LOOP_RUN_STATUSES).
 
     Legacy spellings collapse (success/passed -> ok, failure/error -> failed);
     an unknown token passes through lowercased; None passes through so an
@@ -537,6 +538,20 @@ class DatabaseClient:
         "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
         "DEFINE INDEX IF NOT EXISTS decisions_created_at "
         "ON decisions FIELDS created_at;",
+        # Time-ordered hot paths. get_latest_activity reads the newest sessions
+        # and handoffs row (ORDER BY timestamp DESC LIMIT 1) on every session
+        # start; without these the planner does a TableScan plus sort that grows
+        # with the ledger. Indexing the ordered field turns each into an
+        # IndexScan, the plan decisions_created_at already gets. A new index name
+        # applies to existing tenants on the next connect, so no backfill.
+        "DEFINE INDEX IF NOT EXISTS sessions_timestamp "
+        "ON sessions FIELDS timestamp;",
+        "DEFINE INDEX IF NOT EXISTS handoffs_timestamp "
+        "ON handoffs FIELDS timestamp;",
+        # loop_run_throughput / loop_run_failure_rate filter and group loop_runs
+        # by created_at.
+        "DEFINE INDEX IF NOT EXISTS loop_runs_created_at "
+        "ON loop_runs FIELDS created_at;",
         # Timeseries: composite index on (name, time) for metrics.
         "DEFINE INDEX IF NOT EXISTS metrics_name_time "
         "ON metrics FIELDS name, time;",
@@ -3786,9 +3801,9 @@ class DatabaseClient:
         worktree gets a separate database and a cross-worktree count would be
         invisible.
 
-        ``status`` is normalized to the canonical loop-run vocabulary (ok or
-        failed) at this write seam, so the aggregators can count one token
-        (#165, ADR-0016).
+        ``status`` is normalized to the canonical loop-run vocabulary
+        (LOOP_RUN_STATUSES) at this write seam, so the aggregators can count one
+        token (#165, ADR-0016/0039).
 
         ``target_issue`` is the GitHub issue number this run advanced, when the
         stage carries one. It is stored on the row and also written as a

@@ -295,6 +295,29 @@ def run_stage(
         )
         return 3
 
+    # Remediation cap: refuse to drive the same locked stage+target past the
+    # consecutive-round limit (#341 package 5). A wedged review/fix cycle that
+    # keeps re-proposing the same PR is stopped and surfaced to a human instead
+    # of burning unbounded rounds.
+    if stage in LOCKED_STAGES:
+        target = " ".join(args)
+        if target:
+            try:
+                from solomon_harness import loop_log
+                from solomon_harness.tools.database_client import DatabaseClient
+
+                with DatabaseClient(harness_dir=workspace_root) as _db:
+                    if loop_log.remediation_limit_reached(_db, target, stage):
+                        print(
+                            f"Blocked: /solomon-{stage} {target} has hit the "
+                            "consecutive-round remediation cap; stopping and "
+                            "surfacing to a human instead of re-proposing it.",
+                            file=sys.stderr,
+                        )
+                        return 3
+            except Exception:
+                pass
+
     # Budget governor: at L2/L3, an exhausted daily cost ceiling degrades the
     # automation path to report-only (it stops drafting/merging), never a human.
     if policy.level in ("L2", "L3") and stage != "workflow":
@@ -553,6 +576,7 @@ def run_stage(
                             stderr=subprocess.PIPE,
                             text=True,
                             env=child_env,
+                            start_new_session=True,
                         )
                         if proc.stdin:
                             proc.stdin.write(prompt)
