@@ -19,7 +19,11 @@ import time
 import urllib.request
 from typing import List, Optional, Tuple
 
-from solomon_harness.home import assigned_memory_port, harness_home
+from solomon_harness.home import (
+    assigned_memory_password,
+    assigned_memory_port,
+    harness_home,
+)
 
 DEFAULT_URL = "ws://localhost:8099/rpc"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
@@ -141,27 +145,34 @@ def _pin_published_to_loopback(compose_text: str) -> str:
     return re.sub(r'"(?:[0-9.]+:)?(\d+):(8000|80)"', r'"127.0.0.1:\1:\2"', compose_text)
 
 
-def heal_home_compose() -> Optional[str]:
-    """Pin an existing home compose's published ports to loopback, in place.
+def _set_password(compose_text: str, password: str) -> str:
+    """Rewrite the SurrealDB ``--password`` value in a compose command line."""
+    return re.sub(r"(--password\s+)\S+", lambda m: m.group(1) + password, compose_text)
 
-    Installs materialized before the loopback pin published the store — which
-    runs with a fixed root/root development credential — on all interfaces,
-    and the exists-early-return in ``ensure_home_compose`` preserved that
-    exposure forever. Returns the compose path when the file was rewritten
-    (the caller must then run compose ``up -d`` so the containers are
-    recreated on the new bind), or None when there is nothing to heal (no
-    file, or already pinned).
+
+def _rotate_default_password(compose_text: str, home: str) -> str:
+    """Replace a literal ``--password root`` with the generated per-machine password."""
+    if not re.search(r"--password\s+root\b", compose_text):
+        return compose_text
+    return _set_password(compose_text, assigned_memory_password(home))
+
+
+def heal_home_compose() -> Optional[str]:
+    """Pin an existing home compose to loopback and rotate a literal root password.
+
+    Returns the compose path when the file was rewritten (the caller must then run
+    compose ``up -d`` to recreate the containers), or None when nothing changed.
     """
     dest = os.path.join(harness_home(), "docker-compose.yml")
     if not os.path.isfile(dest):
         return None
     with open(dest, "r", encoding="utf-8") as f:
         content = f.read()
-    pinned = _pin_published_to_loopback(content)
-    if pinned == content:
+    healed = _rotate_default_password(_pin_published_to_loopback(content), harness_home())
+    if healed == content:
         return None
     with open(dest, "w", encoding="utf-8") as f:
-        f.write(pinned)
+        f.write(healed)
     return dest
 
 
@@ -187,6 +198,7 @@ def ensure_home_compose() -> Optional[str]:
     with open(src, "r", encoding="utf-8") as f:
         content = f.read()
     content = _set_published_port(content, port)
+    content = _set_password(content, assigned_memory_password(home))
     os.makedirs(home, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
         f.write(content)

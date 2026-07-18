@@ -2,9 +2,17 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from solomon_harness import healthcheck as hc
+
+
+def _mock_client(backend_status):
+    client = MagicMock()
+    client.__enter__.return_value.backend_status.return_value = backend_status
+    return patch(
+        "solomon_harness.tools.database_client.DatabaseClient", return_value=client
+    )
 
 
 class _P:
@@ -49,7 +57,8 @@ class TestMemory(unittest.TestCase):
 
     def test_serving(self):
         with patch.object(hc.memory, "is_serving", return_value=True), \
-             patch.object(hc, "derive_tenant", return_value="acme-widget"):
+             patch.object(hc, "derive_tenant", return_value="acme-widget"), \
+             _mock_client({"backend": "surrealdb", "degraded": False, "fallback_reason": None}):
             c = hc.check_memory(self.root)
         self.assertEqual(c["status"], hc.OK)
         self.assertIn("acme-widget", c["detail"])

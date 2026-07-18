@@ -196,6 +196,7 @@ def has_github_project_and_wiki(workspace_root: str, git_remote: str) -> bool:
         out = subprocess.check_output(
             ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled,isPrivate"],
             cwd=workspace_root,
+            env=clean_git_env(workspace_root),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=2.0
@@ -241,6 +242,7 @@ def github_wiki_enabled(workspace_root: str) -> bool | None:
         out = subprocess.check_output(
             ["gh", "repo", "view", "--json", "hasWikiEnabled"],
             cwd=workspace_root,
+            env=clean_git_env(workspace_root),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=2.0,
@@ -1006,6 +1008,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
             out = subprocess.check_output(
                 ["gh", "repo", "view", "--json", "hasWikiEnabled,hasProjectsEnabled,isPrivate"],
                 cwd=workspace_root,
+                env=clean_git_env(workspace_root),
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=5.0
@@ -1022,6 +1025,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
                 try:
                     subprocess.check_output(
                         ["git", "ls-remote", wiki_url],
+                        env=clean_git_env(),
                         stderr=subprocess.DEVNULL,
                         timeout=5.0
                     )
@@ -1324,7 +1328,7 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # 6. Install Git commit-msg hook
     print("Installing Git commit-msg hook...")
     try:
-        hooks_dir_bytes = subprocess.check_output(["git", "rev-parse", "--git-path", "hooks"], cwd=workspace_root, stderr=subprocess.DEVNULL)
+        hooks_dir_bytes = subprocess.check_output(["git", "rev-parse", "--git-path", "hooks"], cwd=workspace_root, env=clean_git_env(workspace_root), stderr=subprocess.DEVNULL)
         hooks_dir = os.path.abspath(os.path.join(workspace_root, hooks_dir_bytes.decode("utf-8").strip()))
     except Exception:
         hooks_dir = os.path.join(workspace_root, ".git", "hooks")

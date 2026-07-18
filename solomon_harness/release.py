@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
 from solomon_harness.dates import today_iso
+from solomon_harness.subprocess_env import clean_git_env
 
 # Bump levels, ordered so ``max`` selects the strongest signal in a commit window.
 _NONE, _PATCH, _MINOR, _MAJOR = 0, 1, 2, 3
@@ -418,7 +419,8 @@ def render_release_wiki_page(
 
 def _git(args: List[str], cwd: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=cwd, text=True, capture_output=True, check=True
+        ["git", *args], cwd=cwd, text=True, capture_output=True, check=True,
+        env=clean_git_env(cwd),
     ).stdout
 
 
@@ -868,6 +870,7 @@ def cmd_prep(workspace_root: str, version: Optional[str] = None) -> int:
         ["gh", "pr", "create", "--base", "main", "--head", branch,
          "--title", f"chore(release): v{new_version}", "--body", body],
         cwd=workspace_root, text=True, capture_output=True, check=False,
+        env=clean_git_env(workspace_root),
     )
     print(proc.stdout or proc.stderr)
     return proc.returncode

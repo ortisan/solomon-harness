@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 from typing import Optional
@@ -24,6 +25,8 @@ DEFAULT_HOME = "~/.solomon-harness"
 # the shared backend prefers 8099 and falls back to the next free port.
 DEFAULT_MEMORY_PORT = 8099
 MEMORY_CONFIG = "memory.json"
+CREDENTIALS_CONFIG = "credentials.json"
+DEFAULT_MEMORY_USER = "root"
 
 
 def harness_home() -> str:
@@ -76,6 +79,40 @@ def assigned_memory_port(home: Optional[str] = None, preferred: int = DEFAULT_ME
     with open(cfg, "w", encoding="utf-8") as f:
         json.dump({"host_port": port}, f, indent=2)
     return port
+
+
+def _credentials_path(home: Optional[str] = None) -> str:
+    return os.path.join(home or harness_home(), CREDENTIALS_CONFIG)
+
+
+def generated_memory_password(home: Optional[str] = None) -> Optional[str]:
+    """Return the stored per-machine SurrealDB password, or None when none is set."""
+    path = _credentials_path(home)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("surreal_password") or None
+    except Exception:
+        return None
+
+
+def assigned_memory_password(home: Optional[str] = None) -> str:
+    """Return the per-machine SurrealDB password, generating and persisting it once.
+
+    Stored in ``<home>/credentials.json``, created with 0600 permissions.
+    """
+    home = home or harness_home()
+    existing = generated_memory_password(home)
+    if existing:
+        return existing
+    password = secrets.token_urlsafe(24)
+    os.makedirs(home, exist_ok=True)
+    path = _credentials_path(home)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"surreal_user": DEFAULT_MEMORY_USER, "surreal_password": password}, f, indent=2)
+    return password
 
 
 def _git_remote(workspace_root: str) -> Optional[str]:
