@@ -44,20 +44,32 @@ Name the technique per criterion; "I tested it" is not a technique. The ISO/IEC/
 
 The matrix (RTM) is the deliverable that proves the plan is complete. Keep it as data, regenerated each cycle, not a stale spreadsheet.
 
-| AC ID | Risk | Test IDs | Level | Technique | Status | Defect IDs |
-|-------|------|----------|-------|-----------|--------|------------|
-| AC-PAY-03 | 20 | test_fee_at_min, test_fee_below_min, test_fee_decision_rules | unit, integration | BVA + decision table | pass | - |
-| AC-PAY-07 | 12 | test_refund_partial | integration | equivalence | fail | ISSUE-214 |
+| AC ID | Risk | Test IDs | Level | Technique | Coverage | Defect IDs |
+|-------|------|----------|-------|-----------|----------|------------|
+| AC-PAY-03 | 20 | test_fee_at_min, test_fee_below_min, test_fee_decision_rules | unit, integration | BVA + decision table | covers | - |
+| AC-PAY-07 | 12 | test_refund_partial | integration | equivalence | weak | ISSUE-214 |
+
+The `Coverage` column is a three-value judgment on assertion quality, not a pass/fail run result — a suite can be fully green while this column still reads `weak`:
+
+- `covers` — a specific assertion in the matched test references the literal value, behavior, or contract the criterion describes, at the strict end (equality, status code, error type, exact text).
+- `weak` — a test exists in the criterion's area but uses a permissive matcher, checks the wrong layer (internal state instead of the public outcome), or only exercises the happy path of a multi-branch criterion. This is the row `ai_test_hygiene_scan`'s RF-2 and RF-5 findings resolve to.
+- `missing` — no test references the criterion area at all, or every candidate test is skip/only-fenced, mocked away, or asserts unrelated state (`ai_test_hygiene_scan`'s RF-1 and RF-3 findings resolve here).
+
+A `weak` row blocks release on a High-risk criterion (risk >= 15, or FMEA RPN >= 200); a `missing` row blocks release on any criterion, High-risk or not.
 
 - Maintain it bidirectionally. Forward (AC -> tests) surfaces any criterion with zero linked tests: a coverage hole. Backward (test -> AC) surfaces orphan tests that verify nothing in the current scope, which are noise to prune or a sign of a missing requirement to file.
-- A Must-have criterion (MoSCoW from product_owner `prioritization`) with no passing linked test is a release blocker. Raise it with `log_issue` and tie it to the release `create_milestone`; do not let it pass on the strength of incidental code execution.
+- A Must-have criterion (MoSCoW from product_owner `prioritization`) with a `missing` row, or a `weak` row on a High-risk criterion, is a release blocker. Raise it with `log_issue` and tie it to the release `create_milestone`; do not let it pass on the strength of incidental code execution.
 - Every defect found gets a row link, so a reader can move criterion -> test -> defect -> severity in one hop, and so a fixed defect points back to the criterion that must re-pass.
+
+### Two coverage surfaces, not one
+
+The RTM is not the only coverage ledger this project keeps. `test_planning_and_traceability` answers "does a test verify this acceptance criterion" (criterion -> test); `persona_driven_exploratory_testing`'s `docs/qa/state.csv` answers a different question — "has a persona walked this user journey this cycle" (persona -> journey). The two are dual surfaces of the same release decision, and neither substitutes for the other: a criterion can read `covers` in the RTM while the journey it lives inside was never walked end to end by a real persona, and a journey can read `pass` in `state.csv` while the RTM shows a `missing` row underneath it. Read both before a GO verdict; a gap in either surface is reported as a gap, never assumed covered by the other.
 
 ## Reporting requirements coverage, not just code coverage
 
 Code coverage answers "did a test execute this line"; requirements coverage answers "did a test verify this behavior". They are different metrics and must be reported separately.
 
-- Requirements coverage = (acceptance criteria with at least one passing linked test) / (total acceptance criteria). Report Must-criteria coverage separately and gate the release at 100 percent of Must; track Should/Could as trend, not as a gate.
+- Requirements coverage = (acceptance criteria with at least one `covers` row) / (total acceptance criteria); a `weak` row does not count toward Must-criteria coverage. Report Must-criteria coverage separately and gate the release at 100 percent of Must; track Should/Could as trend, not as a gate.
 - Publish both numbers in the QA report (`qa_report_the_required_output`) beside the `pytest-cov` line/branch figures from `coverage_a_floor_not_a_finish_line`. 100 percent line coverage with 70 percent requirements coverage is the classic trap: incidental execution with no asserting test behind the requirement.
 - Add a result rollup by risk band so the reader sees that the highest-risk criteria are not the ones still failing. A green low-risk band over a red high-risk band is worse than the aggregate pass rate suggests.
 - Track requirement-level defect density (defects per criterion) across cycles. A criterion that keeps reopening defects is under-specified or under-tested at its risk band; escalate it rather than re-running the same cases.
@@ -82,6 +94,7 @@ Code coverage answers "did a test execute this line"; requirements coverage answ
 - [ ] Test depth and execution order follow the risk band; high-risk criteria use boundary, equivalence, and decision-table techniques across unit and integration levels.
 - [ ] A named design technique is recorded per criterion; decision-table criteria have at least one test per surviving rule and combinatorial parameters use an all-pairs set.
 - [ ] A bidirectional traceability matrix links AC -> tests -> defects, with no uncovered Must-have criterion and no unexplained orphan tests.
+- [ ] The RTM's `Coverage` column uses only `covers` / `weak` / `missing`; a `missing` row blocks any criterion and a `weak` row blocks a High-risk criterion, and `docs/qa/state.csv` is checked as the dual persona -> journey coverage surface before a GO verdict.
 - [ ] Requirements coverage is computed and reported separately from code coverage, with Must-criteria coverage at 100 percent gating the release.
 - [ ] The QA report includes the requirements-coverage figure and a result rollup by risk band, and the plan/RTM/cycle are persisted via `save_memory` and `save_session`.
 - [ ] Release hand-off uses `log_handoff` with the coverage number and open blocker issues; blocking gaps are tied to the release `create_milestone`.

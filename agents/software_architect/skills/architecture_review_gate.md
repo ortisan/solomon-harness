@@ -60,6 +60,77 @@ Any unmitigated threat at a boundary handling regulated or high-value data is a 
 - The suite is green on the artifact under review. A red fitness function is a blocker; the gate does not override the machine check by hand.
 - New architectural characteristics introduced by this change have new fitness functions, or a logged issue to add them before merge. Adding a characteristic with no guard is a major finding.
 
+## ADR reconciliation
+
+When the PR body's canonical `ADR: docs/adrs/NNNN-<slug>.md` line
+(`architectural_decision_records`, the `check-adr-gate.py` contract) names a
+record, the gate does not stop at confirming the line exists and points to a
+real file. `check-adr-gate.py` only checks that exactly one canonical line is
+present and well-formed; it says nothing about whether the linked ADR's
+Decision Outcome still describes what shipped. Treating a present,
+well-formed line as proof the design was followed is the recurring failure
+mode this project has already hit: an ADR's prose can describe a mechanism,
+a boundary, or a gate condition that the shipped code never actually
+implements, and a review that trusts the prose instead of the diff waves
+through a change that contradicts its own record — sometimes only surfacing
+the drift after CI is already green.
+
+Run this as a distinct step, after the mechanical body-gate check and before
+judging the five dimensions below:
+
+1. Open the named ADR and read its `## Decision outcome` section (the MADR
+   shape this project standardizes on, per `architectural_decision_records`)
+   — the specific mechanism, boundary, or behavior it commits to, not the
+   surrounding Context or Considered Options, which describe forces and
+   rejected alternatives rather than the binding claim.
+2. Read the actual diff — never the PR description, never the linked issue,
+   never the ADR's own prose repeated back — against each claim the Decision
+   Outcome makes. For every "does X", "only fires when Y", "rejects Z"
+   statement, find the line or lines in the diff that implement it, or find
+   that no such line exists.
+3. Classify the result:
+   - **matches-as-designed** — every claim in the Decision Outcome section is
+     backed by a corresponding line in the diff; no gap.
+   - **`[DEVIATION]`** — at least one claim is not backed, is backed
+     differently than stated, or the diff changes the architectural surface
+     in a way the Decision Outcome never mentions. State the specific
+     mismatch: quote the ADR's claim, cite the diff line(s) that contradict
+     or fail to satisfy it, and say what actually shipped instead. A vague
+     "doesn't quite match" is not a finding; name the exact sentence and the
+     exact code.
+4. A `[DEVIATION]` is not a sixth ad hoc severity tier — judge it against the
+   same blocker/major/minor rubric as every other checklist finding. It is a
+   **major** finding at minimum (an Accepted ADR now disagrees with the code
+   it claims to describe, and every future reader of that record is misled),
+   and a **blocker** when the deviation itself violates one of the five
+   dimensions above — an unmitigated STRIDE threat, a broken contract, a
+   missing fitness function, and so on.
+5. Record the reconciliation verdict inside the same `save_decision` review
+   record as the five-dimension findings, never as a side note or an
+   untracked PR comment. Add one line to the `consequences` or `rationale`
+   field: `ADR reconciliation: docs/adrs/NNNN-<slug>.md — matches-as-designed`
+   or `ADR reconciliation: docs/adrs/NNNN-<slug>.md — [DEVIATION] <specific
+   mismatch>`. A PR that carries an ADR link but whose review record has no
+   reconciliation line is itself a process gap — the gate did not do its job
+   even if the five dimensions all passed clean.
+6. A `[DEVIATION]` follows the same remediation direction as a contract-parity
+   mismatch (`spec_contract_parity`): fix the deliverable to match the ADR, or
+   write a new, superseding ADR (per `architectural_decision_records` — never
+   an edit to the accepted record's substance) that documents the decision
+   the code now actually embodies. Never quietly widen the Decision Outcome
+   prose to match what shipped without going through supersession; that is
+   the same silent-rewrite failure `architectural_decision_records` already
+   forbids, applied to the reconciliation step instead of the original
+   authoring step.
+
+Never trust the ADR prose unexamined. The record is a claim about the design,
+and this step exists specifically to check that claim against the artifact —
+the same discipline the checklist already applies to NFRs, contracts, and
+STRIDE threats, extended to the architect's own documentation. An ADR that
+says the right thing while the diff does something else is a documented lie,
+and it is worse than having no ADR at all, because the next reader trusts it
+without checking.
+
 ## Verdict and recording
 
 The gate produces exactly one of three outcomes:
@@ -95,6 +166,8 @@ A gate verdict is immutable like an ADR. To reverse it, run the gate again and w
 - Treating "no blockers" as "good architecture". The gate is a floor, not a ceiling; minor findings still get logged.
 - Letting the gate become a bottleneck on one person. Encode every objective check as a fitness function so the human gate only judges what machines cannot.
 - Doing the security pass as a checkbox instead of walking each trust boundary against all six STRIDE categories.
+- Trusting the ADR prose because the canonical `ADR:` line is present and well-formed. `check-adr-gate.py` verifies the line's shape, not the record's truth; only reading the diff against the Decision Outcome section catches drift.
+- Filing a `[DEVIATION]` as a bare comment instead of a line inside the `save_decision` review record — an untracked finding gets forgotten the next time this ADR is read.
 
 ## Definition of done
 
@@ -104,3 +177,4 @@ A gate verdict is immutable like an ADR. To reverse it, run the gate again and w
 - [ ] Exactly one verdict (go, conditional-go, no-go) recorded with `save_decision` in ADR shape, listing the condition issue IDs for a conditional go.
 - [ ] Handoff to the next stage logged with `log_handoff` and the gate session closed with `save_session`, both referencing the decision and issue IDs.
 - [ ] No Accepted ADR is contradicted without a superseding ADR; the verdict is treated as immutable and re-run rather than edited to reverse.
+- [ ] When the PR body names an ADR, its Decision Outcome section was diffed against the actual change and classified matches-as-designed or `[DEVIATION]` with the specific mismatch, recorded inside the same `save_decision` record.

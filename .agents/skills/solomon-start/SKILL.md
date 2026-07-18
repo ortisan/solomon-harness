@@ -172,6 +172,12 @@ Confirm with the user before any push or PR creation. Never push to `develop` or
   verification scope must cover the claim scope: a ready-for-review claim runs the full
   suite and the repository validators, not a subset. Reproduce the report in the PR body
   summary; a claim without fresh cited evidence does not proceed to push.
+- **QA honesty rule** (`persona_driven_exploratory_testing` skill): if `docs/qa/state.csv`
+  exists and this change is user-visible (a UI, CLI verb, API route, config key, or copy
+  change), update the tracker as part of completion — add `untested` rows for new behavior
+  and reset the affected rows to `untested` for changed behavior; a pure refactor states
+  "no user-visible change" explicitly. Flag, do not retest — a stale `pass` is worse than
+  no verdict.
 - Confirm with the user, then push: `git push -u origin feature/<slug>`.
 - Headless `dev start` (non-interactive): do not block on that confirmation — proceed to
   push and open the draft PR, printing `Push/PR: proceeding (non-interactive default)`.
