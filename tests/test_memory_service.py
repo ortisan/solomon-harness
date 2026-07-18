@@ -94,7 +94,6 @@ _INIT_DEFINES = (
     "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION; "
     "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION; "
     "DEFINE INDEX IF NOT EXISTS issues_github_id ON issues FIELDS github_id UNIQUE; "
-    "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status; "
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
