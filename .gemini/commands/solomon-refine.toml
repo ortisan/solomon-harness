@@ -80,12 +80,19 @@ Steps:
       same bar in the issue body: suspected `file:line`, current vs expected, and
       the verification command.
 
-3. Slice into thin vertical increments (product_owner). If the issue is too large
+3. Slice into thin vertical increments (product_owner). Apply the vertical-slice
+   sizing rule (`scope_boundaries`): prefer fewer, larger, complete-vertical-slice
+   issues and split only at a dependency, parallelization, or domain boundary —
+   never on file/line count or a complexity rating. If the issue is too large
    to finish in one sprint, propose child issues — each independently shippable and
    testable. List the proposed split and **confirm with the user before creating**
    any sub-issues. On approval, `gh issue create` each child with `type:feature`,
    the matching `priority:*` / `area:*` labels, the same milestone, and a
    `Parent: #<n>` line; track sub-issues back in the parent body.
+   When the split itself is contested (two viable strategies, or a specialist bar
+   conflicting with product scope), you may offer the opt-in council debate
+   (`council_debate`) as an enumerated choice — never automatically — and feed its
+   Recommended Path Forward back through the enumerated-decision menu.
 
 4. Add a Definition of Ready checklist and a rough estimate (scrum_master): INVEST
    check, testable acceptance criteria, the spec is implementation-ready

@@ -22,6 +22,17 @@ dependency, a public contract change, a new persistence or transport boundary)
 that shipped without one. One lens only: duplication belongs to the separate
 `duplication_scan_loop`.
 
+This scan also owns one narrower, mechanical check on the ADR log itself: an
+Accepted ADR that still carries no `## Reconciliation` section (the
+append-only, post-merge convention in `docs/adrs/README.md`) after N merged
+PRs have touched the area it governs is itself a drift finding, ranked
+alongside the layer, contract, and missing-ADR findings above. Default N to 3
+merged PRs touching the ADR's stated area; record the threshold used in the
+run note so a later run applies the same bar rather than re-deriving it. The
+standing one-finding-per-run cap (below) still applies — a stale-reconciliation
+finding is not an exception to it, only one more candidate competing for the
+single slot by severity.
+
 ## Objective rules and tooling
 
 Every finding must cite a reproducible, objective rule, never a taste judgment.
@@ -56,6 +67,15 @@ Rank findings by severity and act on the single highest-confidence finding:
 - Low confidence -> `/solomon-idea` into `Ideas` for human triage; no PR.
 - High confidence and bounded -> `feature/<slug>` (no issue number), the minimal
   fix with a covering test (TDD), one draft PR with a `Refs`/`Closes` line, stop.
+
+A stale-reconciliation finding routes by how much verification it needs: if
+the merged PRs' own review records already carry a reconciliation verdict
+(`architecture_review_gate`'s ADR-reconciliation step) that was simply never
+appended to the ADR file, appending it is a bounded documentation fix — take
+the high-confidence path. If no such verdict exists and the scan would have
+to re-derive whether the ADR still matches the code from scratch, that
+judgment belongs to a human reviewer, not the scan loop — file it as an idea
+instead of guessing.
 
 Hard guardrails the loop must honor:
 

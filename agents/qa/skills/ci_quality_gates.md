@@ -19,6 +19,7 @@ The project's Git Flow merges `feature/*` into `develop` and promotes `release/*
 | integration (Testcontainers) | required | required | required |
 | critical-journey E2E | required (smoke set) | required (full matrix) | full cross-browser |
 | mutation | incremental, changed lines | full on core modules | full on core, trend |
+| flake rate < 2% | advisory, quarantine lane non-gating | required, blocks release at or above 2% | required, tracked as trend |
 | dependency/SCA + secret scan | required, fast | required + license check | full audit |
 | SAST (CodeQL/Semgrep) | diff-aware | full | full |
 | contract `can-i-deploy` | required | required | - |
@@ -97,6 +98,7 @@ Each gate enforces a number that lives in config, not in a reviewer's head:
 - Unit + coverage: `pytest --cov --cov-branch --cov-fail-under=80`, 90%+ on core/risk/money modules, per `coverage_a_floor_not_a_finish_line`. Branch coverage, not just line.
 - Integration + E2E: required green per `integration_and_e2e_testing`; retries capped at one, any retry alerts.
 - Mutation: break threshold anchored to the measured score and ratcheted up, per `mutation_testing`. Incremental on the PR, full on the release gate and nightly.
+- Flake rate: **< 2% in the canonical suite**, tracked via `flaky_tests`' flip-rate and confirmed by `ai_test_hygiene_scan`'s isolation protocol before any failure is trusted as real or dismissed as noise. Advisory on `feature/*` (quarantined tests run but never gate); a hard `FAIL` on `release/*` at or above the threshold, regardless of the aggregate pass rate; tracked as a trend on the nightly job so a drifting suite is visible before it hits the release gate.
 - Dependency/security: `pip-audit` / `osv-scanner` for known CVEs, a secret scanner (`gitleaks`/`trufflehog`) on the diff, `CodeQL` or `Semgrep` for SAST, and a license check on the release gate. Fail on any high/critical with no accepted-risk exception filed.
 
 ## Persisting gate decisions and handoffs
@@ -126,6 +128,7 @@ Gate configuration is a decision record, not folklore. Use the project memory so
 - [ ] An always-run aggregation job is the required check so path filters cannot deadlock merges; no skip-able job is directly required.
 - [ ] Lint, strict type-check, unit + coverage floor (80% / 90% core, branch coverage), and integration are required on every feature PR and run in O(minutes).
 - [ ] Mutation runs incrementally on PRs and fully on the release gate and nightly, with the break threshold anchored and ratcheted, per `mutation_testing`.
+- [ ] Flake rate stays below 2% in the canonical suite as a required, hard-`FAIL` release-gate check; below the threshold on `feature/*` it stays advisory (quarantine lane, non-gating), and it is tracked as a trend on nightly.
 - [ ] Critical-journey E2E and `can-i-deploy` contract checks gate releases, per `integration_and_e2e_testing`; full cross-browser/E2E matrix runs on the release gate and on schedule.
 - [ ] Dependency/SCA, secret scanning, and SAST gates fail on high/critical findings; the release gate adds a license check.
 - [ ] Actions are pinned by commit SHA, the default `GITHUB_TOKEN` is read-only with per-job least privilege, and cloud auth uses OIDC, not stored secrets.

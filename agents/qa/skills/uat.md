@@ -78,6 +78,20 @@ This skill owns the release severity scale. Severity measures user/business impa
 
 Any open Blocker or Critical is an automatic No-Go. A Major ships only with a recorded product_owner waiver and a tracked follow-up issue. This aligns with the P1-first execution order in `test_planning_and_traceability` and the lifecycle states in `defect_triage_and_lifecycle`.
 
+### Mapping discovery-time impact tiers onto this scale
+
+`persona_driven_exploratory_testing` classifies every finding from a real-user exploratory session on five user-impact tiers before it ever reaches this release-gate scale. Translate on intake, at filing time, rather than leaving the two vocabularies to be reconciled later:
+
+| Discovery tier (`persona_driven_exploratory_testing`) | Definition | Maps to |
+|---|---|---|
+| Blocks-Completion | User on a value-delivering journey cannot complete it | Blocker |
+| Data-Loss | Entered, uploaded, or configured data destroyed or made inaccessible without consent | Blocker |
+| Trust-Damage | Nothing technically broken, but user confidence erodes (wrong order id in a confirmation, a dead-end error) | Critical when it recurs across a journey, Major when isolated |
+| Friction | Journey completes, but with extra effort, confusion, or repetition | Minor |
+| Cosmetic | Visual or wording issue only, no functional effect | Trivial (re-classify to Minor on a hero or first-impression surface) |
+
+The translation is a default, not a substitute for judgment: a Trust-Damage finding that keeps recurring on a Must-have journey is Critical even from a single session, and this skill's own Blocker/Critical No-Go rule above still applies in full once the tier is translated into this scale.
+
 Phased acceptance uses explicit entry and exit criteria so the gate is not subjective:
 
 - Alpha entry: feature-complete for the in-scope AC-IDs, all verification suites green, environment provisioned. Alpha exit: no open Blocker, all Critical triaged with owners, Must-have criteria demonstrated at least once.
