@@ -593,15 +593,21 @@ class DatabaseClient:
         # foreign writers. NONE stays allowed so a row that never carried the
         # field remains writable. Each is its own list entry -- one statement
         # per query() call -- so a failing DEFINE is never swallowed.
-        "DEFINE FIELD IF NOT EXISTS status ON issues "
+        #
+        # OVERWRITE, not IF NOT EXISTS: a closed vocabulary can grow (ADR-0039
+        # added "skipped"), and IF NOT EXISTS is a no-op on a pre-existing
+        # field, so a database created before the growth would keep the old
+        # ASSERT and reject the new token forever. OVERWRITE re-applies the
+        # current vocabulary on every connect, so these fields self-heal.
+        "DEFINE FIELD OVERWRITE status ON issues "
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(ISSUE_STATUS_LITERALS)};",
-        "DEFINE FIELD IF NOT EXISTS status ON handoffs "
+        "DEFINE FIELD OVERWRITE status ON handoffs "
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(HANDOFF_STATUSES)};",
-        "DEFINE FIELD IF NOT EXISTS status ON sessions "
+        "DEFINE FIELD OVERWRITE status ON sessions "
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(SESSION_STATUSES)};",
-        "DEFINE FIELD IF NOT EXISTS status ON loop_runs "
+        "DEFINE FIELD OVERWRITE status ON loop_runs "
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(LOOP_RUN_STATUSES)};",
-        "DEFINE FIELD IF NOT EXISTS state ON milestones "
+        "DEFINE FIELD OVERWRITE state ON milestones "
         f"ASSERT $value = NONE OR $value IN {_surreal_literal_array(MILESTONE_STATES)};",
         # First-class issue status transitions (ADR-0016, F4): one row per board
         # move, typed where it matters (the issue link and the timestamp) while

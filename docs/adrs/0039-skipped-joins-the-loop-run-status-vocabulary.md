@@ -24,10 +24,12 @@ ADR-0016 closed the loop-run status vocabulary to `{ok, failed}` and compiled it
 
 Chosen option "amend ADR-0016": `LOOP_RUN_STATUSES = ("ok", "failed", "skipped")`. `skipped` marks a zero-exit start whose workspace snapshot shows no branch-ref movement and no working-tree change and whose issue is not PR-protected. Metric semantics, decided here: `loop_run_failure_rate` keeps counting only `failed`/legacy `failure`, so skipped runs are non-failures in the numerator but remain in the denominator; `loop_run_throughput` counts all rows and therefore remains an attempt-count, not a delivery-count.
 
+Migration mechanism: the five ASSERT-bearing status/state fields switch from `DEFINE FIELD IF NOT EXISTS` to `DEFINE FIELD OVERWRITE`. `IF NOT EXISTS` is a no-op on a pre-existing field, so a database created before a vocabulary grew keeps the old closed ASSERT and rejects the new token forever — verified live: on a database whose `loop_runs.status` field was defined with `['ok','failed']`, re-applying the `['ok','failed','skipped']` definition with `IF NOT EXISTS` left the old ASSERT in place and `CREATE loop_runs SET status='skipped'` was still rejected. `OVERWRITE` re-applies the current vocabulary on every connect (idempotent when unchanged, corrective when the set grew) and still rejects genuine garbage. This makes every typed-state field self-healing, so future vocabulary growth reaches existing tenants without a manual migration.
+
 ### Consequences
 
-- Positive: the skipped outcome lands on the primary backend; writer, schema, and aggregators agree on the token set.
-- Negative: consumers that assumed a two-token vocabulary must treat unknown-to-them tokens as non-failures; the throughput metric's attempt-count semantics are now load-bearing and documented.
+- Positive: the skipped outcome lands on the primary backend, including pre-existing tenant databases; writer, schema, and aggregators agree on the token set; every typed-state field now migrates its own vocabulary on connect.
+- Negative: consumers that assumed a two-token vocabulary must treat unknown-to-them tokens as non-failures; the throughput metric's attempt-count semantics are now load-bearing and documented; `OVERWRITE` rewrites the field definition on every connect (negligible cost, five statements).
 - Follow-ups: none — the aliases table gains no entries (`skipped` has no legacy spellings).
 
 ## More information
