@@ -8,8 +8,10 @@ services:
     ports:
       # Host port 8099 (8000 is too contended); the harness re-templates this to
       # the auto-assigned port. The container always listens on 8000 internally.
-      # Bound to loopback: the server runs with a fixed root/root development
-      # credential, so it must never be reachable from other machines.
+      # Bound to loopback as defense in depth: the store holds project memory and
+      # must never be reachable from other machines. The install re-templates the
+      # --password below to a generated per-machine secret (~/.solomon-harness/
+      # credentials.json); root is only the placeholder for a bare local run.
       - "127.0.0.1:8099:8000"
     volumes:
       - ./memory/surrealdb:/data
@@ -17,7 +19,8 @@ services:
       SURREAL_ROCKSDB_BLOCK_CACHE_SIZE: 268435456 # 256MB
     mem_limit: 512m
     # SurrealDB v3: --username/--password (v2+ renamed --user/--pass) and the
-    # rocksdb store ("file:" was removed in v2).
+    # rocksdb store ("file:" was removed in v2). --password root is the placeholder
+    # the install rewrites to a generated per-machine secret.
     command: start --username root --password root --log info rocksdb:/data/solomon.db
     restart: unless-stopped
     healthcheck:
@@ -31,7 +34,7 @@ services:
     container_name: solomon_surrealist
     ports:
       # Loopback-only for the same reason as the database itself: the admin UI
-      # fronts a store secured with the development credential.
+      # fronts a store secured with the per-machine credential.
       - "127.0.0.1:3000:80"
     depends_on:
       surrealdb:
