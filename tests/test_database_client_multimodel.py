@@ -14,6 +14,7 @@ both layers of the contract:
   coverage holds in CI where no SurrealDB is running.
 """
 
+import json
 import os
 import socket
 import sys
@@ -479,6 +480,28 @@ class TestMultiModelUnit(unittest.TestCase):
         self.assertEqual(len(rows), 2)
 
 
+class TestTimeOrderedIndexesAreDefined(unittest.TestCase):
+    """The time-ordered hot paths carry a supporting index (CI-safe).
+
+    get_latest_activity orders sessions and handoffs by ``timestamp``, and the
+    loop-run aggregations filter/group loop_runs by ``created_at``. Without an
+    index each is a table scan plus sort on every session start. This asserts the
+    production schema declares the index; the live class proves the planner uses
+    it.
+    """
+
+    _EXPECTED = (
+        "DEFINE INDEX IF NOT EXISTS sessions_timestamp ON sessions FIELDS timestamp",
+        "DEFINE INDEX IF NOT EXISTS handoffs_timestamp ON handoffs FIELDS timestamp",
+        "DEFINE INDEX IF NOT EXISTS loop_runs_created_at ON loop_runs FIELDS created_at",
+    )
+
+    def test_schema_statements_declare_time_indexes(self):
+        joined = " ".join(DatabaseClient._SURREAL_SCHEMA_STATEMENTS)
+        for expected in self._EXPECTED:
+            self.assertIn(expected, joined)
+
+
 @unittest.skipUnless(SURREAL_AVAILABLE, "SurrealDB not reachable at " + SURREAL_URL)
 class TestMultiModelLive(unittest.TestCase):
     """Live round-trips against a throwaway SurrealDB tenant."""
@@ -537,6 +560,33 @@ class TestMultiModelLive(unittest.TestCase):
         self.assertIn("issues_github_id", indexes)
         self.assertIn("issues_status", indexes)
         self.assertIn("UNIQUE", indexes["issues_github_id"])
+
+    def test_time_ordered_indexes_are_defined(self):
+        # The production bootstrap (not the test's partial _INIT_DEFINES mirror)
+        # is what must create these, so drive it directly against the tenant.
+        self.client._bootstrap_surreal_schema()
+        for table, index in (
+            ("sessions", "sessions_timestamp"),
+            ("handoffs", "handoffs_timestamp"),
+            ("loop_runs", "loop_runs_created_at"),
+        ):
+            info = self.raw.query(f"INFO FOR TABLE {table}")
+            self.assertIn(index, info["indexes"], f"{index} missing on {table}")
+
+    def test_latest_activity_query_uses_the_timestamp_index(self):
+        # get_latest_activity orders sessions by timestamp DESC LIMIT 1. With the
+        # index the planner must switch from TableScan + sort to an IndexScan, the
+        # same plan decisions already gets on its created_at index.
+        self.client._bootstrap_surreal_schema()
+        for i in range(3):
+            self.client.save_session(f"s{i}", "agent", "task", [])
+        plan = json.dumps(
+            self.raw.query("SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 1 EXPLAIN"),
+            default=str,
+        )
+        self.assertIn("IndexScan", plan)
+        self.assertIn("sessions_timestamp", plan)
+        self.assertNotIn("TableScan", plan)
 
     def test_unique_github_id_index_is_enforced(self):
         import surrealdb

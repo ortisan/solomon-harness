@@ -88,6 +88,7 @@ def build_digest(
     per_issue: Optional[List[Dict[str, Any]]] = None,
     host: str = "unknown",
     degraded: Optional[bool] = None,
+    blocked_ids: Optional[set] = None,
 ) -> List[str]:
     """Render the digest lines from already-collected facts (pure).
 
@@ -253,10 +254,12 @@ def build_digest(
                 "description": f"Resume last activity: {resume.get('agent')} is working on '{_sanitize_title(task_str)}'"
             }
         else:
-            # Check Ready issues
+            # Check Ready issues, skipping any with an open blocker (#341 pkg 16).
+            _blocked = blocked_ids or set()
             ready_issues = [
                 i for i in issues
                 if str(i.get("status")).lower() == "ready"
+                and str(_safe_id(i.get("github_id"))) not in _blocked
             ]
             if ready_issues:
                 issue = ready_issues[0]
@@ -439,7 +442,35 @@ def gather_digest(
             degraded = bool(db.backend_status().get("degraded"))
         except Exception:
             degraded = None
+    blocked_ids = _run_with_timeout(
+        _blocked_ready_ids, db, open_issues, timeout=0.5, default=set()
+    )
     return build_digest(
         resume, open_issues, last_loop, prs, backend=backend, per_issue=per_issue,
-        host=host, degraded=degraded,
+        host=host, degraded=degraded, blocked_ids=blocked_ids,
     )
+
+
+def _blocked_ready_ids(db: Any, open_issues: List[Dict[str, Any]]) -> set:
+    """Ids of Ready issues that have at least one open blocker (#341 pkg 16).
+
+    Consulted before the resume scan proposes a Ready issue for development, so a
+    blocked candidate is never started ahead of its blocker.
+    """
+    blocked: set = set()
+    fn = getattr(db, "issues_blocked_by", None)
+    if not callable(fn):
+        return blocked
+    for issue in open_issues or []:
+        if str(issue.get("status")).lower() != "ready":
+            continue
+        gid = _safe_id(issue.get("github_id"))
+        if not gid:
+            continue
+        try:
+            blockers = fn(gid) or []
+        except Exception:
+            continue
+        if any(not is_terminal(b.get("status")) for b in blockers):
+            blocked.add(str(gid))
+    return blocked

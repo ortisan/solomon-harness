@@ -245,7 +245,8 @@ def _normalize_token(value: Optional[str], aliases: Dict[str, str]) -> Optional[
 
 
 def normalize_loop_run_status(status: Optional[str]) -> Optional[str]:
-    """Map a loop-run status to its canonical token (ok or failed).
+    """Map a loop-run status to its canonical token (ok, failed, skipped, or
+    parked — see LOOP_RUN_STATUSES).
 
     Legacy spellings collapse (success/passed -> ok, failure/error -> failed);
     an unknown token passes through lowercased; None passes through so an
@@ -384,50 +385,6 @@ def person_key_or_unassigned(key: Optional[str]) -> str:
     re-derived by every read consumer.
     """
     return key if key is not None else UNASSIGNED_PERSON_KEY
-
-
-class SpectronFallbackClient:
-    """Fallback client for Spectron REST API when the python package doesn't export it."""
-
-    def __init__(self, context: str, endpoint: str, api_key: str, timeout: float = 30.0, max_retries: int = 3):
-        self.context = context
-        self.endpoint = endpoint.rstrip('/')
-        self.api_key = api_key
-        self.timeout = timeout
-        self.max_retries = max_retries
-        import requests
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        })
-
-    def remember(self, fact: str, scope: Optional[List[str]] = None) -> Any:
-        url = f"{self.endpoint}/api/v1/{self.context}/facts"
-        payload: Dict[str, Any] = {"fact": fact}
-        if scope:
-            payload["scope"] = scope
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json()
-
-    def recall(self, query: str, scope: Optional[List[str]] = None) -> Any:
-        url = f"{self.endpoint}/api/v1/{self.context}/query"
-        payload: Dict[str, Any] = {"query": query}
-        if scope:
-            payload["scope"] = scope
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        
-        data = resp.json()
-        class MockHit:
-            def __init__(self, text):
-                self.text = text
-        class MockResponse:
-            def __init__(self, hits):
-                self.hits = hits
-        hits = [MockHit(h.get("text", "")) for h in data.get("hits", [])]
-        return MockResponse(hits)
 
 
 def _resolve_database(configured: Optional[str], project_root: str) -> str:
@@ -595,6 +552,20 @@ class DatabaseClient:
         "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
         "DEFINE INDEX IF NOT EXISTS decisions_created_at "
         "ON decisions FIELDS created_at;",
+        # Time-ordered hot paths. get_latest_activity reads the newest sessions
+        # and handoffs row (ORDER BY timestamp DESC LIMIT 1) on every session
+        # start; without these the planner does a TableScan plus sort that grows
+        # with the ledger. Indexing the ordered field turns each into an
+        # IndexScan, the plan decisions_created_at already gets. A new index name
+        # applies to existing tenants on the next connect, so no backfill.
+        "DEFINE INDEX IF NOT EXISTS sessions_timestamp "
+        "ON sessions FIELDS timestamp;",
+        "DEFINE INDEX IF NOT EXISTS handoffs_timestamp "
+        "ON handoffs FIELDS timestamp;",
+        # loop_run_throughput / loop_run_failure_rate filter and group loop_runs
+        # by created_at.
+        "DEFINE INDEX IF NOT EXISTS loop_runs_created_at "
+        "ON loop_runs FIELDS created_at;",
         # Timeseries: composite index on (name, time) for metrics.
         "DEFINE INDEX IF NOT EXISTS metrics_name_time "
         "ON metrics FIELDS name, time;",
@@ -731,9 +702,6 @@ class DatabaseClient:
         """Set the backend defaults and the rebuildable SurrealDB params."""
         self.backend = "sqlite"
         self.db = None
-        # Typed Any: assigned a Spectron or SpectronFallbackClient by
-        # _init_spectron when configured, else stays None.
-        self.spectron: Any = None
         self.db_path = db_path
         # The explicit db_path argument (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
@@ -907,7 +875,6 @@ class DatabaseClient:
                         # every statement has actually succeeded.
                         self._bootstrap_surreal_schema()
                         self.backend = "surrealdb"
-                        self._init_spectron(db_config)
                     except Exception as e:
                         sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
                         sys.stderr.write(
@@ -949,39 +916,6 @@ class DatabaseClient:
             if self.db_path is None:
                 self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
-
-    def _init_spectron(self, db_config: Dict[str, Any]) -> None:
-        """Connect the optional Spectron client when URL and API key are set."""
-        # Initialize Spectron if URL and API Key are configured
-        spectron_url = os.environ.get(
-            "SPECTRON_URL", db_config.get("spectron_url")
-        )
-        spectron_api_key = os.environ.get(
-            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-        )
-        spectron_context = os.environ.get(
-            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-        )
-        if spectron_url and spectron_api_key:
-            try:
-                try:
-                    # Spectron ships only in newer surrealdb builds;
-                    # the except below handles its absence at runtime.
-                    from surrealdb import Spectron  # type: ignore[attr-defined]
-                    self.spectron = Spectron(
-                        context=spectron_context,
-                        endpoint=spectron_url,
-                        api_key=spectron_api_key
-                    )
-                except (ImportError, AttributeError):
-                    self.spectron = SpectronFallbackClient(
-                        context=spectron_context,
-                        endpoint=spectron_url,
-                        api_key=spectron_api_key
-                    )
-            except Exception as e:
-                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                self.spectron = None
 
     def backend_status(self) -> Dict[str, Any]:
         """Report which backend serves this client, publicly (issue #163).
@@ -2133,12 +2067,6 @@ class DatabaseClient:
         value = fields["value"]
         category = fields["category"]
         if self.backend == "surrealdb":
-            if self.spectron is not None:
-                try:
-                    self.spectron.remember(fact=value, scope=[category, key])
-                except Exception as e:
-                    logging.warning(f"Failed to save memory in Spectron: {e}")
-
             # Upsert by a deterministic record id derived from the key, so
             # re-saving the same key updates in place. The embedding is computed
             # here (not stored in the durability mirror) so the vector index stays
@@ -2234,14 +2162,6 @@ class DatabaseClient:
             The memory value string or None if not found.
         """
         if self.backend == "surrealdb":
-            if self.spectron is not None:
-                try:
-                    res = self.spectron.recall(key)
-                    if res and hasattr(res, "hits") and res.hits:
-                        return res.hits[0].text
-                except Exception as e:
-                    logging.warning(f"Failed to recall memory from Spectron: {e}")
-
             query = "SELECT `value` FROM memory WHERE key = $key"
             try:
                 res = self._run_surreal(query, {"key": key})
@@ -3987,9 +3907,9 @@ class DatabaseClient:
         worktree gets a separate database and a cross-worktree count would be
         invisible.
 
-        ``status`` is normalized to the canonical loop-run vocabulary (ok or
-        failed) at this write seam, so the aggregators can count one token
-        (#165, ADR-0016).
+        ``status`` is normalized to the canonical loop-run vocabulary
+        (LOOP_RUN_STATUSES) at this write seam, so the aggregators can count one
+        token (#165, ADR-0016/0039).
 
         ``target_issue`` is the GitHub issue number this run advanced, when the
         stage carries one. It is stored on the row and also written as a
