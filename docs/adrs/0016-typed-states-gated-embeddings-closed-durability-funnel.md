@@ -59,7 +59,7 @@ GitHub board adapter), exactly like `normalize_status` (ADR-0006):
 | Kind      | Field  | Canonical set                                              | Aliases mapped on write                              |
 | --------- | ------ | ---------------------------------------------------------- | ---------------------------------------------------- |
 | issue     | status | Ideas, Backlog, Ready, in_progress, code_review, qa, closed (+ legacy open, done, Done) | ADR-0006 aliases, plus casing aliases for the display columns |
-| loop_run  | status | ok, failed                                                  | success, passed -> ok; failure, error -> failed       |
+| loop_run  | status | ok, failed, skipped (ADR-0039)                              | success, passed -> ok; failure, error -> failed       |
 | handoff   | status | open, accepted, done                                        | ready, pending -> open; approved -> accepted; completed, closed -> done |
 | session   | status | active, done                                                | completed, closed, finished -> done                   |
 | milestone | state  | open, closed                                                | active, pending -> open; complete, completed, done -> closed |
@@ -74,7 +74,7 @@ so pre-fix data does not vanish from the metric (#165).
 
 ### Targeted DEFINE FIELD ASSERT policy
 
-Tables stay SCHEMALESS. One `DEFINE FIELD IF NOT EXISTS ... ASSERT $value =
+Tables stay SCHEMALESS. One `DEFINE FIELD OVERWRITE ... ASSERT $value =
 NONE OR $value IN [...]` per stateful field (issues.status, handoffs.status,
 sessions.status, loop_runs.status, milestones.state), each executed as its own
 `query()` call in `_bootstrap_surreal_schema` (the SDK only surfaces the first
