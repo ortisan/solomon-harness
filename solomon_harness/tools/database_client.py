@@ -372,50 +372,6 @@ def person_key_or_unassigned(key: Optional[str]) -> str:
     return key if key is not None else UNASSIGNED_PERSON_KEY
 
 
-class SpectronFallbackClient:
-    """Fallback client for Spectron REST API when the python package doesn't export it."""
-
-    def __init__(self, context: str, endpoint: str, api_key: str, timeout: float = 30.0, max_retries: int = 3):
-        self.context = context
-        self.endpoint = endpoint.rstrip('/')
-        self.api_key = api_key
-        self.timeout = timeout
-        self.max_retries = max_retries
-        import requests
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        })
-
-    def remember(self, fact: str, scope: Optional[List[str]] = None) -> Any:
-        url = f"{self.endpoint}/api/v1/{self.context}/facts"
-        payload: Dict[str, Any] = {"fact": fact}
-        if scope:
-            payload["scope"] = scope
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json()
-
-    def recall(self, query: str, scope: Optional[List[str]] = None) -> Any:
-        url = f"{self.endpoint}/api/v1/{self.context}/query"
-        payload: Dict[str, Any] = {"query": query}
-        if scope:
-            payload["scope"] = scope
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        
-        data = resp.json()
-        class MockHit:
-            def __init__(self, text):
-                self.text = text
-        class MockResponse:
-            def __init__(self, hits):
-                self.hits = hits
-        hits = [MockHit(h.get("text", "")) for h in data.get("hits", [])]
-        return MockResponse(hits)
-
-
 def _resolve_database(configured: Optional[str], project_root: str) -> str:
     """Resolve the SurrealDB database name for a project.
 
@@ -665,9 +621,6 @@ class DatabaseClient:
         """Set the backend defaults and the rebuildable SurrealDB params."""
         self.backend = "sqlite"
         self.db = None
-        # Typed Any: assigned a Spectron or SpectronFallbackClient by
-        # _init_spectron when configured, else stays None.
-        self.spectron: Any = None
         self.db_path = db_path
         # The explicit db_path argument (kept distinct from the resolved store path)
         # marks a test/sandbox-isolated client, used to keep the mirror beside it.
@@ -835,7 +788,6 @@ class DatabaseClient:
                         # every statement has actually succeeded.
                         self._bootstrap_surreal_schema()
                         self.backend = "surrealdb"
-                        self._init_spectron(db_config)
                     except Exception as e:
                         sys.stderr.write(f"Warning: SurrealDB initialization failed: {e}\n")
                         sys.stderr.write(
@@ -877,39 +829,6 @@ class DatabaseClient:
             if self.db_path is None:
                 self.db_path = self._resolve_sqlite_path()
             self._init_sqlite_db()
-
-    def _init_spectron(self, db_config: Dict[str, Any]) -> None:
-        """Connect the optional Spectron client when URL and API key are set."""
-        # Initialize Spectron if URL and API Key are configured
-        spectron_url = os.environ.get(
-            "SPECTRON_URL", db_config.get("spectron_url")
-        )
-        spectron_api_key = os.environ.get(
-            "SPECTRON_API_KEY", db_config.get("spectron_api_key")
-        )
-        spectron_context = os.environ.get(
-            "SPECTRON_CONTEXT", db_config.get("spectron_context", "dev")
-        )
-        if spectron_url and spectron_api_key:
-            try:
-                try:
-                    # Spectron ships only in newer surrealdb builds;
-                    # the except below handles its absence at runtime.
-                    from surrealdb import Spectron  # type: ignore[attr-defined]
-                    self.spectron = Spectron(
-                        context=spectron_context,
-                        endpoint=spectron_url,
-                        api_key=spectron_api_key
-                    )
-                except (ImportError, AttributeError):
-                    self.spectron = SpectronFallbackClient(
-                        context=spectron_context,
-                        endpoint=spectron_url,
-                        api_key=spectron_api_key
-                    )
-            except Exception as e:
-                sys.stderr.write(f"Warning: Connection to Spectron failed: {e}\n")
-                self.spectron = None
 
     def backend_status(self) -> Dict[str, Any]:
         """Report which backend serves this client, publicly (issue #163).
@@ -2030,12 +1949,6 @@ class DatabaseClient:
         value = fields["value"]
         category = fields["category"]
         if self.backend == "surrealdb":
-            if self.spectron is not None:
-                try:
-                    self.spectron.remember(fact=value, scope=[category, key])
-                except Exception as e:
-                    logging.warning(f"Failed to save memory in Spectron: {e}")
-
             # Upsert by a deterministic record id derived from the key, so
             # re-saving the same key updates in place. The embedding is computed
             # here (not stored in the durability mirror) so the vector index stays
@@ -2131,14 +2044,6 @@ class DatabaseClient:
             The memory value string or None if not found.
         """
         if self.backend == "surrealdb":
-            if self.spectron is not None:
-                try:
-                    res = self.spectron.recall(key)
-                    if res and hasattr(res, "hits") and res.hits:
-                        return res.hits[0].text
-                except Exception as e:
-                    logging.warning(f"Failed to recall memory from Spectron: {e}")
-
             query = "SELECT `value` FROM memory WHERE key = $key"
             try:
                 res = self._run_surreal(query, {"key": key})
