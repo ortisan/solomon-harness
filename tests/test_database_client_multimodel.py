@@ -36,6 +36,31 @@ from solomon_harness.tools.database_client import (  # noqa: E402
 SURREAL_URL = os.environ.get("SURREAL_URL", "ws://localhost:8099/rpc")
 
 
+def _surreal_test_creds():
+    """Live-SurrealDB credentials resolved like the client, not a hardcoded root.
+
+    The store uses a per-machine generated password, so a probe or setUp that
+    signs in with root/root silently skips every live test on a migrated machine.
+    Mirror DatabaseClient: SURREAL_USER/PASS env, then the generated home password,
+    then root.
+    """
+    try:
+        from solomon_harness.home import generated_memory_password
+
+        generated = generated_memory_password()
+    except Exception:
+        generated = None
+    return {
+        "username": os.environ.get("SURREAL_USER") or "root",
+        "password": os.environ.get("SURREAL_PASS") or generated or "root",
+    }
+
+
+# Resolved once at import, before any test patches os.path.isfile: reusing the
+# cached value keeps credential resolution out of the per-test monkeypatches.
+_SURREAL_CREDS = _surreal_test_creds()
+
+
 def _host_port(url):
     """Best-effort (host, port) parse of a ws:// URL for a cheap TCP probe."""
     rest = url.split("://", 1)[-1]
@@ -60,7 +85,7 @@ def _surreal_reachable():
         db = surrealdb.Surreal(SURREAL_URL)
         if hasattr(db, "connect"):
             db.connect()
-        db.signin({"username": "root", "password": "root"})
+        db.signin(_SURREAL_CREDS)
         db.use("solomon", "test_mm_probe")
         db.close()
         return True
@@ -459,7 +484,7 @@ class TestMultiModelLive(unittest.TestCase):
         self.raw = surrealdb.Surreal(SURREAL_URL)
         if hasattr(self.raw, "connect"):
             self.raw.connect()
-        self.raw.signin({"username": "root", "password": "root"})
+        self.raw.signin(_SURREAL_CREDS)
         self.raw.use("solomon", self.dbname)
         self.raw.query(_INIT_DEFINES)
         self.client.backend = "surrealdb"
