@@ -8,6 +8,7 @@ normalized results.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import secrets
@@ -28,7 +29,10 @@ from solomon_harness.secure_paths import (
 
 SUPPORTED_SCHEMA_VERSION = 1
 MAX_MANIFEST_BYTES = 1_000_000
+MAX_RECORDINGS_BYTES = 16_777_216
 MAX_CASES = 64
+MAX_RUNS = MAX_CASES * 6
+MAX_AGENT_CONTENT_BYTES = 262_144
 MAX_PATH_BYTES = 512
 MAX_PATH_COMPONENT_BYTES = 128
 MAX_PATH_DEPTH = 16
@@ -67,6 +71,38 @@ SCENARIOS = {"happy", "boundary", "failure"}
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 ACTION_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+RECORDING_FIELDS = {"schema_version", "golden_set_version", "runs", "usage_records"}
+RUN_FIELDS = {
+    "case_id",
+    "case_version",
+    "arm",
+    "repetition",
+    "agent_content",
+    "effective_policy",
+    "host",
+    "model",
+    "effort",
+    "duration_ms",
+    "exit_code",
+    "files",
+    "actions",
+    "containment",
+}
+HOST_FIELDS = {"name", "version", "provider"}
+MODEL_FIELDS = {"name", "version"}
+CONTAINMENT_FIELDS = {"scratch_only", "protected_state", "denied_actions"}
+PROTECTED_STATE_FIELDS = {"resource", "before_digest", "after_digest"}
+PROTECTED_RESOURCES = ("source_checkout", "project_memory", "github")
+USAGE_FIELDS = {
+    "case_id",
+    "arm",
+    "repetition",
+    "input_tokens",
+    "output_tokens",
+    "cache_tokens",
+    "reported_cost_microusd",
+}
 
 
 class EvaluationError(ValueError):
@@ -212,6 +248,145 @@ class _SeedFile:
     content: bytes
 
 
+@dataclass(frozen=True)
+class RunIdentity:
+    case_id: str
+    arm_id: str
+    repetition: int
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "case_id": self.case_id,
+            "arm": self.arm_id,
+            "repetition": self.repetition,
+        }
+
+
+@dataclass(frozen=True)
+class HostMetadata:
+    name: str
+    version: str
+    provider: str
+
+    def to_data(self) -> Dict[str, object]:
+        return {"name": self.name, "version": self.version, "provider": self.provider}
+
+
+@dataclass(frozen=True)
+class ModelMetadata:
+    name: str
+    version: str
+
+    def to_data(self) -> Dict[str, object]:
+        return {"name": self.name, "version": self.version}
+
+
+@dataclass(frozen=True)
+class UsageMetrics:
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_tokens: int | None
+    reported_cost_microusd: int | None
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_tokens": self.cache_tokens,
+            "reported_cost_microusd": self.reported_cost_microusd,
+        }
+
+
+@dataclass(frozen=True)
+class UsageRecord:
+    identity: RunIdentity
+    metrics: UsageMetrics
+
+    def to_data(self) -> Dict[str, object]:
+        return {**self.identity.to_data(), **self.metrics.to_data()}
+
+
+@dataclass(frozen=True)
+class ProtectedStateSnapshot:
+    resource: str
+    before_digest: str
+    after_digest: str
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "resource": self.resource,
+            "before_digest": self.before_digest,
+            "after_digest": self.after_digest,
+        }
+
+
+@dataclass(frozen=True)
+class ContainmentEvidence:
+    scratch_only: bool
+    protected_state: Tuple[ProtectedStateSnapshot, ...]
+    denied_actions: Tuple[str, ...]
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "scratch_only": self.scratch_only,
+            "protected_state": [state.to_data() for state in self.protected_state],
+            "denied_actions": list(self.denied_actions),
+        }
+
+
+@dataclass(frozen=True)
+class RecordedRun:
+    identity: RunIdentity
+    case_version: str
+    agent_content_digest: str
+    effective_policy: EffectivePolicy
+    policy_digest: str
+    host: HostMetadata
+    model: ModelMetadata
+    effort: str
+    duration_ms: int
+    exit_code: int
+    files: Tuple[str, ...]
+    actions: Tuple[str, ...]
+    containment: ContainmentEvidence
+    raw_artifact_path: str
+    raw_index: int
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            **self.identity.to_data(),
+            "case_version": self.case_version,
+            "agent_content_digest": self.agent_content_digest,
+            "effective_policy": self.effective_policy.to_data(),
+            "policy_digest": self.policy_digest,
+            "host": self.host.to_data(),
+            "model": self.model.to_data(),
+            "effort": self.effort,
+            "duration_ms": self.duration_ms,
+            "exit_code": self.exit_code,
+            "files": list(self.files),
+            "actions": list(self.actions),
+            "containment": self.containment.to_data(),
+            "raw_artifact": {"path": self.raw_artifact_path, "index": self.raw_index},
+        }
+
+
+@dataclass(frozen=True)
+class RecordingBundle:
+    schema_version: int
+    golden_set_version: str
+    runs: Tuple[RecordedRun, ...]
+    usage_records: Tuple[UsageRecord, ...]
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "golden_set_version": self.golden_set_version,
+            "runs": [run.to_data() for run in self.runs],
+            "usage_records": [usage.to_data() for usage in self.usage_records],
+        }
+
+
 def _invalid(field: str) -> EvaluationError:
     return EvaluationError("invalid_manifest", field)
 
@@ -229,26 +404,31 @@ def _reject_constant(_value: str) -> object:
     raise _invalid("json.non_finite_number")
 
 
-def _bounded_json(path: Path) -> object:
+def _bounded_json(
+    path: Path,
+    *,
+    max_bytes: int = MAX_MANIFEST_BYTES,
+    subject: str = "manifest",
+) -> object:
     try:
         root_fd = open_root_directory(os.fspath(path.parent))
     except (FileNotFoundError, OSError, UnsafePathError) as exc:
-        raise EvaluationError("unsafe_path", "manifest") from exc
+        raise EvaluationError("unsafe_path", subject) from exc
     try:
         try:
             entry = stat_at(root_fd, path.name)
         except (OSError, UnsafePathError) as exc:
-            raise EvaluationError("unsafe_path", "manifest") from exc
+            raise EvaluationError("unsafe_path", subject) from exc
         if entry is None:
-            raise _invalid("manifest")
+            raise _invalid(subject)
         if not stat.S_ISREG(entry.st_mode):
-            raise EvaluationError("unsafe_path", "manifest")
-        if entry.st_size > MAX_MANIFEST_BYTES:
-            raise EvaluationError("limit_exceeded", "manifest.bytes")
+            raise EvaluationError("unsafe_path", subject)
+        if entry.st_size > max_bytes:
+            raise EvaluationError("limit_exceeded", f"{subject}.bytes")
         try:
-            raw = read_regular_at(root_fd, path.name, max_bytes=MAX_MANIFEST_BYTES)
+            raw = read_regular_at(root_fd, path.name, max_bytes=max_bytes)
         except (OSError, UnsafePathError) as exc:
-            raise EvaluationError("unsafe_path", "manifest") from exc
+            raise EvaluationError("unsafe_path", subject) from exc
     finally:
         os.close(root_fd)
 
@@ -326,8 +506,9 @@ def _unique_strings(
     paths: bool = False,
     token_pattern: re.Pattern[str] | None = None,
     minimum: int = 0,
+    maximum: int = MAX_LIST_ITEMS,
 ) -> Tuple[str, ...]:
-    raw = _list(value, name, minimum=minimum)
+    raw = _list(value, name, minimum=minimum, maximum=maximum)
     strings: List[str] = []
     for item in raw:
         text = _safe_relative_path(item, name) if paths else _string(item, name, maximum=128)
@@ -464,6 +645,241 @@ def load_manifest(path: Path) -> EvaluationManifest:
         cases=cases,
         source_root=path.parent,
     )
+
+
+def _sha256_text(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _digest(value: object, field: str) -> str:
+    digest = _string(value, field, maximum=71)
+    if DIGEST_PATTERN.fullmatch(digest) is None:
+        raise _invalid(field)
+    return digest
+
+
+def _load_host(value: object) -> HostMetadata:
+    data = _closed_object(value, HOST_FIELDS, "run.host")
+    return HostMetadata(
+        name=_string(data["name"], "run.host.name", maximum=64),
+        version=_string(data["version"], "run.host.version", maximum=64),
+        provider=_string(data["provider"], "run.host.provider", maximum=64),
+    )
+
+
+def _load_model(value: object) -> ModelMetadata:
+    data = _closed_object(value, MODEL_FIELDS, "run.model")
+    return ModelMetadata(
+        name=_string(data["name"], "run.model.name", maximum=128),
+        version=_string(data["version"], "run.model.version", maximum=128),
+    )
+
+
+def _load_containment(value: object) -> ContainmentEvidence:
+    data = _closed_object(value, CONTAINMENT_FIELDS, "run.containment")
+    scratch_only = data["scratch_only"]
+    if not isinstance(scratch_only, bool):
+        raise _invalid("run.containment.scratch_only")
+    raw_state = _list(
+        data["protected_state"],
+        "run.containment.protected_state",
+        minimum=len(PROTECTED_RESOURCES),
+        maximum=len(PROTECTED_RESOURCES),
+    )
+    protected_state: List[ProtectedStateSnapshot] = []
+    for item in raw_state:
+        state = _closed_object(item, PROTECTED_STATE_FIELDS, "run.containment.state")
+        protected_state.append(
+            ProtectedStateSnapshot(
+                resource=_string(
+                    state["resource"],
+                    "run.containment.state.resource",
+                    maximum=64,
+                ),
+                before_digest=_digest(
+                    state["before_digest"],
+                    "run.containment.state.before_digest",
+                ),
+                after_digest=_digest(
+                    state["after_digest"],
+                    "run.containment.state.after_digest",
+                ),
+            )
+        )
+    if tuple(item.resource for item in protected_state) != PROTECTED_RESOURCES:
+        raise _invalid("run.containment.protected_state.resources")
+    return ContainmentEvidence(
+        scratch_only=scratch_only,
+        protected_state=tuple(protected_state),
+        denied_actions=_unique_strings(
+            data["denied_actions"],
+            "run.containment.denied_actions",
+            token_pattern=ACTION_PATTERN,
+        ),
+    )
+
+
+def _load_recorded_run(
+    value: object,
+    manifest: EvaluationManifest,
+    raw_artifact_path: str,
+    raw_index: int,
+) -> RecordedRun:
+    data = _closed_object(value, RUN_FIELDS, "run")
+    case_id = _string(data["case_id"], "run.case_id", maximum=64)
+    case_by_id = {case.case_id: case for case in manifest.cases}
+    case = case_by_id.get(case_id)
+    if case is None:
+        raise _invalid("run.case_id")
+    case_version = _string(data["case_version"], "run.case_version", maximum=64)
+    if case_version != case.version:
+        raise _invalid("run.case_version")
+    arm_id = _string(data["arm"], "run.arm", maximum=32)
+    arm_by_id = {arm.arm_id: arm for arm in manifest.arms}
+    arm = arm_by_id.get(arm_id)
+    if arm is None:
+        raise _invalid("run.arm")
+    repetition = _positive_int(data["repetition"], "run.repetition", hard_limit=1000)
+    if repetition > manifest.repetitions:
+        raise _invalid("run.repetition")
+    effective_policy = _load_policy(data["effective_policy"])
+    if effective_policy != arm.policy:
+        raise _invalid("run.effective_policy")
+    agent_content = _string(
+        data["agent_content"],
+        "run.agent_content",
+        maximum=MAX_AGENT_CONTENT_BYTES,
+    )
+    duration_ms = _positive_int(
+        data["duration_ms"],
+        "run.duration_ms",
+        hard_limit=manifest.budget.max_duration_ms,
+    )
+    effort = _string(data["effort"], "run.effort", maximum=32)
+    if ACTION_PATTERN.fullmatch(effort) is None:
+        raise _invalid("run.effort")
+    return RecordedRun(
+        identity=RunIdentity(case_id=case_id, arm_id=arm_id, repetition=repetition),
+        case_version=case_version,
+        agent_content_digest=_sha256_text(agent_content),
+        effective_policy=effective_policy,
+        policy_digest=_sha256_text(canonical_json(effective_policy.to_data())),
+        host=_load_host(data["host"]),
+        model=_load_model(data["model"]),
+        effort=effort,
+        duration_ms=duration_ms,
+        exit_code=_exit_code(data["exit_code"]),
+        files=_unique_strings(
+            data["files"],
+            "run.files",
+            paths=True,
+            maximum=manifest.budget.max_files,
+        ),
+        actions=_unique_strings(
+            data["actions"],
+            "run.actions",
+            token_pattern=ACTION_PATTERN,
+        ),
+        containment=_load_containment(data["containment"]),
+        raw_artifact_path=raw_artifact_path,
+        raw_index=raw_index,
+    )
+
+
+def _optional_metric(value: object, field: str, limit: int) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise _invalid(field)
+    if value > limit:
+        raise EvaluationError("limit_exceeded", field)
+    return value
+
+
+def _load_usage_record(value: object, manifest: EvaluationManifest) -> UsageRecord:
+    data = _closed_object(value, USAGE_FIELDS, "usage_record")
+    case_id = _string(data["case_id"], "usage_record.case_id", maximum=64)
+    arm_id = _string(data["arm"], "usage_record.arm", maximum=32)
+    if SLUG_PATTERN.fullmatch(case_id) is None or SLUG_PATTERN.fullmatch(arm_id) is None:
+        raise _invalid("usage_record.identity")
+    repetition = _positive_int(
+        data["repetition"],
+        "usage_record.repetition",
+        hard_limit=1000,
+    )
+    return UsageRecord(
+        identity=RunIdentity(case_id=case_id, arm_id=arm_id, repetition=repetition),
+        metrics=UsageMetrics(
+            input_tokens=_optional_metric(
+                data["input_tokens"],
+                "usage_record.input_tokens",
+                manifest.budget.max_input_tokens,
+            ),
+            output_tokens=_optional_metric(
+                data["output_tokens"],
+                "usage_record.output_tokens",
+                manifest.budget.max_output_tokens,
+            ),
+            cache_tokens=_optional_metric(
+                data["cache_tokens"],
+                "usage_record.cache_tokens",
+                manifest.budget.max_input_tokens,
+            ),
+            reported_cost_microusd=_optional_metric(
+                data["reported_cost_microusd"],
+                "usage_record.reported_cost_microusd",
+                manifest.budget.max_reported_cost_microusd,
+            ),
+        ),
+    )
+
+
+def load_recordings(path: Path, manifest: EvaluationManifest) -> RecordingBundle:
+    """Load bounded host recordings and normalize their reported metadata."""
+    try:
+        data = _closed_object(
+            _bounded_json(
+                path,
+                max_bytes=MAX_RECORDINGS_BYTES,
+                subject="recordings",
+            ),
+            RECORDING_FIELDS,
+            "recordings",
+        )
+        schema_version = data["schema_version"]
+        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+            raise _invalid("recordings.schema_version")
+        if schema_version != manifest.schema_version:
+            raise EvaluationError("unsupported_schema", "recordings.schema_version")
+        golden_set_version = _string(
+            data["golden_set_version"],
+            "recordings.golden_set_version",
+            maximum=64,
+        )
+        if golden_set_version != manifest.golden_set_version:
+            raise _invalid("recordings.golden_set_version")
+        raw_path = _safe_relative_path(path.name, "recordings.raw_path")
+        raw_runs = _list(data["runs"], "recordings.runs", minimum=1, maximum=MAX_RUNS)
+        runs = tuple(
+            _load_recorded_run(item, manifest, raw_path, index)
+            for index, item in enumerate(raw_runs)
+        )
+        raw_usage = _list(
+            data["usage_records"],
+            "recordings.usage_records",
+            maximum=MAX_RUNS * 2,
+        )
+        usage_records = tuple(_load_usage_record(item, manifest) for item in raw_usage)
+        return RecordingBundle(
+            schema_version=schema_version,
+            golden_set_version=golden_set_version,
+            runs=runs,
+            usage_records=usage_records,
+        )
+    except EvaluationError as exc:
+        if exc.code == "invalid_manifest":
+            raise EvaluationError("invalid_artifact", exc.field) from exc
+        raise
 
 
 def _open_existing_directory(parent_fd: int, name: str, field: str) -> int:

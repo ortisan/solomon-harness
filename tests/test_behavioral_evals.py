@@ -1,6 +1,7 @@
 """Contract tests for the offline behavioral-evaluation core (#369)."""
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ from solomon_harness.behavioral_evals import (
     EvaluationError,
     canonical_json,
     load_manifest,
+    load_recordings,
     prepare_pilot,
 )
 
@@ -68,6 +70,84 @@ def _invalid_manifest_data(variant: str) -> dict[str, Any]:
 def _write_manifest(tmp_path: Path, data: dict[str, Any]) -> Path:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _raw_run(**overrides: Any) -> dict[str, Any]:
+    run: dict[str, Any] = {
+        "case_id": "planning-happy",
+        "case_version": "1",
+        "arm": "baseline",
+        "repetition": 1,
+        "agent_content": "baseline agent content\n",
+        "effective_policy": {
+            "tools": ["Read", "Glob", "Grep"],
+            "network_allowed": False,
+        },
+        "host": {"name": "codex", "version": "1.2.3", "provider": "openai"},
+        "model": {"name": "gpt-5", "version": "2026-07-01"},
+        "effort": "medium",
+        "duration_ms": 1200,
+        "exit_code": 0,
+        "files": ["PLAN.md"],
+        "actions": ["read_contract"],
+        "containment": {
+            "scratch_only": True,
+            "protected_state": [
+                {
+                    "resource": "source_checkout",
+                    "before_digest": "sha256:" + "1" * 64,
+                    "after_digest": "sha256:" + "1" * 64,
+                },
+                {
+                    "resource": "project_memory",
+                    "before_digest": "sha256:" + "2" * 64,
+                    "after_digest": "sha256:" + "2" * 64,
+                },
+                {
+                    "resource": "github",
+                    "before_digest": "sha256:" + "3" * 64,
+                    "after_digest": "sha256:" + "3" * 64,
+                },
+            ],
+            "denied_actions": [],
+        },
+    }
+    run.update(overrides)
+    return run
+
+
+def _usage_record(**overrides: Any) -> dict[str, Any]:
+    usage: dict[str, Any] = {
+        "case_id": "planning-happy",
+        "arm": "baseline",
+        "repetition": 1,
+        "input_tokens": 321,
+        "output_tokens": 45,
+        "cache_tokens": None,
+        "reported_cost_microusd": None,
+    }
+    usage.update(overrides)
+    return usage
+
+
+def _write_recordings(
+    tmp_path: Path,
+    runs: list[dict[str, Any]],
+    usage_records: list[dict[str, Any]],
+) -> Path:
+    path = tmp_path / "recorded-runs.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "golden_set_version": "2026-07-18.1",
+                "runs": runs,
+                "usage_records": usage_records,
+            }
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -301,3 +381,71 @@ def test_prepare_rejects_special_hardlinked_or_raced_seed(
         prepare_pilot(load_manifest(fixture_copy / "manifest.json"), tmp_path / "race")
     assert race_error.value.code == "unsafe_path"
     assert external.read_text(encoding="utf-8") == "external"
+
+
+def test_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailable(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(tmp_path, [_raw_run()], [_usage_record()])
+
+    bundle = load_recordings(path, manifest)
+
+    assert len(bundle.runs) == 1
+    run = bundle.runs[0]
+    expected_content_digest = "sha256:" + hashlib.sha256(
+        b"baseline agent content\n"
+    ).hexdigest()
+    expected_policy_json = '{"network_allowed":false,"tools":["Read","Glob","Grep"]}'
+    expected_policy_digest = "sha256:" + hashlib.sha256(
+        expected_policy_json.encode("utf-8")
+    ).hexdigest()
+    assert run.agent_content_digest == expected_content_digest
+    assert run.policy_digest == expected_policy_digest
+    assert run.effective_policy.to_data() == {
+        "tools": ["Read", "Glob", "Grep"],
+        "network_allowed": False,
+    }
+    assert run.host.to_data() == {
+        "name": "codex",
+        "version": "1.2.3",
+        "provider": "openai",
+    }
+    assert run.model.to_data() == {"name": "gpt-5", "version": "2026-07-01"}
+    assert run.effort == "medium"
+    assert run.duration_ms == 1200
+    assert bundle.usage_records[0].metrics.to_data() == {
+        "input_tokens": 321,
+        "output_tokens": 45,
+        "cache_tokens": None,
+        "reported_cost_microusd": None,
+    }
+    normalized = canonical_json(bundle.to_data())
+    assert "baseline agent content" not in normalized
+    assert '"cache_tokens":null' in normalized
+    assert '"reported_cost_microusd":null' in normalized
+
+
+def test_normalize_artifact_preserves_observed_zero_usage(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(
+        tmp_path,
+        [_raw_run()],
+        [
+            _usage_record(
+                input_tokens=0,
+                output_tokens=0,
+                cache_tokens=0,
+                reported_cost_microusd=0,
+            )
+        ],
+    )
+
+    bundle = load_recordings(path, manifest)
+
+    assert bundle.usage_records[0].metrics.to_data() == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_tokens": 0,
+        "reported_cost_microusd": 0,
+    }
