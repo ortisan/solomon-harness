@@ -1,6 +1,6 @@
 # Spec 369: Add opt-in behavioral benchmark for generated subagents
 
-- Issue: #369 · Status: ready
+- Issue: #369 · Status: implemented
 - Date: 2026-07-18 · Author: product_owner, ml_engineer, software_engineer
 
 ## Context
@@ -27,13 +27,16 @@ or cost baseline for accepting or rejecting later tool, model, and effort change
 3. The active host owns all model invocation and supplies bounded, recorded run
    artifacts. Preparation, scoring, comparison, and serialization remain local,
    deterministic, offline, and free of provider SDKs and subprocess execution.
-4. Closed, versioned JSON contracts reject unknown fields, unsafe paths, symlinks,
-   non-positive budgets, oversized inputs, duplicate run identities, and incomplete
-   comparisons before emitting an eligibility verdict.
-5. Every result identifies the golden-set and case versions, arm, repetition,
-   agent-content and effective-policy digests, reported host/provider, reported
-   model/version, effort, verdict, first failed assertion, duration, raw-artifact
-   pointer, and every available usage/cost field.
+4. Closed schema-version-2 JSON contracts reject unknown fields, unsafe paths,
+   symlinks, non-positive budgets, oversized inputs, duplicate run identities, and
+   incomplete comparisons before emitting an eligibility verdict. The manifest loader
+   derives the required golden-set digest from the versioned manifest and bounded seed
+   contents. Prepared request, recording, result, and comparison contracts propagate
+   that digest. Preparation emits every structural assertion in the host packet.
+5. Every result identifies the golden-set version and digest, case version, arm,
+   repetition, agent-content and effective-policy digests, reported host/provider,
+   reported model/version, effort, verdict, first failed assertion, duration,
+   raw-artifact pointer, and every available usage/cost field.
 6. Unsupported usage fields remain explicit `null` values. They are never inferred
    and never converted to zero.
 7. Structural scoring covers required and forbidden artifacts/actions, expected
@@ -58,6 +61,14 @@ or cost baseline for accepting or rejecting later tool, model, and effort change
   invalid/incomplete paths return non-zero. The module must import no provider SDK,
   open no network connection, execute no subprocess, and touch neither project
   memory nor GitHub.
+- Expose `load_results(path, manifest)` and `load_comparison(path, manifest)` as the
+  public closed readers for normalized output. They reject unknown fields, unsupported
+  schema versions, mismatched golden-set identity, invalid nested values, and
+  inconsistent comparison-derived data.
+- Derive one `golden_set_digest` from canonical manifest data plus the path and SHA-256
+  content digest of every bounded seed file. Carry it through prepared summaries,
+  complete host packets, recordings, results, and comparisons. Reject a changed seed
+  before scratch preparation and reject missing or mismatched recording digests.
 - Reuse the anchored, no-follow path discipline in
   `solomon_harness/secure_paths.py:1-157` for fixture reads and scratch writes.
   Treat recorded actions as inert data and never execute them.
@@ -65,6 +76,9 @@ or cost baseline for accepting or rejecting later tool, model, and effort change
   bounds, 54-result scoring, default-off behavior, incomplete comparison, isolation,
   missing telemetry, aggregate-hidden regression, deterministic output, attribution,
   and scoring overhead.
+- Add `tests/test_behavioral_evals_contracts.py` for the public result/comparison
+  readers and complete host packet. Add `tests/test_behavioral_evals_seed_integrity.py`
+  for golden-set digest propagation and changed-seed rejection.
 - Create `tests/fixtures/behavioral_evals/` with the ready manifest, nine seed cases,
   and a complete recorded two-arm corpus. The corpus intentionally contains one
   candidate regression and one offsetting candidate improvement so the per-case
@@ -73,7 +87,7 @@ or cost baseline for accepting or rejecting later tool, model, and effort change
   JSON compatibility rule, host-containment precondition, and the warning that this
   directional pilot does not activate routing.
 - Record the host/scorer boundary in
-  `docs/adrs/0043-host-controlled-behavioral-evaluation.md`; it follows ADR-0010's
+  `docs/adrs/0044-host-controlled-behavioral-evaluation.md`; it follows ADR-0010's
   host-owned model loop and ADR-0024's deterministic local-processing policy.
 - `solomon_harness/workflows.py:130-164` and
   `solomon_harness/cockpit_read.py:885-924` are context only. This slice does not
@@ -150,10 +164,15 @@ Scenario: Report a regression hidden by the aggregate
 
 ```bash
 uv run python scripts/spec-lint.py docs/specs/369-behavioral-subagent-evals.md
-uv run pytest -q tests/test_behavioral_evals.py
+uv run pytest -q \
+  tests/test_behavioral_evals.py \
+  tests/test_behavioral_evals_hardening.py \
+  tests/test_behavioral_evals_contracts.py \
+  tests/test_behavioral_evals_mutation_contracts.py \
+  tests/test_behavioral_evals_seed_integrity.py
 uv run pytest -q tests/test_integrations.py tests/test_scaffold_agent.py
-uv run ruff check solomon_harness/behavioral_evals.py tests/test_behavioral_evals.py
-uv run mypy solomon_harness/behavioral_evals.py
+uv run ruff check solomon_harness tests
+uv run mypy solomon_harness tests
 uv run pytest -q
 ```
 
@@ -172,12 +191,18 @@ and inspect 54 results plus the named per-case regression and false eligibility.
   attempts. The offline scorer validates that evidence but cannot undo or attest an
   external mutation performed before scoring; a host lacking containment evidence
   cannot produce a qualifying run.
-- Inputs are untrusted data: strict schemas, anchored relative paths, no symlinks,
-  explicit count/byte/prompt/depth bounds, bounded integer parsing, a cap on total pilot
-  copy amplification, no credentials, and no execution of recorded actions.
+- Inputs are untrusted data: strict schemas, anchored relative paths, no symlinks or
+  hard-linked seeds, opened-descriptor identity checks, explicit count/byte/prompt/depth
+  bounds, bounded integer parsing, a cap on total pilot copy amplification, no
+  credentials, and no execution of recorded actions.
 - Schema changes are explicit and versioned. Identical accepted manifest and run
   evidence produces byte-identical normalized result/comparison JSON. A fresh scratch
   path is returned out of band and is not part of that canonical evidence.
+- Schema version 2 is the first accepted interchange version. It requires the
+  golden-set digest across prepared request, recording, result, and comparison
+  boundaries. The loader derives that digest from the accepted manifest and bounded
+  seed contents. Version 1 artifacts fail with `unsupported_schema`; the adapter does
+  not infer or backfill a missing digest in version 2 evidence.
 - Eligibility is conservative derived data. Candidate pass count must be at least the
   baseline count, no baseline-stable case may regress, and at least 95 percent of any
   host-exposed usage envelopes must resolve uniquely. If no usage envelope is exposed,
@@ -201,5 +226,34 @@ and inspect 54 results plus the named per-case regression and false eligibility.
 ## Traceability
 
 - Issue: #369 (child of #171; blocks #370 and #371)
-- ADR: docs/adrs/0043-host-controlled-behavioral-evaluation.md (planned in this branch)
-- PR: pending
+- ADR: docs/adrs/0044-host-controlled-behavioral-evaluation.md
+- PR: #372
+
+Acceptance criteria map to automated tests as follows:
+
+- AC-EVAL-01:
+  `tests/test_behavioral_evals.py::test_ac_eval_01_complete_fixture_corpus_scores_exact_54_results`.
+- AC-EVAL-02:
+  `tests/test_integrations.py::TestCompileSyncsIntegrations::test_compile_keeps_behavioral_evaluations_default_off`
+  and
+  `tests/test_behavioral_evals.py::test_ac_eval_02_behavioral_module_has_no_provider_network_or_process_imports`.
+- AC-EVAL-03:
+  `tests/test_behavioral_evals.py::test_ac_eval_03_two_repetitions_raise_exact_incomplete_comparison`
+  and
+  `tests/test_behavioral_evals.py::test_ac_eval_03_compare_cli_returns_nonzero_without_report_or_eligibility`.
+- AC-EVAL-04:
+  `tests/test_behavioral_evals.py::test_ac_eval_04_prohibited_action_is_inert_and_fails_isolation`
+  and
+  `tests/test_behavioral_evals.py::test_ac_eval_04_changed_protected_snapshot_fails_isolation`.
+- AC-EVAL-05:
+  `tests/test_behavioral_evals.py::test_ac_eval_05_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailable`
+  and
+  `tests/test_behavioral_evals.py::test_normalize_artifact_preserves_observed_zero_usage`.
+- AC-EVAL-06:
+  `tests/test_behavioral_evals.py::test_ac_eval_06_equal_aggregate_stable_case_regression_is_ineligible`.
+
+The schema-version-2 compatibility contract and complete packet are covered by
+`tests/test_behavioral_evals_contracts.py`; semantic boundary and closed-error tables
+are covered by `tests/test_behavioral_evals_mutation_contracts.py`. Golden-set digest
+derivation, propagation, changed-seed rejection, and raced hard-link rejection are
+covered by `tests/test_behavioral_evals_seed_integrity.py`.

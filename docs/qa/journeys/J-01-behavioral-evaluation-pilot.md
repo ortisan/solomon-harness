@@ -6,7 +6,7 @@ the candidate is eligible for further review.
 
 ```mermaid
 flowchart TD
-    A[Open the behavioral evaluation guide] --> B[Prepare the pilot manifest]
+    A[Open the behavioral evaluation guide] --> B[Prepare the schema version 2 manifest]
     B -->|Valid manifest| C[Inspect 54 isolated host requests]
     B -->|Invalid or unsafe input| X[Receive a closed non-zero error]
     C --> D[Record baseline and candidate runs in the active host]
@@ -29,9 +29,10 @@ personas:
 entry_points:
   - docs/behavioral-evals.md
   - python -m solomon_harness.behavioral_evals prepare
+  - tests/fixtures/behavioral_evals/recorded-runs.json
 actions:
-  - action: Prepare the versioned manifest into a new scratch root.
-    expected_observable: Exactly 54 unique requests point to bounded isolated fixtures.
+  - action: Prepare the schema version 2 manifest into a new scratch root.
+    expected_observable: Exactly 54 unique requests point to bounded isolated fixtures and carry one golden-set digest.
   - action: Record each request with the active host and its containment policy.
     expected_observable: Every case arm and repetition has one attributable recording.
   - action: Score the complete recording artifact.
@@ -40,7 +41,7 @@ actions:
     expected_observable: Eligibility and each baseline-stable regression are named explicitly.
 goal: Decide whether the candidate is eligible for later adoption work.
 true_end_state: A persisted comparison report names the decision and regression evidence without changing protected project state.
-exit: The operator retains the manifest recordings normalized results and comparison report for review.
+exit: The operator retains the manifest, recordings, normalized results, and comparison report for review.
 abandonment:
   at_step: After preparation and before every host recording is complete.
   how: Stop the host run without invoking score or compare.

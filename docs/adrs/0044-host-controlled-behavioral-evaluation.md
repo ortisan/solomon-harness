@@ -1,4 +1,4 @@
-# ADR-0043: Host-controlled behavioral evaluation with deterministic offline scoring
+# ADR-0044: Host-controlled behavioral evaluation with deterministic offline scoring
 
 - Status: accepted
 - Date: 2026-07-18
@@ -54,17 +54,23 @@ auditable, reusable evidence for later policy decisions.
 filesystem shell:
 
 - Frozen domain models and closed parsers validate manifest, run-artifact, result, and
-  comparison schemas. `schema_version` evolves the interchange contract independently
-  from `golden_set_version`; unknown fields and unsupported versions fail closed.
+  comparison schemas. The initial published contract is schema version 2.
+  `schema_version` evolves the interchange contract independently from
+  `golden_set_version`; unknown fields and unsupported versions fail closed.
 - A qualifying manifest has the exact `baseline` and `candidate` arms, at least nine
   unique cases, exactly three repetitions for every case-arm pair, and positive explicit
   limits for prompts, files, bytes, duration, tokens, and reported cost.
-- Preparation reads a trusted, bounded, symlink-free seed and creates a new scratch
-  directory for each run identity. It never overwrites a prior fixture. It emits prompt,
-  expected assertions, arm policy, and budget as inert host input; it invokes no model.
-  Entry count, directory depth, per-case bytes, and the sixfold pilot-copy amplification
-  are bounded before a batch directory is created. The manifest records the opened seed
-  root identity and preparation rejects a later pathname substitution.
+- Manifest loading reads every bounded, symlink-free, single-link seed through an
+  anchored descriptor and
+  verifies that the opened descriptor retains the expected identity and link count
+  through the read. It derives
+  `golden_set_digest` from the canonical manifest plus sorted seed-relative paths and
+  content digests. Preparation re-reads that snapshot and rejects drift before creating
+  a batch directory. It then creates a new scratch directory for each run identity and
+  never overwrites a prior fixture. It emits the complete assertion contract, arm
+  policy, budget, and golden-set digest as inert host input; it invokes no model. Entry
+  count, directory depth, per-case bytes, and the sixfold pilot-copy amplification are
+  bounded before a batch directory is created.
 - The host is the sole owner of model execution and containment. A qualifying host must
   confine the run to the prepared scratch directory, deny checkout, project-memory, and
   GitHub writes, and report containment plus before/after protected-state evidence. A
@@ -73,12 +79,13 @@ filesystem shell:
   structural assertion failure, including a denied prohibited mutation attempt or a
   protected snapshot mismatch, produces a normal `fail` result rather than a parser
   error. The result carries a deterministic first failed assertion.
-- Every normalized result is keyed by golden-set version, case id/version, arm,
-  repetition, agent-content digest, and effective-policy digest, with reported
-  host/provider, model/version, effort, duration, verdict, raw pointer, and optional
-  input/output/cache tokens and cost. Unsupported optional metrics are JSON `null` and
-  are never inferred.
-- Comparison first proves the complete Cartesian matrix. Missing, duplicate, or
+- Every recording echoes the golden-set digest. Every normalized result is keyed by
+  schema version, golden-set version and digest, case id/version, arm, repetition,
+  agent-content digest, and effective-policy digest, with reported host/provider,
+  model/version, effort, duration, verdict, raw pointer, and optional input/output/cache
+  tokens and cost. Unsupported optional metrics are JSON `null` and are never inferred.
+- Comparison parsing validates the same identity and digest bindings as result parsing.
+  Comparison first proves the complete Cartesian matrix. Missing, duplicate, or
   unexpected identities return a structured `incomplete_comparison` error naming the
   case, arm, observed repetitions, missing repetitions, and duplicates; no comparison
   file or eligibility value is emitted. A complete comparison reports exact passed/total
@@ -89,10 +96,11 @@ filesystem shell:
   host-exposed usage envelopes must resolve uniquely. An absence of exposed usage is
   recorded as `not_evaluable` and does not fabricate a zero-percent result.
 - Identical accepted manifest and run evidence produces byte-identical normalized
-  result/comparison JSON. Validation, scoring, comparison, and serialization have no
-  side effects. Preparation is the only mutating operation, its authority is limited to
-  caller-selected scratch storage, and its fresh physical path is returned out of band
-  rather than entering canonical evidence.
+  result/comparison JSON. The in-memory validation, scoring, comparison, and
+  serialization functions do not mutate project state. Preparation writes only to
+  caller-selected scratch storage. The CLI writes result and comparison artifacts only
+  to new caller-selected output paths. Fresh physical scratch paths remain outside
+  canonical evidence.
 - The module imports no provider SDK, opens no network connection, executes no
   subprocess, and reads or writes neither project memory, GitHub, workflow state, nor
   generated-agent configuration. Its module CLI only adapts local files to the same

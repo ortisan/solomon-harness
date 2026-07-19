@@ -20,7 +20,7 @@ walked by a persona this cycle", a session ledger rather than a per-case count.
 
 ## Area codes
 
-- `BE` — offline behavioral-evaluation pilot commands and evidence flow.
+- `BE`: offline behavioral-evaluation pilot commands and evidence flow.
 
 ## `state.csv` columns
 
@@ -50,6 +50,8 @@ existing `uat` Blocker/Critical/Major/Minor/Trivial scale.
 
 ## Changelog
 
+- 2026-07-19: Walked J-01 with the Operator persona against the schema-version-2
+  offline fixture replay. CH-001 passed BE-001 through BE-003 with no defect filed.
 - 2026-07-19: Added the issue #369 behavioral-evaluation operator journey,
   targeted charter, and untested scenario rows.
 - Bootstrapped with epic #341 package 6 (persona-driven exploratory testing v1).
