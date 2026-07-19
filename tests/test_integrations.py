@@ -246,6 +246,7 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
 
     def test_compile_keeps_behavioral_evaluations_default_off(self):
         import shutil
+        import subprocess
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
@@ -265,6 +266,41 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
             shutil.copy2(
                 Path(WORKSPACE) / "scripts" / "generate-integrations.py",
                 scripts / "generate-integrations.py",
+            )
+            root.joinpath("pyproject.toml").write_text(
+                '[project]\nname = "solomon-harness"\nversion = "0.0.0"\n',
+                encoding="utf-8",
+            )
+            package = root / "solomon_harness"
+            package.mkdir()
+            package.joinpath("__init__.py").write_text("\n", encoding="utf-8")
+            package.joinpath("mcp_server.py").write_text("\n", encoding="utf-8")
+            root.joinpath("agents", "AGENTS.md").write_text(
+                "# Source rules\n",
+                encoding="utf-8",
+            )
+            workflows = package / "catalog" / "workflows"
+            workflows.mkdir(parents=True)
+            workflows.joinpath("solomon-workflow.md").write_text(
+                "---\ndescription: Run the delivery workflow.\n---\n\n# Workflow\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            subprocess.run(["git", "-C", tmp, "add", "--all"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    tmp,
+                    "-c",
+                    "user.name=Solomon Test",
+                    "-c",
+                    "user.email=solomon@example.invalid",
+                    "commit",
+                    "-qm",
+                    "source fixture",
+                ],
+                check=True,
             )
             before = {
                 path.relative_to(root)
@@ -317,19 +353,19 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
                 ) as create_connection,
                 patch.object(sys, "dont_write_bytecode", True),
             ):
-                cli.main(harness_dir=tmp, argv=["compile"])
+                with self.assertRaises(SystemExit) as raised:
+                    cli.main(harness_dir=tmp, argv=["compile"])
+
+            self.assertEqual(raised.exception.code, 0)
 
             created = {
                 path.relative_to(root)
                 for path in root.rglob("*")
             } - before
-            self.assertEqual(
+            self.assertIn(Path(".claude/agents/qa.md"), created)
+            self.assertFalse(
+                any("behavioral" in path.as_posix() for path in created),
                 created,
-                {
-                    Path(".claude"),
-                    Path(".claude/agents"),
-                    Path(".claude/agents/qa.md"),
-                },
             )
             self.assertEqual(list(root.rglob("behavioral-eval-*")), [])
             load_manifest.assert_not_called()

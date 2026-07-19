@@ -43,7 +43,7 @@ def _manifest_data() -> dict[str, Any]:
 def _invalid_manifest_data(variant: str) -> dict[str, Any]:
     data = copy.deepcopy(_manifest_data())
     if variant == "unsupported_schema":
-        data["schema_version"] = 2
+        data["schema_version"] += 1
     elif variant == "wrong_repetitions":
         data["repetitions"] = 2
     elif variant == "wrong_arms":
@@ -92,6 +92,10 @@ def _invalid_manifest_data(variant: str) -> dict[str, Any]:
         data["cases"][0]["id"] = "planning-other"
     elif variant == "boolean_schema":
         data["schema_version"] = True
+    elif variant == "invalid_unicode_version":
+        data["golden_set_version"] = "\ud800"
+    elif variant == "long_golden_set_version":
+        data["golden_set_version"] = "x" * 65
     else:
         raise AssertionError(f"unknown test variant: {variant}")
     return data
@@ -165,17 +169,21 @@ def _write_recordings(
     tmp_path: Path,
     runs: list[dict[str, Any]],
     usage_records: list[dict[str, Any]],
+    **overrides: Any,
 ) -> Path:
     path = tmp_path / "recorded-runs.json"
+    manifest = load_manifest(MANIFEST_PATH)
+    assert manifest.golden_set_digest is not None
+    document = {
+        "schema_version": manifest.schema_version,
+        "golden_set_version": manifest.golden_set_version,
+        "golden_set_digest": manifest.golden_set_digest,
+        "runs": runs,
+        "usage_records": usage_records,
+    }
+    document.update(overrides)
     path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "golden_set_version": "2026-07-18.1",
-                "runs": runs,
-                "usage_records": usage_records,
-            }
-        ),
+        json.dumps(document),
         encoding="utf-8",
     )
     return path
@@ -235,7 +243,7 @@ def _usage_for_run(run: dict[str, Any], **overrides: Any) -> dict[str, Any]:
 def test_manifest_loads_closed_versioned_contract() -> None:
     manifest = load_manifest(MANIFEST_PATH)
 
-    assert manifest.schema_version == 1
+    assert manifest.schema_version == 2
     assert manifest.golden_set_version == "2026-07-18.1"
     assert tuple(arm.arm_id for arm in manifest.arms) == ("baseline", "candidate")
     assert manifest.repetitions == 3
@@ -281,6 +289,8 @@ def test_manifest_loads_closed_versioned_contract() -> None:
         ("invalid_role", "invalid_manifest"),
         ("missing_role_scenario_coverage", "invalid_manifest"),
         ("boolean_schema", "invalid_manifest"),
+        ("invalid_unicode_version", "invalid_manifest"),
+        ("long_golden_set_version", "limit_exceeded"),
     ],
 )
 def test_manifest_rejects_invalid_bounds_and_unsafe_fixture_paths(
@@ -304,9 +314,10 @@ def test_manifest_rejects_ambiguous_or_non_finite_json(
 ) -> None:
     raw = MANIFEST_PATH.read_text(encoding="utf-8")
     if invalid_token == "duplicate":
+        schema_version = _manifest_data()["schema_version"]
         raw = raw.replace(
-            '"schema_version": 1,',
-            '"schema_version": 1, "schema_version": 1,',
+            f'"schema_version": {schema_version},',
+            f'"schema_version": {schema_version}, "schema_version": {schema_version},',
             1,
         )
     else:
@@ -395,13 +406,10 @@ def test_prepare_pilot_creates_54_fresh_bounded_scratch_fixtures(tmp_path: Path)
     )
     original_seed = first[0].workspace_path.joinpath("task.txt").read_bytes()
     request = json.loads(first[0].request_path.read_text(encoding="utf-8"))
+    assert request["golden_set_digest"] == manifest.golden_set_digest
     assert request["case"]["prompt"] == manifest.cases[0].prompt
-    assert request["artifact_contract"] == {
-        "required_files": ["PLAN.md"],
-        "expected_exit_code": 0,
-    }
-    assert "forbidden_actions" not in canonical_json(request)
-    assert "protected_state" not in canonical_json(request)
+    assert request["artifact_contract"] == manifest.cases[0].assertions.to_data()
+    assert {run.golden_set_digest for run in first} == {manifest.golden_set_digest}
 
     first[0].workspace_path.joinpath("task.txt").write_text("mutated", encoding="utf-8")
     second = prepare_pilot(manifest, tmp_path)
@@ -412,7 +420,9 @@ def test_prepare_pilot_creates_54_fresh_bounded_scratch_fixtures(tmp_path: Path)
     assert second[0].workspace_path.joinpath("task.txt").read_bytes() == original_seed
 
 
-def test_prepare_rejects_symlinked_seed_or_scratch_root(tmp_path: Path) -> None:
+def test_manifest_and_prepare_reject_symlinked_seed_or_scratch_root(
+    tmp_path: Path,
+) -> None:
     fixture_copy = tmp_path / "fixtures"
     shutil.copytree(FIXTURE_ROOT, fixture_copy)
     external = tmp_path / "external.txt"
@@ -420,10 +430,8 @@ def test_prepare_rejects_symlinked_seed_or_scratch_root(tmp_path: Path) -> None:
     seed = fixture_copy / "cases" / "planning-happy" / "task.txt"
     seed.unlink()
     seed.symlink_to(external)
-    manifest = load_manifest(fixture_copy / "manifest.json")
-
     with pytest.raises(EvaluationError) as seed_error:
-        prepare_pilot(manifest, tmp_path / "safe-scratch")
+        load_manifest(fixture_copy / "manifest.json")
     assert seed_error.value.code == "unsafe_path"
 
     real_scratch = tmp_path / "real-scratch"
@@ -519,6 +527,7 @@ def test_prepare_copies_nested_seed_directories_into_every_matching_run(
     nested = fixture_copy / "cases" / "planning-happy" / "nested" / "deeper"
     nested.mkdir(parents=True)
     nested.joinpath("context.txt").write_text("bounded context", encoding="utf-8")
+    nested.joinpath("second.txt").write_text("second context", encoding="utf-8")
     manifest = load_manifest(fixture_copy / "manifest.json")
 
     prepared = prepare_pilot(manifest, tmp_path / "scratch")
@@ -532,9 +541,130 @@ def test_prepare_copies_nested_seed_directories_into_every_matching_run(
         == "bounded context"
         for run in matching
     )
+    assert all(
+        run.workspace_path.joinpath("nested/deeper/second.txt").read_text(
+            encoding="utf-8"
+        )
+        == "second context"
+        for run in matching
+    )
 
 
-def test_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailable(
+@pytest.mark.parametrize(
+    ("variant", "field"),
+    [
+        ("file_count", "fixture.files"),
+        ("file_bytes", "fixture.file_bytes"),
+        ("total_bytes", "fixture.total_bytes"),
+    ],
+)
+def test_manifest_rejects_seed_budget_boundaries(
+    tmp_path: Path,
+    variant: str,
+    field: str,
+) -> None:
+    fixture_copy = tmp_path / "fixtures"
+    shutil.copytree(FIXTURE_ROOT, fixture_copy)
+    data = _manifest_data()
+    case_root = fixture_copy / "cases" / "planning-happy"
+    if variant == "file_count":
+        data["budget"]["max_files"] = 1
+        case_root.joinpath("extra.txt").write_text("x", encoding="utf-8")
+    elif variant == "file_bytes":
+        data["budget"]["max_file_bytes"] = 1
+    else:
+        task_size = len(case_root.joinpath("task.txt").read_bytes())
+        case_root.joinpath("extra.txt").write_bytes(b"x" * task_size)
+        data["budget"]["max_file_bytes"] = task_size
+        data["budget"]["max_total_bytes"] = task_size * 2 - 1
+    scratch_root = tmp_path / "scratch"
+
+    with pytest.raises(EvaluationError) as raised:
+        load_manifest(_write_manifest(fixture_copy, data))
+
+    assert raised.value.to_data() == {
+        "error": {"code": "limit_exceeded", "field": field}
+    }
+    assert not scratch_root.exists()
+
+
+def test_manifest_rejects_seed_tree_at_safe_path_depth_limit(tmp_path: Path) -> None:
+    fixture_copy = tmp_path / "fixtures"
+    shutil.copytree(FIXTURE_ROOT, fixture_copy)
+    cursor = fixture_copy / "cases" / "planning-happy"
+    for index in range(behavioral_evals.MAX_PATH_DEPTH + 1):
+        cursor = cursor / f"depth-{index}"
+        cursor.mkdir()
+    scratch_root = tmp_path / "scratch"
+
+    with pytest.raises(EvaluationError) as raised:
+        load_manifest(fixture_copy / "manifest.json")
+
+    assert raised.value.to_data() == {
+        "error": {"code": "limit_exceeded", "field": "fixture.entry"}
+    }
+    assert not scratch_root.exists()
+
+
+def test_seed_scan_maps_directory_read_failure_to_closed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+
+    def deny_scan(_directory_fd: int) -> object:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(behavioral_evals.os, "scandir", deny_scan)
+
+    with pytest.raises(EvaluationError) as raised:
+        behavioral_evals._collect_seed_files(0, manifest.budget)
+
+    assert raised.value.to_data() == {
+        "error": {"code": "unsafe_path", "field": "fixture"}
+    }
+
+
+def test_directory_creation_helpers_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_open_directory_at = behavioral_evals.open_directory_at
+    monkeypatch.setattr(behavioral_evals, "open_directory_at", lambda _fd, _name: None)
+    with pytest.raises(EvaluationError) as disappeared:
+        behavioral_evals._open_existing_directory(0, "missing", "fixture.entry")
+    assert disappeared.value.to_data() == {
+        "error": {"code": "unsafe_path", "field": "fixture.entry"}
+    }
+
+    monkeypatch.setattr(behavioral_evals, "open_directory_at", real_open_directory_at)
+    monkeypatch.setattr(behavioral_evals, "stat_at", lambda _fd, _name: None)
+
+    def deny_mkdir(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(behavioral_evals.os, "mkdir", deny_mkdir)
+    with pytest.raises(EvaluationError) as denied:
+        behavioral_evals._exclusive_directory(0, "new", "scratch.fixture")
+    assert denied.value.to_data() == {
+        "error": {"code": "unsafe_path", "field": "scratch.fixture"}
+    }
+
+    with pytest.raises(EvaluationError) as invalid_name:
+        behavioral_evals._open_scratch_root(Path("."))
+    assert invalid_name.value.to_data() == {
+        "error": {"code": "unsafe_path", "field": "scratch_root"}
+    }
+
+    monkeypatch.undo()
+    missing_parent = tmp_path / "missing-parent" / "scratch"
+    with pytest.raises(EvaluationError) as missing:
+        behavioral_evals._open_scratch_root(missing_parent)
+    assert missing.value.to_data() == {
+        "error": {"code": "unsafe_path", "field": "scratch_root"}
+    }
+
+
+def test_ac_eval_05_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailable(
     tmp_path: Path,
 ) -> None:
     manifest = load_manifest(MANIFEST_PATH)
@@ -578,8 +708,9 @@ def test_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailabl
 
     result = score_recordings(manifest, bundle)[0]
     assert result.to_data() == {
-        "schema_version": 1,
+        "schema_version": manifest.schema_version,
         "golden_set_version": "2026-07-18.1",
+        "golden_set_digest": manifest.golden_set_digest,
         "case_id": "planning-happy",
         "case_version": "1",
         "arm": "baseline",
@@ -653,6 +784,22 @@ def test_normalize_artifact_preserves_observed_zero_usage(tmp_path: Path) -> Non
         ("zero_usage_repetition", "invalid_artifact", "usage_record.repetition"),
         ("negative_usage", "invalid_artifact", "usage_record.input_tokens"),
         ("usage_above_budget", "limit_exceeded", "usage_record.input_tokens"),
+        ("case_version_mismatch", "invalid_artifact", "run.case_version"),
+        (
+            "non_boolean_scratch_scope",
+            "invalid_artifact",
+            "run.containment.scratch_only",
+        ),
+        (
+            "out_of_order_protected_state",
+            "invalid_artifact",
+            "run.containment.protected_state.resources",
+        ),
+        (
+            "invalid_protected_digest",
+            "invalid_artifact",
+            "run.containment.state.before_digest",
+        ),
     ],
 )
 def test_recordings_reject_invalid_identity_policy_and_metrics(
@@ -695,6 +842,14 @@ def test_recordings_reject_invalid_identity_policy_and_metrics(
     elif variant == "usage_above_budget":
         usage["input_tokens"] = manifest.budget.max_input_tokens + 1
         usage_records = [usage]
+    elif variant == "case_version_mismatch":
+        run["case_version"] = "other-version"
+    elif variant == "non_boolean_scratch_scope":
+        run["containment"]["scratch_only"] = 1
+    elif variant == "out_of_order_protected_state":
+        run["containment"]["protected_state"].reverse()
+    elif variant == "invalid_protected_digest":
+        run["containment"]["protected_state"][0]["before_digest"] = "not-a-digest"
     else:
         raise AssertionError(f"unknown test variant: {variant}")
     path = _write_recordings(tmp_path, [run], usage_records)
@@ -705,6 +860,41 @@ def test_recordings_reject_invalid_identity_policy_and_metrics(
     assert raised.value.code == error_code
     assert raised.value.field == field
     assert str(tmp_path) not in canonical_json(raised.value.to_data())
+
+
+@pytest.mark.parametrize(
+    ("variant", "error_code", "field"),
+    [
+        ("boolean_schema", "invalid_artifact", "recordings.schema_version"),
+        ("unsupported_schema", "unsupported_schema", "recordings.schema_version"),
+        (
+            "mismatched_golden_set",
+            "invalid_artifact",
+            "recordings.golden_set_version",
+        ),
+    ],
+)
+def test_recordings_reject_incompatible_contract_versions(
+    tmp_path: Path,
+    variant: str,
+    error_code: str,
+    field: str,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    overrides: dict[str, Any]
+    if variant == "boolean_schema":
+        overrides = {"schema_version": True}
+    elif variant == "unsupported_schema":
+        overrides = {"schema_version": manifest.schema_version + 1}
+    else:
+        overrides = {"golden_set_version": f"{manifest.golden_set_version}-other"}
+    path = _write_recordings(tmp_path, [_raw_run()], [], **overrides)
+
+    with pytest.raises(EvaluationError) as raised:
+        load_recordings(path, manifest)
+
+    assert raised.value.code == error_code
+    assert raised.value.field == field
 
 
 @pytest.mark.parametrize(
@@ -797,6 +987,34 @@ def test_score_recordings_uses_deterministic_structural_assertions(
 
     assert result.verdict == "fail"
     assert result.failed_assertion == failed_assertion
+
+
+def test_score_recordings_rejects_case_specific_forbidden_action(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    original_case = manifest.cases[0]
+    assertions = replace(
+        original_case.assertions,
+        forbidden_actions=("inspect_secret",),
+    )
+    custom_case = replace(original_case, assertions=assertions)
+    custom_manifest = replace(
+        manifest,
+        cases=(custom_case, *manifest.cases[1:]),
+    )
+    path = _write_recordings(
+        tmp_path,
+        [_raw_run(actions=["read_contract", "inspect_secret"])],
+        [],
+        golden_set_digest=custom_manifest.golden_set_digest,
+    )
+
+    result = score_recordings(
+        custom_manifest,
+        load_recordings(path, custom_manifest),
+    )[0]
+
+    assert result.verdict == "fail"
+    assert result.failed_assertion == "action.forbidden_present:inspect_secret"
 
 
 def test_missing_containment_or_malicious_action_is_invalid_and_inert(tmp_path: Path) -> None:
@@ -962,6 +1180,48 @@ def test_compare_rejects_duplicate_repetition_that_preserves_total_54(
     }
 
 
+def test_validate_complete_comparison_rejects_unexpected_identity(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(tmp_path, _complete_raw_runs(manifest), [])
+    results = score_recordings(manifest, load_recordings(path, manifest))
+    unexpected = replace(
+        results[0],
+        identity=replace(results[0].identity, case_id="unexpected-case"),
+    )
+
+    with pytest.raises(IncompleteComparisonError) as raised:
+        validate_complete_comparison(manifest, (*results, unexpected))
+
+    assert raised.value.to_data()["error"] == {
+        "code": "incomplete_comparison",
+        "case_id": "unexpected-case",
+        "arm": "baseline",
+        "observed_repetition_count": 1,
+        "expected_repetition_count": 0,
+        "observed_repetitions": [1],
+        "missing_repetitions": [],
+        "duplicate_repetitions": [],
+    }
+
+
+def test_validate_complete_comparison_rejects_invalid_result_metadata(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(tmp_path, _complete_raw_runs(manifest), [])
+    results = list(score_recordings(manifest, load_recordings(path, manifest)))
+    results[0] = replace(results[0], duration_ms=0)
+
+    with pytest.raises(EvaluationError) as raised:
+        validate_complete_comparison(manifest, results)
+
+    assert raised.value.to_data() == {
+        "error": {"code": "invalid_artifact", "field": "comparison.result"}
+    }
+
+
 def test_ac_eval_06_equal_aggregate_stable_case_regression_is_ineligible(
     tmp_path: Path,
 ) -> None:
@@ -1058,7 +1318,10 @@ def test_compare_rejects_bundle_version_mismatch_before_scoring(tmp_path: Path) 
     bundle = load_recordings(path, manifest)
 
     with pytest.raises(EvaluationError) as raised:
-        compare_recordings(manifest, replace(bundle, schema_version=2))
+        compare_recordings(
+            manifest,
+            replace(bundle, schema_version=manifest.schema_version + 1),
+        )
 
     assert raised.value.to_data() == {
         "error": {"code": "invalid_artifact", "field": "comparison.bundle"}
@@ -1134,6 +1397,7 @@ def test_module_cli_prepares_all_runs_without_invoking_a_model(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
     scratch_root = tmp_path / "scratch"
 
     exit_code = main(
@@ -1150,10 +1414,14 @@ def test_module_cli_prepares_all_runs_without_invoking_a_model(
     prepared = json.loads(captured.out)
     assert exit_code == 0
     assert captured.err == ""
-    assert prepared["schema_version"] == 1
+    assert prepared["schema_version"] == manifest.schema_version
     assert prepared["golden_set_version"] == "2026-07-18.1"
+    assert prepared["golden_set_digest"] == manifest.golden_set_digest
     assert len(prepared["prepared_runs"]) == 54
     assert len({run["scratch_path"] for run in prepared["prepared_runs"]}) == 54
+    assert {run["golden_set_digest"] for run in prepared["prepared_runs"]} == {
+        manifest.golden_set_digest
+    }
     assert all(Path(run["request_path"]).is_file() for run in prepared["prepared_runs"])
 
 
@@ -1195,6 +1463,7 @@ def test_module_cli_writes_canonical_score_and_comparison_exclusively(
     expected_results = {
         "schema_version": manifest.schema_version,
         "golden_set_version": manifest.golden_set_version,
+        "golden_set_digest": manifest.golden_set_digest,
         "results": [result.to_data() for result in score_recordings(manifest, bundle)],
     }
     expected_comparison = compare_recordings(manifest, bundle).to_data()
@@ -1272,7 +1541,7 @@ def test_module_cli_preserves_existing_and_symlinked_output_targets(
     assert captured.out == ""
 
 
-def test_behavioral_module_has_no_provider_network_or_process_imports() -> None:
+def test_ac_eval_02_behavioral_module_has_no_provider_network_or_process_imports() -> None:
     module_path = Path(behavioral_evals.__file__)
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
     imported_roots = {
@@ -1322,6 +1591,7 @@ def test_ac_eval_01_complete_fixture_corpus_scores_exact_54_results() -> None:
         == {
             "schema_version",
             "golden_set_version",
+            "golden_set_digest",
             "case_id",
             "case_version",
             "arm",
@@ -1380,7 +1650,7 @@ def test_fixture_normalization_and_scoring_median_overhead_stays_below_one_perce
         score_recordings(manifest, load_recordings(RECORDINGS_PATH, manifest))
 
     elapsed_per_run_ms: list[float] = []
-    latest_results = ()
+    latest_results: tuple[behavioral_evals.EvaluationResult, ...] = ()
     for _ in range(15):
         started = time.perf_counter_ns()
         latest_results = score_recordings(

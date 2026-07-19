@@ -25,7 +25,7 @@ MANIFEST_PATH = FIXTURE_ROOT / "manifest.json"
         ("[" * 2_000 + "0" + "]" * 2_000, "json.structure"),
         (
             MANIFEST_PATH.read_text(encoding="utf-8").replace(
-                '"schema_version": 1',
+                '"schema_version": 2',
                 '"schema_version": ' + "9" * 5_000,
                 1,
             ),
@@ -122,15 +122,15 @@ def test_prepare_rejects_total_copy_amplification_before_scratch_creation(
 ) -> None:
     manifest = load_manifest(MANIFEST_PATH)
     reads = 0
-    real_read = behavioral_evals.read_regular_at
+    real_open = behavioral_evals.open_regular_at
 
-    def counting_read(parent_fd: int, name: str, *, max_bytes: int) -> bytes:
+    def counting_open(parent_fd: int, name: str, *, max_bytes: int) -> int | None:
         nonlocal reads
         reads += 1
-        return real_read(parent_fd, name, max_bytes=max_bytes)
+        return real_open(parent_fd, name, max_bytes=max_bytes)
 
     monkeypatch.setattr(behavioral_evals, "MAX_PILOT_COPY_BYTES", 1)
-    monkeypatch.setattr(behavioral_evals, "read_regular_at", counting_read)
+    monkeypatch.setattr(behavioral_evals, "open_regular_at", counting_open)
     scratch_root = tmp_path / "scratch"
 
     with pytest.raises(EvaluationError) as raised:
