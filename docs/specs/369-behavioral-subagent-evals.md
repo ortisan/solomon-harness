@@ -173,11 +173,19 @@ and inspect 54 results plus the named per-case regression and false eligibility.
   external mutation performed before scoring; a host lacking containment evidence
   cannot produce a qualifying run.
 - Inputs are untrusted data: strict schemas, anchored relative paths, no symlinks,
-  explicit count/byte/prompt bounds, no credentials, and no execution of recorded
-  actions.
+  explicit count/byte/prompt/depth bounds, bounded integer parsing, a cap on total pilot
+  copy amplification, no credentials, and no execution of recorded actions.
 - Schema changes are explicit and versioned. Identical accepted manifest and run
   evidence produces byte-identical normalized result/comparison JSON. A fresh scratch
   path is returned out of band and is not part of that canonical evidence.
+- Eligibility is conservative derived data. Candidate pass count must be at least the
+  baseline count, no baseline-stable case may regress, and at least 95 percent of any
+  host-exposed usage envelopes must resolve uniquely. If no usage envelope is exposed,
+  attribution is `not_evaluable`; unavailable cache or cost values remain `null` and do
+  not become an attribution failure.
+- The module CLI validates and computes the complete artifact before opening the caller's
+  output path. It creates a missing regular output exclusively with mode `0600` and
+  preserves existing or symlinked targets.
 - Merge, release, Done, tool-policy generation, and routing activation remain
   human-gated and outside this slice.
 

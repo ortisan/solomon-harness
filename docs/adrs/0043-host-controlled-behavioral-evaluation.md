@@ -62,6 +62,9 @@ filesystem shell:
 - Preparation reads a trusted, bounded, symlink-free seed and creates a new scratch
   directory for each run identity. It never overwrites a prior fixture. It emits prompt,
   expected assertions, arm policy, and budget as inert host input; it invokes no model.
+  Entry count, directory depth, per-case bytes, and the sixfold pilot-copy amplification
+  are bounded before a batch directory is created. The manifest records the opened seed
+  root identity and preparation rejects a later pathname substitution.
 - The host is the sole owner of model execution and containment. A qualifying host must
   confine the run to the prepared scratch directory, deny checkout, project-memory, and
   GitHub writes, and report containment plus before/after protected-state evidence. A
@@ -77,10 +80,14 @@ filesystem shell:
   are never inferred.
 - Comparison first proves the complete Cartesian matrix. Missing, duplicate, or
   unexpected identities return a structured `incomplete_comparison` error naming the
-  case, arm, and observed repetition count; no comparison file or eligibility value is
-  emitted. A complete comparison reports pass rate and p50/p95 duration per arm. Any
-  candidate failure on a case that passed all baseline repetitions is listed as a
-  golden-case regression and makes `eligible` false.
+  case, arm, observed repetitions, missing repetitions, and duplicates; no comparison
+  file or eligibility value is emitted. A complete comparison reports exact passed/total
+  counts and p50/p95 duration per arm. Any candidate failure on a case that passed all
+  baseline repetitions is listed separately as a golden-case regression.
+- Eligibility is derived, never supplied: candidate passed-run count must not fall below
+  baseline, no stable golden-case regression may exist, and at least 95 percent of any
+  host-exposed usage envelopes must resolve uniquely. An absence of exposed usage is
+  recorded as `not_evaluable` and does not fabricate a zero-percent result.
 - Identical accepted manifest and run evidence produces byte-identical normalized
   result/comparison JSON. Validation, scoring, comparison, and serialization have no
   side effects. Preparation is the only mutating operation, its authority is limited to
@@ -89,7 +96,9 @@ filesystem shell:
 - The module imports no provider SDK, opens no network connection, executes no
   subprocess, and reads or writes neither project memory, GitHub, workflow state, nor
   generated-agent configuration. Its module CLI only adapts local files to the same
-  domain operations and maps the closed error set to non-zero exits.
+  domain operations and maps the closed error set to non-zero exits. It completes all
+  validation before creating an output exclusively, without following or replacing an
+  existing entry.
 
 The closed error codes are `invalid_manifest`, `unsupported_schema`, `unsafe_path`,
 `limit_exceeded`, `invalid_artifact`, and `incomplete_comparison`. Adding a field,
