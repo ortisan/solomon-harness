@@ -14,10 +14,31 @@ from solomon_harness.loop_lock import LoopLock, LoopLockHeld
 
 
 class TestResolveLockPath(unittest.TestCase):
-    def test_non_git_dir_falls_back_to_dot_solomon(self):
+    def test_non_git_dir_falls_back_to_canonical_harness_state(self):
         root = tempfile.mkdtemp()
         path = loop_lock.resolve_lock_path(root)
-        self.assertEqual(path, os.path.join(os.path.abspath(root), ".solomon", "loop.lock"))
+        self.assertEqual(
+            path,
+            os.path.join(
+                os.path.abspath(root),
+                ".agents",
+                "solomon",
+                "state",
+                "loop.lock",
+            ),
+        )
+
+    def test_non_git_fallback_rejects_a_symlinked_harness_state(self):
+        root = tempfile.mkdtemp()
+        outside = tempfile.mkdtemp()
+        core = os.path.join(root, ".agents", "solomon")
+        os.makedirs(core)
+        os.symlink(outside, os.path.join(core, "state"))
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            loop_lock.resolve_lock_path(root)
+
+        self.assertEqual(os.listdir(outside), [])
 
     def test_git_directory_anchors_in_common_dir(self):
         root = tempfile.mkdtemp()

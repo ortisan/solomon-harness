@@ -11,6 +11,13 @@ WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(rel_path):
+    # The canonical workflow bodies live in the neutral catalog; the Claude
+    # commands under .claude/commands are thin bridges pointing at them.
+    parts = rel_path.split(os.sep)
+    if parts[:2] == [".claude", "commands"] and parts[-1].startswith("solomon-"):
+        rel_path = os.path.join(
+            "solomon_harness", "catalog", "workflows", parts[-1]
+        )
     with open(os.path.join(WORKSPACE, rel_path), "r", encoding="utf-8") as f:
         return f.read()
 

@@ -1,12 +1,14 @@
 import os
 import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Callable, Dict, Any, Tuple
 from solomon_harness.agent_selection import discover_agents
-
-# The secure git-fetch and filesystem-confinement primitives live in the
-# acquisition chokepoint (#108); the broker uses them but no longer owns them.
-from solomon_harness.skill_acquisition import _pinned_clone, validate_and_install_skill
+from solomon_harness.layout import (
+    HarnessPaths,
+    PathConfinementError,
+    confined_path,
+)
 
 # Proposal kind for a skill acquired through the external broker. Brokered
 # proposals carry single-source provenance instead of the two-source evidence
@@ -36,6 +38,19 @@ class SweepResult:
 
 SweepAnalyzer = Callable[[str, str, str], Optional[DriftMatch]]
 
+
+def _reconcile_host_adapters(root: str) -> Any:
+    """Keep managed consumers transactional and source dogfood direct."""
+    paths = HarnessPaths(root)
+    if paths.manifest.is_file():
+        from solomon_harness.install_layout import compile_project_adapters
+
+        return compile_project_adapters(root)
+
+    from solomon_harness.host_adapters import compile_adapters
+
+    return compile_adapters(root)
+
 def sweep_fleet(
     baseline: str,
     analyzer: SweepAnalyzer,
@@ -44,13 +59,15 @@ def sweep_fleet(
 ) -> SweepResult:
     """Sweep all agents in the fleet, identify drift against the baseline, and emit proposals."""
     root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    paths = HarnessPaths(root)
+    agents_dir = os.fspath(confined_path(paths.root, paths.resolve_agents()))
     agent_names = discover_agents(root)
     
     proposals: List[Proposal] = []
     needs_evidence: List[Dict[str, Any]] = []
     
     for agent_name in sorted(agent_names):
-        agent_dir = os.path.join(root, "agents", agent_name)
+        agent_dir = os.path.join(agents_dir, agent_name)
         
         # Read profile
         profile_path = os.path.join(agent_dir, "agents", f"{agent_name}.md")
@@ -116,7 +133,12 @@ def apply_proposal(
 ) -> str:
     """Apply an accepted proposal to an agent by branching, editing, compiling, committing, and opening a draft PR."""
     import re
-    root = workspace_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    requested_root = workspace_root or os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
+    paths = HarnessPaths(requested_root)
+    root = os.fspath(paths.root)
+    agents_root = confined_path(paths.root, paths.resolve_agents())
 
     # Validation 1: provenance floor. Brokered adapt_skill proposals carry
     # genuine single-source provenance (<source>@<full-sha>) instead of the
@@ -142,7 +164,7 @@ def apply_proposal(
             raise ValueError("targets multiple or invalid agent")
         
     # Validation 3: rule duplicate detection
-    agents_md_path = os.path.join(root, "agents", "AGENTS.md")
+    agents_md_path = os.fspath(confined_path(paths.root, paths.resolve_rules()))
     if os.path.isfile(agents_md_path):
         with open(agents_md_path, "r", encoding="utf-8") as f:
             agents_rules = f.read().lower()
@@ -178,16 +200,32 @@ def apply_proposal(
     
     try:
         # edit agent files
-        agent_dir = os.path.join(root, "agents", proposal.agent)
-        edit_callback(agent_dir)
+        agent_dir = confined_path(paths.root, agents_root / proposal.agent)
+        edit_callback(os.fspath(agent_dir))
         
         # document-skills.py
-        doc_script = os.path.join(root, "scripts", "document-skills.py")
+        doc_script = os.fspath(
+            confined_path(
+                paths.root,
+                paths.resolve_scripts() / "document-skills.py",
+            )
+        )
         if os.path.isfile(doc_script):
-            subprocess.run([sys.executable, doc_script], cwd=root, env=env, check=True)
+            subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
+                [sys.executable, doc_script],
+                cwd=os.fspath(agents_root.parent),
+                env=env,
+                check=True,
+            )
             
-        # solomon compile
-        subprocess.run([sys.executable, "-m", "solomon_harness.cli", "compile"], cwd=root, env=env, check=True)
+        # Reconcile Claude, AGY, and Codex. Installed consumers run through the
+        # manifest transaction; the source checkout compiles dogfood directly.
+        compile_result = _reconcile_host_adapters(root)
+        if compile_result.conflicts:
+            print(
+                "Preserved conflicting host adapter files: "
+                + ", ".join(compile_result.conflicts)
+            )
         
         # add and commit. On an idempotent re-run the reinstall produces no
         # diff, so skip the commit rather than fail on an empty commit.
@@ -271,9 +309,19 @@ def apply_proposal(
                 
                 if proposal.decision_id:
                     date_str = datetime.date.today().isoformat()
-                    contract_dir = os.path.join(root, ".solomon", "handoffs")
+                    contract_dir = os.fspath(
+                        confined_path(paths.root, paths.handoffs)
+                    )
                     os.makedirs(contract_dir, exist_ok=True)
-                    contract_path = os.path.join(contract_dir, f"issue-{proposal.decision_id}-start-to-review.md")
+                    contract_path = os.fspath(
+                        confined_path(
+                            paths.root,
+                            os.path.join(
+                                contract_dir,
+                                f"issue-{proposal.decision_id}-start-to-review.md",
+                            ),
+                        )
+                    )
                     
                     content = f"""# Handoff: start -> review · issue #{proposal.decision_id}
 - Date: {date_str} · Author: practice_curator
@@ -302,10 +350,14 @@ None.
                         sender="practice_curator",
                         recipient="qa",
                         contract_type="pull_request",
-                        contract_path=f".solomon/handoffs/issue-{proposal.decision_id}-start-to-review.md",
+                        contract_path=os.path.relpath(contract_path, root).replace(
+                            os.sep, "/"
+                        ),
                         status="ready",
                         summary=f"Acquired capability: {proposal.drift_description}",
                     )
+        except PathConfinementError:
+            raise
         except Exception as db_exc:
             import logging
             logging.warning(f"Could not log broker decisions to database: {db_exc}")
@@ -313,6 +365,211 @@ None.
         return pr_url
     except Exception:
         raise
+
+
+def _pinned_clone(source: dict, dest: str) -> None:
+    import subprocess
+    import re
+    url = source.get("url")
+    pin = source.get("pin") or source.get("commit")
+    if not url:
+        raise ValueError("Source has no URL")
+    # Scheme allowlist blocks ext::/fd:: and other RCE transports.
+    if not url.startswith(("https://", "ssh://", "git@", "file://")):
+        raise ValueError("disallowed source URL scheme")
+    if not pin:
+        raise ValueError("SHA-pin mandatory (HEAD == recorded SHA; reject unpinned default-branch clone)")
+    # A full hex SHA blocks --upload-pack= option injection and short/branch pins.
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", pin):
+        raise ValueError("pin must be a full commit SHA")
+
+    os.makedirs(dest, exist_ok=True)
+    subprocess.run(["git", "init", "-q", dest], check=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    subprocess.run(["git", "-C", dest, "remote", "add", "origin", url], check=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", pin], check=True, capture_output=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    subprocess.run(["git", "-C", dest, "checkout", "-q", pin], check=True, capture_output=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+
+    proc = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], check=True, capture_output=True, text=True)  # noqa: S603, S607 - fixed git argv, validated pin/url
+    current_head = proc.stdout.strip()
+    if current_head != pin:
+        raise ValueError(f"HEAD mismatch: checked out {current_head}, expected {pin}")
+
+
+def adapt_skill_content(text: str, name: str) -> str:
+    import re
+    # Remove emojis
+    emoji_pattern = re.compile(
+        r"[\U00010000-\U0010ffff\u2600-\u27bf\u200d\ufe0f]",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub("", text)
+    
+    # Remove AI cliches
+    cliches = {
+        r"\bdelve\b": "examine",
+        r"\bleverage\b": "use",
+        r"\btestament to\b": "evidence of",
+        r"\bfeel free to\b": "you may",
+        r"\bdive into\b": "explore",
+        r"\bin summary\b": "concluding",
+        r"\bfurthermore\b": "also",
+        r"\bmoreover\b": "additionally",
+        r"\btapestry\b": "structure",
+        r"\bdelving\b": "examining",
+    }
+    for pattern, repl in cliches.items():
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+        
+    lines = text.splitlines()
+    title = name.replace("_", " ").replace("-", " ").title()
+    has_title = False
+    for line in lines[:5]:
+        if line.strip().startswith("# "):
+            has_title = True
+            break
+            
+    if not has_title:
+        text = f"# {title}\n\n" + text
+        
+    if "## Common pitfalls" not in text:
+        text = text.rstrip() + "\n\n## Common pitfalls\n\n- Stray configuration and redundant abstractions.\n"
+    if "## Definition of done" not in text:
+        text = text.rstrip() + "\n\n## Definition of done\n\n- [ ] The skill conforms to the house style.\n"
+        
+    return text
+
+
+# Inert file types a packaged skill may contain. Anything else is treated as
+# active content and quarantined: an allowlist fails closed, unlike a denylist
+# that an attacker can sidestep with an unlisted extension.
+_ALLOWED_SKILL_EXTS = {
+    ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+    ".rst", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+}
+_SCRIPT_DIRS = {"scripts", "bin", "hooks", ".githooks"}
+_SKILL_SIZE_CAP = 256 * 1024
+
+
+def _quarantine_skill(src_dir: str, workspace_root: str, name: str, reason: str) -> None:
+    """Copy a rejected packaged skill to the quarantine area, then raise.
+
+    The copy preserves symlinks (symlinks=True) so quarantining never
+    dereferences a link out of the source tree.
+    """
+    import shutil
+    if not name or os.path.isabs(name) or os.sep in name or "/" in name or ".." in name:
+        raise ValueError("invalid skill name")
+    paths = HarnessPaths(workspace_root)
+    quarantine_root = os.fspath(
+        confined_path(paths.root, paths.state / "quarantine")
+    )
+    quarantine_path = os.fspath(
+        confined_path(paths.root, os.path.join(quarantine_root, name))
+    )
+    if os.path.isdir(quarantine_path):
+        shutil.rmtree(quarantine_path)
+    os.makedirs(quarantine_root, exist_ok=True)
+    shutil.copytree(src_dir, quarantine_path, symlinks=True)
+    raise ValueError(f"{reason}. Quarantined at: {quarantine_path}")
+
+
+def _scan_packaged_skill(current_dir: str, src_dir: str, in_script_dir: bool, name: str, workspace_root: str) -> None:
+    """Recursively validate a packaged skill tree before it is copied.
+
+    Uses os.scandir, not os.walk: os.walk does not descend symlinked
+    directories, so files behind one are never scanned yet are still copied by
+    shutil.copytree, which dereferences them. This visits every entry at every
+    depth and rejects any symlink (file or directory) before it can be
+    followed, so the scan and the copy traverse the identical tree. Files are
+    held to the inert-type allowlist, the executable bit, the script-directory
+    denylist, and the size cap.
+    """
+    with os.scandir(current_dir) as entries:
+        for entry in sorted(entries, key=lambda e: e.name):
+            if entry.is_symlink():
+                raise ValueError("Symlinks are rejected")
+            if entry.is_dir(follow_symlinks=False):
+                child_in_script_dir = in_script_dir or entry.name in _SCRIPT_DIRS
+                _scan_packaged_skill(entry.path, src_dir, child_in_script_dir, name, workspace_root)
+                continue
+            stat = entry.stat(follow_symlinks=False)
+            if stat.st_size > _SKILL_SIZE_CAP:
+                raise ValueError(f"Skill file size exceeds the 256 KiB cap: {entry.path}")
+            if in_script_dir or (stat.st_mode & 0o111) != 0:
+                _quarantine_skill(src_dir, workspace_root, name, "Security risk: skill contains scripts/executables")
+            if os.path.splitext(entry.name)[1].lower() not in _ALLOWED_SKILL_EXTS:
+                _quarantine_skill(
+                    src_dir, workspace_root, name,
+                    f"Security risk: skill contains a disallowed file type: {entry.name}",
+                )
+
+
+def validate_and_install_skill(src_path: str, agent_skills_dir: str, name: str, workspace_root: str) -> str:
+    import shutil
+    # Reject a name that could escape the skills directory before it is joined
+    # into any path.
+    if os.path.isabs(name) or os.sep in name or "/" in name or ".." in name:
+        raise ValueError("invalid skill name")
+
+    is_packaged = os.path.basename(src_path) == "SKILL.md"
+    paths = HarnessPaths(workspace_root)
+    agents_path = confined_path(paths.root, paths.resolve_agents())
+    try:
+        skills_path = confined_path(paths.root, agent_skills_dir)
+    except PathConfinementError as exc:
+        raise ValueError(f"Confinement violation: {exc}") from exc
+    try:
+        skills_path.relative_to(agents_path)
+    except ValueError as exc:
+        raise ValueError(
+            f"Confinement violation: target path {skills_path} "
+            f"is outside {agents_path}"
+        ) from exc
+    target = confined_path(
+        paths.root,
+        skills_path / (name if is_packaged else f"{name}.md"),
+    )
+    agent_skills_dir = os.fspath(skills_path)
+    target_path = os.fspath(target)
+
+    if os.path.islink(src_path) or os.path.islink(target_path):
+        raise ValueError("Symlinks are rejected")
+
+    if is_packaged:
+        src_dir = os.path.dirname(src_path)
+        _scan_packaged_skill(src_dir, src_dir, False, name, workspace_root)
+    else:
+        size = os.path.getsize(src_path)
+        if size > _SKILL_SIZE_CAP:
+            raise ValueError(f"Skill file size exceeds the 256 KiB cap: {src_path}")
+
+    os.makedirs(agent_skills_dir, exist_ok=True)
+    if is_packaged:
+        src_dir = os.path.dirname(src_path)
+        if os.path.isdir(target_path):
+            shutil.rmtree(target_path)
+        os.makedirs(target_path, exist_ok=True)
+        for item in os.listdir(src_dir):
+            s_item = os.path.join(src_dir, item)
+            t_item = os.path.join(target_path, item)
+            if item != "SKILL.md":
+                if os.path.isdir(s_item):
+                    shutil.copytree(s_item, t_item)
+                else:
+                    shutil.copy2(s_item, t_item)
+        with open(os.path.join(src_dir, "SKILL.md"), "r", encoding="utf-8") as f:
+            content = f.read(256 * 1024)
+        adapted = adapt_skill_content(content, name)
+        with open(os.path.join(target_path, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write(adapted)
+        return target_path
+    else:
+        with open(src_path, "r", encoding="utf-8") as f:
+            content = f.read(256 * 1024)
+        adapted = adapt_skill_content(content, name)
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(adapted)
+        return target_path
 
 
 def broker_skill(
@@ -371,12 +628,16 @@ def broker_agent(
     gh_runner: Optional[Callable[[List[str]], Any]] = None,
     issue_id: Optional[str] = None
 ) -> str:
-    """Acquires a new agent by scaffolding its directories, files, and default skill,
+    """Register a new agent directly in an installed consumer harness.
 
-    registering it, compiling the integrations, and opening a draft PR via apply_proposal.
+    Agent creation is a human-gated local extension operation. It writes to the
+    canonical installed catalog and recompiles native host adapters without
+    creating a branch, commit, or pull request. Source-checkout agent changes
+    remain normal reviewed development work and are not accepted through this
+    broker shortcut.
     """
-    import os
     import re
+    from solomon_harness.install_layout import register_agent_extension
 
     # Validate agent name strictly to prevent path traversal/confinement escape
     if not re.match(r"^[a-z0-9_]+$", agent_name):
@@ -387,30 +648,44 @@ def broker_agent(
     if issue_id is not None and not re.fullmatch(r"[0-9]+", str(issue_id)):
         raise ValueError("issue_id must be a plain issue number")
 
-    def edit_callback(agent_dir: str) -> None:
-        # Confinement check
-        target_realpath = os.path.realpath(agent_dir)
-        agents_realpath = os.path.realpath(os.path.join(workspace_root, "agents"))
-        if target_realpath != agents_realpath and not target_realpath.startswith(agents_realpath + os.sep):
-            raise ValueError(f"Confinement violation: target path {target_realpath} is outside {agents_realpath}")
+    from solomon_harness.agent_builder import build_agent
 
-        from solomon_harness.agent_builder import build_agent
+    def register(agent_path: Path) -> None:
+        registration_root = agent_path.parents[3]
         build_agent(
-            workspace_root,
+            os.fspath(registration_root),
             agent_name,
             description,
             title=title,
             duties=duties,
+            reconcile_adapters=False,
         )
 
-    proposal = Proposal(
-        agent=agent_name,
-        drift_description=f"Create agent {agent_name}",
-        sources=(f"demand@{agent_name}", f"template@{agent_name}"),
-        rationale=f"Creating missing agent {agent_name} for capability",
-        decision_id=issue_id,
-        kind="create_agent",
-    )
-    return apply_proposal(proposal, edit_callback, workspace_root, gh_runner)
+    agent_path = register_agent_extension(workspace_root, agent_name, register)
+    paths = HarnessPaths(workspace_root)
 
+    # ``gh_runner`` remains in the signature for callers compiled against the
+    # reviewed-PR implementation. It is intentionally never invoked here.
+    _ = gh_runner
+    try:
+        from solomon_harness.tools.database_client import DatabaseClient
 
+        with DatabaseClient(harness_dir=os.fspath(paths.root)) as db:
+            issue_note = f" for #{issue_id}" if issue_id else ""
+            db.log_decision(
+                title=f"Capability broker: registered {agent_name}{issue_note}",
+                rationale=f"Creating missing agent {agent_name} for capability",
+                outcome=(
+                    "Mode: direct_registration\n"
+                    f"Agent path: {agent_path.relative_to(paths.root).as_posix()}"
+                ),
+                author="practice_curator",
+                branch="",
+                commit_sha="",
+            )
+    except Exception as db_exc:
+        import logging
+
+        logging.warning(f"Could not log agent registration to database: {db_exc}")
+
+    return os.fspath(agent_path)

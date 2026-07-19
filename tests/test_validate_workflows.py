@@ -40,6 +40,50 @@ VALID = (
     f"      - uses: actions/checkout@{PINNED}\n"
 )
 
+SOLOMON_WORKFLOWS = (
+    "bug",
+    "idea",
+    "issue",
+    "loop",
+    "refine",
+    "release",
+    "review",
+    "scan-arch",
+    "scan-dedup",
+    "start",
+    "workflow",
+)
+
+
+def _write_solomon_workflows(root: Path) -> None:
+    catalog = root / "solomon_harness" / "catalog" / "workflows"
+    bridges = root / ".claude" / "commands"
+    catalog.mkdir(parents=True)
+    bridges.mkdir(parents=True)
+    for name in SOLOMON_WORKFLOWS:
+        metadata = (
+            "---\n"
+            f"description: Run the {name} workflow\n"
+            f"argument-hint: [{name}-input]\n"
+            "---\n"
+        )
+        source = catalog / f"solomon-{name}.md"
+        source.write_text(
+            metadata
+            + "\n"
+            + f"Run the host-neutral {name} lifecycle for {{{{arguments}}}}.\n",
+            encoding="utf-8",
+        )
+        bridge = bridges / source.name
+        bridge.write_text(
+            metadata.removesuffix("---\n")
+            + "allowed-tools: Read\n"
+            + "---\n\n"
+            + f"Read and follow `solomon_harness/catalog/workflows/{source.name}`.\n"
+            + "Treat `$ARGUMENTS` as the value of `{{arguments}}` in that workflow.\n",
+            encoding="utf-8",
+        )
+
 
 def test_real_workflows_validate():
     # End-to-end: the script hard-codes the two .github/workflows paths, so run it
@@ -48,6 +92,59 @@ def test_real_workflows_validate():
         [sys.executable, str(SCRIPT)], cwd=ROOT, capture_output=True, text=True
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_real_solomon_catalog_and_claude_bridges_validate():
+    assert vw.validate_solomon_workflow_catalog(ROOT) is True
+
+
+def test_solomon_catalog_rejects_host_specific_protocols(tmp_path):
+    _write_solomon_workflows(tmp_path)
+    source = (
+        tmp_path
+        / "solomon_harness"
+        / "catalog"
+        / "workflows"
+        / "solomon-review.md"
+    )
+    source.write_text(
+        source.read_text(encoding="utf-8")
+        + "Delegate through the Task tool in .claude/agents.\n",
+        encoding="utf-8",
+    )
+
+    assert vw.validate_solomon_workflow_catalog(tmp_path) is False
+
+
+def test_solomon_catalog_rejects_logic_duplicated_into_claude_bridge(tmp_path):
+    _write_solomon_workflows(tmp_path)
+    bridge = tmp_path / ".claude" / "commands" / "solomon-start.md"
+    bridge.write_text(
+        bridge.read_text(encoding="utf-8")
+        + "\n## Implementation\nRun the complete TDD lifecycle here too.\n",
+        encoding="utf-8",
+    )
+
+    assert vw.validate_solomon_workflow_catalog(tmp_path) is False
+
+
+def test_solomon_catalog_rejects_missing_claude_capability_metadata(tmp_path):
+    _write_solomon_workflows(tmp_path)
+    source = (
+        tmp_path
+        / "solomon_harness"
+        / "catalog"
+        / "workflows"
+        / "solomon-issue.md"
+    )
+    source.write_text(
+        source.read_text(encoding="utf-8")
+        + "Call `project-memory get_latest_activity`, then ask through the host's "
+        + "native enumerable input mechanism.\n",
+        encoding="utf-8",
+    )
+
+    assert vw.validate_solomon_workflow_catalog(tmp_path) is False
 
 
 def test_valid_file_passes(tmp_path):

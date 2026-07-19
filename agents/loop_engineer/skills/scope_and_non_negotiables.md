@@ -13,7 +13,7 @@ The loop_engineer is the accountable owner of the loop-mechanics code already in
 
 ## The non-negotiables
 
-- **The host tool is the model loop (C1).** A self-hosted Python model loop was built and reverted; it must not return. Cadence comes only from host-tool primitives (the `/loop` skill, a scheduled routine, the `ralph-wiggum` plugin; Gemini equivalents). The harness supplies loop design as files and thin adapters, never a model runner or a long-running daemon.
+- **The host tool is the model loop (C1).** A self-hosted Python model loop was built and reverted; it must not return. Cadence comes only from native Claude, AGY, or Codex primitives. The harness supplies loop design as files and thin adapters, never a model runner or a long-running daemon.
 - **The review gate is sacred (C2).** Merge, release, and moving a card to Done are permanently human-gated at every autonomy level. A loop may draft work and route it to `/solomon-review`; a human always approves the merge. The agent may open a draft PR; it may not self-approve or merge.
 - **One driver at a time.** No loop and no driver mutates git or the board without holding the single-driver lock; this is the documented defense against the concurrent-driver race that once produced premature merges and flipped `core.bare=true`.
 - **No autonomous self-trigger by the agent.** Like the practice_curator precedent, the loop_engineer runs when invoked. Scheduling is configured by a human through a host primitive; the agent does not arm its own cadence.

@@ -5,14 +5,14 @@ description: Governs the human/L1/L2/L3 autonomy ladder, the denylist enforced b
 
 # Autonomy Ladder and Guardrails
 
-The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop may act; this skill governs the ladder, the permanent human gate, the denylist, and the kill-switch. It is the policy that makes a loop more capable without ever making it less safe, enforced in portable Python (`solomon_harness/loop_policy.py`) on both hosts.
+The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop may act; this skill governs the ladder, the permanent human gate, the denylist, and the kill-switch. It is enforced in portable Python (`solomon_harness/loop_policy.py`) and through native adapters for Claude, AGY, and Codex.
 
 ## The ladder (`LoopPolicy.decide_stage`)
 
-- **human (default):** no restriction. A repository with no `loop` block in `.agent/config.json` behaves exactly as before.
-- **L1 (report):** only the stages in `L1_ALLOWED_STAGES = {"workflow"}` (scan and propose); every mutating stage is denied.
-- **L2 (assisted):** the stages in `AUTOMATION_ALLOWED_STAGES` — `workflow`, `loop`, `idea`, `issue`, `bug`, `refine`, `start`, `review`, `scan-arch`, `scan-dedup` — create work and draft PRs, never merge.
-- **L3 (unattended):** the same stage set as L2, may run on a cadence, and `requires_lock(stage)` is true for every stage except `workflow`, so an unattended run only acts while holding the single-driver lock; `run_stage` enforces this, it is not just claimed.
+- **human (default):** no restriction. A repository with no `loop` block in `.agents/solomon/config/project.json` behaves exactly as before.
+- **L1 (report):** only `workflow` may inspect and propose; every mutating stage is denied.
+- **L2 (assisted):** `workflow`, `loop`, `idea`, `issue`, `bug`, `refine`, `start`, `review`, `scan-arch`, and `scan-dedup` may create work and draft PRs, never merge.
+- **L3 (unattended):** the same stage set as L2 may run on a cadence, and every stage except `workflow` requires the single-driver lock; `run_stage` enforces this.
 
 `decide_stage` evaluates in a fixed order: the kill-switch denies first (even at `human`); `HUMAN_GATED_STAGES = {"release"}` denies next, at EVERY level including `human` — on the dev automation path a release is never autonomous; `human` then allows everything else; then the level's allow-set applies; anything left — including an unknown or typo'd level — fails closed (`LoopPolicy` keeps a mistyped `l2` verbatim so it denies, never silently becomes `human`). A denied stage exits `3` from `run_stage`, printed as `Blocked by loop autonomy policy (level ...)`, never silently.
 
@@ -28,11 +28,11 @@ The autonomy ladder (human / L1 / L2 / L3) is the one dial for how far a loop ma
 
 ## Denylist and the maker/checker split
 
-`is_denied_path` names the paths the loop must not modify. `DEFAULT_DENYLIST` is `.git/*`, `.agent/config.json`, `*/.env`, `.env`, `*.pem`, `*.key`, `*.enc`, `*secrets/*`, `*/migrations/*`, `*/node_modules/*`. A `denylist` in the config's `loop` block REPLACES the default list rather than extending it, so restate the defaults when adding a pattern. An absolute path is relativized against the workspace root before matching, so slash-bearing patterns hold no matter how the path was rooted. The list is **enforced** by the `loop-guard` PreToolUse hook (`.claude/settings.json`, matcher `Bash|Edit|Write|MultiEdit|NotebookEdit`): `denied_write_verdict` blocks a file-write tool call targeting a denied path — exit 2, reason fed back to the model — precisely so an autonomous (or prompt-injected) run cannot edit `.agent/config.json` to widen its own level, empty its denylist, or defeat its cost ceiling. On the Gemini host (no PreToolUse) the denylist is model-honored, so an unattended L3 cadence on Gemini must pin its level with `SOLOMON_LOOP_AUTONOMY` (env beats config in `from_config`) so a config self-edit cannot raise it. `checker_split_ok` requires the verifier to run on a different model than the maker — a config invariant surfaced by `loop-policy`; it complements, never replaces, the human `/solomon-review` gate.
+`is_denied_path` names the configurable paths the loop must not modify. `DEFAULT_DENYLIST` includes `.git/*`, environment files, keys, encrypted material, secrets, migrations, and dependency trees. A `denylist` in the config's `loop` block replaces those configurable defaults rather than extending them, so restate them when adding a pattern. It can never remove the mandatory trust roots: canonical and legacy project config, the install manifest, manifest-owned core/adapters, and the runtime venv remain immutable during a run. The adapter compiler registers the same normalized `host-hook pre-tool-use` guard for Claude (`.claude/settings.json`), AGY (`.agents/hooks.json`), and Codex (inline in `.codex/config.toml`). The guard blocks a write using each host's native verdict protocol, so an autonomous run cannot edit project config to widen its own level or defeat its cost ceiling. `checker_split_ok` requires the verifier to run on a different model than the maker; it complements, never replaces, the human review gate.
 
 ## The kill-switch
 
-`solomon-harness loop-stop` writes a sentinel beside the lock (`solomon-loop.stop` at the git common dir; `.solomon/loop.stop` outside a git repo) that makes `decide_stage` deny every stage at once, including at `human` level; `solomon-harness loop-stop --clear` removes it. Because the sentinel shares the lock's git-common anchor, one command halts every linked worktree of the repository.
+`solomon-harness loop-stop` writes a sentinel beside the lock (`solomon-loop.stop` at the git common dir; `.agents/solomon/state/loop.stop` outside a git repo) that makes `decide_stage` deny every stage at once, including at `human` level; `solomon-harness loop-stop --clear` removes it. Because the sentinel shares the lock's git-common anchor, one command halts every linked worktree of the repository.
 
 Worked scenario for a runaway cadence: run `solomon-harness loop-stop`; the next `run_stage` call at any level is refused with exit `3` and the reason `loop halted by kill-switch; clear with 'solomon-harness loop-stop --clear'`. Confirm with `solomon-harness loop-policy` (`Kill-switch: ENGAGED`, DENY on every stage row), inspect what the loop did with `solomon-harness log` and `solomon-harness loop-lock status`, and only then `loop-stop --clear` to resume.
 
@@ -40,8 +40,8 @@ Worked scenario for a runaway cadence: run `solomon-harness loop-stop`; the next
 
 - Coercing an invalid level to `human` — that fails open; keep it failing closed.
 - Letting L3 act without the lock, or letting any level merge/release autonomously.
-- Treating the denylist as enforced everywhere — it is a hard block only at the Claude `loop-guard` PreToolUse boundary; on Gemini it is model-honored, so pin the level via env there.
-- Adding one pattern to `loop.denylist` and silently dropping the defaults — the config list replaces `DEFAULT_DENYLIST`, it does not extend it.
+- Assuming the three hosts use the same hook payload or response format — normalize input and serialize the verdict through the host adapter.
+- Adding one pattern to `loop.denylist` and silently dropping the configurable defaults — the config list replaces `DEFAULT_DENYLIST`, although mandatory trust roots still cannot be removed.
 - Putting a webhook URL or model secret in the committed `loop`/`notify` block — secrets come from the environment.
 
 ## Definition of done
@@ -49,5 +49,5 @@ Worked scenario for a runaway cadence: run `solomon-harness loop-stop`; the next
 - [ ] `human` is unrestricted except the permanently human-gated stages; L1 report-only (`workflow` only); L2/L3 draft-only; an invalid level denies (exit 3 from `run_stage`).
 - [ ] Merge, release, and Done are denied at every level of the dev automation path; L3 mutating stages hold the lock.
 - [ ] The kill-switch halts all stages (all worktrees, even `human`) and is clearable; `loop-policy` shows the full state.
-- [ ] The denylist is enforced at the loop-guard PreToolUse boundary (Edit/Write/Bash) and model-honored on Gemini; the checker-split is surfaced; secrets stay in env.
+- [ ] The denylist is enforced through native Claude, AGY, and Codex pre-tool hooks; the checker split is surfaced; secrets stay in env.
 - [ ] Changes ship with covering tests in `tests/test_loop_policy.py`.

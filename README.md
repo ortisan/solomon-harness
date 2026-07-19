@@ -3,14 +3,15 @@
 A multi-agent harness for controlling, planning, and delivering software. It
 defines a team of specialist agents, a project memory, and an end-to-end,
 GitHub-integrated delivery workflow that runs inside the host tool you already
-use — Claude Code, Codex, or the Antigravity CLI (agy). The harness supplies the agents and the
-memory; the host tool supplies the model loop. The delivery loop is
+use — Claude Code, AGY, or Codex. The harness supplies the agents and the
+memory; each host supplies its own model loop. The delivery loop is
 host-orchestrated and human-gated, not fully autonomous: the host tool runs the
 workflow prompts and a human approves every merge and release.
 
-It ships a dual-backend memory layer (SurrealDB primary, SQLite fallback), a
-non-destructive scaffolder, and a set of `/solomon-*` workflows that take a
-piece of work from idea to release while persisting every decision and handoff.
+It ships one host-neutral payload under `.agents/solomon`, thin native adapters
+for all three hosts, a dual-backend memory layer (SurrealDB primary, SQLite
+fallback), and `/solomon-*` workflows that take work from idea to release while
+persisting every decision and handoff.
 
 ---
 
@@ -23,7 +24,7 @@ prerequisites and installs the ones that are safe to install (uv) without sudo.
 ### Prerequisites
 
 - **Python 3.10+** and [uv](https://github.com/astral-sh/uv) (`solomon-harness doctor` installs uv if missing).
-- A **host tool** to run the workflows: [Claude Code](https://claude.com/claude-code), [Codex](https://developers.openai.com/codex/), or the **Antigravity CLI (agy)**.
+- A **host tool** to run the workflows: [Claude Code](https://claude.com/claude-code), **AGY**, or **Codex**.
 - **GitHub CLI** (`gh`), authenticated, for the issue/PR/board steps (`gh auth login`; the board needs the `project` scope).
 - **Docker** (optional) to run SurrealDB locally; without it the harness falls back to SQLite.
 
@@ -37,19 +38,34 @@ uv pip install -e .     # expose the `solomon-harness` CLI on PATH
 
 ### Install into an existing project
 
-From your project directory, run init: it checks prerequisites, copies the harness
-in (agents, the `solomon_harness` package, scripts, config), configures it,
-generates the host-tool integrations, sets the project's memory tenant, and
-indexes the codebase. The harness's own documents never travel: your project's
-`docs/` receives only its own empty `adrs/` and `specs/` trees, seeded with
-each convention's template and README (ADR-0029).
+From your project directory, run `init`. It checks prerequisites and installs one
+owned payload at `.agents/solomon`, including the canonical agents, workflows,
+runtime, configuration, state, and an ownership manifest. It then compiles thin
+discovery adapters for Claude, AGY, and Codex, sets the project's memory tenant,
+and leaves code indexing available through the explicit `solomon-harness index`
+command. It does not copy `agents/`, `scripts/`,
+`solomon_harness/`, `pyproject.toml`, or `uv.lock` into the project root.
+
+Host protocols still require a few files outside `.agents/solomon`: root
+`AGENTS.md`, `.claude/`, `.codex/`, `.mcp.json`, and shared AGY/Codex discovery
+files under `.agents/`. These contain native metadata or pointers back to the
+canonical payload; they are not second copies of the harness. Project-owned
+`docs/` receives only the ADR/spec templates and READMEs, and `.github/` receives
+only the issue and pull-request templates.
 
 ```bash
 cd /path/to/your/project
 solomon-harness init            # add --non-interactive for defaults
+solomon-harness compile         # rebuild the three host adapters
+solomon-harness uninstall --dry-run
+solomon-harness uninstall       # remove unchanged owned files; preserve user data
 ```
 
-Running it from the harness repo itself configures it in place (no copy).
+The deterministic manifest at `.agents/solomon/manifest.json` makes repeat
+installs and compiles idempotent. Upgrade or uninstall reports a conflict rather
+than overwriting a modified managed file, and always preserves project config and
+state. Running `init` from the harness source checkout itself configures that
+checkout in place.
 
 ### Share the agents across projects (once per machine)
 
@@ -57,12 +73,12 @@ Running it from the harness repo itself configures it in place (no copy).
 solomon-harness install-global
 ```
 
-This installs `/solomon-*` commands into `~/.claude`, Antigravity
-plugins/commands into `~/.gemini`, and Codex `$solomon-*` skills into
-`~/.agents/skills`. It also registers the `solomon-memory` MCP server with
-Claude and Codex and sets up the shared memory home in `~/.solomon-harness`. After
-this, every project on the machine uses the same agents with no per-project
-copies; a project carries only its `.agent/config.json` (its tenant).
+This optional legacy-compatibility command installs user-global adapters,
+registers the `solomon-memory` MCP server, and sets up the shared memory home in
+`~/.solomon-harness`. It is not the three-host repository contract. Repository-local
+`init` is authoritative: its Claude, AGY, and Codex adapters point to the same
+`.agents/solomon` catalog and its tenant lives in
+`.agents/solomon/config/project.json`.
 
 ### Shared memory and tenancy
 
@@ -86,14 +102,14 @@ solomon-harness memory-down     # stop it
   mapping and each project's config URL, so a busy port never blocks startup.
 - **Conflict is safe.** If a non-SurrealDB process already holds the configured
   port, `memory-up` detects it, does *not* run `docker compose up` (which would
-  fail to bind), and the client transparently uses SQLite under
-  `memory/long_term/` — work is never blocked.
+  fail to bind), and the client transparently uses repository-local state under
+  `.agents/solomon/state/` — work is never blocked.
 
 Provide credentials via the `SURREAL_USER` / `SURREAL_PASS` environment variables
 (none are committed); locally they default to `root`/`root`. The Surrealist IDE is
 at `http://localhost:3000`.
 
-In Claude Code or the Antigravity CLI (agy), drive the lifecycle with slash commands:
+In Claude Code, AGY, or Codex, drive the lifecycle with the same workflow names:
 
 ```text
 /solomon-workflow  (end-to-end / continue)
@@ -119,7 +135,9 @@ $solomon-release   17
 Or headlessly, for CI and automation:
 
 ```bash
-SOLOMON_ENGINE=claude solomon-harness dev start 42     # or SOLOMON_ENGINE=agy
+solomon-harness dev --engine claude start 42
+solomon-harness dev --engine agy start 42
+solomon-harness dev --engine codex start 42
 ```
 
 Each command shapes the work with the right specialist agents, creates and moves
@@ -158,12 +176,14 @@ the memory handoff contract, the ADR trigger) live in
 
 ### Specialist agents
 
-Twenty-nine role-specific agents, each defined modularly under `agents/<name>/`
-(`persona.md`, the role profile `agents/<name>.md`, `skills/`, and
-`.agent/config.json`). They are exposed through Claude Code subagents,
-Antigravity commands, and Codex workflow skills. The count above is the number of `agents/*/agents/*.md`
-role profiles; `tests/test_readme_sync.py` fails if this table (or the count) drifts
-from that directory listing.
+Twenty-nine role-specific agents, each defined in this source checkout under
+`agents/<name>/` (`persona.md`, the role profile
+`agents/<name>/agents/<name>.md`, `skills/`, and source metadata in
+`agents/<name>/.agent/config.json`). `init` installs the neutral catalog
+under `.agents/solomon/agents`; `compile` exposes the same set through Claude
+subagents, AGY agents, and Codex agent TOML files. The count above is the number
+of `agents/*/agents/*.md` role profiles; `tests/test_readme_sync.py` fails if this
+table or the count drifts from that directory listing.
 
 | Agent | Focus |
 | --- | --- |
@@ -211,12 +231,13 @@ repositories listed in `skill-sources.json` with `solomon-harness skills`.
 
 ### Delivery workflows
 
-Twelve `/solomon-*` commands — the count of `.claude/commands/solomon-*.md` files,
-guarded by `tests/test_readme_sync.py` — are authored once as Claude Code
-commands under `.claude/commands/` and mirrored to Antigravity commands under
-`.gemini/commands/` and Codex skills under `.agents/skills/`. Eight drive the
-lifecycle table above; `/solomon-loop` runs the autonomous parallel loop over
-Ready issues; two,
+Twelve `/solomon-*` commands — currently counted from the source checkout's
+`.claude/commands/solomon-*.md` compatibility catalog and guarded by
+`tests/test_readme_sync.py` — are normalized during installation into
+`.agents/solomon/workflows`. `compile` produces small workflow skills that point
+there for Claude, AGY, and Codex; it does not duplicate workflow bodies. Eight
+drive the lifecycle table above; `/solomon-loop` runs the autonomous parallel
+loop over Ready issues; and the remaining two,
 `/solomon-scan-arch` and `/solomon-scan-dedup`, are standing maintenance loops that
 scan the codebase for architectural drift and duplication (see
 `docs/solomon-workflow.md`); and `/solomon-reconcile` is the locked standing
@@ -230,10 +251,10 @@ normal workflow decision; reconcile only repairs an already-terminal projection
 
 A SurrealDB-primary, SQLite-fallback store (`solomon_harness/tools/database_client.py`)
 records decisions, sessions, handoffs, issues, milestones, and backtests. It is
-exposed as the `solomon-memory` MCP server (`solomon_harness/mcp_server.py`),
-registered for Claude Code (`.mcp.json`), Codex (`install-global`), and the
-Antigravity CLI (`.gemini/settings.json`),
-with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
+exposed as the `solomon-memory` MCP server (`solomon_harness/mcp_server.py`). The
+same server command is registered in Claude's `.mcp.json`, AGY's
+`.agents/plugins/solomon/mcp_config.json`, and Codex's `.codex/config.toml`, with tools:
+`save_decision`/`get_decision`, `save_memory`/`get_memory`,
 `log_issue`/`get_open_issues`/`get_issue`, `create_milestone`/`list_milestones`,
 `save_release`/`get_release`/`list_releases`, `save_backtest`,
 `save_session`/`get_session`, `log_handoff`, `get_latest_activity`, and the
@@ -255,7 +276,7 @@ to `docs/adrs/NNNN-*.md` and persist it with `save_decision`.
 
 `solomon_harness/agent_selection.py` inspects the project's files and manifests and
 enables only the agents the stack needs (a core delivery/planning set plus platform
-and domain agents on detected signals), instead of all twenty-six.
+and domain agents on detected signals), instead of all twenty-eight.
 
 ### GitHub project board
 
@@ -274,18 +295,28 @@ large files) and stores each file in the memory so agents can query the codebase
 
 ### Host-tool integrations
 
-`scripts/generate-integrations.py` regenerates the Claude Code subagents
-(`.claude/agents/`) from `agents/`, plus the Antigravity commands
-(`.gemini/commands/`) and Codex skills (`.agents/skills/`) from
-`.claude/commands/`. `solomon-harness compile` runs it automatically so the
-integrations never drift from their sources.
+`solomon-harness compile` reads only the neutral catalog under
+`.agents/solomon` in an installed repository and renders native, thin adapters:
+Claude uses `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, and
+`.mcp.json`; AGY uses `.agents/agents/`, `.agents/skills/`, `.agents/hooks.json`,
+and `.agents/plugins/solomon/` (including `mcp_config.json`); Codex uses
+`.codex/agents/`, `.agents/skills/`, and `.codex/config.toml` with inline hooks
+and MCP metadata. `scripts/generate-integrations.py` is the equivalent source
+checkout entrypoint. Neither path creates the retired AGY compatibility tree.
+
+Codex 0.144.4 has a native limitation in linked Git worktrees: it loads MCP
+metadata from the worktree's `.codex/config.toml` but may omit project hooks from
+that same trusted file. Normal repositories load both hooks. The harness does not
+bypass trust or install global hooks to mask this; the portable Python lock and
+policy gates remain authoritative inside delivery workflows.
 
 ### Non-destructive scaffolding
 
-`solomon-harness compile` only scaffolds genuinely-missing agent entrypoints and
-config — it never overwrites a hand-authored persona or config — and regenerates
-the host-tool integrations. A test guards that scaffolding never mutates tracked
-source.
+`solomon-harness compile` updates only recognizable generated files and
+Solomon-owned sections of shared JSON, TOML, and instruction files. Unrelated
+host configuration is preserved; an ambiguous or user-modified owned file is
+reported as a conflict. The canonical personas, profiles, skills, workflows,
+project config, and state remain under `.agents/solomon`.
 
 ### Engineering conventions
 
@@ -297,8 +328,8 @@ deviating from one requires an ADR.
 ### Quality and invariants
 
 Strict TDD is the standard; the suite (run with the command below) covers the
-scaffolder, memory client, MCP server, agent selection, the board helpers, the
-host integrations, the Antigravity mirror, Codex skills, and the prerequisite/workflow CLI, plus
+scaffolder, memory client, MCP server, agent selection, the board helpers, three-host
+adapter parity, and the prerequisite/workflow CLI, plus
 invariant guards (scaffolding is non-destructive, the MCP server builds, the
 SurrealDB path works against a live server). The humanizer rules forbid emojis and
 AI cliches in all generated output.
@@ -321,7 +352,8 @@ table.
 | `eval` | Run the agent evaluations test suite |
 | `run [task]` | Show the resume point (latest activity, open issues) and list the workflows |
 | `init [--non-interactive]` | Install into / bootstrap a project: prerequisites, files, config, tenant, board, index |
-| `compile` | Compile agent harnesses and regenerate host-tool integrations |
+| `compile` | Compile thin Claude, AGY, and Codex adapters from `.agents/solomon` |
+| `uninstall [--dry-run]` | Remove unchanged manifest-owned files while preserving project config, state, and user edits |
 | `index` | Index the project codebase into the memory |
 | `reindex-embeddings` | Backfill missing vector embeddings on decisions and memory (SurrealDB only) |
 | `metrics [--window <days>]` | Report delivery metrics: per-stage durations and loop-run throughput/failure rate |
@@ -329,10 +361,10 @@ table.
 | `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
 | `memory-down` | Stop the shared memory backend |
 | `memory sync` | Replay pending mirror records to SurrealDB and report the counts |
-| `reconcile [--dry-run]` | Under the single-driver lock, repair closed-issue memory/tracking rows, canonical board drift, and non-terminal status tokens |
-| `install-global [--no-mcp]` | Install `/solomon-*` commands into `~/.claude`/`~/.gemini`, `$solomon-*` Codex skills into `~/.agents/skills`, the MCP server, and the shared memory home |
+| `reconcile [--dry-run]` | Repair shared-memory issue/tracking rows from GitHub and canonicalize non-terminal status tokens |
+| `install-global [--no-mcp]` | Install user-global compatibility adapters, the MCP server, and the shared memory home |
 | `doctor [--no-install]` | Check prerequisites and install the safe ones (uv) |
-| `healthcheck` | Report runtime readiness and pending init items (Docker, memory, board, global install) |
+| `healthcheck` | Report runtime readiness, Claude/AGY/Codex capability parity, Codex trust state, and pending init items |
 | `git-repair` | Repair local git config by unsetting stray `core.worktree` and setting `core.bare` to false |
 | `loop-lock [status\|release]` | Inspect or clear the single-driver loop lock (crash recovery) |
 | `claim status\|release <issue>` | Inspect or release an issue claim/lease |
@@ -342,15 +374,27 @@ table.
 | `loop-policy` | Show the autonomy level, kill-switch state, denylist, and per-stage gates |
 | `notify <message> [--event EVENT]` | Send an outbound status notification (console or webhook) |
 | `loop-budget` | Show today's autonomous-loop cost spend versus the ceiling |
-| `dev <stage> [args]` | Run a delivery workflow headless (idea, issue, bug, refine, start, review, release, reconcile, and maintenance stages) |
+| `host-hook <event> --host <host>` | Normalize and execute native lifecycle hooks for Claude, AGY, or Codex |
+| `dev [--engine {claude,agy,codex}] <stage> [args]` | Run a delivery workflow headlessly with an explicit host engine |
 | `release plan\|prep [version]\|check\|wiki-page [version]` | Plan, prepare, check, or document a milestone-gated release |
 | `worktree <branch> [--base REF]` | Create or locate the isolated git worktree for a branch (used by `/solomon-start`) |
 | `skills sources \| list <src> \| add <src> <skill> --agent <name>` | Manage external skills |
-| `broker route \| apply --file <json>` | Capability broker (ADR-0008): build the route/gap verdict, or run a human-approved acquisition |
+| `broker route \| apply --file <json>` | Capability broker (ADR-0008/0035): build the route/gap verdict, adapt a skill through a reviewed PR, or register a new agent in the installed harness |
 | `agents list \| help \| show <name>` | List or show the generated subagents |
 | `github <args>` | GitHub board and PR helpers (ensure-board, set-status, add-issue, merge, pr-create) |
 
-For `dev`, set `SOLOMON_ENGINE=claude` (default) or `agy` to choose the engine.
+For `dev`, `--engine {claude,agy,codex}` selects the native headless command. If
+the flag is omitted, `SOLOMON_ENGINE` remains the environment fallback and
+`claude` is the default. Codex retains its normal project-hook trust check; the
+harness never adds a trust-bypass flag.
+
+For a human-approved `create_agent` proposal, `broker apply` writes the agent
+below `.agents/solomon/agents/<name>`, recompiles the native host adapters, and
+returns `mode: direct_registration`, `agent_path`, and
+`restart_required: true`. It does not create a branch, commit, or pull request
+in the consumer project. `adapt_skill` remains `mode: reviewed_pr` and returns
+the draft `pr_url` because fetched external content still requires review.
+
 `python -m solomon_harness.github ensure-board | set-status --issue N --status "<col>" | add-issue --issue N`
 manages the board directly.
 
@@ -361,10 +405,8 @@ manages the board directly.
 ```
 solomon-harness/
 ├── agents/                  # Source-of-truth specialist agents + AGENTS.md (the rules)
-│   └── <name>/              #   persona.md, agents/<name>.md, skills/, .agent/config.json
-├── .agents/                 # Codex: generated Solomon workflow skills
-├── .claude/                 # Claude Code: agents/ (subagents) and commands/ (/solomon-*)
-├── .gemini/                 # Antigravity CLI plugin: commands/ (generated) and settings.json (MCP)
+│   └── <name>/              #   persona.md, agents/<name>/agents/<name>.md, skills/, agents/<name>/.agent/config.json
+├── .claude/                 # Source workflow catalog and source-checkout Claude adapters
 ├── docs/                    # adr/ (ADRs) and solomon-workflow.md (conventions)
 ├── solomon_harness/         # Core package
 │   ├── bootstrap.py         #   init / install / scaffold / codebase indexing
@@ -381,6 +423,23 @@ solomon-harness/
 │   └── tools/               #   database_client.py
 ├── scripts/                 # generate-integrations, document-skills, scrum-master, validators
 └── tests/                   # Verification suite
+```
+
+An initialized consumer repository has a different, intentionally smaller
+surface:
+
+```text
+project/
+├── .agents/
+│   ├── solomon/             # canonical catalog, runtime, config, ignored state, manifest
+│   ├── agents/              # thin AGY specialist metadata
+│   ├── skills/              # thin AGY/Codex workflow skills
+│   ├── hooks.json           # AGY lifecycle hooks
+│   └── plugins/solomon/     # AGY plugin metadata and MCP registration
+├── .claude/                 # thin Claude instructions, agents, skills, hooks
+├── .codex/                  # thin Codex agents, hooks, MCP configuration
+├── AGENTS.md                # managed pointer block; user text is preserved
+└── .mcp.json                # Claude MCP registration
 ```
 
 ---

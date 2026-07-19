@@ -1,0 +1,4 @@
+# Byte-exact historical upgrade fixtures retain their released formatting.
+tests/fixtures/legacy-*/** whitespace=-blank-at-eof
+# document-skills.py emits one terminal spacer line in generated role profiles.
+agents/*/agents/*.md whitespace=-blank-at-eof

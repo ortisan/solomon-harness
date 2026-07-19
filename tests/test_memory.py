@@ -81,6 +81,22 @@ class TestReadDbUrl(unittest.TestCase):
         self.assertEqual(provider, "surrealdb")
         self.assertEqual(url, memory.DEFAULT_URL)
 
+    def test_canonical_config_symlink_fails_closed(self):
+        outside = os.path.join(self.root, "outside.json")
+        config_dir = os.path.join(self.root, ".agents", "solomon", "config")
+        os.makedirs(config_dir)
+        with open(outside, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"database": {"provider": "attacker", "url": "ws://outside:9999"}},
+                handle,
+            )
+        os.symlink(outside, os.path.join(config_dir, "project.json"))
+
+        self.assertEqual(
+            memory._read_db_url(self.root),
+            ("surrealdb", memory.DEFAULT_URL),
+        )
+
 
 class TestEnsureMemoryUp(unittest.TestCase):
     def setUp(self):
@@ -278,6 +294,18 @@ class TestMemoryUpReconcile(unittest.TestCase):
 
 
 class TestEnsureHomeCompose(unittest.TestCase):
+    def test_packaged_compose_resolves_from_wheel_payload(self):
+        with tempfile.TemporaryDirectory() as package:
+            package_dir = os.path.join(package, "solomon_harness")
+            payload = os.path.join(package_dir, "_payload")
+            os.makedirs(payload)
+            compose = os.path.join(payload, "docker-compose.yml")
+            with open(compose, "w", encoding="utf-8") as stream:
+                stream.write("services: {}\n")
+
+            with patch.object(memory, "__file__", os.path.join(package_dir, "memory.py")):
+                self.assertEqual(memory._packaged_compose(), compose)
+
     def test_copies_packaged_compose_into_empty_home(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as pkg:
             src = os.path.join(pkg, "docker-compose.yml")

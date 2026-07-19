@@ -150,12 +150,97 @@ class TestReport(unittest.TestCase):
             checks = hc.run_checks("/tmp")
         # The failing check is captured as a warn rather than propagating.
         self.assertTrue(any(c["status"] == hc.WARN for c in checks))
-        self.assertEqual(len(checks), 7)
+        self.assertEqual(len(checks), 10)
+
+
+class TestHostAdapters(unittest.TestCase):
+    def _matrix(self):
+        capabilities = {
+            "headless",
+            "instructions",
+            "mcp",
+            "pre_tool_guard",
+            "session_start",
+            "specialists",
+            "workflows",
+        }
+        active = {name: "active" for name in capabilities}
+        configured = dict(active, mcp="configured", pre_tool_guard="configured",
+                          session_start="configured")
+        pending = dict(configured, mcp="pending_trust",
+                       pre_tool_guard="pending_trust", session_start="pending_trust")
+        return {
+            "agy": {"status": "configured", "capabilities": capabilities,
+                    "capability_states": configured},
+            "claude": {"status": "configured", "capabilities": capabilities,
+                       "capability_states": configured},
+            "codex": {"status": "pending_trust", "capabilities": capabilities,
+                      "capability_states": pending},
+        }
+
+    def test_reports_each_host_and_codex_pending_trust(self):
+        with patch.object(hc, "inspect_capabilities", return_value=self._matrix()):
+            checks = hc.check_host_adapters("/repo")
+
+        self.assertEqual([item["name"] for item in checks], [
+            "AGY adapter", "Claude adapter", "Codex adapter",
+        ])
+        self.assertEqual(checks[0]["status"], hc.OK)
+        self.assertEqual(checks[1]["status"], hc.OK)
+        self.assertEqual(checks[2]["status"], hc.WARN)
+        self.assertIn("project trust", checks[2]["detail"])
+        self.assertIn("approve", checks[2]["fix"])
+
+    def test_reports_missing_capabilities_without_raising(self):
+        matrix = self._matrix()
+        matrix["claude"]["capabilities"] = {"headless", "instructions"}
+        matrix["claude"]["capability_states"] = {
+            "headless": "active",
+            "instructions": "active",
+            "mcp": "unavailable",
+            "pre_tool_guard": "unavailable",
+            "session_start": "unavailable",
+            "specialists": "unavailable",
+            "workflows": "unavailable",
+        }
+        matrix["claude"]["status"] = "active"
+
+        with patch.object(hc, "inspect_capabilities", return_value=matrix):
+            check = hc.check_host_adapters("/repo")[1]
+
+        self.assertEqual(check["status"], hc.WARN)
+        self.assertIn("mcp", check["detail"])
+        self.assertIn("compile", check["fix"])
+
+    def test_reports_codex_hooks_disabled_with_actionable_remediation(self):
+        matrix = self._matrix()
+        matrix["codex"]["capabilities"] = {
+            capability
+            for capability in matrix["codex"]["capabilities"]
+            if capability not in {"pre_tool_guard", "session_start"}
+        }
+        matrix["codex"]["capability_states"] = dict(
+            matrix["codex"]["capability_states"],
+            pre_tool_guard="disabled",
+            session_start="disabled",
+        )
+        matrix["codex"]["status"] = "disabled"
+
+        with patch.object(hc, "inspect_capabilities", return_value=matrix):
+            check = hc.check_host_adapters("/repo")[2]
+
+        self.assertEqual(check["status"], hc.WARN)
+        self.assertIn("disabled", check["detail"])
+        self.assertIn("features.hooks", check["fix"])
 
 
 class TestPendingReconcile(unittest.TestCase):
     def _write_mirror(self, root, kind, name, synced):
-        directory = os.path.join(root, ".solomon", "memory-mirror", kind)
+        from solomon_harness.tools.database_client import _resolve_mirror_root_path
+
+        directory = os.path.join(
+            _resolve_mirror_root_path(root, for_write=True), kind
+        )
         os.makedirs(directory, exist_ok=True)
         with open(os.path.join(directory, f"{name}.md"), "w", encoding="utf-8") as f:
             f.write(

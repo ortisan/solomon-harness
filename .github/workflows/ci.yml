@@ -15,6 +15,7 @@ jobs:
   validate:
     name: Validate Custom Scripts and Workspace
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Mirrors docker-compose.yml's surrealdb service so the live-integration
     # tests (gated on a reachable server, see tests/test_database_client_multimodel.py,
     # tests/test_memory_service.py and tests/test_harness_invariants.py) run
@@ -33,6 +34,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          # The incremental SAST gate compares the checkout to the event's
+          # exact base commit, which may be outside a shallow clone.
+          fetch-depth: 0
 
       - name: Wait for SurrealDB
         run: |
@@ -62,6 +67,17 @@ jobs:
       - name: Lint with ruff
         run: uv run ruff check solomon_harness tests
 
+      - name: Reject new Ruff security findings
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          base_sha="$PR_BASE_SHA"
+          if [ -z "$base_sha" ]; then
+            base_sha="$PUSH_BASE_SHA"
+          fi
+          uv run python scripts/check-security-diff.py --base-sha "$base_sha"
+
       - name: Typecheck with mypy
         run: uv run mypy solomon_harness tests
 
@@ -78,7 +94,18 @@ jobs:
           # override the values several unit tests construct on purpose to
           # exercise config-driven (non-default) URLs and credentials.
           SURREAL_TEST_URL: ws://localhost:8099/rpc
-        run: uv run pytest
+        run: >-
+          uv run pytest
+          --cov=solomon_harness
+          --cov-branch
+          --cov-report=term-missing
+          --cov-fail-under=80
+
+      - name: Enforce host-neutral core branch coverage
+        run: >-
+          uv run coverage report
+          --include=solomon_harness/host_adapter_agy.py,solomon_harness/host_adapter_claude.py,solomon_harness/host_adapter_codex.py,solomon_harness/host_adapter_contract.py,solomon_harness/host_adapters.py,solomon_harness/payload_inventory.py
+          --fail-under=90
 
       - name: Validate workspace (ADRs, specs, workflows, agents, templates, skills)
         run: |

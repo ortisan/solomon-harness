@@ -26,11 +26,17 @@ class TestBudget(unittest.TestCase):
         loop_budget.record(self.root, 0.6, day="2026-06-28")  # total 1.1 >= 1.0
         self.assertTrue(loop_budget.over_ceiling(self.root, 1.0, day="2026-06-28"))
 
-    def test_ledger_anchored_in_dot_solomon_when_not_git(self):
+    def test_ledger_anchored_in_canonical_harness_state_when_not_git(self):
         loop_budget.record(self.root, 0.1, day="d")
         self.assertEqual(
             loop_budget.ledger_path(self.root),
-            os.path.join(self.root, ".solomon", "loop-budget.jsonl"),
+            os.path.join(
+                os.path.abspath(self.root),
+                ".agents",
+                "solomon",
+                "state",
+                "loop-budget.jsonl",
+            ),
         )
 
     def test_legacy_loop_auto_stage_is_normalized_on_read(self):

@@ -1,0 +1,60 @@
+include pyproject.toml
+include setup.py
+include docker-compose.yml
+include uv.lock
+include skill-sources.json
+include solomon_harness/legacy_payloads/v0.11.0.tsv
+include solomon_harness/legacy_payloads/v0.11.0-main.tsv
+
+include solomon_harness/catalog/workflows/solomon-bug.md
+include solomon_harness/catalog/workflows/solomon-idea.md
+include solomon_harness/catalog/workflows/solomon-issue.md
+include solomon_harness/catalog/workflows/solomon-loop.md
+include solomon_harness/catalog/workflows/solomon-refine.md
+include solomon_harness/catalog/workflows/solomon-release.md
+include solomon_harness/catalog/workflows/solomon-review.md
+include solomon_harness/catalog/workflows/solomon-scan-arch.md
+include solomon_harness/catalog/workflows/solomon-scan-dedup.md
+include solomon_harness/catalog/workflows/solomon-start.md
+include solomon_harness/catalog/workflows/solomon-workflow.md
+include solomon_harness/templates/AGENTS.md.template
+include solomon_harness/templates/CLAUDE.md.template
+include solomon_harness/templates/KANBAN.md.template
+include solomon_harness/templates/harness/.agent/config.json
+include solomon_harness/templates/harness/main.py
+include solomon_harness/templates/wiki/Business-Requirements.md.template
+include solomon_harness/templates/wiki/Commands-Reference.md.template
+include solomon_harness/templates/wiki/Design-System.md.template
+include solomon_harness/templates/wiki/Features.md.template
+include solomon_harness/templates/wiki/Home.md.template
+include solomon_harness/templates/wiki/Quick-Start.md.template
+include solomon_harness/templates/wiki/Release-Notes.md.template
+include solomon_harness/templates/wiki/Release.md.template
+include solomon_harness/templates/wiki/Technical-Documentation.md.template
+include solomon_harness/templates/wiki/_Sidebar.md.template
+
+include docs/solomon-workflow.md
+include docs/release-policy.md
+include docs/loop-engineering.md
+include docs/adrs/0000-adr-template.md
+include docs/adrs/README.md
+include docs/specs/0000-spec-template.md
+include docs/specs/README.md
+include .github/ISSUE_TEMPLATE/bug_report.md
+include .github/ISSUE_TEMPLATE/config.yml
+include .github/ISSUE_TEMPLATE/feature_conception.md
+include .github/ISSUE_TEMPLATE/future_ideas.md
+include .github/ISSUE_TEMPLATE/quant_model_hypothesis.md
+include .github/PULL_REQUEST_TEMPLATE.md
+
+global-exclude *.db *.db-shm *.db-wal *.enc *.py[cod] *.sqlite
+global-exclude scheduled-loop.lock secure_vault.enc settings.local.json
+prune .git
+prune .mypy_cache
+prune .pytest_cache
+prune .ruff_cache
+prune .venv
+prune build
+prune dist
+prune node_modules
+prune worktrees

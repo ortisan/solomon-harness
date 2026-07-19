@@ -13,13 +13,39 @@ with no built-in default (``SURREAL_TEST_URL``), so the live suites actually
 run instead of skipping.
 """
 
+import ast
 import os
+import shlex
 import unittest
 
 import yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CI_WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "ci.yml")
+LIVE_TEST_CLASSES = (
+    (
+        os.path.join(REPO_ROOT, "tests", "test_database_client_multimodel.py"),
+        "TestMultiModelLive",
+    ),
+    (
+        os.path.join(REPO_ROOT, "tests", "test_harness_invariants.py"),
+        "TestMcpServerGraphAndVectorTools",
+    ),
+    (
+        os.path.join(REPO_ROOT, "tests", "test_memory_service.py"),
+        "TestMemoryServiceMultiModelLive",
+    ),
+)
+NETWORK_TEARDOWN_CALLS = {"close", "connect", "query", "signin", "use"}
+# Every live-connection-holding class must release it via the bounded
+# conftest helper (a daemon thread, joined with a timeout) so the
+# connection's keepalive/recv background threads don't leak for the rest of
+# the pytest process.
+CLASSES_REQUIRING_BOUNDED_CLOSE = {
+    "TestMultiModelLive",
+    "TestMemoryServiceMultiModelLive",
+    "TestMcpServerGraphAndVectorTools",
+}
 
 
 def _validate_job():
@@ -30,7 +56,8 @@ def _validate_job():
 
 def _pytest_step(job):
     for step in job.get("steps", []):
-        if step.get("run", "").strip() == "uv run pytest":
+        command = shlex.split(step.get("run", ""))
+        if command[:3] == ["uv", "run", "pytest"]:
             return step
     return None
 
@@ -105,6 +132,70 @@ class TestCiRunsLiveSurrealDB(unittest.TestCase):
             "tests; exporting it here would leak into and break config-driven "
             "URL/credential unit tests",
         )
+
+    def test_validate_job_has_a_bounded_runtime(self):
+        timeout = _validate_job().get("timeout-minutes")
+        self.assertIsInstance(timeout, int, "the validate job must define timeout-minutes")
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(
+            timeout,
+            60,
+            "a blocked SDK call must not consume a runner for more than one hour",
+        )
+
+    def test_live_teardowns_do_not_remove_throwaway_databases(self):
+        # The SurrealDB 2.x client performs blocking websocket reads without a
+        # caller timeout. Removing the selected database during tearDown can
+        # therefore block the entire suite. Every live test already uses a
+        # unique database and CI destroys its tmpfs-backed service after the
+        # job, so tearDown must only restore local process state.
+        for module, class_name in LIVE_TEST_CLASSES:
+            with self.subTest(module=os.path.basename(module), class_name=class_name):
+                with open(module, encoding="utf-8") as fh:
+                    source = fh.read()
+                tree = ast.parse(source, filename=module)
+                classes = [
+                    node
+                    for node in tree.body
+                    if isinstance(node, ast.ClassDef) and node.name == class_name
+                ]
+                self.assertEqual(len(classes), 1, f"expected live test class {class_name}")
+                teardowns = [
+                    node
+                    for node in classes[0].body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "tearDown"
+                ]
+                self.assertTrue(teardowns, "expected at least one tearDown method")
+                for teardown in teardowns:
+                    body = ast.get_source_segment(source, teardown) or ""
+                    self.assertNotIn("REMOVE DATABASE", body)
+                    network_calls = {
+                        call.func.attr
+                        for call in ast.walk(teardown)
+                        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    } & NETWORK_TEARDOWN_CALLS
+                    self.assertEqual(
+                        network_calls,
+                        set(),
+                        "live-test tearDown must not perform blocking network I/O",
+                    )
+                    if class_name in CLASSES_REQUIRING_BOUNDED_CLOSE:
+                        bounded_close_calls = [
+                            call
+                            for call in ast.walk(teardown)
+                            if isinstance(call, ast.Call)
+                            and isinstance(call.func, ast.Name)
+                            and call.func.id == "close_surreal_quietly"
+                        ]
+                        self.assertTrue(
+                            bounded_close_calls,
+                            "tearDown must release its live connection via "
+                            "close_surreal_quietly (bounded daemon-thread close), "
+                            "or every test run leaks that connection's "
+                            "keepalive/recv background threads for the rest of "
+                            "the pytest process",
+                        )
 
 
 if __name__ == "__main__":

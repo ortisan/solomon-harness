@@ -1,7 +1,10 @@
 import os
-import tempfile
 import shutil
+import subprocess
+import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from solomon_harness.bootstrap import scaffold_new_agent
 
@@ -27,6 +30,38 @@ class TestScaffoldAgent(unittest.TestCase):
         # Create an AGENTS.md file mock
         with open(os.path.join(self.agents_dir, "AGENTS.md"), "w", encoding="utf-8") as f:
             f.write("# solomon-harness — Agent Rules and Definitions\n\n## The specialist agents\n\n")
+        commands_dir = os.path.join(self.tmp_dir, ".claude", "commands")
+        os.makedirs(commands_dir, exist_ok=True)
+        with open(
+            os.path.join(commands_dir, "solomon-workflow.md"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write("# Workflow\n\nRun the delivery workflow.\n")
+        # The direct adapter compiler accepts only an installed consumer or a
+        # Git-proven Solomon source checkout. Keep this integration fixture
+        # honest instead of weakening that production trust boundary.
+        with open(
+            os.path.join(self.tmp_dir, "pyproject.toml"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write('[project]\nname = "solomon-harness"\nversion = "0.0.0"\n')
+        subprocess.run(["git", "init", "-q", self.tmp_dir], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                self.tmp_dir,
+                "add",
+                "pyproject.toml",
+                "agents/AGENTS.md",
+                "solomon_harness/__init__.py",
+                "solomon_harness/mcp_server.py",
+                "scripts/generate-integrations.py",
+            ],
+            check=True,
+        )
 
     def tearDown(self):
         shutil.rmtree(self.tmp_dir)
@@ -54,6 +89,7 @@ class TestScaffoldAgent(unittest.TestCase):
         self.assertIn("Test Scaffolded Agent Persona", content)
         self.assertIn("Test specialist description", content)
         self.assertIn("agents/test_scaffolded_agent/agents/test_scaffolded_agent.md", content)
+        self.assertIn("agents/AGENTS.md", content)
 
         # Check role file
         role_path = os.path.join(agent_dir, "agents", "test_scaffolded_agent.md")
@@ -62,6 +98,7 @@ class TestScaffoldAgent(unittest.TestCase):
             content = f.read()
         self.assertIn("Test Scaffolded Agent Profile", content)
         self.assertIn("Test specialist description", content)
+        self.assertIn("`skill-sources.json`", content)
 
         # Check scope_and_mandate.md skill
         skill_path = os.path.join(agent_dir, "skills", "scope_and_mandate.md")
@@ -156,9 +193,33 @@ class TestScaffoldAgent(unittest.TestCase):
         with open(compiled_path, "r", encoding="utf-8") as f:
             compiled_content = f.read()
         # The description is a quoted YAML scalar carrying the role line plus
-        # the scaffolded delegation cue.
+        # a thin pointer back to the neutral catalog.
         self.assertIn('description: "To compile test', compiled_content)
-        self.assertIn("Use this agent when", compiled_content)
+        self.assertIn(
+            "agents/test_compiled_agent/agents/test_compiled_agent.md",
+            compiled_content,
+        )
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(
+                    self.tmp_dir,
+                    ".agents",
+                    "agents",
+                    "test_compiled_agent",
+                    "agent.md",
+                )
+            )
+        )
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(
+                    self.tmp_dir,
+                    ".codex",
+                    "agents",
+                    "test_compiled_agent.toml",
+                )
+            )
+        )
 
     def test_scaffold_cli_command(self):
         from unittest.mock import patch
@@ -166,7 +227,90 @@ class TestScaffoldAgent(unittest.TestCase):
 
         with patch("solomon_harness.cli.scaffold_new_agent") as mock_scaffold:
             cli.main(harness_dir=self.tmp_dir, argv=["agents", "scaffold", "cli_agent", "--description", "CLI desc"])
-            mock_scaffold.assert_called_once_with(self.tmp_dir, "cli_agent", "CLI desc")
+            mock_scaffold.assert_called_once_with(
+                os.path.abspath(self.tmp_dir), "cli_agent", "CLI desc"
+            )
+
+    def test_scaffold_writes_a_consumer_catalog_and_recompiles_from_outer_root(self):
+        consumer = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, consumer, True)
+        rules = os.path.join(consumer, ".agents", "solomon", "AGENTS.md")
+        os.makedirs(os.path.dirname(rules), exist_ok=True)
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Rules\n\n## The specialist agents\n\n")
+        with open(
+            os.path.join(consumer, ".agents", "solomon", "manifest.json"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write("{}\n")
+
+        result = SimpleNamespace(changed=True, conflicts=(), managed_paths=())
+        with (
+            mock.patch(
+                "solomon_harness.install_layout.compile_project_adapters",
+                return_value=result,
+            ) as compile_project,
+            mock.patch(
+                "solomon_harness.host_adapters.compile_adapters",
+                return_value=result,
+            ) as compile_,
+        ):
+            scaffold_new_agent(
+                consumer,
+                "consumer_agent",
+                "Consumer specialist description",
+            )
+
+        role = os.path.join(
+            consumer,
+            ".agents",
+            "solomon",
+            "agents",
+            "consumer_agent",
+            "agents",
+            "consumer_agent.md",
+        )
+        self.assertTrue(os.path.isfile(role))
+        self.assertFalse(os.path.exists(os.path.join(consumer, "agents")))
+        persona = os.path.join(
+            consumer,
+            ".agents",
+            "solomon",
+            "agents",
+            "consumer_agent",
+            "persona.md",
+        )
+        with open(persona, encoding="utf-8") as f:
+            persona_content = f.read()
+        with open(role, encoding="utf-8") as f:
+            role_content = f.read()
+        self.assertIn("`.agents/solomon/AGENTS.md`", persona_content)
+        self.assertIn(
+            "`.agents/solomon/agents/consumer_agent/agents/consumer_agent.md`",
+            persona_content,
+        )
+        self.assertIn(
+            "`.agents/solomon/agents/consumer_agent/skills/`",
+            persona_content,
+        )
+        self.assertIn("`.agents/solomon/skill-sources.json`", role_content)
+        compile_project.assert_called_once_with(consumer)
+        compile_.assert_not_called()
+
+    def test_scaffold_rejects_a_symlinked_canonical_agent_catalog(self):
+        consumer = tempfile.mkdtemp()
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, consumer, True)
+        self.addCleanup(shutil.rmtree, outside, True)
+        core = os.path.join(consumer, ".agents", "solomon")
+        os.makedirs(core)
+        os.symlink(outside, os.path.join(core, "agents"))
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            scaffold_new_agent(consumer, "escaped_agent", "Must stay inside")
+
+        self.assertFalse(os.path.exists(os.path.join(outside, "escaped_agent")))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,28 @@
+# >>> solomon-harness managed adapter >>>
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch|Edit|Write)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "{ SOLOMON_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null)\" && [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } || { SOLOMON_ROOT=\"$PWD\"; while [ \"$SOLOMON_ROOT\" != \"/\" ]; do [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ] && break; SOLOMON_ROOT=\"$(dirname \"$SOLOMON_ROOT\")\"; done; [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } && UV_PROJECT_ENVIRONMENT=\"$SOLOMON_ROOT/.agents/solomon/state/venv\" uv run --frozen --project \"$SOLOMON_ROOT\" python -I -m solomon_harness.cli host-hook pre-tool-use --host codex"
+commandWindows = "for /f \"delims=\" %R in ('git rev-parse --show-toplevel') do set \"UV_PROJECT_ENVIRONMENT=%R\\.agents\\solomon\\state\\venv\" && uv run --frozen --project \"%R\" python -I -m solomon_harness.cli host-hook pre-tool-use --host codex"
+timeout = 30
+
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "{ SOLOMON_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null)\" && [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } || { SOLOMON_ROOT=\"$PWD\"; while [ \"$SOLOMON_ROOT\" != \"/\" ]; do [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ] && break; SOLOMON_ROOT=\"$(dirname \"$SOLOMON_ROOT\")\"; done; [ -f \"$SOLOMON_ROOT/pyproject.toml\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/__init__.py\" ] && [ -f \"$SOLOMON_ROOT/solomon_harness/mcp_server.py\" ] && [ -f \"$SOLOMON_ROOT/scripts/generate-integrations.py\" ]; } && UV_PROJECT_ENVIRONMENT=\"$SOLOMON_ROOT/.agents/solomon/state/venv\" uv run --frozen --project \"$SOLOMON_ROOT\" python -I -m solomon_harness.cli host-hook session-start --host codex"
+commandWindows = "for /f \"delims=\" %R in ('git rev-parse --show-toplevel') do set \"UV_PROJECT_ENVIRONMENT=%R\\.agents\\solomon\\state\\venv\" && uv run --frozen --project \"%R\" python -I -m solomon_harness.cli host-hook session-start --host codex"
+timeout = 30
+
+[mcp_servers.solomon-memory]
+command = "uv"
+args = ["run", "--frozen", "--project", ".", "python", "-I", "-m", "solomon_harness.mcp_server"]
+cwd = ".."
+required = true
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+env = { UV_PROJECT_ENVIRONMENT = ".agents/solomon/state/venv" }
+# <<< solomon-harness managed adapter <<<

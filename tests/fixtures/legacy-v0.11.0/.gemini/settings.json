@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "solomon-memory": {
+      "command": "python3",
+      "args": ["-m", "solomon_harness.mcp_server"]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "command(git)",
+      "command(uv)",
+      "command(gh)",
+      "read_file(/Users/marcelo/Documents/Projects/solomon-harness-worktrees)",
+      "write_file(/Users/marcelo/Documents/Projects/solomon-harness-worktrees)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python -m solomon_harness.cli loop-guard"
+          }
+        ]
+      }
+    ]
+  }
+}

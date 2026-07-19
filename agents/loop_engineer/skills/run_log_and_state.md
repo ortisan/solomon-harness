@@ -21,7 +21,7 @@ The MCP server exposes two SurrealDB-only aggregates: `loop_run_throughput(bucke
 
 ## Filesystem-as-memory, alongside the contracts
 
-Loop state lives in three durable places, read at the start of a tick and never carried in conversation history: the handoff contracts in `.solomon/handoffs/issue-<N>-<from>-to-<to>.md` (releases use `.solomon/handoffs/release-vX.Y.Z-to-done.md`), the `loop_runs` ledger, and git history. Scan loops add a one-line note per run to `.solomon/scan-runs/scan-arch-<date>.md` and `.solomon/scan-runs/scan-dedup-<date>.md`, which is how "two consecutive runs found nothing" becomes a checkable stop condition. Do not introduce a freeform `TODO.md` as a second source of truth — it drifts from the structured memory.
+Loop state lives in three durable places, read at the start of a tick and never carried in conversation history: handoff contracts in `.agents/solomon/state/handoffs/issue-<N>-<from>-to-<to>.md` (releases use `release-vX.Y.Z-to-done.md` in the same directory), the `loop_runs` ledger, and git history. Scan loops add one-line notes under `.agents/solomon/state/scan-runs/`, which is how "two consecutive runs found nothing" becomes a checkable stop condition without adding harness state to the project's tracked files. Do not introduce a freeform `TODO.md` as a second source of truth; it drifts from structured memory.
 
 ## Concurrency signal
 

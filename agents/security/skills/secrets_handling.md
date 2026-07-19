@@ -15,7 +15,7 @@ Order of preference:
 2. A secret manager — HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager, or SOPS+age for small repos — which adds access audit logs, rotation hooks, and versioning.
 3. Environment variables, acceptable at this project's scale but with known leak paths: `/proc/<pid>/environ`, crash reports, `env` dumps in CI logs, and inheritance by every subprocess. Never pass a secret on a command line (`ps` shows it to every local user).
 
-This harness reads `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS` from the environment with per-tenant config in `.agent/config.json` — keep it that way; a credential literal in Python source or a workflow file is a review-blocking finding. In GitHub Actions, secrets come from `secrets.*` or environment-scoped secrets, are masked in logs automatically, and must not be echoed, base64-wrapped (masking misses encodings), or written to artifacts.
+This harness reads `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS` from the environment with per-tenant config in `.agents/solomon/config/project.json` — keep it that way; a credential literal in Python source or a workflow file is a review-blocking finding. In GitHub Actions, secrets come from `secrets.*` or environment-scoped secrets, are masked in logs automatically, and must not be echoed, base64-wrapped (masking misses encodings), or written to artifacts.
 
 `.env` hygiene: `.env` and any key files are gitignored; a committed `.env.example` carries variable names with placeholder values only; nothing in `docker-compose.yml` or test fixtures holds a real credential — tests mock the secret source per the house rule.
 

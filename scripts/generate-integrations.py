@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Generate host-tool integrations from the canonical Solomon sources.
+"""Compatibility entrypoint for the neutral three-host adapter compiler.
 
-This emits one Claude Code subagent per specialist agent, mirrors the canonical
-Claude workflow commands into Gemini commands, and renders the same workflows
-as Codex skills. Run from the repository root:
+The compiler reads through ``HarnessPaths``: installed projects use the catalog
+below ``.agents/solomon`` and this source repository may use the legacy source
+locations for one migration window. It never generates legacy ``.gemini``
+artifacts. Run from the repository root:
 
-    python scripts/generate-integrations.py
+    uv run python -I scripts/generate-integrations.py
 """
 
 import os
-import re
-import shutil
 import sys
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -20,7 +20,6 @@ if WORKSPACE_ROOT not in sys.path:
 
 from solomon_harness.integrations import (  # noqa: E402
     discover_agents as discover_agents,
-    generate_claude_agents,
     harness_subagent_markdown,
     role_description_from_text,
 )
@@ -90,106 +89,70 @@ def gemini_command_toml(description: str, body: str) -> str:
 
 
 def generate_gemini_commands(workspace_root: str) -> int:
-    """Mirror the .claude/commands/*.md commands into .gemini/commands/*.toml."""
-    src_dir = os.path.join(workspace_root, ".claude", "commands")
-    if not os.path.isdir(src_dir):
-        return 0
-    out_dir = os.path.join(workspace_root, ".gemini", "commands")
-    os.makedirs(out_dir, exist_ok=True)
-    count = 0
-    for name in sorted(os.listdir(src_dir)):
-        if not name.endswith(".md"):
-            continue
-        description, body = _parse_command_file(os.path.join(src_dir, name))
-        toml = gemini_command_toml(description, body)
-        with open(os.path.join(out_dir, name[:-3] + ".toml"), "w", encoding="utf-8") as f:
-            f.write(toml)
-        count += 1
-    if count:
-        print(f"Generated {count} Gemini commands in {out_dir}")
-    return count
-
-
-def codex_skill_markdown(skill_name: str, description: str, body: str) -> str:
-    """Render a canonical workflow command as a Codex skill.
-
-    Codex skills receive their arguments through the conversation rather than a
-    custom-prompt substitution pass. ``ARGUMENTS`` is therefore a documented
-    symbolic name inside the generated workflow, not an unresolved placeholder.
-    """
-    trigger = (
-        f"{description.rstrip()} Use when the user asks to run the corresponding "
-        f"Solomon stage or explicitly invokes ${skill_name}."
-    )
-    portable_body = re.sub(
-        r"(?<![A-Za-z0-9_./-])/solomon-",
-        "$solomon-",
-        body.replace("$ARGUMENTS", "ARGUMENTS"),
-    )
-    return (
-        "---\n"
-        f"name: {skill_name}\n"
-        f"description: {yaml_quote(trigger)}\n"
-        "---\n\n"
-        f"# {skill_name}\n\n"
-        "Apply this workflow when the user invokes the skill or asks for the "
-        "stage it governs. Treat `ARGUMENTS` in the workflow below as the "
-        "arguments supplied with the skill invocation or elsewhere in the "
-        "conversation.\n\n"
-        "Codex compatibility rules:\n\n"
-        "- Invoke Solomon workflow stages explicitly with their `$solomon-*` "
-        "skill names.\n"
-        "- When the workflow names Claude-specific Task or AskUserQuestion tools, "
-        "use the equivalent sub-agent delegation or structured user-input "
-        "capability available in the current Codex session.\n"
-        "- Read specialist definitions and skills under `agents/<name>/` before "
-        "acting in that role.\n\n"
-        f"{portable_body}\n"
-    )
-
-
-def generate_codex_skills(workspace_root: str) -> int:
-    """Render every canonical Solomon command into ``.agents/skills``."""
-    src_dir = os.path.join(workspace_root, ".claude", "commands")
-    if not os.path.isdir(src_dir):
-        return 0
-    out_dir = os.path.join(workspace_root, ".agents", "skills")
-    os.makedirs(out_dir, exist_ok=True)
-    active = set()
-    for name in sorted(os.listdir(src_dir)):
-        if not name.startswith("solomon-") or not name.endswith(".md"):
-            continue
-        skill_name = name[:-3]
-        active.add(skill_name)
-        description, body = _parse_command_file(os.path.join(src_dir, name))
-        skill_dir = os.path.join(out_dir, skill_name)
-        os.makedirs(skill_dir, exist_ok=True)
-        with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
-            f.write(codex_skill_markdown(skill_name, description, body))
-
-    for name in os.listdir(out_dir):
-        path = os.path.join(out_dir, name)
-        if name.startswith("solomon-") and name not in active and os.path.isdir(path):
-            shutil.rmtree(path)
-
-    if active:
-        print(f"Generated {len(active)} Codex skills in {out_dir}")
-    return len(active)
-
-
-def generate(workspace_root: str) -> int:
-    agents_dir = os.path.join(workspace_root, "agents")
-    if not os.path.isdir(agents_dir):
-        print(f"Error: agents directory not found at {agents_dir}", file=sys.stderr)
-        return 1
-
-    generate_claude_agents(workspace_root, harness_style=True)
-
-    # Mirror the workflows into Gemini commands and Codex skills.
-    generate_gemini_commands(workspace_root)
-    generate_codex_skills(workspace_root)
+    """Deprecated compatibility shim; current AGY discovers ``.agents``."""
+    del workspace_root
     return 0
 
 
+def generate(workspace_root: str, *, installed: bool | None = None) -> int:
+    """Delegate generation to the canonical Claude, AGY, and Codex compiler."""
+    from solomon_harness.layout import HarnessPaths
+
+    try:
+        paths = HarnessPaths(workspace_root)
+        installed = paths.manifest.is_file() if installed is None else installed
+        if installed:
+            from solomon_harness.install_layout import (
+                compile_project_adapters,
+                load_manifest,
+            )
+
+            install_result = compile_project_adapters(workspace_root)
+            manifest = load_manifest(workspace_root)
+            managed_count = sum(
+                entry.get("owner") == "adapter"
+                for entry in manifest.get("entries", [])
+            )
+            conflicts = install_result.conflicts
+        else:
+            from solomon_harness.host_adapters import compile_adapters
+
+            adapter_result = compile_adapters(workspace_root)
+            managed_count = len(adapter_result.managed_paths)
+            conflicts = adapter_result.conflicts
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        print(f"Error: adapter compilation failed ({exc})", file=sys.stderr)
+        return 1
+    if conflicts:
+        print(
+            "Error: adapter conflicts were preserved: " + ", ".join(conflicts),
+            file=sys.stderr,
+        )
+        return 1
+    print(f"Compiled {managed_count} Claude, AGY, and Codex adapter paths.")
+    return 0
+
+
+def _installed_entrypoint(script_file: str) -> bool:
+    harness_root = Path(script_file).resolve().parent.parent
+    return harness_root.name == "solomon" and harness_root.parent.name == ".agents"
+
+
+def _workspace_root(script_file: str) -> str:
+    """Resolve the consumer root when this entrypoint runs from an install."""
+
+    harness_root = Path(script_file).resolve().parent.parent
+    return os.fspath(
+        harness_root.parent.parent
+        if _installed_entrypoint(script_file)
+        else harness_root
+    )
+
+
 if __name__ == "__main__":
-    sys.exit(generate(WORKSPACE_ROOT))
+    sys.exit(
+        generate(
+            _workspace_root(__file__),
+            installed=_installed_entrypoint(__file__),
+        )
+    )

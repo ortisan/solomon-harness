@@ -1,0 +1,74 @@
+---
+description: Run a task end-to-end, or continue from a previous execution
+argument-hint: (optional) a focus, e.g. an issue or PR number
+---
+
+You are the orchestrator for the solomon delivery lifecycle. Read
+`docs/solomon-workflow.md` first. Your job: scan where work stopped, then propose
+— and, on the user's confirmation, run — the single best next `/solomon-*`
+workflow. `{{arguments}}` may narrow the focus to a specific issue or PR.
+
+This loop is host-orchestrated and human-gated, not fully autonomous: no code
+decides the next stage — the active host executes
+these markdown prompts and the specialist agents — and the merge, release, and
+move-to-Done gates always require a human.
+
+## 1. Scan the current state
+
+Gather these and summarize them concisely:
+
+- `project-memory get_latest_activity` — the last recorded session or handoff (where the team stopped). If it returns a handoff with a `contract_path`, read that handoff contract first and treat it as the bounded input — open the artifacts it points to (PLAN.md, the diff, the ADR, the PR) only when you need them, instead of re-deriving prior context.
+- `project-memory get_memory("__project_structure__")` and `project-memory get_memory("__project_evolution__")` — the living project model and its evolution log. Compare the model's manifest signature with the current codebase state to check if the memory is stale vs. the code (flag any discrepancy).
+- `project-memory get_open_issues` and `uv run python -I -m solomon_harness.github list-open-issues` — open work and its labels. Both are claim-aware (ADR-0027): an issue actively claimed by another session is excluded, so this scan never proposes starting work `start` would immediately refuse. Fall back to plain `gh issue list --state open` only when that command is unavailable.
+- `gh pr list --state open` — pull requests and their review/approval state.
+- The board columns (Ready / In Progress / Code Review / QA) via `gh project item-list` or `solomon_harness.github`. Cross-check any candidate against the claim-aware list above: an In Progress or Ready issue actively claimed by another live session must be excluded from selection here too, not just in the issue list.
+
+## 2. Decide the next step (first match wins)
+
+1. A pull request that is **approved** → `/solomon-review <pr>`; its merge step completes the `QA` → `Done` transition (ADR-0020). `/solomon-release` is never dispatched by an individual PR's state.
+2. A pull request **open and awaiting review** → `/solomon-review <pr>`.
+3. A **milestone** whose issues are all `Done` (0 open) with CI green on `main` → `/solomon-release <milestone>`; dispatched by milestone state, never by a PR number.
+4. An issue **In Progress** with a branch but no PR yet, and **not claimed by another live session** → resume with `/solomon-start <issue>` (continue the TDD loop and open the PR).
+5. A **Ready** or **Backlog** issue with a capability gap detected in its context (missing agent/skill in catalog) → run `/solomon-start <issue>` or `/solomon-refine <issue>` to invoke the capability broker and acquire the capability.
+6. A **Ready** issue (refined, Definition of Ready met) → `/solomon-start <issue>`.
+7. A **Backlog** issue not yet refined → `/solomon-refine <issue>`.
+8. An **Idea** worth promoting → `/solomon-issue` (or `/solomon-refine`).
+9. **Nothing in progress and the backlog is empty** → there is no work to advance; ask the user whether to create one — `/solomon-idea`, `/solomon-issue`, or `/solomon-bug` — and what it is about.
+
+If `{{arguments}}` names a specific issue or PR, evaluate that item and pick its next step.
+
+When deciding the next step, your rationale MUST cite the living project model (current structure and/or the most recent delivered evolution) retrieved from memory, not only the board column state. If the model and the board disagree (e.g. memory is stale vs. the code), flag the discrepancy instead of silently trusting one.
+
+## 3. Propose as an enumerated decision card, confirm, run
+
+A headless `/solomon-loop` iteration (`solomon-harness dev loop`) has no human to
+answer this card: `run_stage` prepends a directive to this prompt in that case only,
+telling the model to skip this section entirely (no interactive question, no
+numbered list awaiting a reply) and enter Option 2 (Autonomous Mode) directly. A
+direct `/solomon-workflow` invocation never receives that directive, so it always
+follows the steps below unchanged.
+
+Present the next step and execution options as a decision card with the following numbered options:
+1. **Single Step (Recommended)**: Run the single recommended next workflow stage ($RECOMMENDED_CMD).
+2. **Autonomous Mode (host-orchestrated, human-gated)**: Advance every eligible ready, in-progress, and reviewable task on the board in sequence, running stages (such as start, review) without re-prompting on each step. This is host-orchestrated, not fully autonomous — the host tool runs each markdown stage in turn — and it stops at the first human-gated boundary: it never merges, releases, or moves a card to Done, and it halts when all eligible tasks are completed or blocked at the human-gated Release gate.
+3. **Other**: Free-text entry.
+
+- If the user selects Option 1 (Single Step):
+  - Run the recommended workflow stage by following its command file `the canonical `solomon-<stage>` workflow` or executing `uv run python -I -m solomon_harness.cli dev <stage> [args]`.
+  - Advance one stage, record the run/decision, and exit.
+
+- If the user selects Option 2 (Autonomous Mode):
+  - Enter an autonomous loop. In each iteration:
+    1. Scan the current board and database state.
+    2. Determine the next step using the "Decide the next step" rules.
+    3. If the next step is a permanently human-gated stage (such as `release`), skip/bypass it and evaluate the remaining rules to find the next actionable, non-human-gated task (e.g. reviewing open PRs, starting ready issues). If no actionable tasks can be progressed, break the loop, notify the user, and report the final status.
+    4. Otherwise, execute the workflow stage headless by running `solomon-harness dev <stage> [args]` (equivalently `uv run python -I -m solomon_harness.cli dev <stage> [args]`). This is the only path that acquires the single-driver loop lock, so a concurrent headless `solomon-harness dev` run can detect contention instead of racing it. Never run the workflow logic directly in-process as an alternative — an iteration that pushes branches or opens PRs without going through `dev` holds no lock and defeats the single-driver guarantee.
+    5. Save the decision and loop run to memory.
+  - Present a final summary of all tasks implemented and reviewed.
+
+## 4. Record
+
+- `project-memory save_decision` — the loop's recommendation and the chosen action, so the next session resumes from it.
+- `project-memory log_handoff` — when the chosen workflow hands off to the next stage,
+  passing `summary="<2-5 line synopsis of what this stage did>"` so a resume survives worktree
+  teardown.

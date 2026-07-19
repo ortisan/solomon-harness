@@ -9,17 +9,20 @@ It exists because the gap is real: the `product_owner` `roadmapping_and_release_
 skill covers outcome roadmaps and milestone intent, and the `sre`
 `release_engineering_and_progressive_delivery` skill covers rollout mechanics for
 running services. Neither one owns the tag, SemVer, and CHANGELOG mechanics for a
-source-distributed library. That is this document.
+installable library. That is this document.
 
 ## What solomon-harness is, for release purposes
 
-solomon-harness is a Claude Code / Gemini agent harness: a Python package plus the
-`/solomon-*` delivery workflows. Two facts about distribution drive every rule below.
+solomon-harness is a Claude, AGY, and Codex agent harness: a Python package plus
+the `/solomon-*` delivery workflows. Two facts about distribution drive every
+rule below.
 
-- It is not published to PyPI. `pyproject.toml` carries `[tool.uv] package = false`;
-  the repository is an application and a template tree, not an installable wheel. A
-  release is a git tag plus a published GitHub Release of the source tree. Consumers
-  check out the tag or download the Release archive.
+- It is an installable package. `uv build` produces an sdist and wheel whose
+  `solomon_harness/_payload` contains the explicit installation allowlist. Source
+  checkout and wheel installs produce the same `.agents/solomon` manifest. PyPI
+  publication is not currently part of the release flow: the authoritative
+  release remains an immutable git tag plus a published GitHub Release, from
+  which consumers install the wheel or source archive.
 - It is trunk-based. Slices squash-merge into `main`. There is no `develop` branch
   and there are no long-lived `release/*` or `hotfix/*` branches.
 
@@ -84,12 +87,14 @@ Post-1.0 (for when the project gets there):
 - `fix` or `perf` -> PATCH.
 
 MAJOR is reserved. Post-1.0, a MAJOR bump means a deliberate break of a harness public
-contract, and only these four count as public contracts:
+contract, and only these count as public contracts:
 
 - the `solomon-harness` CLI surface (commands, subcommands, flags, exit codes);
-- the `.agent/config.json` schema;
+- the `.agents/solomon/config/project.json` schema;
 - the `solomon-memory` MCP tool signatures (the tool names and their parameters);
-- the `agents/<name>/` directory layout.
+- the canonical `.agents/solomon` layout and ownership-manifest schema;
+- the source `agents/<name>/` layout and the promised Claude/AGY/Codex capability
+  parity compiled from it.
 
 A change that does not alter one of these is not a MAJOR, regardless of how it feels.
 
@@ -220,6 +225,10 @@ not apply to a solomon-harness release. The release gate is a library readiness 
 - tests and `ruff` are green on `main`;
 - `python -c "import solomon_harness"` succeeds;
 - the `solomon-harness` console script runs;
+- `uv build` produces an sdist and wheel, and a no-dependency wheel smoke install
+  can run `init` with the same managed manifest as source mode;
+- the installed Claude, AGY, and Codex adapters expose the same specialists,
+  workflows, hooks, MCP server, and headless-engine capability;
 - `release check` passes.
 
 Carry forward only the reversibility kernel from progressive delivery, the part that is

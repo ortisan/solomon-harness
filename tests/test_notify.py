@@ -64,6 +64,17 @@ class TestSelection(unittest.TestCase):
         root = self._root({"enabled": False})
         self.assertIsNone(notify.get_notifier(root, env={"SOLOMON_NOTIFY_WEBHOOK": "https://h/x"}))
 
+    def test_canonical_config_symlink_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            outside = os.path.join(root, "outside.json")
+            config_dir = os.path.join(root, ".agents", "solomon", "config")
+            os.makedirs(config_dir)
+            with open(outside, "w", encoding="utf-8") as handle:
+                json.dump({"notify": {"mode": "console"}}, handle)
+            os.symlink(outside, os.path.join(config_dir, "project.json"))
+
+            self.assertIsNone(notify.get_notifier(root, env={}))
+
     def test_send_is_best_effort(self):
         root = self._root()
         self.assertFalse(notify.send(root, "e", "m", env={}))  # no notifier -> False, no raise

@@ -105,9 +105,14 @@ def build_agent_suite(harness_dir: str) -> unittest.TestSuite:
                     self.fail(f"config.json is not valid JSON: {e}")
 
             self.assertIn("agent_name", config)
-            self.assertIn("models", config)
             self.assertIn("timeout_seconds", config)
             self.assertIn("max_retries", config)
+            # Host selection belongs to the Claude, AGY, or Codex runtime. The
+            # installed canonical specialist config is deliberately neutral;
+            # legacy/source configs may still carry an optional ``models`` map
+            # during the compatibility window.
+            if "models" in config:
+                self.assertIsInstance(config["models"], dict)
 
         def test_database_client(self) -> None:
             """Validate that the database client can be initialized and queried."""

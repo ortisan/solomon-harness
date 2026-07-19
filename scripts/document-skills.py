@@ -85,7 +85,7 @@ def extract_metadata(skill_path):
         purpose = ""
     return title or os.path.basename(skill_path)[:-3], purpose or "No description provided."
 
-def document_agent(agent_name, agents_dir):
+def document_agent(agent_name, agents_dir, sources_reference="skill-sources.json"):
     agent_dir = os.path.join(agents_dir, agent_name)
     skills_dir = os.path.join(agent_dir, "skills")
     profile_path = os.path.join(agent_dir, "agents", f"{agent_name}.md")
@@ -110,7 +110,7 @@ def document_agent(agent_name, agents_dir):
         skills_block += "No local skills configured.\n"
 
     skills_block += "\n## External Skills\n\n"
-    skills_block += "Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:\n"
+    skills_block += f"Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `{sources_reference}` and use:\n"
     skills_block += "```bash\n"
     skills_block += f"solomon-harness skills add <source> <skill> --agent {agent_name}\n"
     skills_block += "```\n"
@@ -146,10 +146,20 @@ def main():
     agents_dir = os.path.join(repo_root, "agents")
     if not os.path.isdir(agents_dir):
         agents_dir = "agents"
+    installed_core = (
+        os.path.basename(repo_root) == "solomon"
+        and os.path.basename(os.path.dirname(repo_root)) == ".agents"
+    )
+    workspace_root = (
+        os.path.dirname(os.path.dirname(repo_root)) if installed_core else repo_root
+    )
+    sources_reference = os.path.relpath(
+        os.path.join(repo_root, "skill-sources.json"), workspace_root
+    ).replace(os.sep, "/")
     for item in os.listdir(agents_dir):
         agent_path = os.path.join(agents_dir, item)
         if os.path.isdir(agent_path) and os.path.isdir(os.path.join(agent_path, "agents")):
-            document_agent(item, agents_dir)
+            document_agent(item, agents_dir, sources_reference)
 
 if __name__ == "__main__":
     main()

@@ -7,13 +7,21 @@ These tests pin the pure core: the version math, the commit classifier, the
 parsers, and the consistency gate. The git/gh I/O is a thin shell over them.
 """
 
+import io
+import json
 import os
+import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from solomon_harness import release
+from solomon_harness import cli, release
+from solomon_harness.loop_lock import (
+    SHELL_CAPABILITY_ENV,
+    LoopLock,
+    resolve_lock_path,
+)
 
 
 # --- SemVer ---------------------------------------------------------------
@@ -275,6 +283,34 @@ def test_prepend_changelog_section_inserts_above_first_heading(tmp_path):
     assert "## [0.3.1] - 2026-06-27" in c.read_text(encoding="utf-8")
 
 
+def test_set_pyproject_version_rejects_a_symlinked_target(tmp_path):
+    outside = tmp_path / "outside.toml"
+    outside.write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
+    linked = tmp_path / "pyproject.toml"
+    linked.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlink"):
+        release.set_pyproject_version(str(linked), "1.0.0")
+
+    assert 'version = "9.9.9"' in outside.read_text(encoding="utf-8")
+
+
+def test_cmd_wiki_page_rejects_a_symlinked_output_directory(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "wiki").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        release,
+        "_gather_release_context",
+        lambda _root, _version: {"commits": [], "milestone": None, "issues": []},
+    )
+
+    assert release.cmd_wiki_page(str(tmp_path), version="1.0.0") == 1
+    assert list(outside.iterdir()) == []
+
+
 # --- run() dispatch ---------------------------------------------------------
 
 def test_run_rejects_unknown_subcommand(capsys):
@@ -368,12 +404,28 @@ def test_cmd_prep_rejects_a_malformed_explicit_version(repo, capsys):
     assert "not a SemVer" in capsys.readouterr().err
 
 
+def test_cmd_prep_rejects_symlinked_release_inputs_before_branching(
+    tmp_path, monkeypatch, capsys
+):
+    outside = tmp_path / "outside.toml"
+    outside.write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").symlink_to(outside)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
+    git_calls = []
+    monkeypatch.setattr(release, "_git", lambda *args, **kwargs: git_calls.append(args))
+
+    assert release.cmd_prep(str(tmp_path), version="1.0.0") == 1
+    assert "symlink" in capsys.readouterr().err
+    assert git_calls == []
+    assert 'version = "9.9.9"' in outside.read_text(encoding="utf-8")
+
+
 def test_cmd_audit_trigger_success(repo, capsys):
     from unittest.mock import patch, MagicMock
     import subprocess
     
-    # Create the curator directory and a dummy pyproject.toml
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+    # Consumer installs keep the curator in the canonical host-neutral catalog.
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
     
     with patch("subprocess.run") as mock_run:
@@ -382,19 +434,26 @@ def test_cmd_audit_trigger_success(repo, capsys):
         mock_run.return_value = mock_proc
         
         rc = release.cmd_audit_trigger(repo, version="1.0.0")
-        
+
         assert rc == 0
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
+        engine_calls = [
+            call
+            for call in mock_run.call_args_list
+            if call.args and call.args[0][0] != "ps"
+        ]
+        assert len(engine_calls) == 1
+        args, kwargs = engine_calls[0]
         assert "v1.0.0" in kwargs["input"]
-        assert kwargs["cwd"] == str(curator_dir)
+        assert kwargs["cwd"] == str(Path(repo).resolve())
+        assert args[0] == ["claude", "-p"]
+        assert not any("dangerously" in token for token in args[0])
         assert "audit skipped" not in capsys.readouterr().out
 
 
 def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
     from unittest.mock import patch
-
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+    
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
 
     with patch("subprocess.run", side_effect=Exception("Sourcing tool is down")):
@@ -406,81 +465,155 @@ def test_cmd_audit_trigger_degrade_safe_on_error(repo, capsys):
         assert "audit skipped: sourcing unavailable" in combined
 
 
-def _configure_orchestrator_model(repo, model):
-    import json
-
-    agent_dir = Path(repo) / ".agent"
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "config.json").write_text(
-        json.dumps({"agent_name": "x", "loop": {"orchestrator_model": model}}),
-        encoding="utf-8",
-    )
-
-
-def test_cmd_audit_trigger_passes_orchestrator_model_to_claude_engine(repo, capsys):
-    # The practice_curator audit trigger is a second headless-engine call site
-    # (independent of workflows.run_stage) -- it must honor the same
-    # loop.orchestrator_model config, or an Opus-orchestrator setup silently
-    # leaves this one trigger on the CLI's default model.
-    from unittest.mock import patch, MagicMock
+@pytest.mark.parametrize(
+    ("engine", "prefix"),
+    [
+        ("claude", ["claude", "-p"]),
+        ("agy", ["agy", "-p", "-"]),
+        ("codex", ["codex", "exec", "--sandbox", "workspace-write"]),
+    ],
+)
+def test_cmd_audit_trigger_uses_safe_common_engine_adapter(repo, engine, prefix):
+    from unittest.mock import MagicMock, patch
     import subprocess
 
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
-    _configure_orchestrator_model(repo, "opus")
+    completed = MagicMock(spec=subprocess.CompletedProcess)
+    completed.returncode = 0
 
-    with patch("subprocess.run") as mock_run:
-        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
-        mock_proc.returncode = 0
-        mock_run.return_value = mock_proc
+    with (
+        patch.dict(os.environ, {"SOLOMON_ENGINE": engine}),
+        patch("subprocess.run", return_value=completed) as run,
+    ):
+        assert release.cmd_audit_trigger(repo, version="1.0.0") == 0
 
-        rc = release.cmd_audit_trigger(repo, version="1.0.0")
-
-        assert rc == 0
-        args, _kwargs = mock_run.call_args
-        cmd = args[0]
-        assert "--model" in cmd
-        assert cmd[cmd.index("--model") + 1] == "opus"
+    command = run.call_args.args[0]
+    assert command[: len(prefix)] == prefix
+    assert not any("dangerously" in token for token in command)
 
 
-def test_cmd_audit_trigger_omits_model_flag_when_not_configured(repo, capsys):
-    from unittest.mock import patch, MagicMock
-    import subprocess
-
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+@pytest.mark.parametrize("engine", ["claude", "agy", "codex"])
+def test_cmd_audit_trigger_propagates_a_live_driver_capability_to_hooks(
+    repo, engine
+):
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
+    validated = False
 
-    with patch("subprocess.run") as mock_run:
-        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
-        mock_proc.returncode = 0
-        mock_run.return_value = mock_proc
+    def shell_payload():
+        if engine == "claude":
+            return {
+                "session_id": "native-session",
+                "tool_name": "Bash",
+                "tool_input": {"command": "solomon-harness log"},
+            }
+        if engine == "agy":
+            return {
+                "conversationId": "native-session",
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": "solomon-harness log"},
+                },
+            }
+        return {
+            "sessionId": "native-session",
+            "tool": "Bash",
+            "input": {"command": "solomon-harness log"},
+        }
 
-        rc = release.cmd_audit_trigger(repo, version="1.0.0")
+    def fake_run(command, *args, **kwargs):
+        nonlocal validated
+        if command and command[0] == "ps":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        env = kwargs["env"]
+        lock = LoopLock(
+            repo,
+            session_id=env["SOLOMON_SESSION_ID"],
+            pid_start_time=lambda _pid: None,
+        )
+        assert lock.shell_capability_allows(
+            env[SHELL_CAPABILITY_ENV],
+            scope="harness:read",
+        )
+        assert not lock.shell_capability_allows(
+            env[SHELL_CAPABILITY_ENV],
+            scope="dev:execute",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with pytest.MonkeyPatch.context() as environment:
+            for name, value in env.items():
+                environment.setenv(name, value)
+            exit_code = cli.handle_host_hook(
+                repo,
+                engine,
+                "pre-tool-use",
+                stdin=io.StringIO(json.dumps(shell_payload())),
+                stdout=stdout,
+                stderr=stderr,
+            )
+        if engine == "agy":
+            assert json.loads(stdout.getvalue())["decision"] == "allow"
+        else:
+            assert exit_code == 0, stderr.getvalue()
+        validated = True
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-        assert rc == 0
-        args, _kwargs = mock_run.call_args
-        assert "--model" not in args[0]
+    with (
+        pytest.MonkeyPatch.context() as environment,
+        pytest.MonkeyPatch.context() as process,
+    ):
+        environment.setenv("SOLOMON_ENGINE", engine)
+        process.setattr(subprocess, "run", fake_run)
+        assert release.cmd_audit_trigger(repo, version="1.0.0") == 0
+
+    assert validated
+    assert not Path(resolve_lock_path(repo)).exists()
 
 
-def test_cmd_audit_trigger_omits_model_flag_for_non_claude_engine(repo, capsys, monkeypatch):
-    from unittest.mock import patch, MagicMock
-    import subprocess
+def test_cmd_audit_trigger_preserves_an_outer_driver_capability(repo):
+    from unittest.mock import MagicMock, patch
 
-    curator_dir = Path(repo) / "agents" / "practice_curator"
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
     curator_dir.mkdir(parents=True, exist_ok=True)
-    _configure_orchestrator_model(repo, "opus")
-    monkeypatch.setenv("SOLOMON_ENGINE", "agy")
+    outer = LoopLock(repo, session_id="release-session", stage="release").acquire()
+    try:
+        token = outer.issue_shell_capability(
+            scopes={"harness:read", "dev:execute"},
+            branches=set(),
+        )
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.returncode = 0
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SOLOMON_SESSION_ID": outer.session_id,
+                    SHELL_CAPABILITY_ENV: token,
+                },
+            ),
+            patch("subprocess.run", return_value=completed),
+        ):
+            assert release.cmd_audit_trigger(repo, version="1.0.0") == 0
 
-    with patch("subprocess.run") as mock_run:
-        mock_proc = MagicMock(spec=subprocess.CompletedProcess)
-        mock_proc.returncode = 0
-        mock_run.return_value = mock_proc
+        assert outer.shell_capability_allows(token, scope="harness:read")
+        assert outer.shell_capability_allows(token, scope="dev:execute")
+        assert Path(resolve_lock_path(repo)).exists()
+    finally:
+        outer.release()
 
-        rc = release.cmd_audit_trigger(repo, version="1.0.0")
 
-        assert rc == 0
-        args, _kwargs = mock_run.call_args
-        assert "--model" not in args[0]
+def test_cmd_audit_trigger_degrades_without_releasing_a_foreign_lock(repo, capsys):
+    curator_dir = Path(repo) / ".agents" / "solomon" / "agents" / "practice_curator"
+    curator_dir.mkdir(parents=True, exist_ok=True)
+    holder = LoopLock(repo, session_id="foreign-driver", stage="workflow").acquire()
+    try:
+        assert release.cmd_audit_trigger(repo, version="1.0.0") == 0
+        assert "audit skipped: sourcing unavailable" in capsys.readouterr().out
+        assert holder.read()["session_id"] == "foreign-driver"
+    finally:
+        holder.release()
 
 
 # --- Merge-time release-window recompute (catches a prep PR going stale) ----

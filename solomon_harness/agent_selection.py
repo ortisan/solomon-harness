@@ -17,7 +17,7 @@ import stat
 import sys
 from typing import List, Optional, Set
 
-from solomon_harness.integrations import discover_agents as discover_compilable_agents
+from solomon_harness.layout import HarnessPaths
 
 # Always enabled: planning, build, quality, delivery and documentation roles.
 CORE_AGENTS = [
@@ -50,6 +50,7 @@ SCAN_SKIP_DIRS = frozenset({
     ".agent",
     ".agents",
     ".claude",
+    ".codex",
     ".gemini",
     ".solomon",
     ".solomon-harness",
@@ -64,8 +65,20 @@ MAX_MANIFEST_TOTAL_BYTES = 2 * 1024 * 1024
 
 
 def discover_agents(workspace_root: str) -> Set[str]:
-    """Return only agents that the canonical compiler can safely activate."""
-    return set(discover_compilable_agents(os.path.join(workspace_root, "agents")))
+    """Return the agents present under the resolved agents directory.
+
+    The agents directory is resolved through ``HarnessPaths`` so a host-agnostic
+    layout (``.agents/solomon/agents``) and the legacy top-level ``agents`` tree
+    are both found. An agent is any directory carrying its role file.
+    """
+    agents_dir = os.fspath(HarnessPaths(workspace_root).resolve_agents())
+    found: Set[str] = set()
+    if not os.path.isdir(agents_dir):
+        return found
+    for item in os.listdir(agents_dir):
+        if os.path.isfile(os.path.join(agents_dir, item, "agents", f"{item}.md")):
+            found.add(item)
+    return found
 
 
 # Back-compat alias for the historical private name (now a public surface that
@@ -169,8 +182,13 @@ def _signals(workspace_root: str) -> Set[str]:
 
 def select_agents(workspace_root: str) -> List[str]:
     """Return the sorted list of agents to enable for the project at workspace_root."""
-    agents_dir = os.path.join(workspace_root, "agents")
-    available = _discover_agents(workspace_root)
+    from solomon_harness.integrations import discover_agents as discover_compilable_agents
+
+    agents_dir = os.fspath(HarnessPaths(workspace_root).resolve_agents())
+    # Stack selection uses the strict "compilable agent" definition (#315): a
+    # present but incomplete catalog fails closed instead of enabling a
+    # half-formed agent the compiler cannot safely activate.
+    available = set(discover_compilable_agents(agents_dir))
     catalog_present = bool(available) or os.path.lexists(agents_dir)
     if catalog_present and not available:
         return []

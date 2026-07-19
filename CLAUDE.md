@@ -8,7 +8,7 @@ Each specialist agent is modularly defined under `agents/<name>/`:
 - **Persona:** `agents/<name>/persona.md` (defines personality and tone constraints).
 - **Profile:** `agents/<name>/agents/<name>.md` (defines duties, active local skills, and external skills access).
 - **Local Skills:** `agents/<name>/skills/` (short, single-concern markdown files).
-- **Configuration:** `agents/<name>/.agent/config.json` (model selection and dynamic pattern switches).
+- **Configuration:** `agents/<name>/.agent/config.json` (source profile metadata; installed model selection belongs to the host).
 - **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).
 - **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).
 
@@ -22,7 +22,7 @@ Each specialist agent is modularly defined under `agents/<name>/`:
    - `agents/<name>/agents/<name>.md` — the role definition.
    - `agents/<name>/persona.md` — the persona.
    - `agents/<name>/skills/` — the agent's skills.
-   - `agents/<name>/.agent/config.json` — model and memory configuration.
+   - `agents/<name>/.agent/config.json` — source profile metadata.
 
 2. **Author Specific Skills:**
    Create individual markdown files inside `agents/<agent_name>/skills/` for each specific topic/responsibility. Keep them short, focused, and precise.
@@ -34,11 +34,21 @@ Each specialist agent is modularly defined under `agents/<name>/`:
    ```
 
 4. **Compile the Harness:**
-   Scaffold any missing agent files and regenerate the host-tool integrations
-   (`.claude/agents/`, `.gemini/commands/`):
+   Regenerate the thin Claude, AGY, and Codex integrations from the existing
+   canonical source files:
    ```bash
    uv run python -m solomon_harness.cli compile
    ```
+
+## Installed Projects
+
+This file imports `agents/AGENTS.md` because this repository is the harness
+source checkout. In a consumer repository, `solomon-harness init` places the
+canonical catalog at `.agents/solomon`; `.claude/CLAUDE.md`,
+`.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, and `.mcp.json`
+are thin Claude adapters that point there. AGY and Codex receive equivalent
+adapters from the same catalog. Rebuild them with `solomon-harness compile` and
+remove unchanged manifest-owned output with `solomon-harness uninstall`.
 
 ## Non-Negotiable Standards
 - **TDD Cycle:** Red (failing test), Green (minimal code to pass), Refactor. Never commit code without a covering test.
