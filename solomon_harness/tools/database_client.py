@@ -190,15 +190,17 @@ def is_github_issue(github_id: Optional[str]) -> bool:
 def recover_parent(github_id: Optional[str], title: Optional[str]) -> Optional[str]:
     """Recover a tracking row's parent GitHub number from its slug id, else title.
 
-    Tracking rows carry a composite slug id (``68-R-01``, ``45-M2``) and a human
-    title (``RAID R-01 (#68)``). The parent number is read id-first -- the run of
-    digits before the slug's first hyphen -- because the id is the structural key;
-    failing that, the first ``#<digits>`` reference in the title is used, which
-    subsumes the ``PR #45`` spelling. Returns the number as a string, or None when
-    neither yields one. Pure and total (#127): it never raises and never invents a
-    number, so a row with no recoverable parent is left open rather than guessed.
+    Tracking rows carry a composite slug id (``68-R-01``, ``45-M2``, or the review
+    stage's ``issue-48-d1-weak-name-validation`` form) and a human title
+    (``RAID R-01 (#68)``). The parent number is read id-first -- the run of digits
+    before the slug's first hyphen, after an optional ``issue-`` prefix -- because
+    the id is the structural key; failing that, the first ``#<digits>`` reference in
+    the title is used, which subsumes the ``PR #45`` spelling. Returns the number as
+    a string, or None when neither yields one. Pure and total (#127): it never
+    raises and never invents a number, so a row with no recoverable parent is left
+    open rather than guessed.
     """
-    id_match = re.match(r"(\d+)-", str(github_id))
+    id_match = re.match(r"(?:issue-)?(\d+)-", str(github_id))
     if id_match:
         return id_match.group(1)
     title_match = re.search(r"#(\d+)", str(title))
@@ -549,7 +551,12 @@ class DatabaseClient:
         # key, so it is unique by construction.
         "DEFINE INDEX IF NOT EXISTS issues_github_id "
         "ON issues FIELDS github_id UNIQUE;",
-        "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status;",
+        # issues_status is dropped, not defined: it served no read (get_open_issues
+        # is a NOT-IN negation no B-tree can satisfy, and the cockpit buckets by
+        # status in Python), so it was pure write-time cost (ADR-0042). REMOVE IF
+        # EXISTS drops it from an existing tenant on the next connect and is a
+        # no-op on a fresh one.
+        "REMOVE INDEX IF EXISTS issues_status ON issues;",
         "DEFINE INDEX IF NOT EXISTS decisions_created_at "
         "ON decisions FIELDS created_at;",
         # Time-ordered hot paths. get_latest_activity reads the newest sessions
@@ -3490,6 +3497,11 @@ class DatabaseClient:
             field is additive -- the stored row and the returned set are unchanged.
         """
         if self.backend == "surrealdb":
+            # A deliberate TableScan (ADR-0042): the "open = not terminal" predicate
+            # is a negation no index can serve, and a derived indexed boolean would
+            # need a live-tenant backfill IF NOT EXISTS cannot apply, at the risk of
+            # silently dropping issues. At 360 rows the scan is a few milliseconds;
+            # revisit the derived index only past ~10^4 issues.
             query = (
                 "SELECT * FROM issues "
                 "WHERE status IS NONE OR status IS NULL OR status NOT IN $terminal"
