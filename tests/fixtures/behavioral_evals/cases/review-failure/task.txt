@@ -1,0 +1,1 @@
+Reject the unsafe change and identify the violated isolation rule.
