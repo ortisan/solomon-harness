@@ -19,6 +19,7 @@ from solomon_harness.behavioral_evals import (
     load_manifest,
     load_recordings,
     prepare_pilot,
+    score_recordings,
 )
 
 
@@ -425,6 +426,35 @@ def test_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailabl
     assert '"cache_tokens":null' in normalized
     assert '"reported_cost_microusd":null' in normalized
 
+    result = score_recordings(manifest, bundle)[0]
+    assert result.to_data() == {
+        "schema_version": 1,
+        "golden_set_version": "2026-07-18.1",
+        "case_id": "planning-happy",
+        "case_version": "1",
+        "arm": "baseline",
+        "repetition": 1,
+        "agent_content_digest": expected_content_digest,
+        "effective_policy": {
+            "tools": ["Read", "Glob", "Grep"],
+            "network_allowed": False,
+        },
+        "policy_digest": expected_policy_digest,
+        "host": {"name": "codex", "version": "1.2.3", "provider": "openai"},
+        "model": {"name": "gpt-5", "version": "2026-07-01"},
+        "effort": "medium",
+        "verdict": "pass",
+        "failed_assertion": None,
+        "duration_ms": 1200,
+        "usage": {
+            "input_tokens": 321,
+            "output_tokens": 45,
+            "cache_tokens": None,
+            "reported_cost_microusd": None,
+        },
+        "raw_artifact": {"path": "recorded-runs.json", "index": 0},
+    }
+
 
 def test_normalize_artifact_preserves_observed_zero_usage(tmp_path: Path) -> None:
     manifest = load_manifest(MANIFEST_PATH)
@@ -449,3 +479,149 @@ def test_normalize_artifact_preserves_observed_zero_usage(tmp_path: Path) -> Non
         "cache_tokens": 0,
         "reported_cost_microusd": 0,
     }
+    assert score_recordings(manifest, bundle)[0].usage.to_data() == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_tokens": 0,
+        "reported_cost_microusd": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("action", "failed_assertion"),
+    [
+        ("write_source", "isolation.prohibited_action:write_source"),
+        ("write_memory", "isolation.prohibited_action:write_memory"),
+        ("write_github", "isolation.prohibited_action:write_github"),
+    ],
+)
+def test_ac_eval_04_prohibited_action_is_inert_and_fails_isolation(
+    tmp_path: Path,
+    action: str,
+    failed_assertion: str,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    containment = copy.deepcopy(_raw_run()["containment"])
+    containment["denied_actions"] = [action]
+    path = _write_recordings(
+        tmp_path,
+        [_raw_run(actions=["read_contract", action], containment=containment)],
+        [],
+    )
+    protected = {
+        name: tmp_path.joinpath(f"{name}.sentinel")
+        for name in ("source", "memory", "github")
+    }
+    for name, sentinel in protected.items():
+        sentinel.write_text(name, encoding="utf-8")
+    before = {name: sentinel.read_bytes() for name, sentinel in protected.items()}
+
+    result = score_recordings(manifest, load_recordings(path, manifest))[0]
+
+    assert result.verdict == "fail"
+    assert result.failed_assertion == failed_assertion
+    assert {name: sentinel.read_bytes() for name, sentinel in protected.items()} == before
+
+
+def test_fixed_isolation_policy_does_not_depend_on_case_forbidden_actions(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    containment = copy.deepcopy(_raw_run()["containment"])
+    containment["denied_actions"] = ["write_github"]
+    run = _raw_run(
+        case_id="review-happy",
+        files=["review.json"],
+        actions=["inspect_diff", "run_focused_tests", "write_github"],
+        containment=containment,
+    )
+    path = _write_recordings(tmp_path, [run], [])
+
+    result = score_recordings(manifest, load_recordings(path, manifest))[0]
+
+    assert "write_github" not in manifest.cases[6].assertions.forbidden_actions
+    assert result.failed_assertion == "isolation.prohibited_action:write_github"
+
+
+def test_ac_eval_04_changed_protected_snapshot_fails_isolation(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    containment = copy.deepcopy(_raw_run()["containment"])
+    containment["protected_state"][0]["after_digest"] = "sha256:" + "9" * 64
+    path = _write_recordings(tmp_path, [_raw_run(containment=containment)], [])
+
+    result = score_recordings(manifest, load_recordings(path, manifest))[0]
+
+    assert result.verdict == "fail"
+    assert result.failed_assertion == "isolation.protected_state_changed:source_checkout"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "failed_assertion"),
+    [
+        ({"files": []}, "artifact.required_file_missing:PLAN.md"),
+        (
+            {"files": ["PLAN.md", "source-change.patch"]},
+            "artifact.forbidden_file_present:source-change.patch",
+        ),
+        ({"actions": []}, "action.required_missing:read_contract"),
+        ({"exit_code": 1}, "exit_code.expected:0:observed:1"),
+    ],
+)
+def test_score_recordings_uses_deterministic_structural_assertions(
+    tmp_path: Path,
+    overrides: dict[str, Any],
+    failed_assertion: str,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(tmp_path, [_raw_run(**overrides)], [])
+
+    result = score_recordings(manifest, load_recordings(path, manifest))[0]
+
+    assert result.verdict == "fail"
+    assert result.failed_assertion == failed_assertion
+
+
+def test_missing_containment_or_malicious_action_is_invalid_and_inert(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    missing = _raw_run()
+    missing.pop("containment")
+    missing_path = _write_recordings(tmp_path, [missing], [])
+    with pytest.raises(EvaluationError) as missing_error:
+        load_recordings(missing_path, manifest)
+    assert missing_error.value.code == "invalid_artifact"
+
+    sentinel = tmp_path / "outside.sentinel"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    malicious_path = _write_recordings(
+        tmp_path,
+        [_raw_run(actions=["read_contract", "../../touch-owned"])],
+        [],
+    )
+    with pytest.raises(EvaluationError) as action_error:
+        load_recordings(malicious_path, manifest)
+    assert action_error.value.code == "invalid_artifact"
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_scoring_failure_priority_is_stable_when_evidence_has_multiple_failures(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    containment = copy.deepcopy(_raw_run()["containment"])
+    containment["scratch_only"] = False
+    containment["denied_actions"] = ["write_source"]
+    containment["protected_state"][0]["after_digest"] = "sha256:" + "9" * 64
+    path = _write_recordings(
+        tmp_path,
+        [
+            _raw_run(
+                files=[],
+                actions=["write_source"],
+                exit_code=1,
+                containment=containment,
+            )
+        ],
+        [],
+    )
+
+    result = score_recordings(manifest, load_recordings(path, manifest))[0]
+
+    assert result.failed_assertion == "isolation.scratch_scope_unconfirmed"
