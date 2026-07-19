@@ -1,0 +1,1 @@
+Produce a plan for the supplied contract without modifying source state.

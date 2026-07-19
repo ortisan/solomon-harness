@@ -1,0 +1,1 @@
+Report the contradictory requirement as a blocker without producing a plan.

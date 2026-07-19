@@ -1,0 +1,1 @@
+Implement only inside the permitted scratch boundary.

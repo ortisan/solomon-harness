@@ -244,6 +244,140 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         mock_gen.assert_called_once()
 
+    def test_compile_keeps_behavioral_evaluations_default_off(self):
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from solomon_harness import behavioral_evals, cli
+
+        blocked = AssertionError("compile must not enter behavioral evaluation")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_external_agent(tmp, "qa")
+            root.joinpath("AGENTS.md").write_text(
+                "# Project instructions\n",
+                encoding="utf-8",
+            )
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(
+                Path(WORKSPACE) / "scripts" / "generate-integrations.py",
+                scripts / "generate-integrations.py",
+            )
+            root.joinpath("pyproject.toml").write_text(
+                '[project]\nname = "solomon-harness"\nversion = "0.0.0"\n',
+                encoding="utf-8",
+            )
+            package = root / "solomon_harness"
+            package.mkdir()
+            package.joinpath("__init__.py").write_text("\n", encoding="utf-8")
+            package.joinpath("mcp_server.py").write_text("\n", encoding="utf-8")
+            root.joinpath("agents", "AGENTS.md").write_text(
+                "# Source rules\n",
+                encoding="utf-8",
+            )
+            workflows = package / "catalog" / "workflows"
+            workflows.mkdir(parents=True)
+            workflows.joinpath("solomon-workflow.md").write_text(
+                "---\ndescription: Run the delivery workflow.\n---\n\n# Workflow\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            subprocess.run(["git", "-C", tmp, "add", "--all"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    tmp,
+                    "-c",
+                    "user.name=Solomon Test",
+                    "-c",
+                    "user.email=solomon@example.invalid",
+                    "commit",
+                    "-qm",
+                    "source fixture",
+                ],
+                check=True,
+            )
+            before = {
+                path.relative_to(root)
+                for path in root.rglob("*")
+            }
+
+            with (
+                patch.object(
+                    behavioral_evals,
+                    "load_manifest",
+                    side_effect=blocked,
+                ) as load_manifest,
+                patch.object(
+                    behavioral_evals,
+                    "prepare_pilot",
+                    side_effect=blocked,
+                ) as prepare_pilot,
+                patch.object(
+                    behavioral_evals,
+                    "load_recordings",
+                    side_effect=blocked,
+                ) as load_recordings,
+                patch.object(
+                    behavioral_evals,
+                    "score_recordings",
+                    side_effect=blocked,
+                ) as score_recordings,
+                patch.object(
+                    behavioral_evals,
+                    "validate_complete_comparison",
+                    side_effect=blocked,
+                ) as validate_comparison,
+                patch.object(
+                    behavioral_evals,
+                    "compare_recordings",
+                    side_effect=blocked,
+                ) as compare_recordings,
+                patch.object(
+                    behavioral_evals,
+                    "main",
+                    side_effect=blocked,
+                ) as behavioral_main,
+                patch(
+                    "urllib.request.urlopen",
+                    side_effect=AssertionError("compile must not open a network connection"),
+                ) as urlopen,
+                patch(
+                    "socket.create_connection",
+                    side_effect=AssertionError("compile must not open a network connection"),
+                ) as create_connection,
+                patch.object(sys, "dont_write_bytecode", True),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    cli.main(harness_dir=tmp, argv=["compile"])
+
+            self.assertEqual(raised.exception.code, 0)
+
+            created = {
+                path.relative_to(root)
+                for path in root.rglob("*")
+            } - before
+            self.assertIn(Path(".claude/agents/qa.md"), created)
+            self.assertFalse(
+                any("behavioral" in path.as_posix() for path in created),
+                created,
+            )
+            self.assertEqual(list(root.rglob("behavioral-eval-*")), [])
+            load_manifest.assert_not_called()
+            prepare_pilot.assert_not_called()
+            load_recordings.assert_not_called()
+            score_recordings.assert_not_called()
+            validate_comparison.assert_not_called()
+            compare_recordings.assert_not_called()
+            behavioral_main.assert_not_called()
+            urlopen.assert_not_called()
+            create_connection.assert_not_called()
+
     def test_packaged_generator_filters_and_reconciles_allowed_agents(self):
         import tempfile
 
