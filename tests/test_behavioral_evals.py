@@ -1,12 +1,15 @@
 """Contract tests for the offline behavioral-evaluation core (#369)."""
 
+import ast
 import copy
 import hashlib
 import json
 import os
 import shutil
 import stat
-from dataclasses import FrozenInstanceError
+import statistics
+import time
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +33,7 @@ from solomon_harness.behavioral_evals import (
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "behavioral_evals"
 MANIFEST_PATH = FIXTURE_ROOT / "manifest.json"
+RECORDINGS_PATH = FIXTURE_ROOT / "recorded-runs.json"
 
 
 def _manifest_data() -> dict[str, Any]:
@@ -44,18 +48,26 @@ def _invalid_manifest_data(variant: str) -> dict[str, Any]:
         data["repetitions"] = 2
     elif variant == "wrong_arms":
         data["arms"] = data["arms"][:1]
+    elif variant == "wrong_arm_ids":
+        data["arms"].reverse()
     elif variant == "too_few_cases":
         data["cases"] = data["cases"][:8]
     elif variant == "duplicate_case":
         data["cases"][1]["id"] = data["cases"][0]["id"]
     elif variant == "bool_budget":
         data["budget"]["max_files"] = True
+    elif variant == "file_budget_above_total":
+        data["budget"]["max_file_bytes"] = data["budget"]["max_total_bytes"] + 1
     elif variant == "budget_above_hard_cap":
         data["budget"]["max_files"] = 1000000
     elif variant == "unsafe_fixture_path":
         data["cases"][0]["fixture_path"] = "../outside"
     elif variant == "unsafe_assertion_path":
         data["cases"][0]["assertions"]["required_files"] = [r"C:\outside.txt"]
+    elif variant == "deep_assertion_path":
+        data["cases"][0]["assertions"]["required_files"] = ["/".join(["x"] * 17)]
+    elif variant == "long_path_component":
+        data["cases"][0]["assertions"]["required_files"] = ["x" * 129]
     elif variant == "prompt_above_budget":
         data["budget"]["max_prompt_bytes"] = 1
     elif variant == "unknown_root_field":
@@ -68,6 +80,18 @@ def _invalid_manifest_data(variant: str) -> dict[str, Any]:
         data["arms"][0]["policy"]["surprise"] = False
     elif variant == "unknown_case_field":
         data["cases"][0]["surprise"] = "ignored"
+    elif variant == "non_boolean_network":
+        data["arms"][0]["policy"]["network_allowed"] = 0
+    elif variant == "duplicate_tool":
+        data["arms"][0]["policy"]["tools"] = ["Read", "Read"]
+    elif variant == "invalid_case_id":
+        data["cases"][0]["id"] = "Planning-Happy"
+    elif variant == "invalid_role":
+        data["cases"][0]["role"] = "operator"
+    elif variant == "missing_role_scenario_coverage":
+        data["cases"][0]["id"] = "planning-other"
+    elif variant == "boolean_schema":
+        data["schema_version"] = True
     else:
         raise AssertionError(f"unknown test variant: {variant}")
     return data
@@ -224,6 +248,7 @@ def test_manifest_loads_closed_versioned_contract() -> None:
     assert canonical_json({"z": 1, "nested": {"b": 2, "a": 3}}) == (
         '{"nested":{"a":3,"b":2},"z":1}'
     )
+    assert manifest.to_data() == _manifest_data()
     with pytest.raises(FrozenInstanceError):
         setattr(manifest, "repetitions", 4)
 
@@ -234,18 +259,28 @@ def test_manifest_loads_closed_versioned_contract() -> None:
         ("unsupported_schema", "unsupported_schema"),
         ("wrong_repetitions", "invalid_manifest"),
         ("wrong_arms", "invalid_manifest"),
+        ("wrong_arm_ids", "invalid_manifest"),
         ("too_few_cases", "invalid_manifest"),
         ("duplicate_case", "invalid_manifest"),
         ("bool_budget", "invalid_manifest"),
+        ("file_budget_above_total", "invalid_manifest"),
         ("budget_above_hard_cap", "limit_exceeded"),
         ("unsafe_fixture_path", "unsafe_path"),
         ("unsafe_assertion_path", "unsafe_path"),
+        ("deep_assertion_path", "limit_exceeded"),
+        ("long_path_component", "limit_exceeded"),
         ("prompt_above_budget", "limit_exceeded"),
         ("unknown_root_field", "invalid_manifest"),
         ("unknown_nested_field", "invalid_manifest"),
         ("unknown_budget_field", "invalid_manifest"),
         ("unknown_policy_field", "invalid_manifest"),
         ("unknown_case_field", "invalid_manifest"),
+        ("non_boolean_network", "invalid_manifest"),
+        ("duplicate_tool", "invalid_manifest"),
+        ("invalid_case_id", "invalid_manifest"),
+        ("invalid_role", "invalid_manifest"),
+        ("missing_role_scenario_coverage", "invalid_manifest"),
+        ("boolean_schema", "invalid_manifest"),
     ],
 )
 def test_manifest_rejects_invalid_bounds_and_unsafe_fixture_paths(
@@ -300,6 +335,41 @@ def test_manifest_rejects_symlinked_or_oversized_input(tmp_path: Path) -> None:
     with pytest.raises(EvaluationError) as size_error:
         load_manifest(oversized)
     assert size_error.value.code == "limit_exceeded"
+
+
+@pytest.mark.parametrize(
+    ("raw", "field"),
+    [
+        (b"\xff", "json.encoding"),
+        (b"{", "json.syntax"),
+        (b"]", "json.structure"),
+    ],
+)
+def test_manifest_maps_malformed_bytes_to_closed_errors(
+    tmp_path: Path,
+    raw: bytes,
+    field: str,
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_bytes(raw)
+
+    with pytest.raises(EvaluationError) as raised:
+        load_manifest(path)
+
+    assert raised.value.code == "invalid_manifest"
+    assert raised.value.field == field
+
+
+def test_manifest_rejects_missing_parent_without_exposing_path(tmp_path: Path) -> None:
+    path = tmp_path / "missing-parent" / "manifest.json"
+
+    with pytest.raises(EvaluationError) as raised:
+        load_manifest(path)
+
+    assert raised.value.to_data() == {
+        "error": {"code": "unsafe_path", "field": "manifest"}
+    }
+    assert str(tmp_path) not in canonical_json(raised.value.to_data())
 
 
 def test_prepare_pilot_creates_54_fresh_bounded_scratch_fixtures(tmp_path: Path) -> None:
@@ -441,6 +511,29 @@ def test_prepare_rejects_special_hardlinked_or_raced_seed(
     assert external.read_text(encoding="utf-8") == "external"
 
 
+def test_prepare_copies_nested_seed_directories_into_every_matching_run(
+    tmp_path: Path,
+) -> None:
+    fixture_copy = tmp_path / "fixtures"
+    shutil.copytree(FIXTURE_ROOT, fixture_copy)
+    nested = fixture_copy / "cases" / "planning-happy" / "nested" / "deeper"
+    nested.mkdir(parents=True)
+    nested.joinpath("context.txt").write_text("bounded context", encoding="utf-8")
+    manifest = load_manifest(fixture_copy / "manifest.json")
+
+    prepared = prepare_pilot(manifest, tmp_path / "scratch")
+
+    matching = [run for run in prepared if run.case_id == "planning-happy"]
+    assert len(matching) == 6
+    assert all(
+        run.workspace_path.joinpath("nested/deeper/context.txt").read_text(
+            encoding="utf-8"
+        )
+        == "bounded context"
+        for run in matching
+    )
+
+
 def test_normalize_artifact_preserves_usage_and_marks_missing_metrics_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -542,6 +635,76 @@ def test_normalize_artifact_preserves_observed_zero_usage(tmp_path: Path) -> Non
         "cache_tokens": 0,
         "reported_cost_microusd": 0,
     }
+
+
+@pytest.mark.parametrize(
+    ("variant", "error_code", "field"),
+    [
+        ("unknown_case", "invalid_artifact", "run.case_id"),
+        ("unknown_arm", "invalid_artifact", "run.arm"),
+        ("excess_repetition", "invalid_artifact", "run.repetition"),
+        ("policy_mismatch", "invalid_artifact", "run.effective_policy"),
+        ("zero_duration", "invalid_artifact", "run.duration_ms"),
+        ("invalid_effort", "invalid_artifact", "run.effort"),
+        ("empty_agent_content", "invalid_artifact", "run.agent_content"),
+        ("duplicate_file", "invalid_artifact", "run.files.duplicate"),
+        ("invalid_exit", "invalid_artifact", "case.assertions.expected_exit_code"),
+        ("invalid_usage_identity", "invalid_artifact", "usage_record.identity"),
+        ("zero_usage_repetition", "invalid_artifact", "usage_record.repetition"),
+        ("negative_usage", "invalid_artifact", "usage_record.input_tokens"),
+        ("usage_above_budget", "limit_exceeded", "usage_record.input_tokens"),
+    ],
+)
+def test_recordings_reject_invalid_identity_policy_and_metrics(
+    tmp_path: Path,
+    variant: str,
+    error_code: str,
+    field: str,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    run = _raw_run()
+    usage = _usage_record()
+    usage_records: list[dict[str, Any]] = []
+    if variant == "unknown_case":
+        run["case_id"] = "unknown-case"
+    elif variant == "unknown_arm":
+        run["arm"] = "control"
+    elif variant == "excess_repetition":
+        run["repetition"] = 4
+    elif variant == "policy_mismatch":
+        run["effective_policy"]["tools"].append("Write")
+    elif variant == "zero_duration":
+        run["duration_ms"] = 0
+    elif variant == "invalid_effort":
+        run["effort"] = "Medium"
+    elif variant == "empty_agent_content":
+        run["agent_content"] = ""
+    elif variant == "duplicate_file":
+        run["files"] = ["PLAN.md", "PLAN.md"]
+    elif variant == "invalid_exit":
+        run["exit_code"] = True
+    elif variant == "invalid_usage_identity":
+        usage["case_id"] = "Unknown"
+        usage_records = [usage]
+    elif variant == "zero_usage_repetition":
+        usage["repetition"] = 0
+        usage_records = [usage]
+    elif variant == "negative_usage":
+        usage["input_tokens"] = -1
+        usage_records = [usage]
+    elif variant == "usage_above_budget":
+        usage["input_tokens"] = manifest.budget.max_input_tokens + 1
+        usage_records = [usage]
+    else:
+        raise AssertionError(f"unknown test variant: {variant}")
+    path = _write_recordings(tmp_path, [run], usage_records)
+
+    with pytest.raises(EvaluationError) as raised:
+        load_recordings(path, manifest)
+
+    assert raised.value.code == error_code
+    assert raised.value.field == field
+    assert str(tmp_path) not in canonical_json(raised.value.to_data())
 
 
 @pytest.mark.parametrize(
@@ -840,6 +1003,14 @@ def test_ac_eval_06_equal_aggregate_stable_case_regression_is_ineligible(
             failed_assertion="artifact.required_file_missing:review.json",
         ),
     )
+    assert report.to_data()["golden_case_regressions"] == [
+        {
+            "case_id": "review-happy",
+            "case_version": "1",
+            "repetition": 2,
+            "failed_assertion": "artifact.required_file_missing:review.json",
+        }
+    ]
     assert report.usage_attribution.to_data() == {
         "attributed_records": 0,
         "exposed_records": 0,
@@ -873,6 +1044,25 @@ def test_compare_uses_aggregate_gate_without_mislabeling_unstable_case(
     assert report.golden_case_regressions == ()
     assert report.eligibility_failures == ("aggregate_pass_rate_regression",)
     assert report.eligible is False
+
+
+def test_duration_median_preserves_integer_and_half_millisecond_values() -> None:
+    assert behavioral_evals._median_duration([3]) == 3
+    assert behavioral_evals._median_duration([1, 3]) == 2
+    assert behavioral_evals._median_duration([1, 2]) == 1.5
+
+
+def test_compare_rejects_bundle_version_mismatch_before_scoring(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(tmp_path, [_raw_run()], [])
+    bundle = load_recordings(path, manifest)
+
+    with pytest.raises(EvaluationError) as raised:
+        compare_recordings(manifest, replace(bundle, schema_version=2))
+
+    assert raised.value.to_data() == {
+        "error": {"code": "invalid_artifact", "field": "comparison.bundle"}
+    }
 
 
 def test_usage_attribution_uses_exact_95_percent_integer_threshold(
@@ -938,3 +1128,270 @@ def test_comparison_is_byte_stable_when_recording_order_changes(tmp_path: Path) 
     second = compare_recordings(manifest, load_recordings(second_path, manifest))
 
     assert canonical_json(first.to_data()) == canonical_json(second.to_data())
+
+
+def test_module_cli_prepares_all_runs_without_invoking_a_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scratch_root = tmp_path / "scratch"
+
+    exit_code = main(
+        [
+            "prepare",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--scratch-root",
+            os.fspath(scratch_root),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    prepared = json.loads(captured.out)
+    assert exit_code == 0
+    assert captured.err == ""
+    assert prepared["schema_version"] == 1
+    assert prepared["golden_set_version"] == "2026-07-18.1"
+    assert len(prepared["prepared_runs"]) == 54
+    assert len({run["scratch_path"] for run in prepared["prepared_runs"]}) == 54
+    assert all(Path(run["request_path"]).is_file() for run in prepared["prepared_runs"])
+
+
+def test_module_cli_writes_canonical_score_and_comparison_exclusively(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    usage = [_usage_for_run(run) for run in runs]
+    recordings = _write_recordings(tmp_path, runs, usage)
+    results_path = tmp_path / "results.json"
+    comparison_path = tmp_path / "comparison.json"
+
+    score_exit = main(
+        [
+            "score",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--recordings",
+            os.fspath(recordings),
+            "--output",
+            os.fspath(results_path),
+        ]
+    )
+    compare_exit = main(
+        [
+            "compare",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--recordings",
+            os.fspath(recordings),
+            "--output",
+            os.fspath(comparison_path),
+        ]
+    )
+
+    bundle = load_recordings(recordings, manifest)
+    expected_results = {
+        "schema_version": manifest.schema_version,
+        "golden_set_version": manifest.golden_set_version,
+        "results": [result.to_data() for result in score_recordings(manifest, bundle)],
+    }
+    expected_comparison = compare_recordings(manifest, bundle).to_data()
+    captured = capsys.readouterr()
+    assert (score_exit, compare_exit) == (0, 0)
+    assert captured.out == ""
+    assert captured.err == ""
+    assert results_path.read_bytes() == (canonical_json(expected_results) + "\n").encode()
+    assert comparison_path.read_bytes() == (
+        canonical_json(expected_comparison) + "\n"
+    ).encode()
+    assert stat.S_IMODE(results_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(comparison_path.stat().st_mode) == 0o600
+
+
+def test_module_cli_preserves_existing_and_symlinked_output_targets(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    recordings = _write_recordings(tmp_path, runs, [])
+    existing = tmp_path / "existing.json"
+    existing.write_bytes(b"preserve existing")
+    target = tmp_path / "target.json"
+    target.write_bytes(b"preserve target")
+    linked = tmp_path / "linked.json"
+    linked.symlink_to(target)
+    missing_parent_output = tmp_path / "missing-parent" / "output.json"
+
+    existing_exit = main(
+        [
+            "score",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--recordings",
+            os.fspath(recordings),
+            "--output",
+            os.fspath(existing),
+        ]
+    )
+    linked_exit = main(
+        [
+            "compare",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--recordings",
+            os.fspath(recordings),
+            "--output",
+            os.fspath(linked),
+        ]
+    )
+    missing_parent_exit = main(
+        [
+            "score",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--recordings",
+            os.fspath(recordings),
+            "--output",
+            os.fspath(missing_parent_output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert (existing_exit, linked_exit, missing_parent_exit) == (2, 2, 2)
+    assert existing.read_bytes() == b"preserve existing"
+    assert target.read_bytes() == b"preserve target"
+    assert linked.is_symlink()
+    assert [json.loads(line) for line in captured.err.splitlines()] == [
+        {"error": {"code": "unsafe_path", "field": "output"}},
+        {"error": {"code": "unsafe_path", "field": "output"}},
+        {"error": {"code": "unsafe_path", "field": "output"}},
+    ]
+    assert captured.out == ""
+
+
+def test_behavioral_module_has_no_provider_network_or_process_imports() -> None:
+    module_path = Path(behavioral_evals.__file__)
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    imported_roots = {
+        alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        (node.module or "").split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+
+    assert imported_roots.isdisjoint(
+        {
+            "anthropic",
+            "google",
+            "httpx",
+            "openai",
+            "requests",
+            "socket",
+            "subprocess",
+            "urllib",
+        }
+    )
+
+
+def test_ac_eval_01_complete_fixture_corpus_scores_exact_54_results() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    bundle = load_recordings(RECORDINGS_PATH, manifest)
+
+    results = score_recordings(manifest, bundle)
+
+    expected_identities = {
+        (case.case_id, arm.arm_id, repetition)
+        for case in manifest.cases
+        for arm in manifest.arms
+        for repetition in range(1, manifest.repetitions + 1)
+    }
+    assert len(results) == 54
+    assert {
+        (result.identity.case_id, result.identity.arm_id, result.identity.repetition)
+        for result in results
+    } == expected_identities
+    assert all(
+        set(result.to_data())
+        == {
+            "schema_version",
+            "golden_set_version",
+            "case_id",
+            "case_version",
+            "arm",
+            "repetition",
+            "agent_content_digest",
+            "effective_policy",
+            "policy_digest",
+            "host",
+            "model",
+            "effort",
+            "verdict",
+            "failed_assertion",
+            "duration_ms",
+            "usage",
+            "raw_artifact",
+        }
+        for result in results
+    )
+    assert any(result.usage.cache_tokens is None for result in results)
+    assert any(result.usage.reported_cost_microusd is None for result in results)
+    assert any(
+        result.usage.to_data()
+        == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_tokens": 0,
+            "reported_cost_microusd": 0,
+        }
+        for result in results
+    )
+
+    report = compare_recordings(manifest, bundle)
+    assert (report.baseline.passed_runs, report.candidate.passed_runs) == (26, 26)
+    assert report.golden_case_regressions == (
+        GoldenCaseRegression(
+            case_id="review-happy",
+            case_version="1",
+            repetition=2,
+            failed_assertion="artifact.required_file_missing:review.json",
+        ),
+    )
+    assert report.usage_attribution.to_data() == {
+        "attributed_records": 54,
+        "exposed_records": 54,
+        "unattributed_records": 0,
+        "minimum_percent": 95,
+        "status": "met",
+    }
+    assert report.eligibility_failures == ("golden_case_regression",)
+    assert report.eligible is False
+
+
+def test_fixture_normalization_and_scoring_median_overhead_stays_below_one_percent() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    for _ in range(3):
+        score_recordings(manifest, load_recordings(RECORDINGS_PATH, manifest))
+
+    elapsed_per_run_ms: list[float] = []
+    latest_results = ()
+    for _ in range(15):
+        started = time.perf_counter_ns()
+        latest_results = score_recordings(
+            manifest,
+            load_recordings(RECORDINGS_PATH, manifest),
+        )
+        elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000
+        elapsed_per_run_ms.append(elapsed_ms / len(latest_results))
+
+    median_local_ms = statistics.median(elapsed_per_run_ms)
+    median_host_ms = statistics.median(
+        result.duration_ms for result in latest_results
+    )
+    assert median_local_ms < median_host_ms * 0.01

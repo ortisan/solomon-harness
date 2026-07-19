@@ -347,6 +347,104 @@ class TestCompileSyncsIntegrations(unittest.TestCase):
         mock_gen.assert_called_once_with(WORKSPACE, allowed_names=["qa"])
         self.assertEqual(events, ["scaffold", "select", "generate"])
 
+    def test_compile_keeps_behavioral_evaluations_default_off(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from solomon_harness import behavioral_evals, cli
+
+        blocked = AssertionError("compile must not enter behavioral evaluation")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_external_agent(tmp, "qa")
+            root.joinpath("AGENTS.md").write_text(
+                "# Project instructions\n",
+                encoding="utf-8",
+            )
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(
+                Path(WORKSPACE) / "scripts" / "generate-integrations.py",
+                scripts / "generate-integrations.py",
+            )
+            before = {
+                path.relative_to(root)
+                for path in root.rglob("*")
+            }
+
+            with (
+                patch.object(
+                    behavioral_evals,
+                    "load_manifest",
+                    side_effect=blocked,
+                ) as load_manifest,
+                patch.object(
+                    behavioral_evals,
+                    "prepare_pilot",
+                    side_effect=blocked,
+                ) as prepare_pilot,
+                patch.object(
+                    behavioral_evals,
+                    "load_recordings",
+                    side_effect=blocked,
+                ) as load_recordings,
+                patch.object(
+                    behavioral_evals,
+                    "score_recordings",
+                    side_effect=blocked,
+                ) as score_recordings,
+                patch.object(
+                    behavioral_evals,
+                    "validate_complete_comparison",
+                    side_effect=blocked,
+                ) as validate_comparison,
+                patch.object(
+                    behavioral_evals,
+                    "compare_recordings",
+                    side_effect=blocked,
+                ) as compare_recordings,
+                patch.object(
+                    behavioral_evals,
+                    "main",
+                    side_effect=blocked,
+                ) as behavioral_main,
+                patch(
+                    "urllib.request.urlopen",
+                    side_effect=AssertionError("compile must not open a network connection"),
+                ) as urlopen,
+                patch(
+                    "socket.create_connection",
+                    side_effect=AssertionError("compile must not open a network connection"),
+                ) as create_connection,
+                patch.object(sys, "dont_write_bytecode", True),
+            ):
+                cli.main(harness_dir=tmp, argv=["compile"])
+
+            created = {
+                path.relative_to(root)
+                for path in root.rglob("*")
+            } - before
+            self.assertEqual(
+                created,
+                {
+                    Path(".claude"),
+                    Path(".claude/agents"),
+                    Path(".claude/agents/qa.md"),
+                },
+            )
+            self.assertEqual(list(root.rglob("behavioral-eval-*")), [])
+            load_manifest.assert_not_called()
+            prepare_pilot.assert_not_called()
+            load_recordings.assert_not_called()
+            score_recordings.assert_not_called()
+            validate_comparison.assert_not_called()
+            compare_recordings.assert_not_called()
+            behavioral_main.assert_not_called()
+            urlopen.assert_not_called()
+            create_connection.assert_not_called()
+
     def test_packaged_generator_filters_and_reconciles_allowed_agents(self):
         import tempfile
 

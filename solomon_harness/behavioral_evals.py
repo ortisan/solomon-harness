@@ -42,6 +42,11 @@ MAX_PATH_COMPONENT_BYTES = 128
 MAX_PATH_DEPTH = 16
 MAX_LIST_ITEMS = 64
 MAX_STRING_BYTES = 16_384
+MAX_JSON_DEPTH = 64
+MAX_JSON_INTEGER_DIGITS = 19
+MAX_SEED_ENTRIES = 4_096
+MAX_SEED_DIRECTORIES = 1_024
+MAX_PILOT_COPY_BYTES = 256 * 1_024 * 1_024
 HARD_BUDGET_LIMITS = {
     "max_prompt_bytes": 65_536,
     "max_files": 256,
@@ -268,6 +273,7 @@ class EvaluationManifest:
     arms: Tuple[EvaluationArm, ...]
     cases: Tuple[EvaluationCase, ...]
     source_root: Path
+    source_root_identity: Tuple[int, int]
 
     def to_data(self) -> Dict[str, object]:
         return {
@@ -297,6 +303,13 @@ class PreparedRun:
 class _SeedFile:
     relative_path: str
     content: bytes
+
+
+@dataclass
+class _SeedScanBudget:
+    entries: int = 0
+    directories: int = 0
+    projected_copy_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -574,17 +587,59 @@ def _reject_constant(_value: str) -> object:
     raise _invalid("json.non_finite_number")
 
 
-def _bounded_json(
+def _reject_float(_value: str) -> object:
+    raise _invalid("json.float")
+
+
+def _parse_bounded_integer(value: str) -> int:
+    digits = value[1:] if value.startswith("-") else value
+    if len(digits) > MAX_JSON_INTEGER_DIGITS:
+        raise _invalid("json.integer")
+    return int(value)
+
+
+def _validate_json_nesting(text: str) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise _invalid("json.structure")
+        elif character in "]}":
+            depth -= 1
+            if depth < 0:
+                raise _invalid("json.structure")
+
+
+def _directory_identity(entry: os.stat_result) -> Tuple[int, int]:
+    return (entry.st_dev, entry.st_ino)
+
+
+def _bounded_json_with_identity(
     path: Path,
     *,
     max_bytes: int = MAX_MANIFEST_BYTES,
     subject: str = "manifest",
-) -> object:
+) -> Tuple[object, Tuple[int, int]]:
+    root_path = Path(os.path.abspath(os.fspath(path.parent)))
     try:
-        root_fd = open_root_directory(os.fspath(path.parent))
+        root_fd = open_root_directory(os.fspath(root_path))
     except (FileNotFoundError, OSError, UnsafePathError) as exc:
         raise EvaluationError("unsafe_path", subject) from exc
     try:
+        root_identity = _directory_identity(os.fstat(root_fd))
         try:
             entry = stat_at(root_fd, path.name)
         except (OSError, UnsafePathError) as exc:
@@ -604,15 +659,37 @@ def _bounded_json(
 
     try:
         text = raw.decode("utf-8", errors="strict")
-        return json.loads(
+        _validate_json_nesting(text)
+        value = json.loads(
             text,
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
+            parse_float=_reject_float,
+            parse_int=_parse_bounded_integer,
         )
+        return value, root_identity
+    except EvaluationError:
+        raise
     except UnicodeDecodeError as exc:
         raise _invalid("json.encoding") from exc
     except json.JSONDecodeError as exc:
         raise _invalid("json.syntax") from exc
+    except (RecursionError, ValueError) as exc:
+        raise _invalid("json.structure") from exc
+
+
+def _bounded_json(
+    path: Path,
+    *,
+    max_bytes: int = MAX_MANIFEST_BYTES,
+    subject: str = "manifest",
+) -> object:
+    value, _root_identity = _bounded_json_with_identity(
+        path,
+        max_bytes=max_bytes,
+        subject=subject,
+    )
+    return value
 
 
 def _closed_object(value: object, fields: set[str], name: str) -> Dict[str, object]:
@@ -792,7 +869,11 @@ def _load_cases(value: object, budget: EvaluationBudget) -> Tuple[EvaluationCase
 
 def load_manifest(path: Path) -> EvaluationManifest:
     """Load and strictly validate a bounded behavioral manifest."""
-    data = _closed_object(_bounded_json(path), ROOT_FIELDS, "manifest")
+    source_root = Path(os.path.abspath(os.fspath(path.parent)))
+    document, source_root_identity = _bounded_json_with_identity(
+        source_root / path.name
+    )
+    data = _closed_object(document, ROOT_FIELDS, "manifest")
     schema_version = data["schema_version"]
     if isinstance(schema_version, bool) or not isinstance(schema_version, int):
         raise _invalid("schema_version")
@@ -813,7 +894,8 @@ def load_manifest(path: Path) -> EvaluationManifest:
         budget=budget,
         arms=arms,
         cases=cases,
-        source_root=path.parent,
+        source_root=source_root,
+        source_root_identity=source_root_identity,
     )
 
 
@@ -1361,7 +1443,11 @@ def _collect_seed_files(
     budget: EvaluationBudget,
     *,
     prefix: str = "",
+    scan_budget: _SeedScanBudget | None = None,
+    copy_multiplier: int = 1,
 ) -> Tuple[_SeedFile, ...]:
+    if scan_budget is None:
+        scan_budget = _SeedScanBudget()
     collected: List[_SeedFile] = []
     total_bytes = 0
 
@@ -1369,10 +1455,19 @@ def _collect_seed_files(
         nonlocal total_bytes
         if depth > MAX_PATH_DEPTH:
             raise EvaluationError("limit_exceeded", "fixture.depth")
+        names: List[str] = []
         try:
-            names = sorted(os.listdir(current_fd))
+            with os.scandir(current_fd) as entries:
+                for directory_entry in entries:
+                    scan_budget.entries += 1
+                    if scan_budget.entries > MAX_SEED_ENTRIES:
+                        raise EvaluationError("limit_exceeded", "fixture.entries")
+                    names.append(directory_entry.name)
+        except EvaluationError:
+            raise
         except OSError as exc:
             raise EvaluationError("unsafe_path", "fixture") from exc
+        names.sort()
         for name in names:
             relative_path = f"{current_prefix}/{name}" if current_prefix else name
             _safe_relative_path(relative_path, "fixture.entry")
@@ -1383,6 +1478,9 @@ def _collect_seed_files(
             if entry is None:
                 raise EvaluationError("unsafe_path", "fixture.entry")
             if stat.S_ISDIR(entry.st_mode):
+                scan_budget.directories += 1
+                if scan_budget.directories > MAX_SEED_DIRECTORIES:
+                    raise EvaluationError("limit_exceeded", "fixture.directories")
                 child_fd = _open_existing_directory(current_fd, name, "fixture.entry")
                 try:
                     walk(child_fd, relative_path, depth + 1)
@@ -1406,17 +1504,38 @@ def _collect_seed_files(
             total_bytes += len(content)
             if total_bytes > budget.max_total_bytes:
                 raise EvaluationError("limit_exceeded", "fixture.total_bytes")
+            projected_copy_bytes = len(content) * copy_multiplier
+            if (
+                scan_budget.projected_copy_bytes + projected_copy_bytes
+                > MAX_PILOT_COPY_BYTES
+            ):
+                raise EvaluationError("limit_exceeded", "pilot.copy_bytes")
+            scan_budget.projected_copy_bytes += projected_copy_bytes
             collected.append(_SeedFile(relative_path=relative_path, content=content))
 
     walk(directory_fd, prefix, 0)
     return tuple(collected)
 
 
-def _read_case_seed(manifest: EvaluationManifest, case: EvaluationCase) -> Tuple[_SeedFile, ...]:
+def _read_case_seed(
+    manifest: EvaluationManifest,
+    case: EvaluationCase,
+    *,
+    scan_budget: _SeedScanBudget | None = None,
+    copy_multiplier: int = 1,
+) -> Tuple[_SeedFile, ...]:
     try:
         root_fd = open_root_directory(os.fspath(manifest.source_root))
     except (FileNotFoundError, OSError, UnsafePathError) as exc:
         raise EvaluationError("unsafe_path", "fixture_root") from exc
+    try:
+        root_identity = _directory_identity(os.fstat(root_fd))
+    except OSError as exc:
+        os.close(root_fd)
+        raise EvaluationError("unsafe_path", "fixture_root") from exc
+    if root_identity != manifest.source_root_identity:
+        os.close(root_fd)
+        raise EvaluationError("unsafe_path", "fixture_root")
     current_fd = root_fd
     try:
         for component in case.fixture_path.split("/"):
@@ -1424,7 +1543,12 @@ def _read_case_seed(manifest: EvaluationManifest, case: EvaluationCase) -> Tuple
             if current_fd != root_fd:
                 os.close(current_fd)
             current_fd = next_fd
-        return _collect_seed_files(current_fd, manifest.budget)
+        return _collect_seed_files(
+            current_fd,
+            manifest.budget,
+            scan_budget=scan_budget,
+            copy_multiplier=copy_multiplier,
+        )
     finally:
         os.close(current_fd)
         if current_fd != root_fd:
@@ -1494,7 +1618,17 @@ def _execution_packet(
 
 def prepare_pilot(manifest: EvaluationManifest, scratch_root: Path) -> Tuple[PreparedRun, ...]:
     """Prepare one fresh scratch fixture for every case, arm, and repetition."""
-    seeds = {case.case_id: _read_case_seed(manifest, case) for case in manifest.cases}
+    scan_budget = _SeedScanBudget()
+    copy_multiplier = len(manifest.arms) * manifest.repetitions
+    seeds = {
+        case.case_id: _read_case_seed(
+            manifest,
+            case,
+            scan_budget=scan_budget,
+            copy_multiplier=copy_multiplier,
+        )
+        for case in manifest.cases
+    }
     root_fd = _open_scratch_root(scratch_root)
     batch_name = f"behavioral-eval-{secrets.token_hex(8)}"
     try:
@@ -1544,20 +1678,78 @@ def prepare_pilot(manifest: EvaluationManifest, scratch_root: Path) -> Tuple[Pre
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m solomon_harness.behavioral_evals")
     commands = parser.add_subparsers(dest="command", required=True)
-    compare = commands.add_parser("compare")
-    compare.add_argument("--manifest", required=True)
-    compare.add_argument("--recordings", required=True)
-    compare.add_argument("--output", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("--manifest", required=True)
+    prepare.add_argument("--scratch-root", required=True)
+    for command in ("score", "compare"):
+        processing = commands.add_parser(command)
+        processing.add_argument("--manifest", required=True)
+        processing.add_argument("--recordings", required=True)
+        processing.add_argument("--output", required=True)
     return parser
 
 
+def _write_output(path: Path, value: object) -> None:
+    content = (canonical_json(value) + "\n").encode("utf-8")
+    try:
+        parent_fd = open_root_directory(os.fspath(path.parent))
+    except (FileNotFoundError, OSError, UnsafePathError) as exc:
+        raise EvaluationError("unsafe_path", "output") from exc
+    try:
+        try:
+            created = create_regular_at(parent_fd, path.name, content, mode=0o600)
+        except (OSError, UnsafePathError) as exc:
+            raise EvaluationError("unsafe_path", "output") from exc
+        if not created:
+            raise EvaluationError("unsafe_path", "output")
+    finally:
+        os.close(parent_fd)
+
+
+def _prepared_runs_data(
+    manifest: EvaluationManifest,
+    prepared: Sequence[PreparedRun],
+) -> Dict[str, object]:
+    return {
+        "schema_version": manifest.schema_version,
+        "golden_set_version": manifest.golden_set_version,
+        "prepared_runs": [
+            {
+                "case_id": run.case_id,
+                "case_version": run.case_version,
+                "arm": run.arm_id,
+                "repetition": run.repetition,
+                "scratch_path": os.fspath(run.scratch_path),
+                "workspace_path": os.fspath(run.workspace_path),
+                "request_path": os.fspath(run.request_path),
+            }
+            for run in prepared
+        ],
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Adapt local comparison files to closed domain errors and process exits."""
+    """Adapt explicit local files to closed domain errors and process exits."""
     arguments = _argument_parser().parse_args(argv)
     try:
         manifest = load_manifest(Path(arguments.manifest))
+        if arguments.command == "prepare":
+            prepared = prepare_pilot(manifest, Path(arguments.scratch_root))
+            sys.stdout.write(canonical_json(_prepared_runs_data(manifest, prepared)) + "\n")
+            return 0
         recordings = load_recordings(Path(arguments.recordings), manifest)
-        compare_recordings(manifest, recordings)
+        if arguments.command == "score":
+            output = {
+                "schema_version": manifest.schema_version,
+                "golden_set_version": manifest.golden_set_version,
+                "results": [
+                    result.to_data()
+                    for result in score_recordings(manifest, recordings)
+                ],
+            }
+        else:
+            output = compare_recordings(manifest, recordings).to_data()
+        _write_output(Path(arguments.output), output)
     except EvaluationError as exc:
         sys.stderr.write(canonical_json(exc.to_data()) + "\n")
         return 2
