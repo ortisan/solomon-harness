@@ -8,7 +8,7 @@ Agents invoke this through a thin entrypoint that passes its own directory as
 import argparse
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TextIO, Tuple
 
 from solomon_harness.bootstrap import scaffold_new_agent
 
@@ -51,32 +51,32 @@ def _subagent_description(filepath: str) -> str:
     return ""
 
 
-def _generate_integrations(
-    workspace_root: str,
-    *,
-    allowed_names: Optional[List[str]] = None,
-) -> None:
-    """Regenerate Claude agents, Gemini commands, and Codex skills.
+def _generate_integrations(workspace_root: str) -> int:
+    """Reconcile all native adapters from the neutral Solomon catalog.
 
-    Loaded from scripts/generate-integrations.py so the compile step keeps the
-    host integrations in sync with the agents/ and .claude/commands/ sources. A
-    packaged Claude-only fallback when the project script is absent.
+    Installed consumers go through the install transaction so the manifest,
+    stale-file cleanup, rollback, and adapter ownership stay synchronized.
+    The source repository has no install manifest and compiles its dogfood
+    adapters directly.
     """
-    import importlib.util
+    from solomon_harness.layout import HarnessPaths
 
-    gi_path = os.path.join(workspace_root, "scripts", "generate-integrations.py")
-    if not os.path.isfile(gi_path):
-        from solomon_harness.integrations import generate_claude_agents
+    if HarnessPaths(workspace_root).manifest.is_file():
+        from solomon_harness.install_layout import compile_project_adapters
 
-        if allowed_names is None:
-            raise ValueError("fallback integration generation requires selected agent names")
-        generate_claude_agents(workspace_root, allowed_names=allowed_names)
-        return
-    spec = importlib.util.spec_from_file_location("generate_integrations", gi_path)
-    if spec and spec.loader:
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.generate(workspace_root)
+        conflicts = compile_project_adapters(workspace_root).conflicts
+    else:
+        from solomon_harness.host_adapters import compile_adapters
+
+        conflicts = compile_adapters(workspace_root).conflicts
+    if conflicts:
+        print(
+            "Adapter compilation preserved conflicting user files: "
+            + ", ".join(conflicts),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 def handle_db_init(harness_dir: str) -> None:
@@ -109,11 +109,10 @@ def handle_eval(harness_dir: str) -> None:
 def handle_run(harness_dir: str, task=None) -> None:
     """Show where the team stopped and point to the delivery workflows.
 
-    The harness does not run a model itself; Claude Code and Gemini expose the
-    workflows as /solomon-* commands, while Codex exposes them as $solomon-*
-    skills. This command resumes context from project memory and renders the
-    invocation form accepted by the active host. It no longer simulates task
-    execution.
+    The harness does not run a model itself; Claude, AGY, or Codex provides the
+    execution loop and discovers the Solomon workflow skills.
+    This command resumes context from the project memory and lists those
+    workflows. It no longer simulates task execution.
     """
     from solomon_harness.tools.database_client import DatabaseClient
     from solomon_harness.host import current_host, workflow_invocation
@@ -182,8 +181,7 @@ def handle_run(harness_dir: str, task=None) -> None:
                 f"e.g. {command}."
             )
 
-        host_label = "Codex" if host == "codex" else "Claude/Gemini"
-        print(f"\nDelivery workflows ({host_label}):")
+        print("\nDelivery workflows (slash skills in Claude/AGY; $ skills in Codex):")
         workflows = [
             ("solomon-workflow", "run a task end-to-end, or continue from a previous execution"),
             ("solomon-loop", "autonomous parallel loop over Ready issues"),
@@ -379,7 +377,10 @@ def handle_notify(workspace_root: str, message: str, event: str) -> None:
     if notify.send(workspace_root, event, message):
         print("Notification sent.")
     else:
-        print("No notifier configured (set SOLOMON_NOTIFY_WEBHOOK or a notify.mode in .agent/config.json).")
+        print(
+            "No notifier configured (set SOLOMON_NOTIFY_WEBHOOK or notify.mode "
+            "in .agents/solomon/config/project.json)."
+        )
 
 
 def handle_loop_budget(workspace_root: str) -> None:
@@ -399,42 +400,322 @@ def handle_loop_budget(workspace_root: str) -> None:
     print(f"Ledger:      {loop_budget.ledger_path(workspace_root)}")
 
 
-def handle_loop_guard(workspace_root: str) -> None:
-    """PreToolUse hook: block unsafe tool calls under the loop's guardrails.
+def _session_resume_context(workspace_root: str) -> str:
+    """Build SessionStart context without leaking non-protocol output.
 
-    Blocks a human-gated transition (`gh pr merge` / `gh release create` / a
-    force-push to a protected branch) whenever the stage runs headlessly, a `git
-    push` / `gh pr merge` issued while another live driver holds the lock, and a
-    file-write tool (Edit/Write/MultiEdit) that targets a denylisted path (so an
-    autonomous run cannot edit `.agent/config.json` to widen itself).
-    Reads the Claude Code hook payload from stdin. Exits 2 to block (the message is
-    fed back to the model), 0 to allow. Fail-open: any error allows the tool,
-    because the portable enforcement of record is the run_stage gate, not this hook.
+    Memory startup and resume are best-effort lifecycle conveniences. Their
+    output is captured here so AGY can receive one valid JSON document and the
+    other hosts receive one plain context block.
     """
+    import contextlib
+    import io
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+        try:
+            from solomon_harness.memory import _describe, ensure_memory_up
+
+            print(_describe(ensure_memory_up(workspace_root)))
+        except Exception as exc:
+            print(f"Memory startup unavailable: {type(exc).__name__}")
+        try:
+            handle_run(workspace_root)
+        except SystemExit as exc:
+            print(f"Project resume unavailable: exit {exc.code}")
+        except Exception as exc:
+            print(f"Project resume unavailable: {type(exc).__name__}")
+
+    context = output.getvalue()
+    diagnostics = errors.getvalue().strip()
+    if diagnostics:
+        context += f"\nSession diagnostics:\n{diagnostics}\n"
+    return context
+
+
+def _guard_hook_verdict(workspace_root: str, normalized):
+    """Apply the existing lock and denylist policy to normalized host facts."""
+    from solomon_harness.host_hooks import (
+        HookVerdict,
+        analyze_shell_command,
+        current_git_branch,
+    )
+    from solomon_harness.loop_lock import (
+        SHELL_CAPABILITY_ENV,
+        LoopLock,
+        guard_verdict,
+    )
+    from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
+
+    from pathlib import Path
+
+    root = Path(workspace_root).resolve()
+
+    def guarded_path(raw_path: str) -> tuple[Optional[str], Optional[HookVerdict]]:
+        candidate = Path(raw_path)
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve(
+            strict=False
+        )
+        try:
+            return resolved.relative_to(root).as_posix(), None
+        except ValueError:
+            return None, HookVerdict(False, f"Target path escapes the workspace: {raw_path}")
+
+    lock_session_id = normalized.session_id or None
+    is_subprocess = os.environ.get("SOLOMON_SUBPROCESS") == "1"
+    if is_subprocess:
+        inherited_session_id = os.environ.get("SOLOMON_SESSION_ID", "").strip()
+        if not inherited_session_id:
+            return HookVerdict(
+                False,
+                "A Solomon subprocess hook is missing its inherited driver identity",
+            )
+        lock_session_id = inherited_session_id
+    lock = LoopLock(workspace_root, session_id=lock_session_id)
+    if normalized.tool_kind == "shell":
+        payload = {
+            "session_id": normalized.session_id,
+            "tool_name": "Bash",
+            "tool_input": {"command": normalized.command},
+        }
+        blocked, reason = guard_verdict(payload, lock, headless=is_subprocess)
+        if blocked:
+            return HookVerdict(False, reason)
+
+    policy = LoopPolicy.from_config(workspace_root)
+    try:
+        from solomon_harness.install_layout import immutable_managed_paths
+
+        protected_paths = set(immutable_managed_paths(root))
+    except RuntimeError as exc:
+        return HookVerdict(False, f"Cannot validate installed harness ownership: {exc}")
+    target_paths = list(normalized.target_paths)
+    if normalized.tool_kind == "shell":
+        try:
+            analysis = analyze_shell_command(normalized.command)
+            target_paths.extend(analysis.write_paths)
+        except ValueError as exc:
+            return HookVerdict(
+                False,
+                "Cannot safely parse shell command against the mandatory loop denylist: "
+                f"{exc}",
+            )
+        for request in analysis.capability_requests:
+            if request.scope == "human:merge":
+                if is_subprocess:
+                    return HookVerdict(
+                        False,
+                        "Merge remains a human confirmation gate and is denied in a "
+                        "Solomon subprocess",
+                    )
+                continue
+            if not is_subprocess:
+                continue
+            branch = request.branch
+            if branch == "@current":
+                try:
+                    branch = current_git_branch(workspace_root, request.cwd)
+                except ValueError as exc:
+                    return HookVerdict(False, str(exc))
+            if request.scope == "git:worktree":
+                target = Path(request.target_path)
+                if not target.is_absolute():
+                    base = Path(request.cwd)
+                    if not base.is_absolute():
+                        base = root / base
+                    target = base / target
+                expected = (
+                    root.parent
+                    / f"{root.name}-worktrees"
+                    / branch.replace("/", "-")
+                )
+                if target.resolve(strict=False) != expected.resolve(strict=False):
+                    return HookVerdict(
+                        False,
+                        "Git worktree target is denied outside the deterministic sibling layout",
+                    )
+            token = os.environ.get(SHELL_CAPABILITY_ENV, "")
+            if not lock.shell_capability_allows(
+                token,
+                scope=request.scope,
+                branch=branch,
+            ):
+                return HookVerdict(
+                    False,
+                    "The Solomon subprocess lacks a valid shell capability for "
+                    f"{request.scope}"
+                    + (f" on branch {branch}" if branch else ""),
+                )
+
+    if is_subprocess and policy.level == "L1" and target_paths:
+        return HookVerdict(
+            False,
+            "L1 is report-only and cannot write local files",
+        )
+
+    for path in target_paths:
+        relative, invalid = guarded_path(path)
+        if invalid is not None:
+            return invalid
+        assert relative is not None  # noqa: S101 - guarded_path established this invariant
+        if any(
+            relative in {"", "."}
+            or relative == protected
+            or relative.startswith(protected.rstrip("/") + "/")
+            or protected.startswith(relative.rstrip("/") + "/")
+            for protected in protected_paths
+        ):
+            return HookVerdict(
+                False,
+                "Managed harness path is immutable under the mandatory loop "
+                f"denylist during a run: {relative}",
+            )
+        payload = {
+            "session_id": normalized.session_id,
+            "tool_name": "Write",
+            "tool_input": {"file_path": relative},
+        }
+        blocked, reason = denied_write_verdict(payload, policy)
+        if blocked:
+            return HookVerdict(False, reason)
+    return HookVerdict(True)
+
+
+def _emit_hook_execution(execution, stdout: TextIO, stderr: TextIO) -> int:
+    if execution.stdout:
+        stdout.write(execution.stdout)
+    if execution.stderr:
+        stderr.write(execution.stderr)
+    return execution.exit_code
+
+
+def handle_host_hook(
+    workspace_root: str,
+    host: str,
+    event: str,
+    *,
+    stdin: Optional[TextIO] = None,
+    stdout: Optional[TextIO] = None,
+    stderr: Optional[TextIO] = None,
+) -> int:
+    """Run one native lifecycle hook through the shared Solomon policy.
+
+    Malformed PreToolUse payloads fail closed. AGY expresses denial in its JSON
+    response with exit zero; Claude and Codex use exit two, as required by their
+    native hook protocols.
+    """
+    import json as _json
+
+    from solomon_harness.host_hooks import (
+        HOOK_HOSTS,
+        HookExecution,
+        HookVerdict,
+        normalize_hook_input,
+        serialize_hook_verdict,
+        serialize_session_context,
+    )
+
+    input_stream = stdin if stdin is not None else sys.stdin
+    output_stream = stdout if stdout is not None else sys.stdout
+    error_stream = stderr if stderr is not None else sys.stderr
+    normalized_host = host.strip().lower()
+    if normalized_host not in HOOK_HOSTS:
+        execution = HookExecution(2, stderr=f"Unknown hook host: {host}\n")
+        return _emit_hook_execution(execution, output_stream, error_stream)
+
+    try:
+        raw = input_stream.read()
+        payload = _json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            raise TypeError("hook payload must be an object")
+    except (TypeError, ValueError, _json.JSONDecodeError) as exc:
+        if event == "pre-tool-use":
+            verdict = HookVerdict(False, f"Invalid hook payload: {type(exc).__name__}")
+            execution = serialize_hook_verdict(normalized_host, verdict)
+        else:
+            execution = HookExecution(
+                2,
+                stderr=f"Invalid lifecycle hook payload: {type(exc).__name__}\n",
+            )
+        return _emit_hook_execution(execution, output_stream, error_stream)
+
+    if event in {"session-start", "pre-invocation"}:
+        invocation_number = payload.get("invocationNum", payload.get("invocationNumber"))
+        if not isinstance(invocation_number, int):
+            invocation_number = None
+        execution = serialize_session_context(
+            normalized_host,
+            _session_resume_context(workspace_root),
+            invocation_number=invocation_number,
+        )
+        return _emit_hook_execution(execution, output_stream, error_stream)
+
+    try:
+        normalized = normalize_hook_input(normalized_host, payload)
+        verdict = _guard_hook_verdict(workspace_root, normalized)
+    except Exception as exc:
+        verdict = HookVerdict(False, f"Hook policy evaluation failed: {type(exc).__name__}")
+    execution = serialize_hook_verdict(normalized_host, verdict)
+    return _emit_hook_execution(execution, output_stream, error_stream)
+
+
+def handle_uninstall(workspace_root: str, *, dry_run: bool) -> int:
+    """Remove only manifest-owned, unchanged project files."""
+    from solomon_harness.install_layout import (
+        InstallConflictError,
+        load_manifest,
+        uninstall_project,
+    )
+
+    try:
+        if dry_run:
+            manifest = load_manifest(workspace_root)
+            entries = manifest.get("entries", []) if manifest else []
+            print(
+                "uninstall --dry-run: "
+                f"{len(entries)} manifest-owned path(s) would be inspected; "
+                "configuration, state, user edits, and merged host settings are preserved."
+            )
+            return 0
+
+        result = uninstall_project(workspace_root)
+    except InstallConflictError as exc:
+        print(f"Uninstall refused: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Uninstall removed {len(result.removed)} unchanged managed file(s).")
+    if result.conflicts:
+        print(
+            "Preserved modified or conflicting files: " + ", ".join(result.conflicts),
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+def handle_loop_guard(workspace_root: str) -> None:
+    """Apply the shared fail-closed policy to the legacy Claude hook payload."""
     import json as _json
 
     try:
         raw = sys.stdin.read()
         payload = _json.loads(raw) if raw.strip() else {}
-    except Exception:
-        sys.exit(0)
+        if not isinstance(payload, dict):
+            raise TypeError("hook payload must be an object")
+    except (TypeError, ValueError, _json.JSONDecodeError) as exc:
+        print(f"Invalid hook payload: {type(exc).__name__}", file=sys.stderr)
+        sys.exit(2)
 
     try:
-        from solomon_harness.loop_lock import LoopLock, guard_verdict
-        from solomon_harness.loop_policy import LoopPolicy, denied_write_verdict
+        from solomon_harness.host_hooks import normalize_hook_input
 
-        lock = LoopLock(workspace_root, session_id=payload.get("session_id"))
-        # SOLOMON_SUBPROCESS marks a headless run_stage child (workflows.py), where
-        # no human is present to complete a merge or release.
-        headless = os.environ.get("SOLOMON_SUBPROCESS") == "1"
-        block, reason = guard_verdict(payload, lock, headless=headless)
-        if not block:
-            block, reason = denied_write_verdict(payload, LoopPolicy.from_config(workspace_root))
-    except Exception:
-        sys.exit(0)
-
-    if block:
-        print(reason, file=sys.stderr)
+        normalized = normalize_hook_input("claude", payload)
+        verdict = _guard_hook_verdict(workspace_root, normalized)
+    except Exception as exc:
+        print(f"Hook policy evaluation failed: {type(exc).__name__}", file=sys.stderr)
+        sys.exit(2)
+    if not verdict.allow:
+        print(verdict.reason or "Blocked by Solomon policy", file=sys.stderr)
         sys.exit(2)
     sys.exit(0)
 
@@ -1188,7 +1469,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "compile",
-        help="Compile agent harnesses and regenerate host-tool integrations",
+        help="Compile Claude, AGY, and Codex adapters from the neutral catalog",
+    )
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Remove unchanged manifest-owned project files and preserve user data",
+    )
+    uninstall_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report the manifest-owned paths without changing the project",
     )
     subparsers.add_parser("index", help="Index project codebase into the database memory")
     subparsers.add_parser(
@@ -1276,6 +1566,21 @@ def build_parser() -> argparse.ArgumentParser:
         "loop-guard",
         help="PreToolUse hook: block a headless merge/release/protected-force-push, and any push/merge while another driver holds the loop lock (reads the hook payload on stdin)",
     )
+    host_hook_parser = subparsers.add_parser(
+        "host-hook",
+        help="Normalize and execute a Claude, AGY, or Codex lifecycle hook",
+    )
+    host_hook_parser.add_argument(
+        "event",
+        choices=["session-start", "pre-invocation", "pre-tool-use"],
+        help="Native lifecycle event to process",
+    )
+    host_hook_parser.add_argument(
+        "--host",
+        choices=["claude", "agy", "codex"],
+        required=True,
+        help="Host protocol used by the hook payload and response",
+    )
 
     loop_stop_parser = subparsers.add_parser(
         "loop-stop", help="Kill-switch: halt all autonomous loop stages immediately (or --clear)"
@@ -1303,6 +1608,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Run a delivery workflow headless (workflow, loop, idea, issue, bug, "
             "refine, start, review, release, reconcile)"
         ),
+    )
+    dev_parser.add_argument(
+        "--engine",
+        choices=["agy", "claude", "codex"],
+        default=None,
+        help="Headless host engine (default: SOLOMON_ENGINE or claude)",
     )
     dev_parser.add_argument("stage", type=str, help="The workflow stage")
     dev_parser.add_argument(
@@ -1388,31 +1699,9 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     if harness_dir is None:
         harness_dir = os.getcwd()
 
-    # Determine workspace root
-    ceilings = []
-    if "GIT_CEILING_DIRECTORIES" in os.environ:
-        ceilings = [
-            os.path.abspath(p)
-            for p in os.environ["GIT_CEILING_DIRECTORIES"].split(os.pathsep)
-            if p
-        ]
+    from solomon_harness.layout import find_workspace_root
 
-    project_root = harness_dir
-    found_root = False
-    while project_root and project_root != os.path.dirname(project_root):
-        if os.path.abspath(project_root) in ceilings:
-            break
-        if os.path.exists(os.path.join(project_root, ".git")):
-            found_root = True
-            break
-        if (
-            os.path.exists(os.path.join(project_root, "agents"))
-            and os.path.exists(os.path.join(project_root, "memory"))
-        ):
-            found_root = True
-            break
-        project_root = os.path.dirname(project_root)
-    workspace_root = project_root if found_root else harness_dir
+    workspace_root = os.fspath(find_workspace_root(harness_dir))
 
     if args.command == "db-init":
         handle_db_init(harness_dir)
@@ -1423,6 +1712,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
     elif args.command == "init":
         from solomon_harness.bootstrap import bootstrap_project
         bootstrap_project(workspace_root, non_interactive=args.non_interactive)
+    elif args.command == "uninstall":
+        sys.exit(handle_uninstall(workspace_root, dry_run=args.dry_run))
     elif args.command == "doctor":
         from solomon_harness.prereqs import check_prerequisites
         sys.exit(0 if check_prerequisites(auto_install=not args.no_install) else 1)
@@ -1440,6 +1731,8 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_loop_lock(workspace_root, args.action)
     elif args.command == "claim":
         handle_claim(workspace_root, args.action, args.issue, force=args.force)
+    elif args.command == "host-hook":
+        sys.exit(handle_host_hook(workspace_root, args.host, args.event))
     elif args.command == "loop-guard":
         handle_loop_guard(workspace_root)
     elif args.command == "loop-stop":
@@ -1456,7 +1749,7 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_reconcile(workspace_root, args.dry_run)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
-        sys.exit(run_stage(workspace_root, args.stage, args.dev_args))
+        sys.exit(run_stage(workspace_root, args.stage, args.dev_args, engine=args.engine))
     elif args.command == "release":
         from solomon_harness.release import run as release_run
         sys.exit(release_run(workspace_root, args.release_args))
@@ -1464,13 +1757,7 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         from solomon_harness.worktree import cli_worktree
         sys.exit(cli_worktree(workspace_root, args.branch, base=args.base))
     elif args.command == "compile":
-        from solomon_harness.bootstrap import scaffold_agents
-        from solomon_harness.agent_selection import select_agents
-
-        scaffold_agents(workspace_root)
-        allowed_names = select_agents(workspace_root)
-        # Keep the host-tool integrations in sync so they never drift from source.
-        _generate_integrations(workspace_root, allowed_names=allowed_names)
+        sys.exit(_generate_integrations(workspace_root))
     elif args.command == "index":
         from solomon_harness.bootstrap import index_codebase
         from solomon_harness.tools.database_client import DatabaseClient
@@ -1553,32 +1840,34 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         from solomon_harness.skills import main as skills_main
         sys.exit(skills_main(args.skills_args, start_dir=workspace_root))
     elif args.command == "agents":
-        # The generated host-tool subagents live in .claude/agents/ (produced by
-        # scripts/generate-integrations.py from the agents/ source of truth).
-        agents_dir = os.path.join(workspace_root, ".claude", "agents")
+        from solomon_harness.agent_selection import discover_agents
+        from solomon_harness.layout import HarnessPaths
+
+        agents_dir = os.fspath(HarnessPaths(workspace_root).resolve_agents())
         if args.agents_command == "list":
             if not os.path.isdir(agents_dir):
                 print(
-                    f"Error: Subagents directory '{agents_dir}' not found. "
-                    "Run 'solomon-harness compile' or scripts/generate-integrations.py first.",
+                    f"Error: Agent catalog '{agents_dir}' not found.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
             print("Available subagents:")
-            found = False
-            import glob
-            for filepath in sorted(glob.glob(os.path.join(agents_dir, "*.md"))):
-                found = True
-                filename = os.path.basename(filepath)
-                name = filename[:-3]
-                print(f"  {name} - {_subagent_description(filepath)}")
-            if not found:
+            names = sorted(discover_agents(workspace_root))
+            for name in names:
+                role = os.path.join(agents_dir, name, "agents", f"{name}.md")
+                print(f"  {name} - {_subagent_description(role)}")
+            if not names:
                 print(f"No subagents found in '{agents_dir}'.")
         elif args.agents_command == "show":
             if not args.agent_name:
                 print("Error: Subcommand 'show' requires an agent name.", file=sys.stderr)
                 sys.exit(1)
-            agent_file = os.path.join(agents_dir, f"{args.agent_name}.md")
+            agent_file = os.path.join(
+                agents_dir,
+                args.agent_name,
+                "agents",
+                f"{args.agent_name}.md",
+            )
             if not os.path.isfile(agent_file):
                 print(f"Error: Subagent '{args.agent_name}' does not exist.", file=sys.stderr)
                 sys.exit(1)

@@ -9,7 +9,7 @@ Operating this project's memory store: a SurrealDB primary with a SQLite fallbac
 
 ## Backend selection and tenancy
 
-`DatabaseClient` reads the `database` block of `.agent/config.json` (harness-local first, project root as fallback): `provider`, `url` (default `ws://localhost:8000/rpc`), `namespace` (default `solomon`), `database`, plus `busy_timeout_seconds` and `connect_timeout_seconds` (both default 5.0). Environment overrides win: `SURREAL_URL`, `SURREAL_USER`, `SURREAL_PASS`.
+`DatabaseClient` reads the `database` block of `.agents/solomon/config/project.json`; `.agent/config.json` is a read-only fallback during the one-release migration window. The block contains `provider`, `url` (default `ws://localhost:8000/rpc`), `namespace` (default `solomon`), `database`, plus `busy_timeout_seconds` and `connect_timeout_seconds` (both default 5.0). Environment overrides win: `SURREAL_URL`, `SURREAL_USER`, `SURREAL_PASS`.
 
 - One shared SurrealDB serves every project on the machine; each project is a tenant. When the configured database is the `harness` sentinel (or empty), the client derives an `<owner>-<repo>` name from the git remote, so two projects never share a database inside the `solomon` namespace.
 - Credentials fail closed: a local URL (`localhost`, `127.0.0.1`, `0.0.0.0`) defaults to `root`/`root`; a non-local URL with no credentials is refused and the client falls back to SQLite rather than guessing.
@@ -21,7 +21,7 @@ The backend is defined once per machine in `~/.solomon-harness/docker-compose.ym
 
 - Image pinned to `surrealdb/surrealdb:v3.1.5` (the Python SDK is `surrealdb>=2.0.0,<3.0.0`, which speaks the v2/v3 protocol); container `solomon_surrealdb`; storage `rocksdb:/data/solomon.db` on the `./memory/surrealdb` volume; 512 MB memory limit with a 256 MB RocksDB block cache; a `surreal isready` healthcheck. A Surrealist UI container listens on host port 3000.
 - The container listens on 8000 internally; the host port is auto-assigned (8099 preferred, next free port otherwise) and recorded in `~/.solomon-harness/memory.json` under `host_port`. Never hardcode 8099 in tooling; read the record.
-- Lifecycle: `solomon-harness memory-up` (idempotent; `--wait N`, default 25 s, for the port to serve) and `solomon-harness memory-down`. The Claude Code SessionStart hook runs `memory-up` automatically. `solomon-harness healthcheck` reports Docker, memory backend, and pending-initialization state; `db-init` initializes tables.
+- Lifecycle: `solomon-harness memory-up` (idempotent; `--wait N`, default 25 s, for the port to serve) and `solomon-harness memory-down`. The normalized SessionStart adapter for Claude, AGY, and Codex runs the resume path automatically. `solomon-harness healthcheck` reports Docker, memory backend, host-adapter capability state, and pending initialization; `db-init` initializes tables.
 
 ## Schema: one multi-model database
 
@@ -33,15 +33,15 @@ Operationally important quirk: the SDK's `query()` surfaces only the first state
 
 Public write/read methods are wrapped by `@_resilient`. A failure is classified as a transport fault only by exception type (SDK/websocket connection classes, `ConnectionError`/`OSError`) or a narrow set of anchored message markers ("no close frame", "connection reset", and similar); query and data errors propagate unchanged and never trigger recovery. On a transport fault the client attempts exactly one reconnect, run in a worker thread joined at the connect deadline so a half-open socket cannot hang the session, then retries the call once; if that fails it activates the SQLite fallback loudly on stderr and serves the call from SQLite.
 
-The SQLite store lives at `<repo>/memory/long_term/harness.db` (or `HARNESS_DB_PATH`). Connections use WAL journal mode with the configured busy timeout for multi-agent concurrency, and set `PRAGMA foreign_keys = ON` per connection because SQLite defaults it off. Schema changes there are in-place expand/contract migrations guarded by `PRAGMA table_info` checks and tolerant of concurrent first-opens.
+The SQLite store lives at `<repo>/.agents/solomon/state/memory/long_term/harness.db` (or `HARNESS_DB_PATH`). Connections use WAL journal mode with the configured busy timeout for multi-agent concurrency, and set `PRAGMA foreign_keys = ON` per connection because SQLite defaults it off. Schema changes there are in-place expand/contract migrations guarded by `PRAGMA table_info` checks and tolerant of concurrent first-opens.
 
 ## Durability: the write-through mirror and reconcile
 
-Every write also lands as Markdown under `.solomon/memory-mirror/<kind>/<id>.md` (precedence: explicit `mirror_root`, `HARNESS_MIRROR_ROOT`, beside an explicit SQLite path, then the repo default). The file is stamped `synced: false` before the DB attempt and re-stamped `true` only if the write reached the SurrealDB primary. Ids are client-minted (`<kind>-<UTC stamp>-<short uuid>`) and double as the SurrealDB record id, so replay is a deterministic UPSERT that never duplicates; deletions replay as DELETE tombstones so removed records stay removed.
+Every write also lands as Markdown under `.agents/solomon/state/memory-mirror/<kind>/<id>.md` (precedence: explicit `mirror_root`, `HARNESS_MIRROR_ROOT`, beside an explicit SQLite path, then the repo default). The file is stamped `synced: false` before the DB attempt and re-stamped `true` only if the write reached the SurrealDB primary. Ids are client-minted (`<kind>-<UTC stamp>-<short uuid>`) and double as the SurrealDB record id, so replay is a deterministic UPSERT that never duplicates; deletions replay as DELETE tombstones so removed records stay removed.
 
 After any outage, replay with `solomon-harness memory sync` (calls `DatabaseClient.reconcile()`, prints synced/pending counts; idempotent, stops cleanly on a mid-run drop). The separate `solomon-harness reconcile [--dry-run]` command is a different repair: it closes memory issue rows whose GitHub issue or parent resolved, and must run from a fresh process against the shared SurrealDB, not from a session already degraded to SQLite. Issue statuses are normalized on write to the ADR-0006 vocabulary, and the terminal-status predicate binds its literals as query parameters, never string formatting; keep both properties intact in any change.
 
-The same store is exposed as the `solomon-memory` MCP server (`python -m solomon_harness.mcp_server`), registered in `.mcp.json` and `.gemini/settings.json`.
+The same store is exposed as the `solomon-memory` MCP server (`python -m solomon_harness.mcp_server`), registered through thin native adapters in `.mcp.json` for Claude, `.agents/plugins/solomon/mcp_config.json` for AGY, and `.codex/config.toml` for Codex. All three commands point to the same canonical project runtime under `.agents/solomon`; source checkouts use the proved source project while keeping the runtime venv in `.agents/solomon/state/venv`.
 
 ## Common pitfalls
 

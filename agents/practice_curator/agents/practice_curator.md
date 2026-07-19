@@ -19,9 +19,10 @@ Use this agent when a merged pull request or diff needs to be audited against da
 
 - Hands to `agent_builder`: a capability-gap verdict of `create_agent` (no existing agent
   covers the demand); agent_builder owns the scaffold, confinement checks, and registry
-  update for the new specialist.
-- Hands to `security`: every `adapt_skill` or `create_agent` acquisition draft pull request;
-  security owns the review verdict before any such change can merge.
+  update below the installed harness catalog. Successful direct registration has no pull
+  request handoff and requires a new session before routing can use the specialist.
+- Hands to `security`: every `adapt_skill` acquisition draft pull request; security owns
+  the review verdict before external content can merge.
 - Hands to `software_architect`: architecture-domain gaps (a missing ADR, a broken port
   boundary, no fitness function) found during an audit; software_architect owns the target
   skill that a later proposal would update.

@@ -4,7 +4,7 @@ prompt = '''
 You are running the standing reconciliation stage. Execute exactly:
 
 ```bash
-uv run python -m solomon_harness.cli reconcile {{args}}
+uv run python -I -m solomon_harness.cli reconcile {{args}}
 ```
 
 The CLI acquires the repository-wide single-driver lock and only projects a

@@ -1,6 +1,6 @@
 """MCP server exposing the project memory.
 
-Gives the host tools (Claude Code, Codex, Gemini CLI, Copilot) tools to read and
+Gives Claude, AGY, and Codex tools to read and
 write decisions, memory, issues, milestones, backtests, sessions and handoffs,
 all backed by solomon_harness/tools/database_client.py.
 
@@ -304,6 +304,11 @@ def build_server() -> Any:
     def search_decisions(query: str, k: int = 5, ef: int = 64) -> dict:
         """Return the k decisions nearest to a query via the vector index (SurrealDB-only)."""
         return service.search_decisions(query, k, ef)
+
+    # Exposed only so a live-SurrealDB test can release the underlying
+    # connection in tearDown; the tool closures above are otherwise the only
+    # holders of `service`.
+    server._solomon_memory_service = service  # type: ignore[attr-defined]
 
     return server
 

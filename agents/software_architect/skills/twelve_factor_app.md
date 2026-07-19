@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 ```
 
-This repo already follows factor 3: `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS` override the agent's `.agent/config.json` at runtime. Keep secrets out of the image and out of Git; inject them via Kubernetes `Secret`, External Secrets Operator, or Vault, and decrypt repo-stored config with SOPS. Credential handling detail is owned by the `security` and `auth_engineer` agents.
+This repo already follows factor 3: `SURREAL_URL` / `SURREAL_USER` / `SURREAL_PASS` override `.agents/solomon/config/project.json` at runtime. Keep secrets out of the image and out of Git; inject them via Kubernetes `Secret`, External Secrets Operator, or Vault, and decrypt repo-stored config with SOPS. Credential handling detail is owned by the `security` and `auth_engineer` agents.
 
 ## Backing services and build/release/run (factors 4-5)
 

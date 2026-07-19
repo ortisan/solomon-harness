@@ -5,11 +5,18 @@
 
 set -euo pipefail
 
-# Resolve repository root directory
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Keep the immutable harness runtime separate from the consumer repository.
+# In an installed project this script lives under `.agents/solomon/scripts`,
+# while wiki content, Git remotes, and temporary output remain project-owned at
+# the outer worktree root.
+HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(git -C "$HARNESS_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$PROJECT_ROOT" ]]; then
+  PROJECT_ROOT="$HARNESS_ROOT"
+fi
 
 # Ensure docs/wiki directory exists and has markdown files
-WIKI_SRC_DIR="${REPO_ROOT}/docs/wiki"
+WIKI_SRC_DIR="${PROJECT_ROOT}/docs/wiki"
 if [[ ! -d "$WIKI_SRC_DIR" ]]; then
   echo "Error: Wiki source directory does not exist: $WIKI_SRC_DIR" >&2
   exit 1
@@ -27,15 +34,15 @@ fi
 
 # Detect git remote URL
 REMOTE_URL=""
-if git rev-parse --is-inside-work-tree &>/dev/null; then
-  REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || true)
+if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
+  REMOTE_URL=$(git -C "$PROJECT_ROOT" config --get remote.origin.url 2>/dev/null || true)
 fi
 
 # If no remote is configured, enter mock mode
 if [[ -z "$REMOTE_URL" ]]; then
   echo "Warning: No git remote origin found. Entering mock mode..." >&2
   
-  MOCK_DIR="${REPO_ROOT}/tmp/wiki-mock-verification"
+  MOCK_DIR="${PROJECT_ROOT}/tmp/wiki-mock-verification"
   echo "Mock Mode: Copying wiki files locally to $MOCK_DIR for verification..."
   
   rm -rf "$MOCK_DIR"
@@ -92,12 +99,24 @@ echo "Resolved wiki remote URL: $(strip_userinfo "$WIKI_URL")"
 # script share one source; call it here rather than re-deriving it. It runs no
 # browser action and never blocks on input, so a headless or CI invocation
 # degrades deterministically with exit 4 and surfaces no raw git error. The
-# timeout is read from WIKI_SYNC_LSREMOTE_TIMEOUT. REPO_ROOT carries the bundled
-# solomon_harness package in an installed project; PYTHON pins the interpreter
-# when set.
+# timeout is read from WIKI_SYNC_LSREMOTE_TIMEOUT. Run the bundled package from
+# its own frozen uv project and isolated Python mode: neither the consumer cwd,
+# PYTHONPATH, user-site packages, nor a consumer sitecustomize can shadow the
+# immutable harness runtime.
+if [[ "$HARNESS_ROOT" == */.agents/solomon ]]; then
+  HARNESS_VENV="$HARNESS_ROOT/state/venv"
+else
+  HARNESS_VENV="$HARNESS_ROOT/.agents/solomon/state/venv"
+fi
 set +e
-PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
-  "${PYTHON:-python3}" -m solomon_harness.wiki_bootstrap detect "$REMOTE_URL"
+(
+  cd "$HARNESS_ROOT"
+  env -u PYTHONHOME -u PYTHONPATH \
+    UV_NO_CONFIG=1 \
+    UV_PROJECT_ENVIRONMENT="$HARNESS_VENV" \
+    uv run --frozen --project "$HARNESS_ROOT" \
+    python -I -m solomon_harness.wiki_bootstrap detect "$REMOTE_URL"
+)
 DETECT_STATUS=$?
 set -e
 if [[ "$DETECT_STATUS" -ne 0 ]]; then
@@ -107,7 +126,7 @@ fi
 echo "Wiki content repository detected. Proceeding to sync."
 
 # Create a temporary directory in workspace
-TEMP_PARENT="${REPO_ROOT}/tmp"
+TEMP_PARENT="${PROJECT_ROOT}/tmp"
 mkdir -p "$TEMP_PARENT"
 TEMP_DIR=$(mktemp -d "${TEMP_PARENT}/wiki-sync-XXXXXX")
 

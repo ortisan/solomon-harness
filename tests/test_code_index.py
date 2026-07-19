@@ -73,6 +73,22 @@ class TestIncrementalIndex(unittest.TestCase):
         self.assertIn(b_rel, db.deletes)
         self.assertNotIn(b_rel, db.store)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no FIFO support on this platform")
+    def test_skips_non_regular_files(self):
+        # A named pipe blocks open() until a writer connects; index_codebase
+        # must never hang on one (issue #240 / PR #288's CI-only deadlock,
+        # caused by a workspace_root resolving to a directory containing
+        # runner-owned sockets/pipes).
+        fifo_path = os.path.join(self.root, "some.sock")
+        os.mkfifo(fifo_path)
+        self._write("keep.py", "x = 1")
+
+        db = FakeDB()
+        bootstrap.index_codebase(self.root, db)
+
+        self.assertIn("keep.py", db.store)
+        self.assertNotIn("some.sock", db.store)
+
     def test_excludes_generated_dirs(self):
         self._write("keep.py", "x = 1")
         self._write(os.path.join(".git", "config"), "[core]")

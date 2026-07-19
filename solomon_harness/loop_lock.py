@@ -6,14 +6,14 @@ merges that bypassed the review gate, and worktree tooling flipping
 (``solomon-harness dev``): every headless driver acquires one advisory lockfile
 before a mutating stage touches git or the board, and a second is refused, so that
 path is race-free by construction. Interactive ``/solomon-*`` sessions do not
-acquire the lock; they are bounded by the human merge gate and the Claude-side
-``loop-guard`` hook, and operators run one interactive driver at a time.
+acquire the lock; they are bounded by the human merge gate and the normalized
+Claude, AGY, and Codex ``loop-guard`` hooks.
 
 The lock is anchored at the git *common* directory (resolved by reading ``.git``
 directly, not by shelling out to ``git`` — which would be intercepted by tests
 that patch ``subprocess.run``), so all linked worktrees of a repository contend
 on the same file. When the directory is not a git repository the lock falls back
-to ``<root>/.solomon/loop.lock``.
+to ``<root>/.agents/solomon/state/loop.lock``.
 
 The lock is a plain JSON file on disk, so the holder is itself auditable —
 "every decision traces back to a file on disk". Staleness favors safety: a live
@@ -31,16 +31,24 @@ mismatch means the pid was recycled and the lock is reclaimed.
 """
 
 import json
+import hashlib
+import hmac
 import os
 import re
+import secrets
+import shlex
 import socket
 import subprocess
 import time
+from fnmatch import fnmatchcase
 from typing import Any, Callable, Dict, Optional, Tuple
+
+from solomon_harness.layout import HarnessPaths, confined_path
 
 DEFAULT_TTL_SECONDS = 1800.0
 LOCK_FILENAME_GIT = "solomon-loop.lock"
 LOCK_FILENAME_FALLBACK = "loop.lock"
+SHELL_CAPABILITY_ENV = "SOLOMON_SHELL_CAPABILITY"
 
 
 class LoopLockHeld(Exception):
@@ -84,7 +92,7 @@ def _read_gitdir(dotgit_file: str, worktree_root: str) -> Optional[str]:
 
 
 def _common_anchor(workspace_root: str):
-    """Return ``(dir, is_git)``: the git common dir, or a ``.solomon`` fallback.
+    """Return ``(dir, is_git)``: Git common dir or canonical state fallback.
 
     Anchoring shared loop state (the lock and the kill-switch sentinel) at the git
     common directory is what makes every linked worktree contend on one file.
@@ -102,19 +110,27 @@ def _common_anchor(workspace_root: str):
             if gitdir:
                 return gitdir, True
             return dotgit, True
-    return os.path.join(os.path.abspath(workspace_root), ".solomon"), False
+    return os.fspath(HarnessPaths(workspace_root).state), False
 
 
 def resolve_lock_path(workspace_root: str) -> str:
     """Resolve the lockfile path, anchored at the git common dir when possible."""
     anchor, is_git = _common_anchor(workspace_root)
-    return os.path.join(anchor, LOCK_FILENAME_GIT if is_git else LOCK_FILENAME_FALLBACK)
+    target = os.path.join(
+        anchor, LOCK_FILENAME_GIT if is_git else LOCK_FILENAME_FALLBACK
+    )
+    if not is_git:
+        target = os.fspath(confined_path(workspace_root, target))
+    return target
 
 
 def resolve_common_file(workspace_root: str, git_name: str, fallback_name: str) -> str:
     """Resolve a shared loop-state file beside the lock (same git-common anchor)."""
     anchor, is_git = _common_anchor(workspace_root)
-    return os.path.join(anchor, git_name if is_git else fallback_name)
+    target = os.path.join(anchor, git_name if is_git else fallback_name)
+    if not is_git:
+        target = os.fspath(confined_path(workspace_root, target))
+    return target
 
 
 def _pid_alive(pid: int) -> bool:
@@ -195,6 +211,7 @@ class LoopLock:
         self._clock = clock
         self._pid_alive = pid_alive
         self._pid_start_time = pid_start_time
+        self._shell_capability: Dict[str, Any] = {}
         # Captured once, at construction: the start time of `self.pid` as this
         # instance would report it if it becomes the holder. Recorded in the
         # lock file so a later `is_stale` check can tell a still-running
@@ -267,22 +284,25 @@ class LoopLock:
     # -- mutation -----------------------------------------------------------
     def _body(self, now: float, acquired_at: Optional[float] = None) -> str:
         acq = acquired_at if acquired_at is not None else now
-        return json.dumps(
-            {
-                "session_id": self.session_id,
-                "pid": self.pid,
-                "pid_started_at": self.pid_started_at,
-                "host": self.host,
-                "stage": self.stage,
-                "acquired_at": _iso(acq),
-                "heartbeat_at": _iso(now),
-            }
-        )
+        body: Dict[str, Any] = {
+            "session_id": self.session_id,
+            "pid": self.pid,
+            "pid_started_at": self.pid_started_at,
+            "host": self.host,
+            "stage": self.stage,
+            "acquired_at": _iso(acq),
+            "heartbeat_at": _iso(now),
+        }
+        if self._shell_capability:
+            body["shell_capability"] = self._shell_capability
+        return json.dumps(body)
 
     def _write_atomically(self, now: float) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         tmp = f"{self.path}.{self.pid}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(self._body(now))
         os.replace(tmp, self.path)
 
@@ -294,7 +314,7 @@ class LoopLock:
         self._reentrant = False
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             info = self.read()
             if info and info.get("session_id") == self.session_id:
@@ -305,6 +325,9 @@ class LoopLock:
                 # holder: it must not remove the lock on release, since the
                 # outer call is still relying on it.
                 self._reentrant = True
+                capability = info.get("shell_capability")
+                if isinstance(capability, dict):
+                    self._shell_capability = capability
                 self._write_atomically(now)
                 return self
             if info and not self.is_stale(info):
@@ -322,6 +345,77 @@ class LoopLock:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(self._body(now))
             return self
+
+    def issue_shell_capability(
+        self,
+        *,
+        scopes: set[str],
+        branches: set[str],
+    ) -> str:
+        """Issue an ephemeral capability bound to this live lock and session.
+
+        The raw bearer token is returned to the trusted ``run_stage`` caller and
+        only its SHA-256 digest is persisted. Scope and branch patterns are
+        explicit, so possession never authorizes an unlisted operation or a
+        protected branch accidentally.
+        """
+
+        info = self.read()
+        if not info or info.get("session_id") != self.session_id or self.is_stale(info):
+            raise RuntimeError("cannot issue a shell capability without owning a live lock")
+        clean_scopes = sorted(
+            scope for scope in scopes if isinstance(scope, str) and scope.strip()
+        )
+        clean_branches = sorted(
+            branch for branch in branches if isinstance(branch, str) and branch.strip()
+        )
+        if not clean_scopes:
+            raise ValueError("a shell capability requires at least one scope")
+        token = secrets.token_urlsafe(32)
+        self._shell_capability = {
+            "session_id": self.session_id,
+            "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            "scopes": clean_scopes,
+            "branches": clean_branches,
+        }
+        self._write_atomically(self._clock())
+        return token
+
+    def shell_capability_allows(
+        self,
+        token: str,
+        *,
+        scope: str,
+        branch: str = "",
+    ) -> bool:
+        """Validate one requested scope against the current live lock record."""
+
+        if not token or not scope:
+            return False
+        info = self.read()
+        if not info or info.get("session_id") != self.session_id or self.is_stale(info):
+            return False
+        capability = info.get("shell_capability")
+        if not isinstance(capability, dict):
+            return False
+        if capability.get("session_id") != self.session_id:
+            return False
+        digest = capability.get("token_sha256")
+        if not isinstance(digest, str) or not hmac.compare_digest(
+            digest,
+            hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        ):
+            return False
+        scopes = capability.get("scopes")
+        if not isinstance(scopes, list) or scope not in scopes:
+            return False
+        if not branch:
+            return True
+        branches = capability.get("branches")
+        return isinstance(branches, list) and any(
+            isinstance(pattern, str) and fnmatchcase(branch, pattern)
+            for pattern in branches
+        )
 
     def heartbeat(self) -> None:
         """Refresh the heartbeat if this session still owns the lock."""
@@ -360,6 +454,46 @@ class LoopLock:
 
 
 _PUSH_OR_MERGE = re.compile(r"\b(git\s+push|gh\s+pr\s+merge|git\s+merge)\b")
+_SHELL_SEPARATORS = {"&", "&&", "(", ")", ";", "|", "||"}
+_GIT_OPTIONS_WITH_VALUES = {
+    "--config-env",
+    "--exec-path",
+    "--git-dir",
+    "--namespace",
+    "--super-prefix",
+    "--work-tree",
+    "-C",
+    "-c",
+}
+_GH_OPTIONS_WITH_VALUES = {"--config", "--hostname", "--repo", "-R"}
+
+
+def _shell_tokens(command: str) -> list[str]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+
+def _command_words(
+    tokens: list[str], start: int, options_with_values: set[str]
+) -> list[str]:
+    words: list[str] = []
+    index = start
+    while index < len(tokens) and tokens[index] not in _SHELL_SEPARATORS:
+        token = tokens[index]
+        if token in options_with_values:
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in options_with_values):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        words.append(token)
+        index += 1
+    return words
 
 # The permanently human-gated, irreversible transitions: merging a PR, publishing
 # a release, or force-pushing a protected branch. The sanctioned interactive merge
@@ -374,7 +508,22 @@ _PLUS_REFSPEC_PROTECTED = re.compile(r"\+\s*(?:[\w./-]*:)?(main|master)\b")
 
 def is_push_or_merge(command: str) -> bool:
     """True when a shell command pushes or merges (the irreversible operations)."""
-    return bool(_PUSH_OR_MERGE.search(command or ""))
+
+    try:
+        tokens = _shell_tokens(command or "")
+    except ValueError:
+        return bool(_PUSH_OR_MERGE.search(command or ""))
+    for index, token in enumerate(tokens):
+        executable = os.path.basename(token)
+        if executable == "git":
+            words = _command_words(tokens, index + 1, _GIT_OPTIONS_WITH_VALUES)
+            if words and words[0] in {"merge", "push"}:
+                return True
+        elif executable == "gh":
+            words = _command_words(tokens, index + 1, _GH_OPTIONS_WITH_VALUES)
+            if len(words) >= 2 and words[:2] == ["pr", "merge"]:
+                return True
+    return False
 
 
 def is_human_gated_transition(command: str) -> bool:
@@ -412,8 +561,9 @@ def guard_verdict(
     2. A push/merge issued while another live driver holds the loop lock is
        blocked so two drivers cannot race the review gate.
 
-    This is the Claude-only defense-in-depth layer; the portable enforcement that
-    works on both hosts is the gate inside ``run_stage``. Fail-open otherwise.
+    Native Claude, AGY, and Codex adapters feed their payloads into this
+    defense-in-depth layer; the portable enforcement of record is the gate inside
+    ``run_stage``. Fail-open otherwise: a command matching neither rule is allowed.
     """
     if (payload.get("tool_name") or payload.get("tool") or "") != "Bash":
         return (False, "")

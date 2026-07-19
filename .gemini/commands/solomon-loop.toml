@@ -5,14 +5,14 @@ You are running the headless batch loop stage: N sequential workflow iterations,
 
 ## 1. Ask for the Iteration Count
 
-Ask the user using the AskUserQuestion tool (or standard chat response if the tool is not available):
+Ask the user through the host's native enumerable input mechanism (or a numbered list if structured input is unavailable):
 "How many sequential workflow iterations do you want to run? (Default: 3)"
 
 ## 2. Execute the Loop
 
-Once you have the count (default to 3 if not specified), run the batch loop runner via the Bash tool (the `--concurrency` flag name is historical — iterations run sequentially under one lock):
+Once you have the count (default to 3 if not specified), run the batch loop runner with the host's shell-execution mechanism (the `--concurrency` flag name is historical — iterations run sequentially under one lock):
 ```bash
-uv run python -m solomon_harness.cli dev loop --concurrency <limit> {{args}}
+uv run python -I -m solomon_harness.cli dev loop --concurrency <limit> {{args}}
 ```
 
 Capability gaps: the start/refine stages the loop drives run a Capability

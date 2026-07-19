@@ -3,9 +3,34 @@
 Shared conventions for the `/solomon-*` Claude/Gemini workflows and their
 `$solomon-*` Codex skill counterparts. Every workflow
 reads this file and follows it so the lifecycle is consistent, auditable, and
-backed by the project memory. The host tool (Claude Code, Codex, or Antigravity CLI) provides
-the model; these workflows orchestrate the specialist agents, the GitHub project,
-and the memory layer.
+backed by the project memory. Claude Code, AGY, and Codex provide their native
+model loops; the same workflows orchestrate the specialist agents, the GitHub
+project, and the memory layer on all three.
+
+## Installed layout and host adapters
+
+`solomon-harness init` installs the canonical harness at `.agents/solomon` in a
+consumer repository. Agents, workflow bodies, conventions, runtime code,
+project config, state, and `manifest.json` live there. Root `AGENTS.md`, the
+`.claude/` and `.codex/` trees, `.mcp.json`, and the remaining `.agents/` host
+discovery files are thin protocol adapters: they contain metadata or pointers,
+not independent copies of the workflows or specialist definitions.
+
+`solomon-harness compile` deterministically renders the Claude, AGY, and Codex
+adapters from that neutral catalog. `solomon-harness uninstall --dry-run`
+reports the owned paths; `solomon-harness uninstall` removes only unchanged
+manifest-owned files and preserves project config, state, unrelated host
+settings, and modified files reported as conflicts. The source checkout keeps
+`agents/`, `scripts/`, `solomon_harness/`, and its workflow authoring sources in
+their normal development locations; the compact installed layout applies to
+consumer repositories.
+
+Native lifecycle files call `solomon-harness host-hook <event> --host <host>`.
+That internal adapter normalizes Claude, AGY, and Codex event payloads before
+running the same session-resume and pre-tool safety behavior. Headless workflow
+delivery uses `solomon-harness dev --engine {claude,agy,codex} <stage> [args]`;
+the selected engine changes only the native process command, never workflow
+policy.
 
 ## Lifecycle and board
 
@@ -54,11 +79,11 @@ invocation: when work is in flight it proposes development, review, or release;
 when nothing is in progress it proposes creating a feature, bug, or refinement.
 
 The loop is host-orchestrated and human-gated, not fully autonomous: no code
-decides the next stage — the host tool (Claude Code, Codex, or the Antigravity
-CLI) runs these markdown prompts — and a human always originates merge, release,
-and the normal move-to-`Done` decision. ADR-0034 permits one narrower automated
-action: repairing a derived board projection after GitHub already reports the
-issue `CLOSED`; it cannot close, merge, release, or act on an open issue.
+decides the next stage — Claude, AGY, or Codex runs these
+markdown prompts — and a human always originates merge, release, and the normal
+move-to-`Done` decision. ADR-0034 permits one narrower automated action: repairing
+a derived board projection after GitHub already reports the issue `CLOSED`; it
+cannot close, merge, release, or act on an open issue.
 
 Selection guards (epic #341). Before proposing a `Ready` issue for development,
 the resume scan skips any candidate whose `issues_blocked_by` returns an open
@@ -68,24 +93,27 @@ round, it consults `loop_log.remediation_limit_reached` (the consecutive-round
 cap, default 6): at the cap it stops re-proposing that target and surfaces it to
 the human instead of burning further rounds.
 
-At the start of every Claude Code or Antigravity CLI session, the harness surfaces the
-project status (latest activity and open issues) through a SessionStart hook that
-runs `solomon-harness run`. This hook automatically checks memory for pending tasks
-(or prints open issues if none) and outputs the options card. It performs no board
-reconciliation or mutable background work; that belongs to the locked standing
-stage. The agent reads the digest and immediately prompts the user with the
-enumerated choices.
+At the start or first invocation of every Claude, AGY, or Codex session, the
+harness surfaces project status (latest activity and open issues) through the
+host's native lifecycle event. Claude and Codex use their session-start surface;
+AGY injects the resume card on its first `PreInvocation`. Every adapter delegates
+to `host-hook`, which runs the common resume behavior and outputs the options
+card. It performs no board reconciliation or mutable background work; that belongs
+to the locked standing stage. The agent reads this immediately and prompts the user
+with the enumerated choices. Codex project hooks run only after the user trusts the
+project; the portable `dev` gates remain active regardless, and the harness never
+bypasses that trust decision.
 
 ## Interaction style
 
 When a workflow needs a decision or confirmation from the user — which next step,
 which option, which target — present the choices as an enumerated list (1, 2, 3, …),
 with the final option always being "Other", where the user types a free-form answer.
-In Claude Code this is the AskUserQuestion tool; in Codex use structured user
-input when available; in the Antigravity CLI, present a numbered list and invite
-a free-text reply. Lead with the recommended option first and keep the
-options mutually exclusive. This is mandatory, not a preference (the non-negotiable
-Enumerable decisions rule in `agents/AGENTS.md`): never end a turn with an open prose
+In Claude Code this is the AskUserQuestion tool. In AGY or Codex, use the host's
+native short-choice input when available; otherwise present a numbered list and
+invite a free-text reply. Lead with the recommended option first and keep the
+options mutually exclusive. This is mandatory, not a preference (the
+non-negotiable Enumerable decisions rule in `agents/AGENTS.md`): never end a turn with an open prose
 question, and never hand the user a command to copy ("run `/solomon-start 55` when you
 want") in place of a clickable option — the closing "what next" block of every turn that
 offers a choice MUST be the enumerated menu. Discrete numbered choices keep the user's
@@ -147,6 +175,16 @@ acquiring; Other). Acquisition runs only through
 permanently human-gated: a headless stage subprocess, an automation autonomy
 level, or an engaged kill-switch is refused (exit 3) before any change — the
 loop surfaces gaps, a human applies them.
+
+The apply result is action-specific. `adapt_skill` returns
+`mode: reviewed_pr` and a `pr_url`; its pinned external content still follows
+the security-reviewed pull-request path. `create_agent` returns
+`mode: direct_registration`, the confined `agent_path` below
+`.agents/solomon/agents`, and `restart_required: true`. That path registers the
+new source in the installed harness and recompiles the Claude, AGY, and Codex
+adapters without creating a branch, commit, pull request, or PR handoff in the
+consumer project. The current stage stops so the user can start a new session
+that discovers the new agent.
 
 ### Spec generation (`/solomon-issue`)
 
@@ -360,11 +398,12 @@ heading — `release prep` writes them, and a CI check rejects any non-release P
 touches them, which structurally prevents three-way version drift.
 
 **Library readiness gate.** Because the harness is distributed as an immutable git
-tag and GitHub Release of the source tree — not a running service and not published
-to PyPI — the SLO-burn / canary / blue-green / on-call production-readiness review
-does not apply. The release gate is a library readiness check: tests and `ruff`
-green on `main`, `python -c "import solomon_harness"` succeeds, the
-`solomon-harness` console script runs, and `release check` passes. The one kernel
+tag and GitHub Release with a buildable sdist/wheel — not a running service — the
+SLO-burn / canary / blue-green / on-call production-readiness review does not
+apply. The release gate is a library readiness check: tests and `ruff` green on
+`main`, `python -c "import solomon_harness"` succeeds, `uv build` and the
+source-versus-wheel manifest smoke test pass, the `solomon-harness` console
+script runs, and `release check` passes. The one kernel
 carried over from progressive delivery is reversibility: immutable, never-moved
 tags; rollback as a revert PR that auto-ships the next patch; and
 backward-compatible expand/contract migrations for the SurrealDB / SQLite memory
@@ -424,7 +463,7 @@ work moves across stages and sessions.
 Rules:
 
 - At the end of a stage that hands off, WRITE the contract to
-  `.solomon/handoffs/issue-<N>-<from>-to-<to>.md` (the `.solomon/` directory is
+  `.agents/solomon/state/handoffs/issue-<N>-<from>-to-<to>.md` (the handoff directory is
   gitignored local state), then call
   `log_handoff(sender, recipient, contract_type, contract_path, status, summary)`
   with `contract_path` set to that file and `summary` — a required, non-empty
@@ -485,10 +524,9 @@ incident — two concurrent `/solomon-workflow` drivers — produced premature m
 that bypassed the review gate and flipped `core.bare=true` on a worktree. The
 safety floor prevents that by construction:
 
-- **Single-driver lock.** Before a stage that touches git/board state runs
-  (`workflow`, `loop`, `start`, `review`, `release`, `reconcile`, and the
-  `scan-arch` / `scan-dedup` maintenance loops — and, at L3, every stage the policy's
-  `requires_lock` names), the headless runner acquires one advisory lock anchored at the git
+- **Single-driver lock.** Before any headless stage runs, including the
+  idea/issue/bug/refine stages that mutate GitHub or the board, the runner
+  acquires one advisory lock anchored at the git
   *common* directory (`<common>/solomon-loop.lock`), so every linked worktree of
   the repository contends on the same file. A second driver is refused. The lock
   is a plain JSON file (the holder is auditable). Staleness favors safety: a
@@ -497,12 +535,25 @@ safety floor prevents that by construction:
   pid, or a cross-host lock past the TTL (`DEFAULT_TTL_SECONDS = 1800`, since a
   remote pid cannot be probed), is reclaimed. Implementation:
   `solomon_harness/loop_lock.py`; the portable gate lives in `run_stage` so it
-  enforces on both Claude Code and the Antigravity CLI. (`workflows.LOCKED_STAGES` is
-  the source of truth for the static set.)
-- **PreToolUse guard (Claude Code only).** A `loop-guard` hook in
-  `.claude/settings.json` blocks `git push` / `gh pr merge` while another live
-  driver holds the lock. It is defense-in-depth on top of the portable gate and
-  fails open — the run_stage gate, not the hook, is the enforcement of record.
+  enforces on Claude, AGY, and Codex. `workflows.LOCKED_STAGES` equals the full
+  stage set, so every engine child receives one inherited identity and scoped
+  capability.
+- **Native pre-tool guards.** Claude's `.claude/settings.json`, AGY's
+  `.agents/hooks.json`, and Codex's inline hooks in `.codex/config.toml` route shell and write
+  events through `host-hook pre-tool-use`. Every shell segment must be an
+  explicit read-only form, a known mutator with statically proven targets, or a
+  classified privileged operation. Unknown executables and opaque interpreter
+  scripts become `dev:execute` requests: they fail closed without a matching
+  live capability. A locked headless stage receives an ephemeral capability
+  bound to its lock identity, delivery-operation scopes, and non-protected branch
+  patterns. Only the token digest is stored in the mode-`0600` lock. Autonomous
+  Direct Git/GitHub merge, protected-branch push, force/delete push, and
+  destructive history commands remain denied. Malformed payloads and
+  policy/ownership errors also
+  fail closed.
+  These hooks remain defense-in-depth because a host may decline to load them;
+  the `run_stage` gate is the portable enforcement of record. Codex retains its
+  project-trust gate.
 - **Recovery.** `solomon-harness loop-lock status` shows the current holder and
   whether it is stale; `solomon-harness loop-lock release` clears a stuck lock
   after a crash.
@@ -559,10 +610,11 @@ layers on top of.
 ## Autonomy levels and the kill-switch
 
 How far the automation path (`solomon-harness dev <stage>` and any host-scheduled
-cadence) may act is one dial, set in the project's `.agent/config.json` `loop`
+cadence) may act is one dial, set in the project's
+`.agents/solomon/config/project.json` `loop`
 block (overridable with `SOLOMON_LOOP_AUTONOMY`) and enforced in portable Python
-inside `run_stage` (`solomon_harness/loop_policy.py`), so it holds on both Claude
-Code and the Antigravity CLI — not only in a Claude-only hook.
+inside `run_stage` (`solomon_harness/loop_policy.py`), so it holds on Claude,
+AGY, and Codex rather than depending on any one host hook.
 
 ```json
 "loop": { "autonomy": "L2", "maker_model": "...", "checker_model": "...",

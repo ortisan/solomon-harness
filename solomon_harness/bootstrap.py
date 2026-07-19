@@ -4,15 +4,10 @@ import shutil
 import stat
 import datetime
 import subprocess
-from typing import Callable, List, Dict, Any, Optional, TextIO
+import tempfile
+from pathlib import Path
+from typing import Callable, Iterable, List, Dict, Any, Optional, TextIO
 
-from solomon_harness.secure_paths import (
-    UnsafePathError,
-    create_regular_at,
-    open_directory_at,
-    open_regular_at,
-    open_root_directory,
-)
 from solomon_harness.subprocess_env import clean_git_env
 from solomon_harness.wiki_bootstrap import (
     is_github_remote,
@@ -123,7 +118,12 @@ def get_project_metadata(workspace_root: str) -> tuple[str, str, str]:
 
 
 def ensure_database_config(workspace_root: str) -> str:
-    """Ensure .agent/config.json points at the shared SurrealDB with a per-project
+    """Ensure the canonical project config points at the shared SurrealDB.
+
+    Legacy ``.agent/config.json`` is read only during the migration window. New
+    writes always target ``.agents/solomon/config/project.json``.
+
+    The configuration points at the shared SurrealDB with a per-project
     tenant database, and return the tenant id.
 
     The memory backend is shared across all projects on the machine (one
@@ -133,21 +133,33 @@ def ensure_database_config(workspace_root: str) -> str:
     """
     from solomon_harness.home import assigned_memory_port, derive_tenant
 
-    config_dir = os.path.join(workspace_root, ".agent")
-    os.makedirs(config_dir, exist_ok=True)
-    config_path = os.path.join(config_dir, "config.json")
+    from solomon_harness.layout import HarnessPaths, confined_path
 
-    config_data = {}
-    if os.path.isfile(config_path):
+    paths = HarnessPaths(workspace_root)
+    config_path = confined_path(paths.root, paths.config)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path = confined_path(paths.root, paths.config)
+
+    config_data: Dict[str, Any] = {}
+    read_path = confined_path(paths.root, paths.resolve_config())
+    if read_path.is_file():
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with read_path.open("r", encoding="utf-8") as f:
                 config_data = json.load(f)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"Project configuration must be a valid JSON object: {read_path}"
+            ) from exc
+        if not isinstance(config_data, dict):
+            raise ValueError(
+                f"Project configuration must be a valid JSON object: {read_path}"
+            )
 
     tenant = derive_tenant(workspace_root)
     port = assigned_memory_port()
     db = config_data.setdefault("database", {})
+    if not isinstance(db, dict):
+        raise ValueError("Project configuration field 'database' must be an object")
     db.setdefault("provider", "surrealdb")
     db.setdefault("namespace", "solomon")
     # Point at the shared backend on its assigned host port, migrating the legacy
@@ -159,8 +171,34 @@ def ensure_database_config(workspace_root: str) -> str:
     if db.get("database") in (None, "", "harness"):
         db["database"] = tenant
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config_data, f, indent=2)
+    rendered = json.dumps(config_data, indent=2)
+    try:
+        current = config_path.read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    if current != rendered:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".project.json.", dir=config_path.parent
+        )
+        temporary = os.path.abspath(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(rendered)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            confined_path(paths.root, config_path)
+            os.replace(temporary, config_path)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    try:
+        if (config_path.stat().st_mode & 0o777) != 0o600:
+            config_path.chmod(0o600)
+    except OSError:
+        pass
     return db["database"]
 
 
@@ -287,49 +325,31 @@ def hint_uninitialized_wiki(
     )
 
 
-def _install_harness_files(workspace_root: str) -> None:
-    """Copy the harness files into a fresh project (no-op when already present).
+def _install_harness_files(workspace_root: str) -> bool:
+    """Install the owned payload into an external project.
 
-    The source is this package's repository (resolved from __file__), so running
-    `solomon-harness init` from a clone or editable install scaffolds the harness
-    into the current project. When workspace_root already has agents/, nothing is
-    copied and the workspace is configured in place.
+    Returns ``True`` for a consumer-project install and ``False`` while
+    developing this source repository in place. The allowlisted installer is
+    the only code path allowed to materialize harness files in a consumer.
     """
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if os.path.abspath(repo_root) == os.path.abspath(workspace_root):
-        return  # developing the harness in place
-    if os.path.isdir(os.path.join(workspace_root, "agents")):
-        return  # already installed
-    if not os.path.isdir(os.path.join(repo_root, "agents")):
-        return  # the harness tree is not bundled with this install
+        return False
 
-    print("Installing harness files into the project...")
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "build", "node_modules")
-    trees = ["agents", "scripts", "solomon_harness", ".claude", ".gemini"]
-    # No per-project docker-compose.yml: the memory backend is a single shared
-    # instance in ~/.solomon-harness (see solomon_harness/memory.py).
-    # The harness's own README stays home: an installed project's README is its
-    # own document (maintainer directive recorded in ADR-0028).
-    files = [
-        ".mcp.json", "pyproject.toml", "uv.lock",
-        "AGENTS.md", "AGY.md", "CLAUDE.md", "skill-sources.json",
-        os.path.join(".github", "copilot-instructions.md"),
-    ]
-    for tree in trees:
-        src = os.path.join(repo_root, tree)
-        dest = os.path.join(workspace_root, tree)
-        if os.path.isdir(src) and not os.path.exists(dest):
-            shutil.copytree(src, dest, ignore=ignore)
-    for name in files:
-        src = os.path.join(repo_root, name)
-        dest = os.path.join(workspace_root, name)
-        if os.path.isfile(src) and not os.path.exists(dest):
-            dest_dir = os.path.dirname(dest)
-            if dest_dir:
-                os.makedirs(dest_dir, exist_ok=True)
-            shutil.copy2(src, dest)
-    _install_docs_skeleton(repo_root, workspace_root)
+    from solomon_harness.install_layout import InstallConflictError, install_project
+
+    print("Installing harness files into .agents/solomon...")
+    result = install_project(workspace_root)
+    if result.conflicts:
+        print(f"  Preserved {len(result.conflicts)} locally modified managed file(s).")
+    blocking_conflicts = getattr(result, "blocking_conflicts", result.conflicts)
+    if blocking_conflicts:
+        raise InstallConflictError(
+            "Harness installation preserved conflicting managed files: "
+            + ", ".join(blocking_conflicts)
+        )
     print("  Harness files installed.")
+    return True
 
 
 # The harness's documents never travel into installed projects (ADR-0029):
@@ -628,131 +648,106 @@ def retrofit_instruction_docs(workspace_root: str) -> None:
             f.write(content + RETROFIT_MARKER + "\n" + block)
 
 
-def scaffold_agents(workspace_root: str) -> None:
-    """Ensure each agent has safe local scaffolding (create-only).
+def scaffold_agents(
+    workspace_root: str,
+    *,
+    agent_names: Optional[Iterable[str]] = None,
+) -> None:
+    """Ensure each agent has main.py and .agent/config.json (create-only).
 
-    Non-destructive: a hand-authored entrypoint or config is never overwritten.
-    Capability-only projects receive no executable or configuration scaffolding;
-    a local ``solomon_harness/cli.py`` runtime is required for both files.
-    Every managed component is opened relative to directory descriptors and any
-    symlink, dangling link, or unexpected file type fails closed.
+    Non-destructive: a hand-authored entrypoint or config is never overwritten;
+    only genuinely missing scaffolding is filled in from the bundled template.
+    ``agent_names`` confines an individual registration to its own source tree.
     """
-    import re
+    from solomon_harness.layout import HarnessPaths, confined_path, confined_read_path
+    from solomon_harness.install_transaction import create_install_file
 
+    paths = HarnessPaths(workspace_root)
+    agents_dir = os.fspath(confined_path(paths.root, paths.resolve_agents()))
+    if not os.path.isdir(agents_dir):
+        return
     package_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = os.path.join(package_dir, "templates", "harness")
-    main_src = os.path.join(template_dir, "main.py")
-    config_src = os.path.join(template_dir, ".agent", "config.json")
-    workspace_fd = open_root_directory(workspace_root)
-    runtime_fd = cli_fd = agents_fd = None
-    try:
-        try:
-            runtime_fd = open_directory_at(
-                workspace_fd,
-                "solomon_harness",
-                missing_ok=True,
-            )
-            if runtime_fd is None:
-                return
-            cli_fd = open_regular_at(runtime_fd, "cli.py", missing_ok=True)
-            if cli_fd is None:
-                return
-        except (FileNotFoundError, UnsafePathError, OSError):
-            return
-        finally:
-            if cli_fd is not None:
-                os.close(cli_fd)
-                cli_fd = None
-            if runtime_fd is not None:
-                os.close(runtime_fd)
-                runtime_fd = None
+    # Resolve (and symlink-reject) the bundled payload templates before any
+    # capability gate, so an unsafe template is rejected even for a project that
+    # would otherwise receive no scaffolding.
+    main_src = os.fspath(
+        confined_read_path(package_dir, os.path.join(template_dir, "main.py"))
+    )
+    config_src = os.fspath(
+        confined_read_path(
+            package_dir, os.path.join(template_dir, ".agent", "config.json")
+        )
+    )
+    # Capability-only projects carry no local runtime and no install manifest;
+    # they receive no executable or configuration scaffolding (issue #315). A
+    # managed installed extension (manifest present) or a source checkout with a
+    # local ``solomon_harness/cli.py`` runtime is required before anything is written.
+    local_runtime = os.path.isfile(
+        os.path.join(os.fspath(paths.root), "solomon_harness", "cli.py")
+    )
+    if not paths.manifest.is_file() and not local_runtime:
+        return
+    installed_extension = paths.manifest.is_file()
 
-        agents_fd = open_directory_at(workspace_fd, "agents", missing_ok=True)
-        if agents_fd is None:
-            return
+    names = (
+        sorted(os.listdir(agents_dir))
+        if agent_names is None
+        else sorted(set(agent_names))
+    )
+    for name in names:
+        agent_dir = os.fspath(confined_path(paths.root, os.path.join(agents_dir, name)))
+        role_path = os.fspath(
+            confined_path(paths.root, os.path.join(agent_dir, "agents", f"{name}.md"))
+        )
+        if not os.path.isfile(role_path):
+            continue  # not an agent directory
 
-        main_content = main_mode = None
-        if os.path.isfile(main_src) and not os.path.islink(main_src):
-            with open(main_src, "rb") as f:
-                main_content = f.read()
-            main_mode = stat.S_IMODE(os.stat(main_src, follow_symlinks=False).st_mode)
-        config_template = config_mode = None
-        if os.path.isfile(config_src) and not os.path.islink(config_src):
-            with open(config_src, "r", encoding="utf-8") as f:
-                config_template = f.read()
-            config_mode = stat.S_IMODE(os.stat(config_src, follow_symlinks=False).st_mode)
-
-        for name in sorted(os.listdir(agents_fd)):
-            if not re.fullmatch(r"[a-z0-9_]+", name):
-                continue
-            agent_fd = role_dir_fd = role_fd = config_dir_fd = existing_fd = None
-            try:
-                agent_fd = open_directory_at(agents_fd, name)
-                assert agent_fd is not None
-                role_dir_fd = open_directory_at(agent_fd, "agents", missing_ok=True)
-                if role_dir_fd is None:
-                    continue
-                role_fd = open_regular_at(
-                    role_dir_fd,
-                    f"{name}.md",
-                    missing_ok=True,
+        # Confine both destinations before writing either, so a single unsafe
+        # target (e.g. a symlinked ``.agent`` directory or ``main.py``) rejects
+        # the agent without leaving a partial write behind (issue #315 atomicity).
+        main_dst = os.fspath(confined_path(paths.root, os.path.join(agent_dir, "main.py")))
+        config_dst = os.fspath(
+            confined_path(paths.root, os.path.join(agent_dir, ".agent", "config.json"))
+        )
+        if os.path.isfile(main_src) and not os.path.isfile(main_dst):
+            if installed_extension:
+                create_install_file(
+                    paths.root,
+                    Path(main_dst),
+                    Path(main_src).read_bytes(),
+                    stat.S_IMODE(Path(main_src).stat().st_mode),
                 )
-                if role_fd is None:
-                    continue
+            else:
+                shutil.copy2(main_src, main_dst)
 
-                existing_fd = open_regular_at(agent_fd, "main.py", missing_ok=True)
-                main_exists = existing_fd is not None
-                if existing_fd is not None:
-                    os.close(existing_fd)
-                    existing_fd = None
+        if os.path.isfile(config_src) and not os.path.isfile(config_dst):
+            with open(config_src, "r", encoding="utf-8") as f:
+                content = f.read().replace("{{AGENT_NAME}}", name)
+            if installed_extension:
+                create_install_file(
+                    paths.root,
+                    Path(config_dst),
+                    content.encode("utf-8"),
+                )
+            else:
+                os.makedirs(os.path.dirname(config_dst), exist_ok=True)
+                with open(config_dst, "w", encoding="utf-8") as f:
+                    f.write(content)
 
-                config_dir_fd = open_directory_at(agent_fd, ".agent", missing_ok=True)
-                config_exists = False
-                if config_dir_fd is not None:
-                    existing_fd = open_regular_at(
-                        config_dir_fd,
-                        "config.json",
-                        missing_ok=True,
-                    )
-                    config_exists = existing_fd is not None
-                    if existing_fd is not None:
-                        os.close(existing_fd)
-                        existing_fd = None
 
-                if main_content is not None and main_mode is not None and not main_exists:
-                    create_regular_at(
-                        agent_fd,
-                        "main.py",
-                        main_content,
-                        mode=main_mode,
-                    )
-                if config_template is not None and config_mode is not None and not config_exists:
-                    if config_dir_fd is None:
-                        config_dir_fd = open_directory_at(agent_fd, ".agent", create=True)
-                        assert config_dir_fd is not None
-                    config_content = config_template.replace("{{AGENT_NAME}}", name).encode(
-                        "utf-8"
-                    )
-                    create_regular_at(
-                        config_dir_fd,
-                        "config.json",
-                        config_content,
-                        mode=config_mode,
-                    )
-            finally:
-                for descriptor in (
-                    existing_fd,
-                    config_dir_fd,
-                    role_fd,
-                    role_dir_fd,
-                    agent_fd,
-                ):
-                    if descriptor is not None:
-                        os.close(descriptor)
-    finally:
-        if agents_fd is not None:
-            os.close(agents_fd)
-        os.close(workspace_fd)
+def _reconcile_host_adapters(workspace_root: str) -> Any:
+    """Reconcile adapters directly in source and transactionally in consumers."""
+    from solomon_harness.layout import HarnessPaths
+
+    if HarnessPaths(workspace_root).manifest.is_file():
+        from solomon_harness.install_layout import compile_project_adapters
+
+        return compile_project_adapters(workspace_root)
+
+    from solomon_harness.host_adapters import compile_adapters
+
+    return compile_adapters(workspace_root)
 
 
 def scaffold_new_agent(
@@ -761,28 +756,102 @@ def scaffold_new_agent(
     description: str,
     title: Optional[str] = None,
     duties: Optional[List[str]] = None,
+    *,
+    reconcile_adapters: bool = True,
 ) -> None:
-    """Scaffold a new agent directory from templates (create-only)."""
+    """Scaffold one agent, optionally leaving adapter commit to an outer transaction."""
     import re
+    from solomon_harness.layout import (
+        HarnessPaths,
+        PathConfinementError,
+        confined_path,
+        confined_read_path,
+    )
+    from solomon_harness.install_transaction import create_install_file
+
     if not re.match(r"^[a-z0-9_]+$", name):
         raise ValueError("Agent name must be alphanumeric and underscores only (snake_case)")
 
-    agents_dir = os.path.join(workspace_root, "agents")
-    agent_dir = os.path.join(agents_dir, name)
-    real_agents_dir = os.path.realpath(agents_dir)
-    real_agent_dir = os.path.realpath(agent_dir)
+    paths = HarnessPaths(workspace_root)
+    installed_extension = paths.manifest.is_file()
+    selected_agents = paths.agents if installed_extension else paths.resolve_agents()
+    agents_path = confined_path(paths.root, selected_agents)
+    agents_dir = os.fspath(agents_path)
+    agent_path = confined_path(paths.root, agents_path / name)
+    agent_dir = os.fspath(agent_path)
 
-    # Confinement check
-    if not real_agent_dir.startswith(real_agents_dir + os.sep) and real_agent_dir != real_agents_dir:
-        raise ValueError("Path confinement violation: agent folder must be inside agents/")
+    if agent_path.exists():
+        if installed_extension:
+            try:
+                required = tuple(
+                    confined_read_path(paths.root, candidate)
+                    for candidate in (
+                        agent_path / "persona.md",
+                        agent_path / "main.py",
+                        agent_path / ".agent" / "config.json",
+                        agent_path / "agents" / f"{name}.md",
+                        agent_path / "skills" / "scope_and_mandate.md",
+                    )
+                )
+            except PathConfinementError as exc:
+                from solomon_harness.install_layout import InstallConflictError
 
-    if os.path.exists(real_agent_dir):
+                raise InstallConflictError(
+                    f"Installed agent scaffold traverses a symlink: {agent_path}"
+                ) from exc
+            if not agent_path.is_dir() or any(
+                candidate.is_symlink() or not candidate.is_file()
+                for candidate in required
+            ):
+                from solomon_harness.install_layout import InstallConflictError
+
+                raise InstallConflictError(
+                    f"Installed agent scaffold is incomplete: {agent_path}"
+                )
+            if reconcile_adapters:
+                compile_result = _reconcile_host_adapters(workspace_root)
+                if compile_result.conflicts:
+                    from solomon_harness.install_layout import InstallConflictError
+
+                    raise InstallConflictError(
+                        "Agent adapter conflicts prevented registration: "
+                        + ", ".join(compile_result.conflicts)
+                    )
+            return
         print(f"Agent '{name}' already exists. Skipping scaffolding.")
         return
 
+    selected_scripts = paths.scripts if installed_extension else paths.resolve_scripts()
+    doc_skills_script = confined_read_path(
+        paths.root, selected_scripts / "document-skills.py"
+    )
+
+    def project_reference(path: str) -> str:
+        return os.path.relpath(path, os.fspath(paths.root)).replace(os.sep, "/")
+
+    role_path = os.path.join(agent_dir, "agents", f"{name}.md")
+    skills_path = os.path.join(agent_dir, "skills")
+    canonical_catalog = agents_path == paths.agents
+    rules_path = (
+        os.fspath(paths.rules)
+        if canonical_catalog
+        else os.path.join(agents_dir, "AGENTS.md")
+    )
+    rules_path = os.fspath(confined_path(paths.root, rules_path))
+    sources_path = (
+        os.fspath(paths.skill_sources)
+        if canonical_catalog
+        else os.fspath(paths.resolve_skill_sources())
+    )
+    rules_reference = project_reference(rules_path)
+    role_reference = project_reference(role_path)
+    skills_reference = project_reference(skills_path).rstrip("/") + "/"
+    sources_reference = project_reference(sources_path)
+
     # Create directories
-    os.makedirs(os.path.join(real_agent_dir, "agents"), exist_ok=True)
-    os.makedirs(os.path.join(real_agent_dir, "skills"), exist_ok=True)
+    if not installed_extension:
+        os.makedirs(os.path.join(agent_dir, "agents"), exist_ok=True)
+        os.makedirs(os.path.join(agent_dir, "skills"), exist_ok=True)
 
     # Write persona.md
     if title is None:
@@ -791,10 +860,14 @@ def scaffold_new_agent(
 
 {description}
 
-This agent is the {name} brain for solomon-harness. It reasons within the shared rules in agents/AGENTS.md and its contract in agents/{name}/agents/{name}.md, applies the skills in agents/{name}/skills/, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
+This agent is the {name} brain for solomon-harness. It reasons within the shared rules in `{rules_reference}` and its contract in `{role_reference}`, applies the skills in `{skills_reference}`, records decisions and handoffs in the project memory, and communicates in a direct, professional tone with no emojis or filler.
 """
-    with open(os.path.join(real_agent_dir, "persona.md"), "w", encoding="utf-8") as f:
-        f.write(persona_content)
+    persona_path = Path(agent_dir) / "persona.md"
+    if installed_extension:
+        create_install_file(paths.root, persona_path, persona_content.encode("utf-8"))
+    else:
+        with persona_path.open("w", encoding="utf-8") as f:
+            f.write(persona_content)
 
     # Write role file
     if duties is None:
@@ -816,17 +889,22 @@ Use this agent when the task falls within this mandate: {description}
 
 ## Active Skills
 
-No local skills configured.
+The following specific skills are actively configured for this agent:
+- [scope_and_mandate](skills/scope_and_mandate.md) — Defines what the {name} specialist owns and what it hands off. Use when clarifying whether a task belongs to this agent.
 
 ## External Skills
 
-Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `skill-sources.json` and use:
+Additional skills can be fetched and integrated from external skill servers at any time. Configure external repositories in `{sources_reference}` and use:
 ```bash
 solomon-harness skills add <source> <skill> --agent {name}
 ```
 """
-    with open(os.path.join(real_agent_dir, "agents", f"{name}.md"), "w", encoding="utf-8") as f:
-        f.write(role_content)
+    role_file = Path(role_path)
+    if installed_extension:
+        create_install_file(paths.root, role_file, role_content.encode("utf-8"))
+    else:
+        with role_file.open("w", encoding="utf-8") as f:
+            f.write(role_content)
 
     # Write scope_and_mandate.md skill
     skill_content = f"""---
@@ -850,15 +928,25 @@ This skill covers the {name} role's duties.
 
 - [ ] The work stayed within this agent's mandate or was handed off explicitly.
 """
-    with open(os.path.join(real_agent_dir, "skills", "scope_and_mandate.md"), "w", encoding="utf-8") as f:
-        f.write(skill_content)
+    skill_path = Path(agent_dir) / "skills" / "scope_and_mandate.md"
+    if installed_extension:
+        create_install_file(paths.root, skill_path, skill_content.encode("utf-8"))
+    else:
+        with skill_path.open("w", encoding="utf-8") as f:
+            f.write(skill_content)
 
     # Copy main.py and config.json via scaffold_agents
-    scaffold_agents(workspace_root)
+    scaffold_agents(
+        workspace_root,
+        agent_names=(name,) if installed_extension else None,
+    )
 
-    # Register in agents/AGENTS.md
-    agents_md_path = os.path.join(agents_dir, "AGENTS.md")
-    if os.path.isfile(agents_md_path):
+    # A consumer-created agent is project-owned extension content. The
+    # installed AGENTS.md belongs to the package manifest; changing it here
+    # would turn the next upgrade into a blocking core conflict. Native source
+    # scaffolds still update their tracked roster.
+    agents_md_path = rules_path
+    if not installed_extension and os.path.isfile(agents_md_path):
         with open(agents_md_path, "r", encoding="utf-8") as f:
             content = f.read()
 
@@ -914,19 +1002,39 @@ This skill covers the {name} role's duties.
             with open(agents_md_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-    # Run document-skills script to compile the new agent's skills
-    doc_skills_script = os.path.join(workspace_root, "scripts", "document-skills.py")
-    if os.path.isfile(doc_skills_script):
+    # Source authoring keeps its historical whole-catalog documentation pass.
+    # Installed profiles are package-owned; rewriting every built-in role would
+    # turn the next upgrade into core drift. The new role already carries its
+    # generated scope skill entry above, so no global pass is needed there.
+    doc_skills_script = confined_read_path(paths.root, doc_skills_script)
+    if not installed_extension and doc_skills_script.is_file():
         import subprocess
         import sys
-        subprocess.run([sys.executable, doc_skills_script], cwd=workspace_root, check=True)
+        subprocess.run(  # noqa: S603 - current interpreter runs a confined repository script
+            [sys.executable, os.fspath(doc_skills_script)],
+            cwd=os.path.dirname(agents_dir),
+            check=True,
+        )
 
-    # Compile Claude agents, Gemini commands, and Codex skills.
-    gen_integrations_script = os.path.join(workspace_root, "scripts", "generate-integrations.py")
-    if os.path.isfile(gen_integrations_script):
-        import subprocess
-        import sys
-        subprocess.run([sys.executable, gen_integrations_script], cwd=workspace_root, check=True)
+    # Reconcile every host adapter from the neutral catalog. The compiler must
+    # receive the outer project root; passing .agents/solomon would render host
+    # discovery files inside the managed core instead of the consumer project.
+    if not reconcile_adapters:
+        return
+
+    compile_result = _reconcile_host_adapters(workspace_root)
+    if compile_result.conflicts:
+        if installed_extension:
+            from solomon_harness.install_layout import InstallConflictError
+
+            raise InstallConflictError(
+                "Agent adapter conflicts prevented registration: "
+                + ", ".join(compile_result.conflicts)
+            )
+        print(
+            "Preserved conflicting host adapter files: "
+            + ", ".join(compile_result.conflicts)
+        )
 
 
 def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> None:
@@ -954,9 +1062,10 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     # host project's.
     project_name, git_remote, technologies = get_project_metadata(workspace_root)
 
-    # When run in a fresh project (no agents/ yet), install the harness files from
-    # this package's repository into the workspace before configuring it.
-    _install_harness_files(workspace_root)
+    # Consumer repositories use the managed layout. This source repository
+    # continues through the legacy dogfooding bootstrap below until its own
+    # tracked tree is migrated independently.
+    managed_consumer = _install_harness_files(workspace_root)
     # Runs for existing projects too (_install_harness_files early-returns once
     # agents/ exists): a project bootstrapped before this rule kept a .gitignore
     # that let PLAN.md get committed and collide across branches.
@@ -1076,163 +1185,9 @@ def bootstrap_project(workspace_root: str, non_interactive: bool = False) -> Non
     except Exception as exc:
         print(f"  Warning: could not prepare the shared memory home: {exc}")
 
-    # 3. Generate .claude/settings.json only when it does not already exist, so
-    # re-running init never clobbers a hand-maintained settings file. No model is
-    # pinned (the host tool decides), and permissions use the Bash(<cmd>:*) form.
-    claude_settings_dir = os.path.join(workspace_root, ".claude")
-    os.makedirs(claude_settings_dir, exist_ok=True)
-    claude_settings_path = os.path.join(claude_settings_dir, "settings.json")
-    if not os.path.isfile(claude_settings_path):
-        print("Generating .claude/settings.json...")
-        claude_settings = {
-            "permissions": {
-                "allow": [
-                    "Bash(git status:*)",
-                    "Bash(git diff:*)",
-                    "Bash(git log:*)",
-                ],
-                "ask": [
-                    "Bash(git commit:*)",
-                    "Bash(git push:*)",
-                ],
-            },
-            # On session start, bring the memory backend up (docker compose) and
-            # then resume the project status. Both degrade gracefully, so a
-            # missing Docker daemon never blocks the session.
-            "hooks": {
-                "SessionStart": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true",
-                            },
-                            {
-                                "type": "command",
-                                "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true",
-                            },
-                        ]
-                    }
-                ]
-            },
-        }
-        with open(claude_settings_path, "w", encoding="utf-8") as f:
-            json.dump(claude_settings, f, indent=2)
-        try:
-            os.chmod(claude_settings_path, 0o600)
-        except Exception:
-            pass
-    else:
-        try:
-            os.chmod(claude_settings_path, 0o600)
-        except Exception:
-            pass
-        print("Keeping existing .claude/settings.json.")
-
-    # 3.5 Generate .gemini/settings.json only when it does not already exist.
-    gemini_settings_dir = os.path.join(workspace_root, ".gemini")
-    os.makedirs(gemini_settings_dir, exist_ok=True)
-    gemini_settings_path = os.path.join(gemini_settings_dir, "settings.json")
-    if not os.path.isfile(gemini_settings_path):
-        print("Generating .gemini/settings.json...")
-        gemini_settings = {
-            "permissions": {
-                "allow": [
-                    "command(git)",
-                    "command(uv)",
-                    "command(gh)",
-                ]
-            },
-            "hooks": {
-                "SessionStart": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true",
-                            },
-                            {
-                                "type": "command",
-                                "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true",
-                            },
-                        ]
-                    }
-                ],
-                "PreToolUse": [
-                    {
-                        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "uv run python -m solomon_harness.cli loop-guard",
-                            }
-                        ]
-                    }
-                ]
-            },
-        }
-        with open(gemini_settings_path, "w", encoding="utf-8") as f:
-            json.dump(gemini_settings, f, indent=2)
-        try:
-            os.chmod(gemini_settings_path, 0o600)
-        except Exception:
-            pass
-    else:
-        # If settings.json exists, merge the SessionStart and PreToolUse hooks into it.
-        settings: Optional[Dict[str, Any]] = {}
-        if os.path.getsize(gemini_settings_path) > 0:
-            try:
-                with open(gemini_settings_path, "r", encoding="utf-8") as f:
-                    settings = json.load(f) or {}
-            except json.JSONDecodeError as exc:
-                print(f"WARNING: local settings file at {gemini_settings_path} is not valid JSON ({exc}). Overwriting with default settings.")
-                settings = {}
-            except Exception as exc:
-                print(f"WARNING: failed to read local settings file at {gemini_settings_path} ({exc}). Hooks not merged.")
-                settings = None
-        
-        if settings is not None:
-            hooks = settings.setdefault("hooks", {})
-            
-            # Merge SessionStart
-            session_start = hooks.setdefault("SessionStart", [])
-            existing_ss = json.dumps(session_start)
-            updated = False
-            if "solomon_harness.cli memory-up" not in existing_ss:
-                session_start.append({
-                    "hooks": [
-                        {"type": "command", "command": "uv run python -m solomon_harness.cli memory-up 2>/dev/null || true"},
-                        {"type": "command", "command": "uv run python -m solomon_harness.cli run 2>/dev/null || true"},
-                    ]
-                })
-                updated = True
-
-            # Merge PreToolUse
-            pre_tool_use = hooks.setdefault("PreToolUse", [])
-            existing_ptu = json.dumps(pre_tool_use)
-            if "solomon_harness.cli loop-guard" not in existing_ptu:
-                pre_tool_use.append({
-                    "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-                    "hooks": [
-                        {"type": "command", "command": "uv run python -m solomon_harness.cli loop-guard"}
-                    ]
-                })
-                updated = True
-
-            if updated:
-                with open(gemini_settings_path, "w", encoding="utf-8") as f:
-                    json.dump(settings, f, indent=2)
-                try:
-                    os.chmod(gemini_settings_path, 0o600)
-                except Exception:
-                    pass
-                print("Merged hooks into existing .gemini/settings.json.")
-            else:
-                try:
-                    os.chmod(gemini_settings_path, 0o600)
-                except Exception:
-                    pass
-                print("Keeping existing .gemini/settings.json (hooks already present).")
+    if managed_consumer:
+        print("=== Bootstrap Completed Successfully ===")
+        return
 
     # Resolve templates directory (bundled inside the package or root fallback)
     package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1469,8 +1424,8 @@ def index_codebase(workspace_root: str, db) -> None:
     print("Indexing project codebase into database...")
     exclude_dirs = {
         ".git", "node_modules", ".venv", "venv", "build", "dist", ".solomon",
-        ".claude", ".gemini", "docs", "planning", "__pycache__", ".idea",
-        ".vscode", "memory",
+        ".agents", ".claude", ".codex", ".gemini", "docs", "planning",
+        "__pycache__", ".idea", ".vscode", "memory",
     }
     exclude_exts = {
         ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".tar",
@@ -1492,14 +1447,18 @@ def index_codebase(workspace_root: str, db) -> None:
     for root, dirs, files in os.walk(workspace_root):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
         for file in files:
+            rel_path = os.path.relpath(os.path.join(root, file), workspace_root)
+            if rel_path in {"AGENTS.md", ".mcp.json"}:
+                continue
             if os.path.splitext(file)[1].lower() in exclude_exts:
                 continue
             file_path = os.path.join(root, file)
-            rel_path = os.path.relpath(file_path, workspace_root)
             try:
                 st = os.stat(file_path)
             except OSError:
                 continue
+            if not stat.S_ISREG(st.st_mode):
+                continue  # never open a socket/pipe/device: open() can block forever
             if st.st_size > 250000:
                 continue
             signature = f"{int(st.st_mtime)}:{st.st_size}"

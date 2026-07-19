@@ -1,4 +1,4 @@
-# solomon-harness — Antigravity Agent Guidelines
+# solomon-harness — AGY Agent Guidelines
 
 The canonical project rules and specialist agent definitions are maintained in a central source. Read it before starting any work:
 @agents/AGENTS.md
@@ -8,7 +8,7 @@ Every specialist agent is modularly isolated and defined under `agents/<name>/`:
 - **Persona:** `agents/<name>/persona.md` (defines core behavior, personality, and tone constraints).
 - **Profile:** `agents/<name>/agents/<name>.md` (defines core duties, active local skills, and external skills access).
 - **Local Skills:** `agents/<name>/skills/` (a directory of short, pulverized/topic-specific markdown files).
-- **Configuration:** `agents/<name>/.agent/config.json` (defines model specifications and dynamic architectural patterns).
+- **Configuration:** `agents/<name>/.agent/config.json` (source profile metadata; installed model selection belongs to the host).
 - **Specs:** `docs/specs/` (specification documents defining requirements and design constraints for feature issues).
 - **ADRs:** `docs/adrs/` (Architectural Decision Records tracking architecture and technology selections).
 
@@ -32,11 +32,23 @@ When introducing a new agent to the harness, adhere to the following sequence:
    ```
 
 4. **Compile the Harness:**
-   Scaffold any missing agent files and regenerate the host-tool integrations
-   (`.claude/agents/`, `.gemini/commands/`):
+   Regenerate the thin Claude, AGY, and Codex integrations from the existing
+   canonical source files:
    ```bash
    uv run python -m solomon_harness.cli compile
    ```
+
+## Installed Projects
+
+This file imports `agents/AGENTS.md` because this repository is the harness
+source checkout. In a consumer repository, `solomon-harness init` places the
+canonical catalog at `.agents/solomon`; `.agents/agents/`,
+`.agents/skills/`, `.agents/hooks.json`, and `.agents/plugins/solomon/`
+(including its `mcp_config.json`) are thin AGY
+adapters that point there. Claude and
+Codex receive equivalent adapters from the same catalog. Rebuild them with
+`solomon-harness compile` and remove unchanged manifest-owned output with
+`solomon-harness uninstall`.
 
 ## Development and Testing Standards
 - **Strict TDD:** Write failing tests first, observe them fail, implement the fix, and then refactor.

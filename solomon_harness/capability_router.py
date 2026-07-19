@@ -16,7 +16,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple, Union
 
-from solomon_harness.integrations import MAX_ROLE_BYTES, discover_agents, read_agent_role
+from solomon_harness.agent_selection import discover_agents
+from solomon_harness.integrations import MAX_ROLE_BYTES, read_agent_role
+from solomon_harness.layout import HarnessPaths, find_workspace_root
 from solomon_harness.secure_paths import UnsafePathError
 
 ADAPT_SKILL = "adapt_skill"
@@ -80,7 +82,7 @@ Matcher = Callable[[str, List[Agent]], Match]
 
 
 def _default_workspace_root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.fspath(find_workspace_root(__file__))
 
 
 def _role_description(role_text: str) -> str:
@@ -101,13 +103,10 @@ def load_catalog(workspace_root: Optional[str] = None) -> List[Agent]:
     """
     root = workspace_root or _default_workspace_root()
     real_root = os.path.realpath(root)
-    agents_dir = os.path.join(real_root, "agents")
-    try:
-        names = discover_agents(os.path.join(real_root, "agents"), strict=True)
-    except (FileNotFoundError, UnsafePathError, OSError) as exc:
-        raise CatalogError(f"unsafe agent catalog under {agents_dir}") from exc
+    agents_dir = os.path.realpath(HarnessPaths(real_root).resolve_agents())
+    names = discover_agents(real_root)
     if not names:
-        raise CatalogError(f"no agents discovered under {os.path.join(real_root, 'agents')}")
+        raise CatalogError(f"no agents discovered under {agents_dir}")
     catalog = []
     for name in sorted(names):
         try:

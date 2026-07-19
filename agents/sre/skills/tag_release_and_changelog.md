@@ -24,7 +24,7 @@ Pre-1.0 (the project is at `0.x` now) classification of the window:
 - Else, any `fix` / `perf` / `refactor` / `revert` bumps the **PATCH**: `0.3.1 -> 0.3.2`.
 - A window of only `chore` / `docs` / `ci` / `test` / `style` / `build` is **non-releasable**: no tag is cut.
 
-Post-1.0 the standard SemVer mapping applies: `BREAKING CHANGE -> MAJOR`, `feat -> MINOR`, `fix`/`perf -> PATCH`. MAJOR is reserved for breaking a harness public contract — the `solomon-harness` CLI surface, the `.agent/config.json` schema, the `solomon-memory` MCP tool signatures, or the `agents/<name>/` layout. Nothing else justifies a major bump.
+Post-1.0 the standard SemVer mapping applies: `BREAKING CHANGE -> MAJOR`, `feat -> MINOR`, `fix`/`perf -> PATCH`. MAJOR is reserved for breaking a harness public contract — the `solomon-harness` CLI surface, the `.agents/solomon/config/project.json` schema, the `solomon-memory` MCP tool signatures, or the `agents/<name>/` layout. Nothing else justifies a major bump.
 
 ## Keep a Changelog discipline
 

@@ -5,7 +5,97 @@ import subprocess
 import tempfile
 import unittest
 
+import pytest
+
 from solomon_harness.subprocess_env import clean_git_env
+
+
+def test_scaffold_agents_rejects_a_symlinked_canonical_catalog(tmp_path):
+    from solomon_harness.bootstrap import scaffold_agents
+
+    outside = tmp_path.parent / f"{tmp_path.name}-agents-outside"
+    role = outside / "qa" / "agents" / "qa.md"
+    role.parent.mkdir(parents=True)
+    role.write_text("# QA\n", encoding="utf-8")
+    core = tmp_path / ".agents" / "solomon"
+    core.mkdir(parents=True)
+    (core / "agents").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        scaffold_agents(str(tmp_path))
+
+    assert not (outside / "qa" / "main.py").exists()
+
+
+def test_scaffold_agents_rejects_a_payload_template_through_a_symlink(
+    tmp_path, monkeypatch
+):
+    from solomon_harness import bootstrap
+
+    workspace = tmp_path / "workspace"
+    role = workspace / "agents" / "qa" / "agents" / "qa.md"
+    role.parent.mkdir(parents=True)
+    role.write_text("# QA\n", encoding="utf-8")
+
+    package = tmp_path / "payload" / "solomon_harness"
+    templates = package / "templates"
+    templates.mkdir(parents=True)
+    outside = tmp_path / "outside-templates"
+    (outside / ".agent").mkdir(parents=True)
+    (outside / "main.py").write_text("print('outside')\n", encoding="utf-8")
+    (outside / ".agent" / "config.json").write_text(
+        '{"agent_name":"{{AGENT_NAME}}"}\n', encoding="utf-8"
+    )
+    (templates / "harness").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(bootstrap, "__file__", str(package / "bootstrap.py"))
+
+    with pytest.raises(ValueError, match="read path.*symlink"):
+        bootstrap.scaffold_agents(str(workspace))
+
+    assert not (workspace / "agents" / "qa" / "main.py").exists()
+    assert not (workspace / "agents" / "qa" / ".agent" / "config.json").exists()
+
+
+def test_scaffold_new_agent_does_not_execute_document_skills_through_a_symlink(
+    tmp_path, monkeypatch
+):
+    from solomon_harness import bootstrap
+
+    workspace = tmp_path / "workspace"
+    agents = workspace / "agents"
+    agents.mkdir(parents=True)
+    (agents / "AGENTS.md").write_text(
+        "# Rules\n\n## The specialist agents\n\n", encoding="utf-8"
+    )
+    outside_scripts = tmp_path / "outside-scripts"
+    outside_scripts.mkdir()
+    (outside_scripts / "document-skills.py").write_text(
+        "raise RuntimeError('must not execute')\n", encoding="utf-8"
+    )
+    (workspace / "scripts").symlink_to(
+        outside_scripts, target_is_directory=True
+    )
+    launched = []
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "run",
+        lambda *args, **kwargs: launched.append((args, kwargs)),
+    )
+
+    class _CompileResult:
+        conflicts = ()
+
+    monkeypatch.setattr(
+        bootstrap, "_reconcile_host_adapters", lambda _root: _CompileResult()
+    )
+
+    with pytest.raises(ValueError, match="read path.*symlink"):
+        bootstrap.scaffold_new_agent(
+            str(workspace), "escaped_agent", "Must stay confined"
+        )
+
+    assert launched == []
+    assert not (agents / "escaped_agent").exists()
 
 
 class TestBootstrapAgent(unittest.TestCase):
@@ -188,80 +278,43 @@ class TestBootstrapAgent(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Business-Requirements.md")))
         self.assertTrue(os.path.isfile(os.path.join(wiki_dir, "Technical-Documentation.md")))
 
-    def test_bootstrap_gemini_settings_creation_and_merge(self):
+    def test_bootstrap_uses_native_three_host_adapters_and_never_gemini(self):
         from solomon_harness.bootstrap import bootstrap_project
 
-        # Run bootstrap_project directly
+        # This scenario is a fresh consumer install. The shared shell-bootstrap
+        # fixture copies the current source tree for its subprocess cases; those
+        # files are not a proven legacy payload and must not be mistaken for one.
+        for legacy_source_tree in ("agents", "scripts", "solomon_harness"):
+            shutil.rmtree(
+                os.path.join(self.workspace_dir, legacy_source_tree),
+                ignore_errors=True,
+            )
+
         bootstrap_project(self.workspace_dir, non_interactive=True)
-        
-        # Verify .gemini/settings.json exists and has the correct hooks
-        gemini_settings_path = os.path.join(self.workspace_dir, ".gemini", "settings.json")
-        self.assertTrue(os.path.isfile(gemini_settings_path))
-        with open(gemini_settings_path, "r", encoding="utf-8") as f:
+
+        self.assertFalse(os.path.exists(os.path.join(self.workspace_dir, ".gemini")))
+        for relative in (
+            ".claude/settings.json",
+            ".agents/hooks.json",
+            ".agents/plugins/solomon/mcp_config.json",
+            ".codex/config.toml",
+        ):
+            self.assertTrue(os.path.isfile(os.path.join(self.workspace_dir, relative)), relative)
+
+        claude_settings_path = os.path.join(self.workspace_dir, ".claude", "settings.json")
+        with open(claude_settings_path, "r", encoding="utf-8") as f:
             settings = json.load(f)
-        
-        self.assertIn("hooks", settings)
-        self.assertIn("SessionStart", settings["hooks"])
-        self.assertIn("PreToolUse", settings["hooks"])
-        
-        # Verify permissions
-        self.assertIn("permissions", settings)
-        self.assertIn("command(git)", settings["permissions"]["allow"])
+        settings.setdefault("permissions", {}).setdefault("allow", []).append("Bash(dummy:*)")
+        with open(claude_settings_path, "w", encoding="utf-8") as f:
+            json.dump(settings, f)
 
-        # Now, modify the file: remove PreToolUse to force merge PreToolUse
-        settings["permissions"]["allow"].append("command(dummy)")
-        settings["hooks"].pop("PreToolUse")
-        with open(gemini_settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-            
-        # Run bootstrap_project again (covers merge PreToolUse)
-        bootstrap_project(self.workspace_dir, non_interactive=True)
-        
-        with open(gemini_settings_path, "r", encoding="utf-8") as f:
-            settings_merged = json.load(f)
-        self.assertIn("PreToolUse", settings_merged["hooks"])
-        self.assertIn("command(dummy)", settings_merged["permissions"]["allow"])
-
-        # Modify the file: remove SessionStart to force merge SessionStart
-        settings_merged["hooks"].pop("SessionStart")
-        with open(gemini_settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings_merged, f, indent=2)
-
-        # Run bootstrap_project again (covers merge SessionStart)
         bootstrap_project(self.workspace_dir, non_interactive=True)
 
-        with open(gemini_settings_path, "r", encoding="utf-8") as f:
-            settings_merged2 = json.load(f)
-        self.assertIn("SessionStart", settings_merged2["hooks"])
-
-        # Run bootstrap_project again with no changes (covers 578: updated is False)
-        bootstrap_project(self.workspace_dir, non_interactive=True)
-
-        # Write invalid/malformed JSON to test error handling (covers 543-544)
-        with open(gemini_settings_path, "w", encoding="utf-8") as f:
-            f.write("{invalid_json")
-
-        # Run bootstrap_project again (covers exception handling)
-        bootstrap_project(self.workspace_dir, non_interactive=True)
-        
-        with open(gemini_settings_path, "r", encoding="utf-8") as f:
-            settings_recovered = json.load(f)
-        self.assertIn("hooks", settings_recovered)
-
-        # Trigger general read exception to cover lines 556-558
-        from unittest.mock import patch
-        import builtins
-        real_open = builtins.open
-        def mock_open_fn(file, *args, **kwargs):
-            if str(file).endswith(os.path.join(".gemini", "settings.json")):
-                mode = args[0] if args else kwargs.get("mode", "r")
-                if "w" not in mode:
-                    raise PermissionError("no read access")
-            return real_open(file, *args, **kwargs)
-
-        with patch("builtins.open", side_effect=mock_open_fn):
-            # Run bootstrap_project again; it should log warning and return early without raising
-            bootstrap_project(self.workspace_dir, non_interactive=True)
+        with open(claude_settings_path, "r", encoding="utf-8") as f:
+            merged = json.load(f)
+        self.assertIn("Bash(dummy:*)", merged["permissions"]["allow"])
+        self.assertIn("SessionStart", merged["hooks"])
+        self.assertIn("PreToolUse", merged["hooks"])
 
 
 class TestProjectIdentityNotClobberedByHarnessInstall(unittest.TestCase):
@@ -315,16 +368,13 @@ class TestProjectIdentityNotClobberedByHarnessInstall(unittest.TestCase):
 
         bootstrap_project(self.workspace_dir, non_interactive=True)
 
-        # The harness's own pyproject.toml is installed since none existed --
-        # confirms the copy happened, so the assertion below is meaningful.
-        self.assertTrue(os.path.isfile(os.path.join(self.workspace_dir, "pyproject.toml")))
-
-        kanban_path = os.path.join(self.workspace_dir, "planning", "KANBAN.md")
-        self.assertTrue(os.path.isfile(kanban_path))
-        with open(kanban_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("acme-trader", content)
-        self.assertNotIn("solomon-harness", content)
+        self.assertFalse(os.path.isfile(os.path.join(self.workspace_dir, "pyproject.toml")))
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(self.workspace_dir, ".agents", "solomon", "pyproject.toml")
+            )
+        )
+        self.assertFalse(os.path.exists(os.path.join(self.workspace_dir, "planning")))
 
 
 class TestGithubPrereqStatus(unittest.TestCase):
@@ -586,12 +636,8 @@ class TestRetrofitInstructionDocs(unittest.TestCase):
         self.assertIn(RETROFIT_MARKER, content)
 
 
-class TestFreshInstallScaffoldsCopilotInstructions(unittest.TestCase):
-    """A fresh install must carry .github/copilot-instructions.md wired with
-    the docs/specs and docs/adrs references, per #236's own acceptance
-    scenario (PR #284 review, qa gate blocker B1: only CLAUDE.md, AGY.md, and
-    agents/AGENTS.md were scaffolded; .github/copilot-instructions.md was
-    never created by any code path on a truly fresh install)."""
+class TestFreshInstallScaffoldsGithubTemplates(unittest.TestCase):
+    """A consumer gets project record templates, not another host adapter."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -600,17 +646,62 @@ class TestFreshInstallScaffoldsCopilotInstructions(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_copilot_instructions_scaffolded_and_wired_on_fresh_install(self):
+    def test_pr_template_is_scaffolded_without_copilot_instructions(self):
         from solomon_harness import bootstrap
 
         bootstrap._install_harness_files(self.workspace)
 
-        path = os.path.join(self.workspace, ".github", "copilot-instructions.md")
-        self.assertTrue(os.path.isfile(path), ".github/copilot-instructions.md was not scaffolded")
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("docs/specs/", content)
-        self.assertIn("docs/adrs/", content)
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.workspace, ".github", "PULL_REQUEST_TEMPLATE.md"))
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.workspace, ".github", "copilot-instructions.md"))
+        )
+
+
+def test_bootstrap_fails_closed_when_managed_adapter_conflicts_are_preserved(
+    tmp_path, monkeypatch, capsys
+):
+    from solomon_harness import bootstrap, install_layout, prereqs
+
+    class _ConflictResult:
+        conflicts = (".mcp.json", ".codex/config.toml")
+        blocking_conflicts = conflicts
+
+    monkeypatch.setattr(prereqs, "check_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(install_layout, "install_project", lambda _root: _ConflictResult())
+
+    with pytest.raises(install_layout.InstallConflictError, match=r"\.mcp\.json"):
+        bootstrap.bootstrap_project(str(tmp_path), non_interactive=True)
+
+    output = capsys.readouterr().out
+    assert "Preserved 2" in output
+    assert "Bootstrap Completed Successfully" not in output
+
+
+def test_bootstrap_reports_nonblocking_legacy_conflicts_and_completes(
+    tmp_path, monkeypatch, capsys
+):
+    from solomon_harness import bootstrap, install_layout, prereqs
+
+    class _WarningResult:
+        conflicts = ("agents/project-owned.md",)
+        blocking_conflicts = ()
+
+    monkeypatch.setattr(prereqs, "check_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(install_layout, "install_project", lambda _root: _WarningResult())
+    # Isolate the per-machine harness home so bootstrap's memory setup writes the
+    # generated SurrealDB credentials into a throwaway dir, never the real
+    # ~/.solomon-harness — a leaked credentials.json there makes the live
+    # SurrealDB integration tests sign in with a non-root password (#350).
+    monkeypatch.setenv("SOLOMON_HARNESS_HOME", str(tmp_path / "harness-home"))
+
+    bootstrap.bootstrap_project(str(tmp_path), non_interactive=True)
+
+    output = capsys.readouterr().out
+    assert "Preserved 1" in output
+    assert "Harness files installed" in output
+    assert "Bootstrap Completed Successfully" in output
 
 
 if __name__ == "__main__":

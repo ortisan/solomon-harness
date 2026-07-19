@@ -2,13 +2,15 @@
 
 A thin, JSON-serializable wrapper over DatabaseClient. The MCP server
 (solomon_harness/mcp_server.py) registers these methods as tools so the host
-tools (Claude Code, Codex, Gemini CLI, Copilot) can read and write the project
+tools (Claude, AGY, and Codex) can read and write the project
 memory. The service is directly testable without the MCP SDK installed.
 """
 
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from solomon_harness.layout import HarnessPaths
 
 if TYPE_CHECKING:
     from solomon_harness.claim import ClaimStore
@@ -17,14 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_harness_dir(start: Optional[str] = None) -> str:
-    """Walks up from start (or cwd) to the directory containing the solomon_harness
-    package, so the memory store is the project-root one regardless of cwd."""
-    current = os.path.abspath(start or os.getcwd())
+    """Return the consumer repository root regardless of the current directory."""
+    origin = os.path.abspath(start or os.getcwd())
+    current = origin
     while current and current != os.path.dirname(current):
-        if os.path.isdir(os.path.join(current, "solomon_harness")):
+        paths = HarnessPaths(current)
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        if paths.solomon.is_dir():
+            return current
+        if paths.legacy_agents.is_dir() and paths.legacy_python_package.is_dir():
             return current
         current = os.path.dirname(current)
-    return os.path.abspath(start or os.getcwd())
+    return origin
 
 
 class MemoryService:

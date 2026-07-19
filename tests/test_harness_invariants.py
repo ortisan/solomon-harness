@@ -14,6 +14,8 @@ import socket
 import unittest
 from unittest.mock import patch
 
+from conftest import close_surreal_quietly
+
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -189,7 +191,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
                 f.write("# QA Profile\n")
             os.symlink(outside, os.path.join(root, "agents", "qa"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.lexists(os.path.join(outside, "main.py")))
             self.assertFalse(os.path.lexists(os.path.join(outside, ".agent")))
@@ -204,7 +206,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
             escaped = os.path.join(root, "escaped-main.py")
             os.symlink(escaped, os.path.join(agent_dir, "main.py"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.exists(escaped))
             self.assertFalse(os.path.lexists(os.path.join(agent_dir, ".agent")))
@@ -223,7 +225,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
                 f.write("do not trust\n")
             os.symlink(outside, os.path.join(config_dir, "config.json"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
             with open(outside, "r", encoding="utf-8") as f:
@@ -240,7 +242,7 @@ class TestScaffoldPathSafety(unittest.TestCase):
             agent_dir = os.path.join(root, "agents", "qa")
             os.symlink(outside, os.path.join(agent_dir, ".agent"))
 
-            with self.assertRaisesRegex(ValueError, "unsafe"):
+            with self.assertRaisesRegex(ValueError, "traverses a symlink"):
                 scaffold_agents(root)
             self.assertFalse(os.path.lexists(os.path.join(agent_dir, "main.py")))
             self.assertEqual(os.listdir(outside), [])
@@ -357,8 +359,9 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
     ``relate``/``block_issue`` (graph) and ``semantic_search`` (vector) raise
     on the SQLite fallback by design, so exercising them for real needs a live
     SurrealDB; this runs against one when reachable (see SURREAL_LIVE_AVAILABLE)
-    in a disposable per-test tenant that is removed in tearDown, so it never
-    touches the real project's tenant.
+    in a disposable per-test tenant derived from a unique temp directory, so it
+    never touches the real project's tenant. tearDown closes the server client
+    and restores process state; the CI service owns database cleanup.
     """
 
     def setUp(self):
@@ -381,23 +384,7 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         _skip_unless_live_surreal_backend(self.server, self)
 
     def tearDown(self):
-        from solomon_harness.home import derive_tenant
-
-        tenant = derive_tenant(self.temp_dir.name)
-        try:
-            import surrealdb
-
-            raw = surrealdb.Surreal(SURREAL_LIVE_URL)
-            if hasattr(raw, "connect"):
-                raw.connect()
-            raw.signin(_SURREAL_CREDS)
-            # REMOVE DATABASE requires a bound namespace on the connection.
-            raw.use("solomon", tenant)
-            raw.query(f"REMOVE DATABASE `{tenant}`;")
-            raw.close()
-        except Exception:
-            pass
-
+        close_surreal_quietly(self.server._solomon_memory_service.client.db)
         if self._prior_url is None:
             os.environ.pop("SURREAL_URL", None)
         else:

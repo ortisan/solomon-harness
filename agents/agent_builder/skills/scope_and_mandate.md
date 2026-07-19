@@ -1,6 +1,6 @@
 ---
 name: scope-and-mandate
-description: Governs the creation, scaffolding, and registration of new specialist agents — the mandated agents/<name>/ directory layout, path-traversal and snake_case-name confinement checks, and the registry updates to agents/AGENTS.md, README.md, and the compiled host-tool integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
+description: Governs the creation, scaffolding, and registration of new specialist agents in either a source checkout or an installed consumer, with path confinement, source-only rules updates, and compiled Claude, AGY, and Codex integrations. Use when scaffolding a brand-new agent directory or verifying a generated agent is safely confined and fully registered.
 ---
 
 # Agent Builder Scope and Mandate
@@ -9,11 +9,16 @@ The Agent Builder specialist agent governs the creation, scaffolding, and regist
 
 ## Agent Directory Layout Standards
 
-Every specialist agent must occupy a dedicated subdirectory directly under the `agents/` root of the workspace. The generated structure must adhere to the following layout without deviation:
-- `agents/<name>/persona.md` — The agent's operational persona, defining its tone, perspective, and domain of expertise.
-- `agents/<name>/agents/<name>.md` — The role profile, detailing the core duties, active skills, and required competencies.
-- `agents/<name>/skills/` — A directory containing markdown skill files providing granular, topic-specific reference guides.
-- `agents/<name>/.agent/config.json` — Configuration file specifying model parameters, memory constraints, and tenant identifiers.
+Every specialist agent must occupy a dedicated subdirectory below the canonical catalog. The catalog root is `agents/` while authoring this source checkout and `.agents/solomon/agents/` in an installed consumer. The generated structure must adhere to this layout without deviation:
+- `<catalog-root>/<name>/persona.md` — The agent's operational persona, defining its tone, perspective, and domain of expertise.
+- `<catalog-root>/<name>/agents/<name>.md` — The role profile, detailing the core duties, active skills, and required competencies.
+- `<catalog-root>/<name>/skills/` — A directory containing markdown skill files providing granular, topic-specific reference guides.
+- `<catalog-root>/<name>/.agent/config.json` — Configuration file specifying model parameters, memory constraints, and tenant identifiers.
+
+Consequently, the installed role and configuration paths are
+`.agents/solomon/agents/<name>/agents/<name>.md` and
+`.agents/solomon/agents/<name>/.agent/config.json`; neither may be shortened to a
+project-root path.
 
 When creating these files, the Agent Builder must populate them with clean templates that contain placeholders conforming to the system requirements (such as the ban on emojis, icons, or AI cliches).
 
@@ -21,26 +26,27 @@ When creating these files, the Agent Builder must populate them with clean templ
 
 To prevent path traversal attacks or accidental filesystem writes outside the designated boundary, the Agent Builder must enforce strict security checks:
 1. Target Path Resolution: Retrieve the real path of the destination using absolute canonical resolution (`os.path.realpath` or `Path.resolve`).
-2. Confinement Assertion: Explicitly check that the resolved target path starts with the real path of the repository's `agents/` folder. If the path escapes the agents folder (for example, containing `../` sequences that resolve outside the tree), the operation must immediately raise a value error and halt.
+2. Confinement Assertion: Explicitly check that the resolved target remains below the selected canonical catalog root. If the path escapes that root (for example, containing `../` sequences that resolve outside the tree), the operation must immediately raise a value error and halt.
 3. Filename Validation: Validate the new agent's name against a strict snake_case regex (`^[a-z0-9_]+$`). Any name containing uppercase letters, hyphens, or special characters must be rejected.
 
 ## Registry Integration and Compilation
 
-Once the agent files are successfully scaffolded on disk, the Agent Builder is responsible for updating the central registry files:
-1. `agents/AGENTS.md`: Add the new agent to the index list in alphabetical order, with a clear one-sentence summary of its primary focus.
-2. `README.md`: Update the spelt-out count of role-specific agents and add the new agent to the markdown table detailing all specialist roles.
-3. Integration Compilation: Invoke the harness compilation process (`solomon-harness compile` or the equivalent programmatic script) to regenerate the host-tool integrations, such as `.claude/agents/<name>.md` profiles, ensuring that the new agent is immediately discoverable.
+Once the agent files are successfully scaffolded on disk, the Agent Builder is responsible for updating the applicable registry surfaces:
+1. Source checkout only: add the new agent to `agents/AGENTS.md` in alphabetical order, with a clear one-sentence summary of its primary focus. In an installed consumer, `.agents/solomon/AGENTS.md` is package-owned and must remain byte-for-byte unchanged; catalog discovery registers the extension from `.agents/solomon/agents/<name>`.
+2. Source checkout only: update the harness's own `README.md` count/table and `scripts/validate-agents.py` keyword registration. In an installed consumer, do not read or modify the product repository's `README.md`, scripts, agent count, or documentation tables.
+3. Integration Compilation: invoke `solomon-harness compile` (or the equivalent programmatic operation) to regenerate `.claude/agents/<name>.md`, `.agents/agents/<name>/agent.md`, and `.codex/agents/<name>.toml`, ensuring that the new agent is discoverable in all three hosts after a session restart.
+4. Installed consumer only: return the confined agent path directly. Do not create a branch, commit, pull request, or review handoff for this harness-local registration.
 
 ## Verifying the Integration Sync Points
 
 A newly scaffolded agent is not complete until every downstream reference to it is consistent; the Agent Builder treats each sync point as a checklist item to verify, not merely as a file to write once and forget.
 
-- `agents/AGENTS.md` roster entry: after inserting the new agent into the "The specialist agents" list in alphabetical order with a one-sentence summary, read the file back and confirm the new line appears exactly once, sits between its correct alphabetical neighbors, and that no adjacent agent's line was accidentally altered, duplicated, or dropped in the edit.
-- `README.md` agent count and table: the README states a spelt-out count of role-specific agents and lists every agent in a markdown table with a folder link and a one-line description. After editing, recompute the count from the number of `agents/*/agents/*.md` files on disk, confirm the spelt-out number in the README prose matches that count exactly, and confirm the new row was appended to the table with a working relative link and a description consistent with the profile.
-- `scripts/validate-agents.py` `REQUIRED_KEYWORDS` registration: this dictionary maps each profile filename to the literal keywords CI checks for inside that profile's body. A new agent needs its own entry in the dictionary — the agent's title-case name plus three to six domain keywords drawn directly from its Core Duties — or the profile will compile cleanly but fail the keyword gate on the next CI run. Add this entry in the same commit that adds the profile, never as a follow-up, so the keyword gate is never red between commits.
-- Regenerating `.claude/agents/` via `compile`: the host-tool integration files under `.claude/agents/` and `.gemini/commands/` are generated artifacts, never hand-edited. Run `uv run python -m solomon_harness.cli compile` after every scaffold, then confirm `.claude/agents/<name>.md` exists, is non-empty, and reflects the persona and duties just written, so the new agent is discoverable in the same session instead of after a separate manual step.
+- Source checkout rules roster entry: after inserting the new agent into the "The specialist agents" list in alphabetical order, read `agents/AGENTS.md` back and confirm the line appears exactly once, sits between its correct alphabetical neighbors, and no adjacent line was altered, duplicated, or dropped. In an installed consumer, verify instead that `.agents/solomon/AGENTS.md` did not change.
+- Source checkout only, harness `README.md` agent count and table: recompute the count from `agents/*/agents/*.md`, confirm the spelt-out number matches, and confirm the new row has a working relative link and a description consistent with the profile. Skip this sync point entirely in an installed consumer so product documentation remains product-owned.
+- Source checkout only, `scripts/validate-agents.py` `REQUIRED_KEYWORDS` registration: add the profile filename, title-case name, and three to six domain keywords in the same commit. Skip this sync point in installed consumers; their scripts are outside the harness ownership boundary.
+- Regenerating all host adapters via `compile`: Claude's `.claude/agents/<name>.md`, AGY's `.agents/agents/<name>/agent.md`, and Codex's `.codex/agents/<name>.toml` are generated metadata, never hand-edited. Run `solomon-harness compile` after every scaffold, then confirm all three files exist, are non-empty, and point to the same canonical profile. In an installed consumer that profile is `.agents/solomon/agents/<name>/agents/<name>.md`; this source checkout retains `agents/<name>/agents/<name>.md` as its authoring location.
 
-Treat a scaffold as done only once all four sync points have been independently re-read and confirmed, not assumed from the fact that the scaffolding command or the compile step exited without error; a clean exit code proves the writer did not crash, not that the roster, the README, the keyword gate, and the compiled profile all agree with one another.
+Treat a scaffold as done only once every sync point applicable to the current layout has been independently re-read and confirmed. A source checkout includes the source-only checks; an installed consumer includes the canonical catalog, unchanged package rules, and compiled-host checks.
 
 ## Common pitfalls
 
@@ -52,9 +58,10 @@ Treat a scaffold as done only once all four sync points have been independently 
 
 ## Definition of done
 
-- [ ] All directories and files are created under the validated `agents/` path.
+- [ ] All directories and files are created under the validated canonical catalog path.
 - [ ] No path traversal escape is possible via user-controlled inputs.
-- [ ] The new agent is registered alphabetically in `agents/AGENTS.md` and documented in the main `README.md`.
-- [ ] The Spelt-out agent count in `README.md` is updated and matches the file system count.
-- [ ] Compilation succeeds without errors and the generated integration profiles are present.
+- [ ] Source checkout only: the new agent is registered alphabetically in `agents/AGENTS.md`; installed consumers leave `.agents/solomon/AGENTS.md` unchanged.
+- [ ] Source checkout only: the harness `README.md` count/table and `scripts/validate-agents.py` entry are updated; installed consumers leave product-owned docs and scripts unchanged.
+- [ ] Compilation succeeds without conflicts and the Claude, AGY, and Codex integration profiles are present and point to the same canonical profile.
+- [ ] Installed-consumer creation returns the canonical agent path without a Git or GitHub mutation and reports the session-restart requirement.
 - [ ] No emojis, icons, or prohibited AI cliches exist in the generated template files.

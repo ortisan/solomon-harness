@@ -17,6 +17,8 @@ import sys
 import urllib.request
 from typing import Any, Callable, Dict, Mapping, Optional
 
+from solomon_harness.layout import HarnessPaths, PathConfinementError, confined_path
+
 DEFAULT_WEBHOOK_ENV = "SOLOMON_NOTIFY_WEBHOOK"
 
 
@@ -54,12 +56,15 @@ class WebhookNotifier(Notifier):
 
 
 def _read_notify_config(workspace_root: str) -> Dict[str, Any]:
-    path = os.path.join(workspace_root, ".agent", "config.json")
     try:
+        path = confined_path(
+            workspace_root,
+            HarnessPaths(workspace_root).resolve_config(),
+        )
         with open(path, "r", encoding="utf-8") as f:
             block = json.load(f).get("notify")
         return block if isinstance(block, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, PathConfinementError):
         return {}
 
 
@@ -120,6 +125,4 @@ def log_progress(message: str) -> None:
                 tty.flush()
         except OSError:
             pass
-
-
 
