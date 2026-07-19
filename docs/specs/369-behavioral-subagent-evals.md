@@ -175,8 +175,9 @@ and inspect 54 results plus the named per-case regression and false eligibility.
 - Inputs are untrusted data: strict schemas, anchored relative paths, no symlinks,
   explicit count/byte/prompt bounds, no credentials, and no execution of recorded
   actions.
-- Schema changes are explicit and versioned. Identical accepted input produces
-  byte-identical normalized JSON.
+- Schema changes are explicit and versioned. Identical accepted manifest and run
+  evidence produces byte-identical normalized result/comparison JSON. A fresh scratch
+  path is returned out of band and is not part of that canonical evidence.
 - Merge, release, Done, tool-policy generation, and routing activation remain
   human-gated and outside this slice.
 

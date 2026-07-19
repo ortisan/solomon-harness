@@ -7,10 +7,10 @@
     "max_files": 16,
     "max_file_bytes": 4096,
     "max_total_bytes": 32768,
-    "max_duration_seconds": 600,
+    "max_duration_ms": 600000,
     "max_input_tokens": 200000,
     "max_output_tokens": 50000,
-    "max_reported_cost_usd": 10.0
+    "max_reported_cost_microusd": 10000000
   },
   "arms": [
     {

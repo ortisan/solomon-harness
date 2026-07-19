@@ -81,9 +81,11 @@ filesystem shell:
   emitted. A complete comparison reports pass rate and p50/p95 duration per arm. Any
   candidate failure on a case that passed all baseline repetitions is listed as a
   golden-case regression and makes `eligible` false.
-- Identical accepted input produces byte-identical canonical JSON. Validation, scoring,
-  comparison, and serialization have no side effects. Preparation is the only mutating
-  operation, and its authority is limited to caller-selected scratch storage.
+- Identical accepted manifest and run evidence produces byte-identical normalized
+  result/comparison JSON. Validation, scoring, comparison, and serialization have no
+  side effects. Preparation is the only mutating operation, its authority is limited to
+  caller-selected scratch storage, and its fresh physical path is returned out of band
+  rather than entering canonical evidence.
 - The module imports no provider SDK, opens no network connection, executes no
   subprocess, and reads or writes neither project memory, GitHub, workflow state, nor
   generated-agent configuration. Its module CLI only adapts local files to the same
