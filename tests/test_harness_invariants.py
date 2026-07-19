@@ -32,6 +32,30 @@ def _call_tool_json(server, name, arguments):
     return json.loads(result[0].text)
 
 
+def _surreal_test_creds():
+    """Live-SurrealDB credentials resolved like the client, not a hardcoded root.
+
+    The store uses a per-machine generated password, so a probe or setUp that
+    signs in with root/root silently skips every live test on a migrated machine.
+    Mirror DatabaseClient: SURREAL_USER/PASS env, then the generated home password,
+    then root.
+    """
+    try:
+        from solomon_harness.home import generated_memory_password
+
+        generated = generated_memory_password()
+    except Exception:
+        generated = None
+    return {
+        "username": os.environ.get("SURREAL_USER") or "root",
+        "password": os.environ.get("SURREAL_PASS") or generated or "root",
+    }
+
+
+# Resolved once at import, before any test patches os.path.isfile.
+_SURREAL_CREDS = _surreal_test_creds()
+
+
 def _surreal_reachable(url):
     """Best-effort probe: True only if a SurrealDB server signs in at ``url``.
 
@@ -54,11 +78,23 @@ def _surreal_reachable(url):
         probe = surrealdb.Surreal(url)
         if hasattr(probe, "connect"):
             probe.connect()
-        probe.signin({"username": "root", "password": "root"})
+        probe.signin(_SURREAL_CREDS)
         probe.close()
         return True
     except Exception:
         return False
+
+
+def _skip_unless_live_surreal_backend(server, testcase):
+    """Skip when the server's client is not actually on SurrealDB right now.
+
+    The class gate is probed once at import; SurrealDB can drop between then and
+    the test, dropping the client to SQLite, where the graph/vector tools raise.
+    Checking the resolved backend at setUp turns that race into a clean skip.
+    """
+    status = _call_tool_json(server, "get_backend_status", {})
+    if status.get("backend") != "surrealdb":
+        testcase.skipTest("SurrealDB is not the live backend now (dropped after the module gate)")
 
 
 SURREAL_LIVE_URL = os.environ.get("SURREAL_URL", "ws://localhost:8099/rpc")
@@ -239,7 +275,7 @@ class TestMcpServerBuilds(unittest.TestCase):
         "record_metric", "query_metric", "aggregate_metric",
         "loop_run_throughput", "loop_run_failure_rate",
         # Vector (SurrealDB-only).
-        "semantic_search",
+        "semantic_search", "search_decisions",
     }
 
     def test_build_server_registers_expected_tools(self):
@@ -324,8 +360,8 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
     on the SQLite fallback by design, so exercising them for real needs a live
     SurrealDB; this runs against one when reachable (see SURREAL_LIVE_AVAILABLE)
     in a disposable per-test tenant derived from a unique temp directory, so it
-    never touches the real project's tenant. tearDown restores env vars only;
-    the disposable CI SurrealDB service (tmpfs-backed) owns state cleanup.
+    never touches the real project's tenant. tearDown closes the server client
+    and restores process state; the CI service owns database cleanup.
     """
 
     def setUp(self):
@@ -345,6 +381,7 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         os.environ["SOLOMON_HARNESS_DIR"] = self.temp_dir.name
 
         self.server = build_server()
+        _skip_unless_live_surreal_backend(self.server, self)
 
     def tearDown(self):
         close_surreal_quietly(self.server._solomon_memory_service.client.db)
@@ -396,6 +433,25 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         self.assertEqual(len(found["results"]), 1)
         self.assertEqual(found["results"][0]["key"], "note-1")
 
+    def test_call_tool_vector_search_decisions(self):
+        """search_decisions round-trips through call_tool, returning the nearest
+        decision first, so a marshaling bug in the MCP wrapper is caught."""
+        self._call_tool_json(
+            "save_decision",
+            {"title": "hexagonal ports and adapters", "rationale": "isolate the domain",
+             "outcome": "adopt hexagonal", "author": "arch"},
+        )
+        self._call_tool_json(
+            "save_decision",
+            {"title": "pizza pasta", "rationale": "italian food", "outcome": "takeout",
+             "author": "chef"},
+        )
+        found = self._call_tool_json(
+            "search_decisions", {"query": "hexagonal architecture domain", "k": 1}
+        )
+        self.assertEqual(len(found["results"]), 1)
+        self.assertEqual(found["results"][0]["title"], "hexagonal ports and adapters")
+
     def _call_tool_json(self, name, arguments):
         return _call_tool_json(self.server, name, arguments)
 
@@ -431,6 +487,19 @@ class TestSurrealIntegration(unittest.TestCase):
             db.save_memory("invariant_key", "invariant_value", "test")
             self.assertEqual(db.get_memory("invariant_key"), "invariant_value")
             db.close()
+
+
+class TestLiveSurrealBackendGuard(unittest.TestCase):
+    """The setUp guard turns a mid-run SurrealDB drop into a clean skip."""
+
+    def test_skips_when_the_backend_fell_back_to_sqlite(self):
+        with patch(f"{__name__}._call_tool_json", return_value={"backend": "sqlite"}):
+            with self.assertRaises(unittest.SkipTest):
+                _skip_unless_live_surreal_backend(object(), self)
+
+    def test_does_not_skip_when_the_backend_is_surrealdb(self):
+        with patch(f"{__name__}._call_tool_json", return_value={"backend": "surrealdb"}):
+            _skip_unless_live_surreal_backend(object(), self)
 
 
 if __name__ == "__main__":

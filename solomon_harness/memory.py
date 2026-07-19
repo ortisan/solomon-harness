@@ -126,7 +126,7 @@ def _set_published_port(compose_text: str, port: int) -> str:
     """Rewrite the SurrealDB published host port in a compose file's text.
 
     Only the host side of the ``"<host>:8000"`` mapping changes; the container
-    still listens on 8000 internally (Surrealist/Spectron reach it by service
+    still listens on 8000 internally (Surrealist reaches it by service
     name). The published mapping is always pinned to the loopback interface —
     the store ships a fixed root/root development credential, so it must never
     listen on all interfaces — and a pre-loopback template (bare

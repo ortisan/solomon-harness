@@ -4,7 +4,7 @@
 - Date: 2026-07-15
 - Deciders: maintainer, software_architect, loop_engineer, security, qa
 - Issue: #240
-- Amended: 2026-07-16 by ADR-0041, which defines consumer-owned agent
+- Amended: 2026-07-16 by ADR-0043, which defines consumer-owned agent
   extensions below the installed canonical catalog.
 
 ## Context and problem statement

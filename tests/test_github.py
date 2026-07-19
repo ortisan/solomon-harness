@@ -134,15 +134,15 @@ class TestGhRetry(unittest.TestCase):
             with patch("subprocess.run", side_effect=fake_run):
                 res = github._gh(["project", "item-edit"])
         self.assertTrue(res["ok"])
-        # The first attempt inherits the env; the retry carries the healed token.
-        self.assertIsNone(gh_args_envs[0])
-        self.assertIsNotNone(gh_args_envs[1])
+        # The first attempt runs with the scrubbed default env (no token); the
+        # retry carries the healed token.
+        self.assertNotIn("GH_TOKEN", gh_args_envs[0])
         self.assertEqual(gh_args_envs[1].get("GH_TOKEN"), "healed-token-42")
 
     def test_retry_does_not_resolve_or_override_a_preset_token(self):
         """When GITHUB_TOKEN is already set, the heal retry neither calls
-        `gh auth token` nor overrides the token: the retried call runs with the
-        inherited env (env=None)."""
+        `gh auth token` nor overrides the token: the retried call keeps the preset
+        token in the scrubbed env, with no GH_TOKEN injection."""
         seen = []
         results = [_Proc(1, "", "Bad credentials"), _Proc(0, "ok")]
 
@@ -156,7 +156,8 @@ class TestGhRetry(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertFalse(any(cmd[:3] == ["gh", "auth", "token"] for cmd, _env in seen))
         self.assertEqual(len(seen), 2)
-        self.assertIsNone(seen[1][1])  # the retry inherits the env, no injection
+        self.assertEqual(seen[1][1].get("GITHUB_TOKEN"), "preset")
+        self.assertNotIn("GH_TOKEN", seen[1][1])
 
     def test_retry_runs_without_injection_when_token_resolution_is_empty(self):
         """If `gh auth token` resolves nothing (empty output), the retry still runs as
@@ -174,7 +175,27 @@ class TestGhRetry(unittest.TestCase):
             with patch("subprocess.run", side_effect=fake_run):
                 res = github._gh(["project", "item-edit"])
         self.assertTrue(res["ok"])
-        self.assertIsNone(gh_args_envs[1])  # plain retry, no env override
+        self.assertNotIn("GH_TOKEN", gh_args_envs[1])  # plain retry, no injection
+
+    def test_gh_call_strips_git_env(self):
+        """Every gh call runs with GIT_* stripped so a leaked GIT_DIR/GIT_WORK_TREE
+        cannot redirect gh to an enclosing repository (Refs #251)."""
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["env"] = kwargs.get("env")
+            return _Proc(0, "ok")
+
+        with patch.dict(
+            "os.environ",
+            {"GIT_DIR": "/enclosing/.git", "GIT_WORK_TREE": "/enclosing"},
+            clear=False,
+        ):
+            with patch("subprocess.run", side_effect=fake_run):
+                github._gh(["repo", "view"])
+        self.assertIsNotNone(seen["env"])
+        self.assertNotIn("GIT_DIR", seen["env"])
+        self.assertNotIn("GIT_WORK_TREE", seen["env"])
 
     def test_successful_first_call_does_not_retry(self):
         """A first call that exits zero is not retried: exactly one subprocess.run."""
@@ -915,11 +936,13 @@ class TestMergePrAndClose(unittest.TestCase):
                 "solomon_harness.github.set_issue_status", return_value={"ok": True}
             ) as set_status,
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
+            patch("solomon_harness.github.record_transition") as record_transition,
         ):
             res = github.merge_pr_and_close(42, 172)
         gh.assert_called_once_with(["pr", "merge", "42", "--squash"])
         set_status.assert_called_once_with(172, "Done")
         record_terminal.assert_called_once_with(172)
+        record_transition.assert_called_once_with(172, "Done")
         self.assertTrue(res["ok"])
         self.assertEqual(res["pr"], 42)
         self.assertEqual(res["issue"], 172)
@@ -938,6 +961,7 @@ class TestMergePrAndClose(unittest.TestCase):
                 return_value={"ok": False, "error": "no Status field"},
             ),
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
+            patch("solomon_harness.github.record_transition") as record_transition,
         ):
             res = github.merge_pr_and_close(42, 172)
         self.assertFalse(res["ok"])
@@ -947,6 +971,9 @@ class TestMergePrAndClose(unittest.TestCase):
         # Closes trailer), so memory still converges to that true state even
         # though the board column lags -- only the board needs a retry.
         record_terminal.assert_called_once_with(172)
+        # The board move failed, so the timeline must not claim a Done entry:
+        # column and board-history stay in lockstep.
+        record_transition.assert_not_called()
 
     def test_failed_merge_does_not_touch_board_or_memory(self):
         with (
@@ -956,10 +983,12 @@ class TestMergePrAndClose(unittest.TestCase):
             ),
             patch("solomon_harness.github.set_issue_status") as set_status,
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
+            patch("solomon_harness.github.record_transition") as record_transition,
         ):
             res = github.merge_pr_and_close(42, 172)
         set_status.assert_not_called()
         record_terminal.assert_not_called()
+        record_transition.assert_not_called()
         self.assertFalse(res["ok"])
         self.assertIn("error", res)
 
@@ -979,6 +1008,7 @@ class TestMergePrAndClose(unittest.TestCase):
                 "solomon_harness.github.set_issue_status", return_value={"ok": True}
             ),
             patch("solomon_harness.github.record_terminal_status"),
+            patch("solomon_harness.github.record_transition"),
         ):
             res = github.merge_pr_and_close(42, 172, claim_store=FakeClaimStore())
 

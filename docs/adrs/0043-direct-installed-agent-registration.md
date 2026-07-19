@@ -1,4 +1,4 @@
-# ADR-0041: register new agents directly in the installed harness
+# ADR-0043: register new agents directly in the installed harness
 
 - Status: accepted
 - Date: 2026-07-16

@@ -8,6 +8,7 @@ native non-interactive process adapter.
 import os
 import subprocess
 import sys
+import time
 from typing import Any, List, Optional
 
 from solomon_harness.layout import PathConfinementError
@@ -157,10 +158,17 @@ def _record_loop_run(
     rc: int,
     session_id: str,
     status: Optional[str] = None,
+    elapsed_seconds: Optional[float] = None,
 ) -> None:
     """Append one auditable loop-run entry; best-effort, never fails the stage.
     ``status`` overrides the rc-derived vocabulary (today ``"skipped"``: a
-    zero-exit start that changed nothing)."""
+    zero-exit start that changed nothing). When ``elapsed_seconds`` is given, the
+    stage's wall-clock is also emitted as a ``stage_duration_seconds`` metric
+    tagged with the stage and outcome, giving the timeseries layer a real producer
+    the delivery-metrics read consumes. One sample per run_stage call: a ``loop``
+    stage run with ``--concurrency N`` times the whole N-iteration span, not one
+    iteration, matching the one-row-per-call granularity of the loop_run ledger."""
+    outcome = status or ("ok" if rc == 0 else "failed")
     try:
         from solomon_harness.tools.database_client import DatabaseClient
 
@@ -169,10 +177,16 @@ def _record_loop_run(
                 stage=stage,
                 target=" ".join(args),
                 decision=f"ran /solomon-{stage}",
-                status=status or ("ok" if rc == 0 else "failed"),
+                status=outcome,
                 session_id=session_id,
                 target_issue=_target_issue_from_args(args),
             )
+            if elapsed_seconds is not None:
+                db.record_metric(
+                    "stage_duration_seconds",
+                    float(elapsed_seconds),
+                    tags={"stage": stage, "outcome": outcome},
+                )
     except Exception:
         # The ledger is a convenience over the durable store; a logging failure
         # must never block delivery work.
@@ -303,6 +317,9 @@ def run_stage(
     if engine not in ("agy", "claude", "codex"):
         print(f"Error: unknown engine '{engine}'. Use 'agy', 'claude', or 'codex'.", file=sys.stderr)
         return 1
+    # Wall-clock start for the stage_duration_seconds metric, captured once the
+    # stage is validated so the timing covers execution, not the arg checks above.
+    stage_started = time.monotonic()
 
     # `loop` has no command file of its own: it drives N iterations of the
     # `workflow` stage's existing prompt/logic, so the engine sees the same
@@ -787,6 +804,7 @@ def run_stage(
                 rc,
                 lock.session_id,
                 status="parked" if run_stalled else ("skipped" if run_skipped else None),
+                elapsed_seconds=time.monotonic() - stage_started,
             )
         if rc == 0 and stage in LOCKED_STAGES and not run_skipped:
             from solomon_harness import notify

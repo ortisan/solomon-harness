@@ -1322,5 +1322,43 @@ class TestRunStageStallParking(unittest.TestCase):
         store.release.assert_not_called()
 
 
+class TestStageDurationMetric(unittest.TestCase):
+    """_record_loop_run emits stage_duration_seconds only when timed."""
+
+    def _fake_db(self):
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        db.__enter__ = MagicMock(return_value=db)
+        db.__exit__ = MagicMock(return_value=False)
+        return db
+
+    def test_elapsed_emits_the_stage_duration_metric(self):
+        db = self._fake_db()
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient", return_value=db
+        ):
+            workflows._record_loop_run(
+                "/ws", "review", ["55"], 0, "sess-1", elapsed_seconds=12.5
+            )
+        db.record_metric.assert_called_once()
+        name, value = db.record_metric.call_args[0][:2]
+        self.assertEqual(name, "stage_duration_seconds")
+        self.assertEqual(value, 12.5)
+        self.assertEqual(
+            db.record_metric.call_args.kwargs["tags"],
+            {"stage": "review", "outcome": "ok"},
+        )
+
+    def test_no_elapsed_emits_no_metric(self):
+        db = self._fake_db()
+        with patch(
+            "solomon_harness.tools.database_client.DatabaseClient", return_value=db
+        ):
+            workflows._record_loop_run("/ws", "start", ["1"], 1, "sess-1")
+        db.save_loop_run.assert_called_once()
+        db.record_metric.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

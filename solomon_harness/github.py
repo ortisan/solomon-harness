@@ -22,6 +22,8 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
+from solomon_harness.subprocess_env import clean_gh_env
+
 if TYPE_CHECKING:
     from solomon_harness.claim import ClaimStore
 
@@ -67,8 +69,8 @@ def _gh(
     likewise not retried. The retry at most doubles a single call's worst-case time.
     """
     cmd = ["gh", *args]
-    # Reached only if both attempts fail transiently; each failing attempt overwrites
-    # it with the specific error, so the generic default is a defensive fallback.
+    if env is None:
+        env = clean_gh_env(cwd)
     transient_error: Dict[str, Any] = {"ok": False, "error": "gh command failed."}
     for attempt in range(2):
         attempt_env = _heal_token_env(env, cwd=cwd) if attempt == 1 else env
@@ -468,6 +470,7 @@ def merge_pr_and_close(
             "pr": pr_number,
             "issue": issue_number,
         }
+    record_transition(issue_number, "Done")
     return {"ok": True, "pr": pr_number, "issue": issue_number}
 
 
