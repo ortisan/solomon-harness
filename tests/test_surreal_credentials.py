@@ -95,7 +95,7 @@ class TestClientReadsGeneratedCredential(unittest.TestCase):
                     DatabaseClient, "_connect_surreal", return_value=True
                 ), patch.object(
                     DatabaseClient, "_bootstrap_surreal_schema", return_value=None
-                ), patch.object(DatabaseClient, "_init_spectron", return_value=None):
+                ):
                     client = DatabaseClient(harness_dir=tmp)
                 self.assertEqual(client._surreal_password, generated)
                 self.assertNotEqual(client._surreal_password, "root")

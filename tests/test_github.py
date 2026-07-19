@@ -936,11 +936,13 @@ class TestMergePrAndClose(unittest.TestCase):
                 "solomon_harness.github.set_issue_status", return_value={"ok": True}
             ) as set_status,
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
+            patch("solomon_harness.github.record_transition") as record_transition,
         ):
             res = github.merge_pr_and_close(42, 172)
         gh.assert_called_once_with(["pr", "merge", "42", "--squash"])
         set_status.assert_called_once_with(172, "Done")
         record_terminal.assert_called_once_with(172)
+        record_transition.assert_called_once_with(172, "Done")
         self.assertTrue(res["ok"])
         self.assertEqual(res["pr"], 42)
         self.assertEqual(res["issue"], 172)
@@ -959,6 +961,7 @@ class TestMergePrAndClose(unittest.TestCase):
                 return_value={"ok": False, "error": "no Status field"},
             ),
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
+            patch("solomon_harness.github.record_transition") as record_transition,
         ):
             res = github.merge_pr_and_close(42, 172)
         self.assertFalse(res["ok"])
@@ -968,6 +971,9 @@ class TestMergePrAndClose(unittest.TestCase):
         # Closes trailer), so memory still converges to that true state even
         # though the board column lags -- only the board needs a retry.
         record_terminal.assert_called_once_with(172)
+        # The board move failed, so the timeline must not claim a Done entry:
+        # column and board-history stay in lockstep.
+        record_transition.assert_not_called()
 
     def test_failed_merge_does_not_touch_board_or_memory(self):
         with (
@@ -977,10 +983,12 @@ class TestMergePrAndClose(unittest.TestCase):
             ),
             patch("solomon_harness.github.set_issue_status") as set_status,
             patch("solomon_harness.github.record_terminal_status") as record_terminal,
+            patch("solomon_harness.github.record_transition") as record_transition,
         ):
             res = github.merge_pr_and_close(42, 172)
         set_status.assert_not_called()
         record_terminal.assert_not_called()
+        record_transition.assert_not_called()
         self.assertFalse(res["ok"])
         self.assertIn("error", res)
 
@@ -1000,6 +1008,7 @@ class TestMergePrAndClose(unittest.TestCase):
                 "solomon_harness.github.set_issue_status", return_value={"ok": True}
             ),
             patch("solomon_harness.github.record_terminal_status"),
+            patch("solomon_harness.github.record_transition"),
         ):
             res = github.merge_pr_and_close(42, 172, claim_store=FakeClaimStore())
 

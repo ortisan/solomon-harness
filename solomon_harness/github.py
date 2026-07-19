@@ -470,6 +470,7 @@ def merge_pr_and_close(
             "pr": pr_number,
             "issue": issue_number,
         }
+    record_transition(issue_number, "Done")
     return {"ok": True, "pr": pr_number, "issue": issue_number}
 
 

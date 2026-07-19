@@ -956,6 +956,70 @@ def reconcile_tracking_rows(db, resolved_map: Dict[str, bool], dry_run: bool = F
     }
 
 
+def handle_reindex_embeddings(workspace_root: str) -> None:
+    """Backfill missing vector embeddings on the shared SurrealDB (additive).
+
+    Recomputes the embedding for every decision or memory row that has none, so
+    rows written before their vector index existed (or replayed from the durability
+    mirror) become searchable. Idempotent and additive -- no board or status row is
+    touched -- so it needs no single-driver lock. A no-op on the SQLite fallback.
+    """
+    from solomon_harness.tools.database_client import DatabaseClient
+
+    try:
+        with DatabaseClient(harness_dir=workspace_root) as db:
+            if db.backend != "surrealdb":
+                print("reindex-embeddings: no SurrealDB backend; nothing to do.")
+                return
+            counts = db.reindex_embeddings()
+    except Exception as e:
+        print(f"Error: embedding reindex failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    total = sum(counts.values())
+    detail = ", ".join(f"{table}={n}" for table, n in sorted(counts.items()))
+    print(f"reindex-embeddings: re-embedded {total} rows ({detail}).")
+
+
+def handle_metrics(workspace_root: str, window: Optional[int]) -> None:
+    """Print a human-readable delivery-metrics report over the metrics timeseries.
+
+    Per-stage wall-clock durations (from the stage_duration_seconds metric the
+    workflow producer emits) plus the loop-run throughput and failure rate. Read
+    -only; the same numbers the cockpit `metrics` payload serves the web panel.
+    """
+    from solomon_harness.cockpit_read import metrics_payload
+
+    try:
+        payload = metrics_payload(window_days=window, harness_dir=workspace_root)
+    except Exception as e:
+        print(f"Error: metrics read failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    span = f" (last {window}d)" if window else ""
+    print(f"Delivery metrics{span}:")
+    stages = payload.get("stageDurations") or {}
+    if stages:
+        print("  Stage durations (seconds):")
+        print(f"    {'stage':<12} {'count':>6} {'mean':>8} {'p95':>8} {'max':>8}")
+        for stage, s in stages.items():
+            print(
+                f"    {stage:<12} {s['count']:>6} {s['meanSeconds']:>8.1f} "
+                f"{s['p95Seconds']:>8.1f} {s['maxSeconds']:>8.1f}"
+            )
+    else:
+        print("  Stage durations: no stage_duration_seconds samples yet.")
+    if not payload.get("loopRunsAvailable", True):
+        print("  Loop runs: unavailable on this backend (SurrealDB required).")
+    else:
+        rate = payload.get("loopRunFailureRate") or {}
+        if rate.get("total"):
+            print(
+                f"  Loop runs: {rate['total']} total, {rate['failures']} failed "
+                f"({rate['failure_rate'] * 100:.0f}% failure rate)."
+            )
+        else:
+            print("  Loop runs: none recorded in range.")
+
+
 def handle_reconcile(workspace_root: str, dry_run: bool) -> None:
     """Run reconciliation under the repository's single-driver mutation lock."""
     from solomon_harness.loop_lock import LoopLock, LoopLockHeld
@@ -1127,6 +1191,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compile agent harnesses and regenerate host-tool integrations",
     )
     subparsers.add_parser("index", help="Index project codebase into the database memory")
+    subparsers.add_parser(
+        "reindex-embeddings",
+        help="Backfill missing vector embeddings on decisions and memory (SurrealDB only)",
+    )
+    metrics_parser = subparsers.add_parser(
+        "metrics",
+        help="Report delivery metrics: per-stage durations and loop-run throughput/failure rate",
+    )
+    metrics_parser.add_argument(
+        "--window", type=int, default=None, help="Bound the sample to the last N days"
+    )
     subparsers.add_parser("wiki", help="Refresh the living code-overview wiki page from the index")
 
     mem_up = subparsers.add_parser("memory-up", help="Start the memory backend (docker compose) if it is not already running")
@@ -1405,6 +1480,10 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         except Exception as e:
             print(f"Error: Codebase indexing failed: {e}", file=sys.stderr)
             sys.exit(1)
+    elif args.command == "reindex-embeddings":
+        handle_reindex_embeddings(workspace_root)
+    elif args.command == "metrics":
+        handle_metrics(workspace_root, args.window)
     elif args.command == "memory-up":
         from solomon_harness.memory import _describe, ensure_memory_up
         result = ensure_memory_up(workspace_root, wait_seconds=args.wait)

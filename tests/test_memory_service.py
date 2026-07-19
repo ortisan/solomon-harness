@@ -15,6 +15,31 @@ from solomon_harness.memory_service import MemoryService, resolve_harness_dir  #
 SURREAL_URL = os.environ.get("SURREAL_URL", "ws://localhost:8099/rpc")
 
 
+def _surreal_test_creds():
+    """Live-SurrealDB credentials resolved like the client, not a hardcoded root.
+
+    The store uses a per-machine generated password, so a probe or setUp that
+    signs in with root/root silently skips every live test on a migrated machine.
+    Mirror DatabaseClient: SURREAL_USER/PASS env, then the generated home password,
+    then root.
+    """
+    try:
+        from solomon_harness.home import generated_memory_password
+
+        generated = generated_memory_password()
+    except Exception:
+        generated = None
+    return {
+        "username": os.environ.get("SURREAL_USER") or "root",
+        "password": os.environ.get("SURREAL_PASS") or generated or "root",
+    }
+
+
+# Resolved once at import, before any test patches os.path.isfile: reusing the
+# cached value keeps credential resolution out of the per-test monkeypatches.
+_SURREAL_CREDS = _surreal_test_creds()
+
+
 def _host_port(url):
     """Best-effort (host, port) parse of a ws:// URL for a cheap TCP probe."""
     rest = url.split("://", 1)[-1]
@@ -39,7 +64,7 @@ def _surreal_reachable():
         db = surrealdb.Surreal(SURREAL_URL)
         if hasattr(db, "connect"):
             db.connect()
-        db.signin({"username": "root", "password": "root"})
+        db.signin(_SURREAL_CREDS)
         db.use("solomon", "test_mm_probe")
         db.close()
         return True
@@ -69,10 +94,11 @@ _INIT_DEFINES = (
     "DEFINE TABLE IF NOT EXISTS produced TYPE RELATION; "
     "DEFINE TABLE IF NOT EXISTS addresses TYPE RELATION; "
     "DEFINE INDEX IF NOT EXISTS issues_github_id ON issues FIELDS github_id UNIQUE; "
-    "DEFINE INDEX IF NOT EXISTS issues_status ON issues FIELDS status; "
     "DEFINE INDEX IF NOT EXISTS decisions_created_at ON decisions FIELDS created_at; "
     "DEFINE INDEX IF NOT EXISTS metrics_name_time ON metrics FIELDS name, time; "
     "DEFINE INDEX IF NOT EXISTS memory_embedding ON memory "
+    f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32; "
+    "DEFINE INDEX IF NOT EXISTS decisions_embedding ON decisions "
     f"FIELDS embedding HNSW DIMENSION {EMBEDDING_DIM} DIST COSINE TYPE F32;"
 )
 
@@ -230,6 +256,10 @@ class TestMemoryService(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "requires the SurrealDB backend"):
             self.svc.semantic_search("anything")
 
+    def test_search_decisions_requires_surreal(self):
+        with self.assertRaisesRegex(RuntimeError, "requires the SurrealDB backend"):
+            self.svc.search_decisions("anything")
+
 
 @unittest.skipUnless(SURREAL_AVAILABLE, "SurrealDB not reachable at " + SURREAL_URL)
 class TestMemoryServiceMultiModelLive(unittest.TestCase):
@@ -252,7 +282,7 @@ class TestMemoryServiceMultiModelLive(unittest.TestCase):
         self.raw = surrealdb.Surreal(SURREAL_URL)
         if hasattr(self.raw, "connect"):
             self.raw.connect()
-        self.raw.signin({"username": "root", "password": "root"})
+        self.raw.signin(_SURREAL_CREDS)
         self.raw.use("solomon", self.dbname)
         self.raw.query(_INIT_DEFINES)
         self.svc.client.backend = "surrealdb"
@@ -330,6 +360,16 @@ class TestMemoryServiceMultiModelLive(unittest.TestCase):
         hits = self.svc.semantic_search("italian pizza dinner", k=3)["results"]
         self.assertTrue(hits)
         self.assertEqual(hits[0]["key"], "food")
+
+    def test_search_decisions_returns_nearest(self):
+        self.svc.save_decision(
+            "hexagonal ports and adapters", "isolate the domain", "adopt hexagonal",
+            "arch", "main", "s1",
+        )
+        self.svc.save_decision("pizza pasta", "italian food", "takeout", "chef", "main", "s2")
+        hits = self.svc.search_decisions("hexagonal architecture domain", k=2)["results"]
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["title"], "hexagonal ports and adapters")
 
 
 if __name__ == "__main__":

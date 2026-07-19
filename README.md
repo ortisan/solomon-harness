@@ -236,7 +236,8 @@ Antigravity CLI (`.gemini/settings.json`),
 with tools: `save_decision`/`get_decision`, `save_memory`/`get_memory`,
 `log_issue`/`get_open_issues`/`get_issue`, `create_milestone`/`list_milestones`,
 `save_release`/`get_release`/`list_releases`, `save_backtest`,
-`save_session`/`get_session`, `log_handoff`, and `get_latest_activity`.
+`save_session`/`get_session`, `log_handoff`, `get_latest_activity`, and the
+vector search tools `semantic_search` (memory) and `search_decisions` (decisions).
 
 The SurrealDB backend is a single shared instance per machine, defined in
 `~/.solomon-harness/docker-compose.yml` and managed by `solomon_harness/memory.py`.
@@ -322,6 +323,8 @@ table.
 | `init [--non-interactive]` | Install into / bootstrap a project: prerequisites, files, config, tenant, board, index |
 | `compile` | Compile agent harnesses and regenerate host-tool integrations |
 | `index` | Index the project codebase into the memory |
+| `reindex-embeddings` | Backfill missing vector embeddings on decisions and memory (SurrealDB only) |
+| `metrics [--window <days>]` | Report delivery metrics: per-stage durations and loop-run throughput/failure rate |
 | `wiki` | Refresh the living code-overview wiki page from the index |
 | `memory-up [--wait N]` | Start the shared memory backend (docker compose) if it is not already serving |
 | `memory-down` | Stop the shared memory backend |
