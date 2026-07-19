@@ -15,11 +15,14 @@ import pytest
 from solomon_harness import behavioral_evals, secure_paths
 from solomon_harness.behavioral_evals import (
     EvaluationError,
+    IncompleteComparisonError,
     canonical_json,
     load_manifest,
     load_recordings,
+    main,
     prepare_pilot,
     score_recordings,
+    validate_complete_comparison,
 )
 
 
@@ -625,3 +628,67 @@ def test_scoring_failure_priority_is_stable_when_evidence_has_multiple_failures(
     result = score_recordings(manifest, load_recordings(path, manifest))[0]
 
     assert result.failed_assertion == "isolation.scratch_scope_unconfirmed"
+
+
+def test_ac_eval_03_two_repetitions_raise_exact_incomplete_comparison(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    path = _write_recordings(
+        tmp_path,
+        [_raw_run(repetition=1), _raw_run(repetition=2)],
+        [],
+    )
+    results = score_recordings(manifest, load_recordings(path, manifest))
+
+    with pytest.raises(IncompleteComparisonError) as raised:
+        validate_complete_comparison(manifest, results)
+
+    assert raised.value.to_data() == {
+        "error": {
+            "code": "incomplete_comparison",
+            "case_id": "planning-happy",
+            "arm": "baseline",
+            "observed_repetition_count": 2,
+            "expected_repetition_count": 3,
+        }
+    }
+    assert "eligible" not in canonical_json(raised.value.to_data())
+
+
+def test_ac_eval_03_compare_cli_returns_nonzero_without_report_or_eligibility(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    recordings = _write_recordings(
+        tmp_path,
+        [_raw_run(repetition=1), _raw_run(repetition=2)],
+        [],
+    )
+    report = tmp_path / "comparison.json"
+
+    exit_code = main(
+        [
+            "compare",
+            "--manifest",
+            os.fspath(MANIFEST_PATH),
+            "--recordings",
+            os.fspath(recordings),
+            "--output",
+            os.fspath(report),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert not report.exists()
+    assert json.loads(captured.err) == {
+        "error": {
+            "code": "incomplete_comparison",
+            "case_id": "planning-happy",
+            "arm": "baseline",
+            "observed_repetition_count": 2,
+            "expected_repetition_count": 3,
+        }
+    }
+    assert "eligible" not in captured.err

@@ -7,15 +7,17 @@ normalized results.
 
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
 import os
 import re
 import secrets
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from solomon_harness.secure_paths import (
     UnsafePathError,
@@ -113,6 +115,37 @@ class EvaluationError(ValueError):
         self.code = code
         self.field = field
         super().__init__(f"{code}: {field}")
+
+    def to_data(self) -> Dict[str, object]:
+        return {"error": {"code": self.code, "field": self.field}}
+
+
+class IncompleteComparisonError(EvaluationError):
+    """A case-arm pair does not contain the required repetition matrix."""
+
+    def __init__(
+        self,
+        case_id: str,
+        arm_id: str,
+        observed_repetition_count: int,
+        expected_repetition_count: int,
+    ) -> None:
+        self.case_id = case_id
+        self.arm_id = arm_id
+        self.observed_repetition_count = observed_repetition_count
+        self.expected_repetition_count = expected_repetition_count
+        super().__init__("incomplete_comparison", "comparison.matrix")
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "error": {
+                "code": self.code,
+                "case_id": self.case_id,
+                "arm": self.arm_id,
+                "observed_repetition_count": self.observed_repetition_count,
+                "expected_repetition_count": self.expected_repetition_count,
+            }
+        }
 
 
 def canonical_json(value: object) -> str:
@@ -998,6 +1031,39 @@ def score_recordings(
     return tuple(results)
 
 
+def validate_complete_comparison(
+    manifest: EvaluationManifest,
+    results: Sequence[EvaluationResult],
+) -> None:
+    """Reject any missing, duplicate, or unexpected comparison identity."""
+    by_pair: Dict[Tuple[str, str], List[int]] = {}
+    for result in results:
+        pair = (result.identity.case_id, result.identity.arm_id)
+        by_pair.setdefault(pair, []).append(result.identity.repetition)
+
+    expected_repetitions = list(range(1, manifest.repetitions + 1))
+    for case in manifest.cases:
+        for arm in manifest.arms:
+            pair = (case.case_id, arm.arm_id)
+            observed = by_pair.pop(pair, [])
+            if sorted(observed) != expected_repetitions:
+                raise IncompleteComparisonError(
+                    case_id=case.case_id,
+                    arm_id=arm.arm_id,
+                    observed_repetition_count=len(observed),
+                    expected_repetition_count=manifest.repetitions,
+                )
+
+    if by_pair:
+        (case_id, arm_id), observed = min(by_pair.items())
+        raise IncompleteComparisonError(
+            case_id=case_id,
+            arm_id=arm_id,
+            observed_repetition_count=len(observed),
+            expected_repetition_count=0,
+        )
+
+
 def _open_existing_directory(parent_fd: int, name: str, field: str) -> int:
     try:
         descriptor = open_directory_at(parent_fd, name)
@@ -1224,3 +1290,31 @@ def prepare_pilot(manifest: EvaluationManifest, scratch_root: Path) -> Tuple[Pre
     finally:
         os.close(batch_fd)
     return tuple(prepared)
+
+
+def _argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m solomon_harness.behavioral_evals")
+    commands = parser.add_subparsers(dest="command", required=True)
+    compare = commands.add_parser("compare")
+    compare.add_argument("--manifest", required=True)
+    compare.add_argument("--recordings", required=True)
+    compare.add_argument("--output", required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Adapt local comparison files to closed domain errors and process exits."""
+    arguments = _argument_parser().parse_args(argv)
+    try:
+        manifest = load_manifest(Path(arguments.manifest))
+        recordings = load_recordings(Path(arguments.recordings), manifest)
+        results = score_recordings(manifest, recordings)
+        validate_complete_comparison(manifest, results)
+    except EvaluationError as exc:
+        sys.stderr.write(canonical_json(exc.to_data()) + "\n")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
