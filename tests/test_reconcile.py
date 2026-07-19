@@ -53,6 +53,9 @@ class TestRecoverParent(unittest.TestCase):
             (("45-M2", "loop review minor"), "45"),    # id wins, no title ref
             (("R-01", "RAID R-01 (#68)"), "68"),       # id has no leading int -> title
             (("follow-up", "loop (review minor, PR #45)"), "45"),  # PR # form via #(\d+)
+            (("issue-48-d1-weak-name-validation", "d1: weak name validation"), "48"),  # issue-<n>-<slug>
+            (("issue-48-d2-missing-existence-check", ""), "48"),  # issue-<n>-<slug>, no title ref
+            (("issueX-5-foo", "no number here"), None),  # not the issue- prefix -> no false positive
             (("R-07", "no number here"), None),        # nothing recoverable
             ((None, None), None),                       # total over None inputs
         ]
@@ -665,6 +668,20 @@ class TestReconcileTrackingRows(unittest.TestCase):
         self.assertEqual(client.get_issue("100-R-02")["status"], "in_progress")
         self.assertEqual(client.get_issue("45-M2")["status"], "in_progress")
         self.assertEqual(client.get_issue("100")["status"], "in_progress")
+        client.close()
+
+    def test_closes_issue_prefixed_tracking_row(self):
+        client = DatabaseClient(db_path=self.db_path)
+        client.log_issue(
+            "issue-48-d1-weak-name-validation", "d1: weak name validation",
+            "followup", "in_progress", None,
+        )
+        result = cli.reconcile_tracking_rows(client, {"48": True})
+        self.assertEqual(result["closed"], 1)
+        self.assertEqual(result["skipped_no_parent"], 0)
+        self.assertTrue(
+            is_terminal(client.get_issue("issue-48-d1-weak-name-validation")["status"])
+        )
         client.close()
 
     def test_skips_and_logs_row_with_no_parent(self):
