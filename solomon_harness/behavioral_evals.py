@@ -15,7 +15,9 @@ import re
 import secrets
 import stat
 import sys
+from collections import Counter
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -127,13 +129,25 @@ class IncompleteComparisonError(EvaluationError):
         self,
         case_id: str,
         arm_id: str,
-        observed_repetition_count: int,
+        observed_repetitions: Sequence[int],
         expected_repetition_count: int,
     ) -> None:
         self.case_id = case_id
         self.arm_id = arm_id
-        self.observed_repetition_count = observed_repetition_count
+        self.observed_repetitions = tuple(sorted(observed_repetitions))
+        self.observed_repetition_count = len(self.observed_repetitions)
         self.expected_repetition_count = expected_repetition_count
+        repetition_counts = Counter(self.observed_repetitions)
+        self.missing_repetitions = tuple(
+            repetition
+            for repetition in range(1, expected_repetition_count + 1)
+            if repetition_counts[repetition] == 0
+        )
+        self.duplicate_repetitions = tuple(
+            repetition
+            for repetition, count in sorted(repetition_counts.items())
+            if count > 1
+        )
         super().__init__("incomplete_comparison", "comparison.matrix")
 
     def to_data(self) -> Dict[str, object]:
@@ -144,6 +158,9 @@ class IncompleteComparisonError(EvaluationError):
                 "arm": self.arm_id,
                 "observed_repetition_count": self.observed_repetition_count,
                 "expected_repetition_count": self.expected_repetition_count,
+                "observed_repetitions": list(self.observed_repetitions),
+                "missing_repetitions": list(self.missing_repetitions),
+                "duplicate_repetitions": list(self.duplicate_repetitions),
             }
         }
 
@@ -457,6 +474,86 @@ class EvaluationResult:
             "duration_ms": self.duration_ms,
             "usage": self.usage.to_data(),
             "raw_artifact": {"path": self.raw_artifact_path, "index": self.raw_index},
+        }
+
+
+@dataclass(frozen=True)
+class ArmSummary:
+    arm_id: str
+    passed_runs: int
+    total_runs: int
+    p50_duration_ms: int | float
+    p95_duration_ms: int
+
+    @property
+    def pass_rate(self) -> Fraction:
+        return Fraction(self.passed_runs, self.total_runs)
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "arm": self.arm_id,
+            "passed_runs": self.passed_runs,
+            "total_runs": self.total_runs,
+            "p50_duration_ms": self.p50_duration_ms,
+            "p95_duration_ms": self.p95_duration_ms,
+        }
+
+
+@dataclass(frozen=True)
+class GoldenCaseRegression:
+    case_id: str
+    case_version: str
+    repetition: int
+    failed_assertion: str
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "case_id": self.case_id,
+            "case_version": self.case_version,
+            "repetition": self.repetition,
+            "failed_assertion": self.failed_assertion,
+        }
+
+
+@dataclass(frozen=True)
+class UsageAttribution:
+    attributed_records: int
+    exposed_records: int
+    status: str
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "attributed_records": self.attributed_records,
+            "exposed_records": self.exposed_records,
+            "unattributed_records": self.exposed_records - self.attributed_records,
+            "minimum_percent": 95,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class ComparisonReport:
+    schema_version: int
+    golden_set_version: str
+    baseline: ArmSummary
+    candidate: ArmSummary
+    usage_attribution: UsageAttribution
+    golden_case_regressions: Tuple[GoldenCaseRegression, ...]
+    eligibility_failures: Tuple[str, ...]
+    eligible: bool
+
+    def to_data(self) -> Dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "golden_set_version": self.golden_set_version,
+            "baseline": self.baseline.to_data(),
+            "candidate": self.candidate.to_data(),
+            "usage_attribution": self.usage_attribution.to_data(),
+            "golden_case_regressions": [
+                regression.to_data() for regression in self.golden_case_regressions
+            ],
+            "eligibility_failures": list(self.eligibility_failures),
+            "eligible": self.eligible,
         }
 
 
@@ -1050,7 +1147,7 @@ def validate_complete_comparison(
                 raise IncompleteComparisonError(
                     case_id=case.case_id,
                     arm_id=arm.arm_id,
-                    observed_repetition_count=len(observed),
+                    observed_repetitions=observed,
                     expected_repetition_count=manifest.repetitions,
                 )
 
@@ -1059,9 +1156,161 @@ def validate_complete_comparison(
         raise IncompleteComparisonError(
             case_id=case_id,
             arm_id=arm_id,
-            observed_repetition_count=len(observed),
+            observed_repetitions=observed,
             expected_repetition_count=0,
         )
+
+    case_by_id = {case.case_id: case for case in manifest.cases}
+    arm_by_id = {arm.arm_id: arm for arm in manifest.arms}
+    for result in sorted(
+        results,
+        key=lambda item: (
+            item.identity.case_id,
+            item.identity.arm_id,
+            item.identity.repetition,
+        ),
+    ):
+        case = case_by_id[result.identity.case_id]
+        arm = arm_by_id[result.identity.arm_id]
+        valid_verdict = (
+            result.verdict == "pass" and result.failed_assertion is None
+        ) or (
+            result.verdict == "fail"
+            and isinstance(result.failed_assertion, str)
+            and bool(result.failed_assertion)
+        )
+        if (
+            result.schema_version != manifest.schema_version
+            or result.golden_set_version != manifest.golden_set_version
+            or result.case_version != case.version
+            or result.effective_policy != arm.policy
+            or result.duration_ms <= 0
+            or not valid_verdict
+        ):
+            raise EvaluationError("invalid_artifact", "comparison.result")
+
+
+def _median_duration(durations: Sequence[int]) -> int | float:
+    ordered = sorted(durations)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    central_sum = ordered[midpoint - 1] + ordered[midpoint]
+    if central_sum % 2 == 0:
+        return central_sum // 2
+    return central_sum / 2
+
+
+def _summarize_arm(arm_id: str, results: Sequence[EvaluationResult]) -> ArmSummary:
+    arm_results = [result for result in results if result.identity.arm_id == arm_id]
+    durations = [result.duration_ms for result in arm_results]
+    p95_rank = (95 * len(durations) + 99) // 100
+    return ArmSummary(
+        arm_id=arm_id,
+        passed_runs=sum(result.verdict == "pass" for result in arm_results),
+        total_runs=len(arm_results),
+        p50_duration_ms=_median_duration(durations),
+        p95_duration_ms=sorted(durations)[p95_rank - 1],
+    )
+
+
+def _golden_case_regressions(
+    manifest: EvaluationManifest,
+    results: Sequence[EvaluationResult],
+) -> Tuple[GoldenCaseRegression, ...]:
+    by_case_arm: Dict[Tuple[str, str], List[EvaluationResult]] = {}
+    for result in results:
+        key = (result.identity.case_id, result.identity.arm_id)
+        by_case_arm.setdefault(key, []).append(result)
+
+    regressions: List[GoldenCaseRegression] = []
+    for case in manifest.cases:
+        baseline = by_case_arm[(case.case_id, "baseline")]
+        if not all(result.verdict == "pass" for result in baseline):
+            continue
+        candidate = by_case_arm[(case.case_id, "candidate")]
+        for result in candidate:
+            if result.verdict == "fail":
+                if result.failed_assertion is None:
+                    raise EvaluationError("invalid_artifact", "comparison.failed_assertion")
+                regressions.append(
+                    GoldenCaseRegression(
+                        case_id=case.case_id,
+                        case_version=case.version,
+                        repetition=result.identity.repetition,
+                        failed_assertion=result.failed_assertion,
+                    )
+                )
+    return tuple(
+        sorted(
+            regressions,
+            key=lambda item: (
+                item.case_id,
+                item.case_version,
+                item.repetition,
+                item.failed_assertion,
+            ),
+        )
+    )
+
+
+def _usage_attribution(
+    results: Sequence[EvaluationResult],
+    usage_records: Sequence[UsageRecord],
+) -> UsageAttribution:
+    result_identities = {result.identity for result in results}
+    usage_counts = Counter(record.identity for record in usage_records)
+    attributed = sum(
+        record.identity in result_identities and usage_counts[record.identity] == 1
+        for record in usage_records
+    )
+    exposed = len(usage_records)
+    if exposed == 0:
+        status = "not_evaluable"
+    elif 100 * attributed >= 95 * exposed:
+        status = "met"
+    else:
+        status = "not_met"
+    return UsageAttribution(
+        attributed_records=attributed,
+        exposed_records=exposed,
+        status=status,
+    )
+
+
+def compare_recordings(
+    manifest: EvaluationManifest,
+    bundle: RecordingBundle,
+) -> ComparisonReport:
+    """Re-score raw recordings and derive a deterministic paired comparison."""
+    if (
+        bundle.schema_version != manifest.schema_version
+        or bundle.golden_set_version != manifest.golden_set_version
+    ):
+        raise EvaluationError("invalid_artifact", "comparison.bundle")
+    results = score_recordings(manifest, bundle)
+    validate_complete_comparison(manifest, results)
+    baseline = _summarize_arm("baseline", results)
+    candidate = _summarize_arm("candidate", results)
+    regressions = _golden_case_regressions(manifest, results)
+    attribution = _usage_attribution(results, bundle.usage_records)
+    failures: List[str] = []
+    if candidate.passed_runs < baseline.passed_runs:
+        failures.append("aggregate_pass_rate_regression")
+    if regressions:
+        failures.append("golden_case_regression")
+    if attribution.status == "not_met":
+        failures.append("usage_attribution_below_threshold")
+    return ComparisonReport(
+        schema_version=manifest.schema_version,
+        golden_set_version=manifest.golden_set_version,
+        baseline=baseline,
+        candidate=candidate,
+        usage_attribution=attribution,
+        golden_case_regressions=regressions,
+        eligibility_failures=tuple(failures),
+        eligible=not failures,
+    )
 
 
 def _open_existing_directory(parent_fd: int, name: str, field: str) -> int:
@@ -1308,8 +1557,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         manifest = load_manifest(Path(arguments.manifest))
         recordings = load_recordings(Path(arguments.recordings), manifest)
-        results = score_recordings(manifest, recordings)
-        validate_complete_comparison(manifest, results)
+        compare_recordings(manifest, recordings)
     except EvaluationError as exc:
         sys.stderr.write(canonical_json(exc.to_data()) + "\n")
         return 2

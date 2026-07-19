@@ -15,8 +15,10 @@ import pytest
 from solomon_harness import behavioral_evals, secure_paths
 from solomon_harness.behavioral_evals import (
     EvaluationError,
+    GoldenCaseRegression,
     IncompleteComparisonError,
     canonical_json,
+    compare_recordings,
     load_manifest,
     load_recordings,
     main,
@@ -155,6 +157,57 @@ def _write_recordings(
     return path
 
 
+def _passing_raw_run(
+    manifest: Any,
+    case_id: str,
+    arm_id: str,
+    repetition: int,
+    duration_ms: int,
+) -> dict[str, Any]:
+    case = next(case for case in manifest.cases if case.case_id == case_id)
+    arm = next(arm for arm in manifest.arms if arm.arm_id == arm_id)
+    return _raw_run(
+        case_id=case.case_id,
+        case_version=case.version,
+        arm=arm.arm_id,
+        repetition=repetition,
+        agent_content=f"{arm.arm_id} agent content\n",
+        effective_policy=arm.policy.to_data(),
+        duration_ms=duration_ms,
+        exit_code=case.assertions.expected_exit_code,
+        files=list(case.assertions.required_files),
+        actions=list(case.assertions.required_actions),
+    )
+
+
+def _complete_raw_runs(manifest: Any) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    for arm_index, arm in enumerate(manifest.arms):
+        duration_ms = 1 + arm_index * 100
+        for case in manifest.cases:
+            for repetition in range(1, manifest.repetitions + 1):
+                runs.append(
+                    _passing_raw_run(
+                        manifest,
+                        case.case_id,
+                        arm.arm_id,
+                        repetition,
+                        duration_ms,
+                    )
+                )
+                duration_ms += 1
+    return runs
+
+
+def _usage_for_run(run: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    return _usage_record(
+        case_id=run["case_id"],
+        arm=run["arm"],
+        repetition=run["repetition"],
+        **overrides,
+    )
+
+
 def test_manifest_loads_closed_versioned_contract() -> None:
     manifest = load_manifest(MANIFEST_PATH)
 
@@ -270,6 +323,7 @@ def test_prepare_pilot_creates_54_fresh_bounded_scratch_fixtures(tmp_path: Path)
         stat.S_IMODE(run.workspace_path.joinpath("task.txt").stat().st_mode) == 0o600
         for run in first
     )
+    original_seed = first[0].workspace_path.joinpath("task.txt").read_bytes()
     request = json.loads(first[0].request_path.read_text(encoding="utf-8"))
     assert request["case"]["prompt"] == manifest.cases[0].prompt
     assert request["artifact_contract"] == {
@@ -285,7 +339,7 @@ def test_prepare_pilot_creates_54_fresh_bounded_scratch_fixtures(tmp_path: Path)
     assert {run.scratch_path for run in first}.isdisjoint(
         {run.scratch_path for run in second}
     )
-    assert second[0].workspace_path.joinpath("task.txt").read_text(encoding="utf-8") != "mutated"
+    assert second[0].workspace_path.joinpath("task.txt").read_bytes() == original_seed
 
 
 def test_prepare_rejects_symlinked_seed_or_scratch_root(tmp_path: Path) -> None:
@@ -634,9 +688,16 @@ def test_ac_eval_03_two_repetitions_raise_exact_incomplete_comparison(
     tmp_path: Path,
 ) -> None:
     manifest = load_manifest(MANIFEST_PATH)
+    missing_identity = ("planning-happy", "baseline", 3)
+    runs = [
+        run
+        for run in _complete_raw_runs(manifest)
+        if (run["case_id"], run["arm"], run["repetition"]) != missing_identity
+    ]
+    assert len(runs) == 53
     path = _write_recordings(
         tmp_path,
-        [_raw_run(repetition=1), _raw_run(repetition=2)],
+        runs,
         [],
     )
     results = score_recordings(manifest, load_recordings(path, manifest))
@@ -651,6 +712,9 @@ def test_ac_eval_03_two_repetitions_raise_exact_incomplete_comparison(
             "arm": "baseline",
             "observed_repetition_count": 2,
             "expected_repetition_count": 3,
+            "observed_repetitions": [1, 2],
+            "missing_repetitions": [3],
+            "duplicate_repetitions": [],
         }
     }
     assert "eligible" not in canonical_json(raised.value.to_data())
@@ -660,9 +724,16 @@ def test_ac_eval_03_compare_cli_returns_nonzero_without_report_or_eligibility(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    missing_identity = ("planning-happy", "baseline", 3)
+    runs = [
+        run
+        for run in _complete_raw_runs(manifest)
+        if (run["case_id"], run["arm"], run["repetition"]) != missing_identity
+    ]
     recordings = _write_recordings(
         tmp_path,
-        [_raw_run(repetition=1), _raw_run(repetition=2)],
+        runs,
         [],
     )
     report = tmp_path / "comparison.json"
@@ -689,6 +760,181 @@ def test_ac_eval_03_compare_cli_returns_nonzero_without_report_or_eligibility(
             "arm": "baseline",
             "observed_repetition_count": 2,
             "expected_repetition_count": 3,
+            "observed_repetitions": [1, 2],
+            "missing_repetitions": [3],
+            "duplicate_repetitions": [],
         }
     }
     assert "eligible" not in captured.err
+    assert captured.out == ""
+
+
+def test_compare_rejects_duplicate_repetition_that_preserves_total_54(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    duplicate = next(
+        run
+        for run in runs
+        if (run["case_id"], run["arm"], run["repetition"])
+        == ("planning-happy", "baseline", 3)
+    )
+    duplicate["repetition"] = 2
+    path = _write_recordings(tmp_path, runs, [])
+    results = score_recordings(manifest, load_recordings(path, manifest))
+
+    with pytest.raises(IncompleteComparisonError) as raised:
+        validate_complete_comparison(manifest, results)
+
+    assert raised.value.to_data()["error"] == {
+        "code": "incomplete_comparison",
+        "case_id": "planning-happy",
+        "arm": "baseline",
+        "observed_repetition_count": 3,
+        "expected_repetition_count": 3,
+        "observed_repetitions": [1, 2, 2],
+        "missing_repetitions": [3],
+        "duplicate_repetitions": [2],
+    }
+
+
+def test_ac_eval_06_equal_aggregate_stable_case_regression_is_ineligible(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    baseline_improvement_target = next(
+        run
+        for run in runs
+        if (run["case_id"], run["arm"], run["repetition"])
+        == ("planning-boundary", "baseline", 1)
+    )
+    baseline_improvement_target["files"] = []
+    candidate_regression = next(
+        run
+        for run in runs
+        if (run["case_id"], run["arm"], run["repetition"])
+        == ("review-happy", "candidate", 2)
+    )
+    candidate_regression["files"] = []
+    path = _write_recordings(tmp_path, runs, [])
+    bundle = load_recordings(path, manifest)
+
+    report = compare_recordings(manifest, bundle)
+
+    assert len(score_recordings(manifest, bundle)) == 54
+    assert (report.baseline.passed_runs, report.baseline.total_runs) == (26, 27)
+    assert (report.candidate.passed_runs, report.candidate.total_runs) == (26, 27)
+    assert report.baseline.pass_rate == report.candidate.pass_rate
+    assert str(report.baseline.pass_rate) == "26/27"
+    assert report.baseline.p50_duration_ms == 14
+    assert report.baseline.p95_duration_ms == 26
+    assert report.candidate.p50_duration_ms == 114
+    assert report.candidate.p95_duration_ms == 126
+    assert report.golden_case_regressions == (
+        GoldenCaseRegression(
+            case_id="review-happy",
+            case_version="1",
+            repetition=2,
+            failed_assertion="artifact.required_file_missing:review.json",
+        ),
+    )
+    assert report.usage_attribution.to_data() == {
+        "attributed_records": 0,
+        "exposed_records": 0,
+        "unattributed_records": 0,
+        "minimum_percent": 95,
+        "status": "not_evaluable",
+    }
+    assert report.eligibility_failures == ("golden_case_regression",)
+    assert report.eligible is False
+
+
+def test_compare_uses_aggregate_gate_without_mislabeling_unstable_case(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    for run in runs:
+        identity = (run["case_id"], run["arm"], run["repetition"])
+        if identity == ("planning-boundary", "baseline", 1):
+            run["files"] = []
+        if identity in {
+            ("planning-boundary", "candidate", 1),
+            ("planning-boundary", "candidate", 2),
+        }:
+            run["files"] = []
+    path = _write_recordings(tmp_path, runs, [])
+
+    report = compare_recordings(manifest, load_recordings(path, manifest))
+
+    assert (report.baseline.passed_runs, report.candidate.passed_runs) == (26, 25)
+    assert report.golden_case_regressions == ()
+    assert report.eligibility_failures == ("aggregate_pass_rate_regression",)
+    assert report.eligible is False
+
+
+def test_usage_attribution_uses_exact_95_percent_integer_threshold(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    usage_52 = [
+        _usage_for_run(
+            run,
+            input_tokens=None if index == 0 else 321,
+            output_tokens=None if index == 0 else 45,
+        )
+        for index, run in enumerate(runs[:52])
+    ]
+    usage_52.extend(
+        _usage_record(case_id=f"unmatched-{index}", arm="baseline")
+        for index in range(2)
+    )
+    path = _write_recordings(tmp_path, runs, usage_52)
+
+    report_52 = compare_recordings(manifest, load_recordings(path, manifest))
+
+    assert report_52.usage_attribution.to_data() == {
+        "attributed_records": 52,
+        "exposed_records": 54,
+        "unattributed_records": 2,
+        "minimum_percent": 95,
+        "status": "met",
+    }
+    assert report_52.eligibility_failures == ()
+    assert report_52.eligible is True
+
+    usage_51 = [_usage_for_run(run) for run in runs[:51]]
+    usage_51.extend(
+        _usage_record(case_id=f"unmatched-{index}", arm="baseline")
+        for index in range(3)
+    )
+    path = _write_recordings(tmp_path, runs, usage_51)
+
+    report_51 = compare_recordings(manifest, load_recordings(path, manifest))
+
+    assert report_51.usage_attribution.to_data() == {
+        "attributed_records": 51,
+        "exposed_records": 54,
+        "unattributed_records": 3,
+        "minimum_percent": 95,
+        "status": "not_met",
+    }
+    assert report_51.eligibility_failures == (
+        "usage_attribution_below_threshold",
+    )
+    assert report_51.eligible is False
+
+
+def test_comparison_is_byte_stable_when_recording_order_changes(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    runs = _complete_raw_runs(manifest)
+    usage = [_usage_for_run(run) for run in runs]
+    first_path = _write_recordings(tmp_path, runs, usage)
+    first = compare_recordings(manifest, load_recordings(first_path, manifest))
+    second_path = _write_recordings(tmp_path, list(reversed(runs)), list(reversed(usage)))
+    second = compare_recordings(manifest, load_recordings(second_path, manifest))
+
+    assert canonical_json(first.to_data()) == canonical_json(second.to_data())
