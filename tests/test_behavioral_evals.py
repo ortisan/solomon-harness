@@ -1644,24 +1644,34 @@ def test_ac_eval_01_complete_fixture_corpus_scores_exact_54_results() -> None:
     assert report.eligible is False
 
 
+# Coverage tracing adds interpreter work to the wall-clock interval under test.
+@pytest.mark.no_cover
 def test_fixture_normalization_and_scoring_median_overhead_stays_below_one_percent() -> None:
     manifest = load_manifest(MANIFEST_PATH)
     for _ in range(3):
         score_recordings(manifest, load_recordings(RECORDINGS_PATH, manifest))
 
+    cycles_per_sample = 20
     elapsed_per_run_ms: list[float] = []
     latest_results: tuple[behavioral_evals.EvaluationResult, ...] = ()
     for _ in range(15):
         started = time.perf_counter_ns()
-        latest_results = score_recordings(
-            manifest,
-            load_recordings(RECORDINGS_PATH, manifest),
-        )
+        for _ in range(cycles_per_sample):
+            latest_results = score_recordings(
+                manifest,
+                load_recordings(RECORDINGS_PATH, manifest),
+            )
         elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000
-        elapsed_per_run_ms.append(elapsed_ms / len(latest_results))
+        elapsed_per_run_ms.append(
+            elapsed_ms / (cycles_per_sample * len(latest_results))
+        )
 
     median_local_ms = statistics.median(elapsed_per_run_ms)
     median_host_ms = statistics.median(
         result.duration_ms for result in latest_results
     )
-    assert median_local_ms < median_host_ms * 0.01
+    observed_ratio = median_local_ms / median_host_ms
+    assert observed_ratio < 0.01, (
+        f"normalization and scoring used {median_local_ms:.6f} ms/result, "
+        f"or {observed_ratio:.6%} of the {median_host_ms:.3f} ms host median"
+    )
