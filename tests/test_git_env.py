@@ -8,8 +8,8 @@ _SUBPROCESS_CALLS = {"run", "check_output", "Popen", "check_call", "call"}
 _CLEAN_ENV = {"clean_git_env", "clean_gh_env"}
 # Out-of-scope env handling exempted with an explicit reason, per #251's review:
 #   curator.py  -- apply_proposal's git/gh env, tracked as #103.
-#   github.py   -- _gh centralizes gh calls behind a retry/token-heal env; stripping
-#                  GIT_* there is a follow-up (Refs #251), not this issue's scope.
+#   github.py   -- _gh strips GIT_* at runtime (env defaults to clean_gh_env), but its
+#                  retry/token-heal env is a computed value a static scan cannot prove.
 _ALLOWLISTED_FILES = {"curator.py", "github.py"}
 
 
