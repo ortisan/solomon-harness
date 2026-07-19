@@ -18,6 +18,10 @@ walked by a persona this cycle", a session ledger rather than a per-case count.
   path, or one-line value so any question ("all failing scenarios") is one grep.
 - `templates/` — the charter and (as needed) report templates.
 
+## Area codes
+
+- `BE` — offline behavioral-evaluation pilot commands and evidence flow.
+
 ## `state.csv` columns
 
 `id, area, title, persona, journey, expected, entry_points, qa_status, bug_ids,
@@ -46,4 +50,6 @@ existing `uat` Blocker/Critical/Major/Minor/Trivial scale.
 
 ## Changelog
 
+- 2026-07-19: Added the issue #369 behavioral-evaluation operator journey,
+  targeted charter, and untested scenario rows.
 - Bootstrapped with epic #341 package 6 (persona-driven exploratory testing v1).

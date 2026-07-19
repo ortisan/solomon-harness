@@ -1,1 +1,4 @@
 id,area,title,persona,journey,expected,entry_points,qa_status,bug_ids,fix_status,retest_status,fix_commits,evidence,last_report,overlaps,notes
+BE-001,BE,Prepare isolated pilot fixtures,Operator,J-01,Creates 54 unique bounded scratch fixtures without changing protected paths,python -m solomon_harness.behavioral_evals prepare,untested,,,,,,,,Issue #369; targeted Feature tour pending
+BE-002,BE,Score recorded host runs,Operator,J-01,Produces one attributable deterministic result per recording and preserves unavailable telemetry as null,python -m solomon_harness.behavioral_evals score,untested,,,,,,,,Issue #369; targeted Feature tour pending
+BE-003,BE,Compare paired pilot results,Operator,J-01,Rejects an incomplete matrix and reports a baseline-stable regression with eligible false,python -m solomon_harness.behavioral_evals compare,untested,,,,,,,,Issue #369; targeted Feature tour pending
