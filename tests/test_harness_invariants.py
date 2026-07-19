@@ -83,6 +83,18 @@ def _surreal_reachable(url):
         return False
 
 
+def _skip_unless_live_surreal_backend(server, testcase):
+    """Skip when the server's client is not actually on SurrealDB right now.
+
+    The class gate is probed once at import; SurrealDB can drop between then and
+    the test, dropping the client to SQLite, where the graph/vector tools raise.
+    Checking the resolved backend at setUp turns that race into a clean skip.
+    """
+    status = _call_tool_json(server, "get_backend_status", {})
+    if status.get("backend") != "surrealdb":
+        testcase.skipTest("SurrealDB is not the live backend now (dropped after the module gate)")
+
+
 SURREAL_LIVE_URL = os.environ.get("SURREAL_URL", "ws://localhost:8099/rpc")
 SURREAL_LIVE_AVAILABLE = _surreal_reachable(SURREAL_LIVE_URL)
 
@@ -366,6 +378,7 @@ class TestMcpServerGraphAndVectorTools(unittest.TestCase):
         os.environ["SOLOMON_HARNESS_DIR"] = self.temp_dir.name
 
         self.server = build_server()
+        _skip_unless_live_surreal_backend(self.server, self)
 
     def tearDown(self):
         from solomon_harness.home import derive_tenant
@@ -487,6 +500,19 @@ class TestSurrealIntegration(unittest.TestCase):
             db.save_memory("invariant_key", "invariant_value", "test")
             self.assertEqual(db.get_memory("invariant_key"), "invariant_value")
             db.close()
+
+
+class TestLiveSurrealBackendGuard(unittest.TestCase):
+    """The setUp guard turns a mid-run SurrealDB drop into a clean skip."""
+
+    def test_skips_when_the_backend_fell_back_to_sqlite(self):
+        with patch(f"{__name__}._call_tool_json", return_value={"backend": "sqlite"}):
+            with self.assertRaises(unittest.SkipTest):
+                _skip_unless_live_surreal_backend(object(), self)
+
+    def test_does_not_skip_when_the_backend_is_surrealdb(self):
+        with patch(f"{__name__}._call_tool_json", return_value={"backend": "surrealdb"}):
+            _skip_unless_live_surreal_backend(object(), self)
 
 
 if __name__ == "__main__":
