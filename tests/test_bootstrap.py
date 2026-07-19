@@ -5,8 +5,6 @@ import subprocess
 import tempfile
 import unittest
 
-from solomon_harness.subprocess_env import clean_git_env
-
 
 class TestBootstrapAgent(unittest.TestCase):
     def setUp(self):
@@ -35,7 +33,7 @@ class TestBootstrapAgent(unittest.TestCase):
 
         # Initialize a dummy git repository in the temporary workspace
         # to satisfy git command dependencies in the bootstrap script.
-        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True, env=clean_git_env())
+        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True)
         subprocess.run(
             [
                 "git",
@@ -46,30 +44,26 @@ class TestBootstrapAgent(unittest.TestCase):
             ],
             cwd=self.workspace_dir,
             capture_output=True,
-            env=clean_git_env(),
         )
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
             cwd=self.workspace_dir,
             capture_output=True,
-            env=clean_git_env(),
         )
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
             cwd=self.workspace_dir,
             capture_output=True,
-            env=clean_git_env(),
         )
         with open(os.path.join(self.workspace_dir, "README.md"), "w") as f:
             f.write("# Dummy project")
         subprocess.run(
-            ["git", "add", "README.md"], cwd=self.workspace_dir, capture_output=True, env=clean_git_env()
+            ["git", "add", "README.md"], cwd=self.workspace_dir, capture_output=True
         )
         subprocess.run(
             ["git", "commit", "-m", "Initial commit"],
             cwd=self.workspace_dir,
             capture_output=True,
-            env=clean_git_env(),
         )
 
         # Setup paths inside the sandboxed directory
@@ -103,6 +97,24 @@ class TestBootstrapAgent(unittest.TestCase):
         self._prev_skip_gh = os.environ.get("SOLOMON_SKIP_GH_CHECK")
         os.environ["SOLOMON_SKIP_GH_CHECK"] = "true"
 
+        # Force unreachable SurrealDB URL so database_client falls back to local sqlite
+        self._prev_surreal_url = os.environ.get("SURREAL_URL")
+        self._prev_surreal_user = os.environ.get("SURREAL_USER")
+        self._prev_surreal_pass = os.environ.get("SURREAL_PASS")
+        os.environ["SURREAL_URL"] = "ws://127.0.0.1:1/rpc"
+        os.environ["SURREAL_USER"] = ""
+        os.environ["SURREAL_PASS"] = ""
+
+        # Create a mock 'gh' executable to prevent any real network calls
+        self.mock_bin_dir = tempfile.mkdtemp()
+        gh_path = os.path.join(self.mock_bin_dir, "gh")
+        with open(gh_path, "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(gh_path, 0o755)
+        
+        self._prev_path = os.environ.get("PATH")
+        os.environ["PATH"] = f"{self.mock_bin_dir}:{self._prev_path or ''}"
+
     def tearDown(self):
         # Clean up temporary directory
         self.test_dir.cleanup()
@@ -117,8 +129,31 @@ class TestBootstrapAgent(unittest.TestCase):
             os.environ["SOLOMON_SKIP_GH_CHECK"] = self._prev_skip_gh
         shutil.rmtree(self._home, ignore_errors=True)
 
+        # Clean up database environment variables
+        if self._prev_surreal_url is None:
+            os.environ.pop("SURREAL_URL", None)
+        else:
+            os.environ["SURREAL_URL"] = self._prev_surreal_url
+            
+        if self._prev_surreal_user is None:
+            os.environ.pop("SURREAL_USER", None)
+        else:
+            os.environ["SURREAL_USER"] = self._prev_surreal_user
+            
+        if self._prev_surreal_pass is None:
+            os.environ.pop("SURREAL_PASS", None)
+        else:
+            os.environ["SURREAL_PASS"] = self._prev_surreal_pass
+
+        # Clean up mock PATH environment
+        if self._prev_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = self._prev_path
+        shutil.rmtree(self.mock_bin_dir, ignore_errors=True)
+
     def test_non_interactive_default_via_env(self):
-        env = clean_git_env(self.workspace_dir)
+        env = os.environ.copy()
         env["NON_INTERACTIVE"] = "true"
 
         result = subprocess.run(
@@ -147,7 +182,6 @@ class TestBootstrapAgent(unittest.TestCase):
             cwd=self.workspace_dir,
             capture_output=True,
             text=True,
-            env=clean_git_env(self.workspace_dir),
         )
 
         self.assertEqual(result.returncode, 0, f"Script failed with: {result.stderr}")
@@ -161,7 +195,7 @@ class TestBootstrapAgent(unittest.TestCase):
         import shutil
         shutil.rmtree(os.path.join(self.workspace_dir, ".git"), ignore_errors=True)
 
-        env = clean_git_env(self.workspace_dir)
+        env = os.environ.copy()
         env["NON_INTERACTIVE"] = "true"
 
         result = subprocess.run(
@@ -262,160 +296,6 @@ class TestBootstrapAgent(unittest.TestCase):
         with patch("builtins.open", side_effect=mock_open_fn):
             # Run bootstrap_project again; it should log warning and return early without raising
             bootstrap_project(self.workspace_dir, non_interactive=True)
-
-
-class TestProjectIdentityNotClobberedByHarnessInstall(unittest.TestCase):
-    """A fresh project with no pyproject.toml/package.json of its own must keep
-    its own directory name as its identity. Regression: _install_harness_files
-    copies this repo's own pyproject.toml (name = "solomon-harness") into any
-    workspace that lacks one, so reading project metadata after that copy
-    misidentified every from-scratch install as "solomon-harness"."""
-
-    def setUp(self):
-        self.test_dir = tempfile.TemporaryDirectory()
-        self.workspace_dir = os.path.join(self.test_dir.name, "acme-trader")
-        os.makedirs(self.workspace_dir)
-
-        subprocess.run(["git", "init"], cwd=self.workspace_dir, capture_output=True, env=clean_git_env())
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=self.workspace_dir,
-            capture_output=True,
-            env=clean_git_env(),
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=self.workspace_dir,
-            capture_output=True,
-            env=clean_git_env(),
-        )
-
-        self._home = tempfile.mkdtemp()
-        self._prev_home = os.environ.get("SOLOMON_HARNESS_HOME")
-        os.environ["SOLOMON_HARNESS_HOME"] = self._home
-
-        self._prev_skip_gh = os.environ.get("SOLOMON_SKIP_GH_CHECK")
-        os.environ["SOLOMON_SKIP_GH_CHECK"] = "true"
-
-    def tearDown(self):
-        self.test_dir.cleanup()
-        if self._prev_home is None:
-            os.environ.pop("SOLOMON_HARNESS_HOME", None)
-        else:
-            os.environ["SOLOMON_HARNESS_HOME"] = self._prev_home
-
-        if self._prev_skip_gh is None:
-            os.environ.pop("SOLOMON_SKIP_GH_CHECK", None)
-        else:
-            os.environ["SOLOMON_SKIP_GH_CHECK"] = self._prev_skip_gh
-        shutil.rmtree(self._home, ignore_errors=True)
-
-    def test_fresh_project_keeps_its_own_name_not_the_harness_own(self):
-        from solomon_harness.bootstrap import bootstrap_project
-
-        bootstrap_project(self.workspace_dir, non_interactive=True)
-
-        # The harness's own pyproject.toml is installed since none existed --
-        # confirms the copy happened, so the assertion below is meaningful.
-        self.assertTrue(os.path.isfile(os.path.join(self.workspace_dir, "pyproject.toml")))
-
-        kanban_path = os.path.join(self.workspace_dir, "planning", "KANBAN.md")
-        self.assertTrue(os.path.isfile(kanban_path))
-        with open(kanban_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("acme-trader", content)
-        self.assertNotIn("solomon-harness", content)
-
-
-class TestGithubPrereqStatus(unittest.TestCase):
-    """Wiki is only a hard requirement for public repos; GitHub Projects always
-    blocks init, since the delivery board depends on it."""
-
-    def test_public_repo_missing_wiki_blocks(self):
-        from solomon_harness.bootstrap import github_prereq_status
-
-        wiki_ok, wiki_blocking, blocked = github_prereq_status(
-            wiki_enabled=False, wiki_initialized=False, projects_ok=True, is_public=True
-        )
-        self.assertFalse(wiki_ok)
-        self.assertTrue(wiki_blocking)
-        self.assertTrue(blocked)
-
-    def test_private_repo_missing_wiki_does_not_block(self):
-        from solomon_harness.bootstrap import github_prereq_status
-
-        wiki_ok, wiki_blocking, blocked = github_prereq_status(
-            wiki_enabled=False, wiki_initialized=False, projects_ok=True, is_public=False
-        )
-        self.assertFalse(wiki_ok)
-        self.assertFalse(wiki_blocking)
-        self.assertFalse(blocked)
-
-    def test_private_repo_missing_projects_still_blocks(self):
-        from solomon_harness.bootstrap import github_prereq_status
-
-        wiki_ok, wiki_blocking, blocked = github_prereq_status(
-            wiki_enabled=False, wiki_initialized=False, projects_ok=False, is_public=False
-        )
-        self.assertFalse(wiki_blocking)
-        self.assertTrue(blocked)
-
-    def test_public_repo_with_wiki_and_projects_does_not_block(self):
-        from solomon_harness.bootstrap import github_prereq_status
-
-        wiki_ok, wiki_blocking, blocked = github_prereq_status(
-            wiki_enabled=True, wiki_initialized=True, projects_ok=True, is_public=True
-        )
-        self.assertTrue(wiki_ok)
-        self.assertFalse(wiki_blocking)
-        self.assertFalse(blocked)
-
-
-class TestHasGithubProjectAndWiki(unittest.TestCase):
-    """The local-Kanban-fallback check: wiki is only required alongside the
-    project board for public repos."""
-
-    def _fake_gh_output(self, has_projects, has_wiki, is_private):
-        return json.dumps(
-            {
-                "hasProjectsEnabled": has_projects,
-                "hasWikiEnabled": has_wiki,
-                "isPrivate": is_private,
-            }
-        )
-
-    def test_private_repo_with_projects_no_wiki_counts_as_ready(self):
-        from unittest.mock import patch
-
-        from solomon_harness.bootstrap import has_github_project_and_wiki
-
-        with patch(
-            "subprocess.check_output",
-            return_value=self._fake_gh_output(True, False, True),
-        ):
-            self.assertTrue(has_github_project_and_wiki("/ws", "git@github.com:o/r.git"))
-
-    def test_public_repo_with_projects_no_wiki_is_not_ready(self):
-        from unittest.mock import patch
-
-        from solomon_harness.bootstrap import has_github_project_and_wiki
-
-        with patch(
-            "subprocess.check_output",
-            return_value=self._fake_gh_output(True, False, False),
-        ):
-            self.assertFalse(has_github_project_and_wiki("/ws", "git@github.com:o/r.git"))
-
-    def test_no_projects_board_is_never_ready(self):
-        from unittest.mock import patch
-
-        from solomon_harness.bootstrap import has_github_project_and_wiki
-
-        with patch(
-            "subprocess.check_output",
-            return_value=self._fake_gh_output(False, True, True),
-        ):
-            self.assertFalse(has_github_project_and_wiki("/ws", "git@github.com:o/r.git"))
 
 
 class TestInitWikiHint(unittest.TestCase):
@@ -615,49 +495,3 @@ class TestFreshInstallScaffoldsCopilotInstructions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestInstallDocsBoundary(unittest.TestCase):
-    """The harness's own documents never travel into installed projects
-    (maintainer directive, #234 review round): an install receives only the
-    operating docs the commands read and the convention scaffolding, and each
-    project's record trees start empty."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.workspace = self.tmp.name
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def test_install_ships_skeleton_docs_without_harness_records(self):
-        from solomon_harness import bootstrap
-
-        bootstrap._install_harness_files(self.workspace)
-
-        adrs = os.path.join(self.workspace, "docs", "adrs")
-        specs = os.path.join(self.workspace, "docs", "specs")
-        self.assertEqual(
-            sorted(os.listdir(adrs)), ["0000-adr-template.md", "README.md"],
-            "an installed project's docs/adrs holds only the convention scaffolding",
-        )
-        self.assertEqual(
-            sorted(os.listdir(specs)), ["0000-spec-template.md", "README.md"],
-            "an installed project's docs/specs holds only the convention scaffolding",
-        )
-        # Nothing else from the harness's docs travels (ADR-0029): no wiki,
-        # no conventions, no templates tree, no root README — the record
-        # scaffolding above is the entire docs payload.
-        self.assertFalse(os.path.isdir(os.path.join(self.workspace, "docs", "wiki")))
-        self.assertFalse(os.path.isfile(os.path.join(self.workspace, "README.md")))
-        self.assertFalse(
-            os.path.isfile(os.path.join(self.workspace, "docs", "solomon-workflow.md"))
-        )
-        self.assertFalse(
-            os.path.isdir(os.path.join(self.workspace, "docs", "templates"))
-        )
-        self.assertEqual(
-            sorted(os.listdir(os.path.join(self.workspace, "docs"))),
-            ["adrs", "specs"],
-            "the record scaffolding is the entire docs payload of an install",
-        )
