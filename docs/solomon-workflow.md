@@ -47,7 +47,7 @@ Work flows through a GitHub Project (v2) board with these Status columns:
 | Refine for readiness | `/solomon-refine` | product_owner, scrum_master | `Backlog` → `Ready` |
 | Implement | `/solomon-start` | scrum_master, software_engineer, software_architect | `Ready` → `In Progress` → `Code Review` |
 | Review | `/solomon-review` (auto-runs at the end of start) | software_architect (code), then qa, security, plus up to two diff-selected domain lenses | `Code Review` → `QA`, then on approval and interactive confirmation, merges the PR and moves `QA` → `Done` (ADR-0020) |
-| Reconcile projections | `/solomon-reconcile` (schedulable standing stage) | loop_engineer, software_engineer | only after GitHub already reports an issue `CLOSED`, repairs a missing/stale canonical card → `Done` and terminal memory (ADR-0034) |
+| Reconcile projections | `/solomon-reconcile` (schedulable standing stage; auto-runs before each `dev loop` run) | loop_engineer, software_engineer | only after GitHub already reports an issue `CLOSED`, repairs a missing/stale canonical card → `Done` and terminal memory (ADR-0034); also imports a memory row for each GitHub-open issue the memory has never seen (memory-only, non-terminal) |
 | Deliver and release | `/solomon-release` | sre, software_engineer | milestone-level: cuts the version tag once a milestone's issues are already `Done`; never merges an individual PR |
 
 The board and helpers live in `solomon_harness/github.py`. Create the board once
@@ -658,11 +658,15 @@ single-driver lock. Two are generative loops whose input is repository state:
 The third is convergent rather than generative:
 
 - `/solomon-reconcile` (loop_engineer, software_engineer) — bulk-read GitHub and
-  the canonical Project status, then repair only actual closed-issue projection
-  drift. A converged run makes no board write. It is allowed at L2/L3, denied at
-  L1, and can be invoked on a host cadence with
-  `solomon-harness dev reconcile` (or the already-locked
-  `python -m solomon_harness.cli reconcile` command).
+  the canonical Project status, then repair actual closed-issue projection
+  drift and import a memory row for each GitHub-open issue the memory has
+  never seen (a memory-only write with a non-terminal status, never a board
+  move). A converged run makes no board write. It is allowed at L2/L3, denied
+  at L1, runs automatically before each `dev loop` run's iterations, and can be
+  invoked on a host cadence with `solomon-harness dev reconcile` (or the
+  already-locked `python -m solomon_harness.cli reconcile` command). The
+  session-start digest stays read-only: it only reports the memory-vs-GitHub
+  drift counts and points here.
 
 Each scan acts on at most one finding and terminates at a **draft PR** routed to the
 unchanged `/solomon-review` gate (low-confidence findings go to `Ideas`/`Backlog`

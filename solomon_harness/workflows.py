@@ -193,6 +193,24 @@ def _record_loop_run(
         pass
 
 
+def _loop_reconcile(workspace_root: str, reconcile_fn: Any) -> None:
+    """Best-effort standing reconcile before a loop run's iterations.
+
+    ``reconcile_fn`` is the already-locked reconcile core injected by the CLI
+    dispatch -- the loop holds the single-driver lock, so this is the
+    sanctioned mutating cadence (session start stays read-only by design).
+    Injection keeps the dependency direction cli -> workflows: this module
+    never imports the CLI adapter, and a run_stage call without the callable
+    (every unit test) runs no reconcile at all. A failure degrades to a
+    stderr warning: converging memory must never cost an otherwise healthy
+    loop run.
+    """
+    try:
+        reconcile_fn(workspace_root, dry_run=False)
+    except (Exception, SystemExit) as exc:
+        print(f"loop: standing reconcile skipped ({exc})", file=sys.stderr)
+
+
 def _read_command_file(workspace_root: str, stage: str) -> str:
     from solomon_harness.layout import HarnessPaths, confined_read_path
 
@@ -292,6 +310,7 @@ def run_stage(
     stage: str,
     args: List[str],
     engine: Optional[str] = None,
+    reconcile_fn: Optional[Any] = None,
 ) -> int:
     """Run one workflow stage headless through the selected engine."""
     try:
@@ -636,6 +655,9 @@ def run_stage(
             # failed-run claim release read any mid-run exception (engine
             # missing, KeyboardInterrupt) as a success and keep the claim for
             # the whole TTL.
+            if stage == "loop" and lock is not None and reconcile_fn is not None:
+                _loop_reconcile(workspace_root, reconcile_fn)
+
             stall_retry_used = False
             while True:
               run_stalled = False

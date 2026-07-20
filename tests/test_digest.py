@@ -8,6 +8,7 @@ that stays the canonical prose ladder in the loop command.
 
 import re
 import unittest
+from unittest.mock import patch
 
 from solomon_harness import digest
 
@@ -633,3 +634,86 @@ class TestBlockedIssueSkip(unittest.TestCase):
         db = self._db({"60": [{"github_id": "5", "status": "closed"}]})
         ids = digest._blocked_ready_ids(db, db.get_open_issues())
         self.assertEqual(ids, set())
+
+
+class TestReconcileDrift(unittest.TestCase):
+    """The digest surfaces memory-vs-GitHub drift as one loud line: without it,
+    a stale memory row can propose resuming a delivered issue while truly open
+    issues stay invisible to the resume scan."""
+
+    def test_build_digest_renders_the_drift_line(self):
+        text = "\n".join(
+            digest.build_digest(
+                resume=None,
+                open_issues=[{"github_id": "100", "title": "T"}],
+                last_loop_run=None,
+                prs=None,
+                drift=(26, 31),
+            )
+        )
+        self.assertIn("26 open GitHub issue(s) missing from memory", text)
+        self.assertIn("31 memory row(s) not open on GitHub", text)
+        self.assertIn("/solomon-reconcile", text)
+
+    def test_zero_drift_renders_nothing(self):
+        text = "\n".join(
+            digest.build_digest(
+                resume=None, open_issues=[], last_loop_run=None, prs=None,
+                drift=(0, 0),
+            )
+        )
+        self.assertNotIn("missing from memory", text)
+
+    def test_unavailable_drift_renders_nothing(self):
+        text = "\n".join(
+            digest.build_digest(
+                resume=None, open_issues=[], last_loop_run=None, prs=None,
+                drift=None,
+            )
+        )
+        self.assertNotIn("missing from memory", text)
+
+    def test_drift_counts_compare_numeric_open_rows_to_github(self):
+        rows = [
+            {"github_id": "100", "title": "open on both sides", "status": "in_progress"},
+            {"github_id": "221", "title": "stale row", "status": "in_progress"},
+            {"github_id": "1", "title": "phantom PR row", "status": "open"},
+            {"github_id": "45-M2", "title": "tracking row", "status": "open"},
+            {"github_id": "7", "title": "delivered", "status": "closed"},
+        ]
+        self.assertEqual(digest._drift_counts(rows, [100, 300]), (1, 2))
+
+    def test_drift_counts_none_without_github_data(self):
+        self.assertIsNone(digest._drift_counts([], None))
+
+    def test_gather_digest_computes_drift_from_the_unfiltered_rows(self):
+        """A claimed issue still has a memory row; the claim filter must never
+        make it look missing from memory."""
+
+        class FakeDB:
+            def get_latest_activity(self):
+                return None
+
+            def get_open_issues(self):
+                return [
+                    {"github_id": "100", "title": "claimed", "status": "in_progress"},
+                ]
+
+            def list_loop_runs(self, n):
+                return []
+
+        class AllClaimedStore:
+            def filter_unclaimed(self, issue_numbers):
+                return []
+
+        with (
+            patch.object(
+                digest, "_best_effort_issue_numbers", return_value=[100, 300]
+            ),
+            patch.object(digest, "_best_effort_prs", return_value=[]),
+        ):
+            text = "\n".join(
+                digest.gather_digest(".", FakeDB(), claim_store=AllClaimedStore())
+            )
+        self.assertIn("1 open GitHub issue(s) missing from memory", text)
+        self.assertIn("0 memory row(s) not open on GitHub", text)

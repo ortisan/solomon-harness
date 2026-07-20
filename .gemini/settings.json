@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "solomon-memory": {
-      "command": "python3",
-      "args": ["-m", "solomon_harness.mcp_server"]
+      "command": "uv",
+      "args": ["run", "python", "-m", "solomon_harness.mcp_server"]
     }
   },
   "permissions": {

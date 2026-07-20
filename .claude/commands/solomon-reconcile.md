@@ -1,5 +1,5 @@
 ---
-description: Standing reconciliation — converge closed issues in memory and on the canonical board
+description: Standing reconciliation — converge memory and the canonical board with GitHub: close delivered rows, import missing open issues
 argument-hint: (optional) --dry-run
 allowed-tools: Bash(uv run:*)
 ---

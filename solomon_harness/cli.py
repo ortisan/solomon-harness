@@ -779,6 +779,7 @@ def _fetch_gh_states(
     valid_states: Tuple[str, ...],
     kind_label: str,
     workspace_root: str,
+    extra_fields: Tuple[str, ...] = (),
 ) -> List[dict]:
     """Run a bulk ``gh <list_args> --state all`` query and return validated records.
 
@@ -790,7 +791,9 @@ def _fetch_gh_states(
     ``RuntimeError`` when gh is
     unavailable or its output cannot be parsed, so the caller reports instead of
     repairing nothing silently. This is the single fetch core shared by the issue
-    and PR fetchers, which differ only in the subcommand and the accepted state set.
+    and PR fetchers, which differ only in the subcommand, the accepted state set,
+    and the ``extra_fields`` carried through as plain strings (data, never
+    interpolated).
     """
     import json as _json
     import subprocess
@@ -798,10 +801,11 @@ def _fetch_gh_states(
     from solomon_harness.github import GH_TIMEOUT_SECONDS
     from solomon_harness.subprocess_env import clean_gh_env
 
+    json_fields = ",".join(("number", "state", *extra_fields))
     try:
         proc = subprocess.run(
             ["gh", *list_args, "--state", "all", "--limit", str(_GH_ISSUE_LIMIT),
-             "--json", "number,state"],
+             "--json", json_fields],
             cwd=workspace_root, capture_output=True, text=True, check=False,
             env=clean_gh_env(), timeout=GH_TIMEOUT_SECONDS,
         )
@@ -840,7 +844,10 @@ def _fetch_gh_states(
         state = str(item.get("state", "")).upper()
         if state not in valid_states:
             continue
-        states.append({"number": str(number), "state": state})
+        record = {"number": str(number), "state": state}
+        for field in extra_fields:
+            record[field] = str(item.get(field) or "").strip()
+        states.append(record)
     return states
 
 
@@ -848,9 +855,13 @@ def _fetch_gh_issue_states(workspace_root: str) -> List[dict]:
     """Read every issue's GitHub state via gh (``OPEN``/``CLOSED``), as data.
 
     Thin config over ``_fetch_gh_states``; the validation and STRIDE handling live
-    in that shared core.
+    in that shared core. Carries the title so the reconcile import pass can
+    create a real memory row for an issue the memory has never seen.
     """
-    return _fetch_gh_states(["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root)
+    return _fetch_gh_states(
+        ["issue", "list"], ("OPEN", "CLOSED"), "issue", workspace_root,
+        extra_fields=("title",),
+    )
 
 
 def _canonical_board_statuses(board_items: object) -> Dict[str, Optional[str]]:
@@ -1023,6 +1034,78 @@ def reconcile_memory(
         "board_moved": board_moved,
         "board_failures": board_failures,
         "would_move_board": would_move_board,
+    }
+
+
+_ISSUE_TYPE_BY_PREFIX = {
+    "feat": "feature",
+    "fix": "bug",
+    "bug": "bug",
+    "chore": "chore",
+    "test": "test",
+    "docs": "docs",
+    "perf": "perf",
+    "refactor": "refactor",
+}
+
+
+def _issue_type_from_title(title: Optional[str]) -> str:
+    """Map a conventional-commit title prefix to an issue type; default "task".
+
+    Only a prefix immediately followed by ``(``, ``!`` or ``:`` counts, so a
+    prose title starting with a keyword ("feature request ...") is never
+    misclassified.
+    """
+    import re
+
+    match = re.match(r"^([a-z]+)[(!:]", str(title or ""))
+    if match:
+        return _ISSUE_TYPE_BY_PREFIX.get(match.group(1), "task")
+    return "task"
+
+
+def import_missing_issues(db, gh_states: List[dict], dry_run: bool = False) -> dict:
+    """Upsert a memory row for each GitHub-OPEN issue absent from memory.
+
+    The close-direction pass (``reconcile_memory``) can only repair rows that
+    exist, so an issue created outside the harness flows stayed invisible to
+    the digest and the loop. GitHub is the source of truth for the open set:
+    the new row takes the GitHub title (placeholder ``GitHub issue #<n>`` when
+    empty), a type derived from the conventional title prefix, and the
+    canonical board column as status -- forced to "open" when the column is
+    absent, ambiguous, or terminal, so an OPEN issue can never be imported as
+    delivered. Existing rows and CLOSED entries are never touched, which keeps
+    the pass idempotent. With ``dry_run`` nothing is written; candidates are
+    collected in ``would_import``.
+
+    Returns ``{"imported", "would_import", "scanned_open"}``.
+    """
+    from solomon_harness.tools.database_client import is_terminal, normalize_status
+
+    would_import: List[str] = []
+    imported = 0
+    scanned_open = 0
+    for entry in gh_states:
+        if entry.get("state") != "OPEN":
+            continue
+        scanned_open += 1
+        number = entry["number"]
+        if db.get_issue(number) is not None:
+            continue
+        would_import.append(number)
+        if dry_run:
+            continue
+        board_status = entry.get("board_status")
+        status = normalize_status(board_status) if board_status else "open"
+        if status is None or is_terminal(status):
+            status = "open"
+        title = str(entry.get("title") or "").strip() or f"GitHub issue #{number}"
+        db.log_issue(number, title, _issue_type_from_title(title), status, None)
+        imported += 1
+    return {
+        "imported": imported,
+        "would_import": would_import,
+        "scanned_open": scanned_open,
     }
 
 
@@ -1349,6 +1432,7 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
             print(f"reconcile failed: {exc}", file=sys.stderr)
             sys.exit(1)
         result = reconcile_memory(db, issue_states, dry_run=dry_run)
+        imports = import_missing_issues(db, issue_states, dry_run=dry_run)
         claims = reconcile_claims(
             claim_store,
             claim_snapshot,
@@ -1373,6 +1457,12 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile --dry-run: {len(result['would_repair'])} issue(s) would be "
             f"set to closed ({result['scanned']} GitHub issues scanned){suffix}"
+        )
+        import_ids = ", ".join(f"#{n}" for n in imports["would_import"])
+        import_suffix = f": {import_ids}" if import_ids else ""
+        print(
+            f"reconcile --dry-run: {len(imports['would_import'])} open GitHub "
+            f"issue(s) would be imported into memory{import_suffix}"
         )
         board_ids = ", ".join(f"#{n}" for n in result["would_move_board"])
         board_suffix = f": {board_ids}" if board_ids else ""
@@ -1404,6 +1494,10 @@ def _handle_reconcile_locked(workspace_root: str, dry_run: bool) -> None:
         print(
             f"reconcile: {result['repaired']} issue(s) set to closed "
             f"({result['scanned']} GitHub issues scanned)"
+        )
+        print(
+            f"reconcile: {imports['imported']} open GitHub issue(s) imported "
+            f"into memory ({imports['scanned_open']} open issues scanned)"
         )
         print(f"reconcile: {result['board_moved']} board card(s) moved to Done")
         for failure in result["board_failures"]:
@@ -1749,7 +1843,15 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_reconcile(workspace_root, args.dry_run)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
-        sys.exit(run_stage(workspace_root, args.stage, args.dev_args, engine=args.engine))
+        sys.exit(
+            run_stage(
+                workspace_root,
+                args.stage,
+                args.dev_args,
+                engine=args.engine,
+                reconcile_fn=_handle_reconcile_locked,
+            )
+        )
     elif args.command == "release":
         from solomon_harness.release import run as release_run
         sys.exit(release_run(workspace_root, args.release_args))

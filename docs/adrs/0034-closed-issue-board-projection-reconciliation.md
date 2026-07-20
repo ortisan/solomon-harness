@@ -134,3 +134,23 @@ writes and repeated multi-process `gh` traffic.
   `solomon_harness/workflows.py`; and `AUTOMATION_ALLOWED_STAGES` in
   `solomon_harness/loop_policy.py`.
 - This decision is also recorded in project memory via `save_decision`.
+
+## Reconciliation (2026-07-20, PR #373)
+
+The reconcile stage was extended additively; no constraint above is violated,
+but the shipped shape is wider than the Decision Outcome describes:
+
+- An import direction: `import_missing_issues` upserts a memory-only,
+  non-terminal row for each GitHub-open issue absent from memory. It never
+  touches the board and never writes a terminal status, so the "no open issue
+  moves to Done" constraint holds by construction.
+- A standing cadence: `dev loop` invokes the already-locked reconcile core
+  once before its iterations, injected by the CLI dispatch
+  (`run_stage(reconcile_fn=...)`) so the dependency direction stays
+  cli -> workflows. The stage remains schedulable on a host cadence as before.
+- A read-only drift read at session start: the digest fetches open-issue
+  numbers via a bounded best-effort `gh issue list` and renders drift counts.
+  "SessionStart has no added network latency" above is therefore softened to
+  "SessionStart adds one bounded (2 s), best-effort read-only gh call";
+  session start still performs no reconciliation write, pinned by
+  `test_session_start_does_not_launch_mutating_reconcile_work`.
