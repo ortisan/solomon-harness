@@ -961,6 +961,71 @@ class TestLoopStage(unittest.TestCase):
         # mocked calls that do appear are the lock's own ps staleness probes.
         self.assertEqual(_engine_calls(mock_run), [])
 
+    def test_loop_runs_the_reconcile_pass_once_before_the_iterations(self):
+        root = _workspace_with_command("workflow", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with (
+            patch.object(workflows, "_loop_reconcile") as mock_reconcile,
+            patch(
+                "subprocess.run",
+                side_effect=_answering_ps_probes([_Proc(), _Proc(), _Proc()]),
+            ),
+        ):
+            rc = workflows.run_stage(
+                root, "loop", ["--concurrency", "3"], engine="claude"
+            )
+        self.assertEqual(rc, 0)
+        mock_reconcile.assert_called_once_with(root)
+
+    def test_non_loop_stages_never_run_the_reconcile_pass(self):
+        root = _workspace_with_command("workflow", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        with (
+            patch.object(workflows, "_loop_reconcile") as mock_reconcile,
+            patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])),
+        ):
+            rc = workflows.run_stage(root, "workflow", [], engine="claude")
+        self.assertEqual(rc, 0)
+        mock_reconcile.assert_not_called()
+
+
+class TestLoopReconcilePass(unittest.TestCase):
+    """The pre-iteration reconcile gives the loop a standing cadence without a
+    new failure mode: it delegates to the locked reconcile core, never raises
+    into the loop, and short-circuits under a mocked subprocess runner so unit
+    tests can never touch the live store."""
+
+    def test_delegates_to_the_locked_reconcile_core(self):
+        from solomon_harness import cli
+
+        with patch.object(cli, "_handle_reconcile_locked") as mock_locked:
+            workflows._loop_reconcile("/some/root")
+        mock_locked.assert_called_once_with("/some/root", dry_run=False)
+
+    def test_reconcile_failure_never_aborts_the_loop(self):
+        from solomon_harness import cli
+
+        for boom in (SystemExit(1), RuntimeError("gh unavailable")):
+            with self.subTest(boom=boom):
+                with patch.object(cli, "_handle_reconcile_locked", side_effect=boom):
+                    workflows._loop_reconcile("/some/root")
+
+    def test_skips_under_a_mocked_subprocess_runner(self):
+        from solomon_harness import cli
+
+        with (
+            patch("subprocess.run"),
+            patch.object(cli, "_handle_reconcile_locked") as mock_locked,
+        ):
+            workflows._loop_reconcile("/some/root")
+        mock_locked.assert_not_called()
+
 
 class TestLoopInjectsAutonomousModeDirective(unittest.TestCase):
     """#194: a headless `loop`-driven iteration must skip the interactive

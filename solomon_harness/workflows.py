@@ -193,6 +193,30 @@ def _record_loop_run(
         pass
 
 
+def _loop_reconcile(workspace_root: str) -> None:
+    """Best-effort standing reconcile before a loop run's iterations.
+
+    Delegates to the locked reconcile core -- the loop already holds the
+    single-driver lock, so this is the sanctioned mutating cadence (session
+    start stays read-only by design). A failure degrades to a stderr warning:
+    converging memory must never cost an otherwise healthy loop run. Skips
+    under a mocked subprocess runner, the same test-environment guard as the
+    cost-capture path, so a unit test can never reach the live store.
+    """
+    import unittest.mock
+
+    if isinstance(subprocess.run, unittest.mock.Mock) or hasattr(
+        subprocess.run, "assert_called"
+    ):
+        return
+    from solomon_harness import cli
+
+    try:
+        cli._handle_reconcile_locked(workspace_root, dry_run=False)
+    except (Exception, SystemExit) as exc:
+        print(f"loop: standing reconcile skipped ({exc})", file=sys.stderr)
+
+
 def _read_command_file(workspace_root: str, stage: str) -> str:
     from solomon_harness.layout import HarnessPaths, confined_read_path
 
@@ -636,6 +660,9 @@ def run_stage(
             # failed-run claim release read any mid-run exception (engine
             # missing, KeyboardInterrupt) as a success and keep the claim for
             # the whole TTL.
+            if stage == "loop" and lock is not None:
+                _loop_reconcile(workspace_root)
+
             stall_retry_used = False
             while True:
               run_stalled = False

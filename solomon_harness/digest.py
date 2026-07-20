@@ -46,6 +46,61 @@ def _best_effort_prs(workspace_root: str, timeout: float = 2.0) -> Optional[List
         return None
 
 
+def _best_effort_issue_numbers(
+    workspace_root: str, timeout: float = 2.0
+) -> Optional[List[int]]:
+    """Fetch the open GitHub issue numbers via gh; None when gh is unavailable.
+
+    Best-effort like ``_best_effort_prs``: the SessionStart hook must never
+    fail or hang on a missing/slow ``gh``. Read-only -- the numbers only feed
+    the drift line; converging the stores stays with the locked reconcile
+    stage.
+    """
+    try:
+        from solomon_harness.subprocess_env import clean_git_env
+
+        proc = subprocess.run(
+            ["gh", "issue", "list", "--state", "open", "--limit", "200",
+             "--json", "number"],
+            cwd=workspace_root, capture_output=True, text=True, timeout=timeout, check=False,
+            env=clean_git_env(),
+        )
+        if proc.returncode != 0:
+            return None
+        rows = json.loads(proc.stdout or "[]")
+        numbers: List[int] = []
+        for row in rows if isinstance(rows, list) else []:
+            value = row.get("number") if isinstance(row, dict) else None
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                continue
+            numbers.append(value)
+        return numbers
+    except Exception:
+        return None
+
+
+def _drift_counts(
+    open_rows: Optional[List[Dict[str, Any]]],
+    gh_open_numbers: Optional[List[int]],
+) -> Optional[tuple]:
+    """(missing-from-memory, not-open-on-GitHub) between memory and GitHub.
+
+    Computed over the UNFILTERED memory rows: the claim filter drops actively
+    claimed issues from the digest list, and a claimed issue still has a row,
+    so filtering first would fake a "missing" entry. None when gh gave no
+    data, so absence of evidence never renders as zero drift.
+    """
+    if gh_open_numbers is None:
+        return None
+    memory_open = set()
+    for row in open_rows or []:
+        gid = str(row.get("github_id") or "")
+        if is_github_issue(gid) and not is_terminal(row.get("status")):
+            memory_open.add(int(gid))
+    github_open = set(gh_open_numbers)
+    return (len(github_open - memory_open), len(memory_open - github_open))
+
+
 def _awaiting_review(prs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Open, non-draft PRs that no human has approved yet."""
     out = []
@@ -89,8 +144,14 @@ def build_digest(
     host: str = "unknown",
     degraded: Optional[bool] = None,
     blocked_ids: Optional[set] = None,
+    drift: Optional[tuple] = None,
 ) -> List[str]:
     """Render the digest lines from already-collected facts (pure).
+
+    ``drift`` is ``_drift_counts``'s (missing-from-memory, not-open-on-GitHub)
+    pair; a non-zero pair renders one loud line naming the reconcile workflow,
+    so memory-vs-GitHub divergence surfaces at session start instead of
+    silently mis-proposing resumes.
 
     ``backend`` is the memory backend the facts were read from. When it is the
     SQLite fallback (SurrealDB unreachable), the digest leads with a banner so a
@@ -144,6 +205,12 @@ def build_digest(
     g = sum(1 for i in issues if is_github_issue(i.get("github_id")))
     t = len(issues) - g
     lines.append(f"Open issues: {g} GitHub issues, {t} tracking items")
+    if drift and (drift[0] or drift[1]):
+        lines.append(
+            f"  Drift vs GitHub: {drift[0]} open GitHub issue(s) missing from "
+            f"memory, {drift[1]} memory row(s) not open on GitHub. Converge "
+            f"with {command('reconcile')}."
+        )
     for i in issues[:_MAX_LIST]:
         lines.append(f"  - [{_sanitize_title(i.get('github_id'))}] {_sanitize_title(i.get('title'))}")
     if len(issues) > _MAX_LIST:
@@ -411,6 +478,9 @@ def gather_digest(
     """Collect facts from memory (and best-effort gh) and render the digest with timeout protection."""
     resume = _run_with_timeout(db.get_latest_activity, timeout=0.5, default=None)
     open_issues = _run_with_timeout(db.get_open_issues, timeout=0.5, default=[]) or []
+    # Kept before the claim filter: drift compares the full memory row set to
+    # GitHub, and a claimed issue still has a row.
+    unfiltered_issues = list(open_issues)
     if claim_store is None:
         from solomon_harness.claim import GitClaimStore
 
@@ -432,6 +502,10 @@ def gather_digest(
         else []
     )
     prs = _best_effort_prs(workspace_root) if fetch_github else None
+    gh_issue_numbers = (
+        _best_effort_issue_numbers(workspace_root) if fetch_github else None
+    )
+    drift = _drift_counts(unfiltered_issues, gh_issue_numbers)
     # Read the backend AFTER the queries: a mid-call ConnectionLost can flip the
     # client to the SQLite fallback, and the banner must reflect where the facts
     # above actually came from.
@@ -447,7 +521,7 @@ def gather_digest(
     )
     return build_digest(
         resume, open_issues, last_loop, prs, backend=backend, per_issue=per_issue,
-        host=host, degraded=degraded, blocked_ids=blocked_ids,
+        host=host, degraded=degraded, blocked_ids=blocked_ids, drift=drift,
     )
 
 

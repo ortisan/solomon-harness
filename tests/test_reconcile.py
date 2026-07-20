@@ -827,9 +827,9 @@ class TestFetchGhIssueStates(unittest.TestCase):
         self.assertEqual(
             states,
             [
-                {"number": "6", "state": "CLOSED"},
-                {"number": "100", "state": "OPEN"},
-                {"number": "101", "state": "OPEN"},
+                {"number": "6", "state": "CLOSED", "title": ""},
+                {"number": "100", "state": "OPEN", "title": ""},
+                {"number": "101", "state": "OPEN", "title": ""},
             ],
         )
 
@@ -866,7 +866,7 @@ class TestFetchGhIssueStates(unittest.TestCase):
         payload = json.dumps([{"number": 6, "state": "CLOSED"}, "garbage", 42, None])
         with patch("subprocess.run", return_value=_Proc(0, payload)):
             states = cli._fetch_gh_issue_states(".")
-        self.assertEqual(states, [{"number": "6", "state": "CLOSED"}])
+        self.assertEqual(states, [{"number": "6", "state": "CLOSED", "title": ""}])
 
     def test_strips_inherited_git_env_before_shelling_out(self):
         # Leaked git context or GH_REPO (e.g. from a hook or another worktree)
@@ -1580,6 +1580,127 @@ class TestHandleRunDoesNotReconcile(unittest.TestCase):
         self.assertIn("$solomon-workflow", output)
         self.assertIn("$solomon-start", output)
         self.assertNotIn("/solomon-", output)
+
+class TestImportMissingIssues(unittest.TestCase):
+    """import_missing_issues upserts a memory row for each GitHub-OPEN issue the
+    memory has never seen, so the digest and the loop select from the whole real
+    backlog instead of the subset that happened to be logged at creation.
+    GitHub-CLOSED entries and already-tracked rows are untouched, and GitHub
+    OPEN wins over a terminal board column so an open issue can never be
+    imported as delivered."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "harness.db")
+        self.client = DatabaseClient(db_path=self.db_path)
+        self.client.log_issue("100", "Already tracked", "feature", "in_progress", None)
+
+    def tearDown(self):
+        self.client.close()
+        self.temp_dir.cleanup()
+
+    def test_imports_open_missing_rows_and_leaves_the_rest_alone(self):
+        states = [
+            {"number": "200", "state": "OPEN", "title": "feat(memory): import pass", "board_status": "Backlog"},
+            {"number": "100", "state": "OPEN", "title": "Already tracked", "board_status": None},
+            {"number": "6", "state": "CLOSED", "title": "Delivered", "board_status": "Done"},
+        ]
+        result = cli.import_missing_issues(self.client, states)
+        self.assertEqual(result["imported"], 1)
+        self.assertEqual(result["would_import"], ["200"])
+        row = self.client.get_issue("200")
+        self.assertEqual(row["title"], "feat(memory): import pass")
+        self.assertEqual(row["type_"], "feature")
+        self.assertEqual(row["status"], "Backlog")
+        self.assertIsNone(self.client.get_issue("6"))
+        self.assertEqual(self.client.get_issue("100")["status"], "in_progress")
+
+    def test_open_issue_on_a_terminal_board_column_imports_as_open(self):
+        states = [
+            {"number": "201", "state": "OPEN", "title": "fix: drift", "board_status": "Done"}
+        ]
+        cli.import_missing_issues(self.client, states)
+        row = self.client.get_issue("201")
+        self.assertFalse(is_terminal(row["status"]))
+        self.assertEqual(row["status"], "open")
+        self.assertEqual(row["type_"], "bug")
+
+    def test_missing_board_column_imports_as_open(self):
+        states = [
+            {"number": "202", "state": "OPEN", "title": "chore: tidy", "board_status": None}
+        ]
+        cli.import_missing_issues(self.client, states)
+        self.assertEqual(self.client.get_issue("202")["status"], "open")
+        self.assertEqual(self.client.get_issue("202")["type_"], "chore")
+
+    def test_dry_run_collects_without_writing(self):
+        states = [
+            {"number": "203", "state": "OPEN", "title": "feat: x", "board_status": "Ready"}
+        ]
+        result = cli.import_missing_issues(self.client, states, dry_run=True)
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["would_import"], ["203"])
+        self.assertIsNone(self.client.get_issue("203"))
+
+    def test_untitled_issue_gets_the_canonical_placeholder(self):
+        states = [{"number": "204", "state": "OPEN", "title": "", "board_status": None}]
+        cli.import_missing_issues(self.client, states)
+        row = self.client.get_issue("204")
+        self.assertEqual(row["title"], "GitHub issue #204")
+        self.assertEqual(row["type_"], "task")
+
+
+class TestIssueTypeFromTitle(unittest.TestCase):
+    """The imported row's type comes from the conventional title prefix; anything
+    unrecognized is the neutral "task", never a guess."""
+
+    def test_conventional_prefix_truth_table(self):
+        cases = [
+            ("feat(memory): x", "feature"),
+            ("feat: x", "feature"),
+            ("fix(github): y", "bug"),
+            ("bug: y", "bug"),
+            ("chore(agents): z", "chore"),
+            ("test(ui): z", "test"),
+            ("docs: z", "docs"),
+            ("perf(memory): z", "perf"),
+            ("refactor: z", "refactor"),
+            ("feature request without prefix colon", "task"),
+            ("Plain prose title", "task"),
+            ("", "task"),
+            (None, "task"),
+        ]
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(cli._issue_type_from_title(title), expected)
+
+
+class TestFetchCarriesTitle(unittest.TestCase):
+    """The issue fetch requests the title so the import pass can create a real
+    row; the title is data, never interpolated. The PR fetch keeps its lean
+    number/state shape."""
+
+    def test_fetch_gh_issue_states_requests_and_carries_the_title(self):
+        payload = json.dumps([{"number": 5, "state": "OPEN", "title": "feat: x"}])
+        with patch("subprocess.run", return_value=_Proc(0, payload)) as mock_run:
+            states = cli._fetch_gh_issue_states(".")
+        argv = mock_run.call_args.args[0]
+        self.assertIn("number,state,title", argv)
+        self.assertEqual(states, [{"number": "5", "state": "OPEN", "title": "feat: x"}])
+
+    def test_missing_title_field_degrades_to_empty_string(self):
+        payload = json.dumps([{"number": 7, "state": "OPEN"}])
+        with patch("subprocess.run", return_value=_Proc(0, payload)):
+            states = cli._fetch_gh_issue_states(".")
+        self.assertEqual(states[0]["title"], "")
+
+    def test_pr_fetch_keeps_the_number_state_shape(self):
+        payload = json.dumps([{"number": 45, "state": "MERGED", "title": "ignored"}])
+        with patch("subprocess.run", return_value=_Proc(0, payload)) as mock_run:
+            states = cli._fetch_gh_pr_states(".")
+        self.assertIn("number,state", mock_run.call_args.args[0])
+        self.assertEqual(states, [{"number": "45", "state": "MERGED"}])
+
 
 if __name__ == "__main__":
     unittest.main()
