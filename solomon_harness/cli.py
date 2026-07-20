@@ -1843,7 +1843,15 @@ def main(harness_dir: Optional[str] = None, argv: Optional[List[str]] = None) ->
         handle_reconcile(workspace_root, args.dry_run)
     elif args.command == "dev":
         from solomon_harness.workflows import run_stage
-        sys.exit(run_stage(workspace_root, args.stage, args.dev_args, engine=args.engine))
+        sys.exit(
+            run_stage(
+                workspace_root,
+                args.stage,
+                args.dev_args,
+                engine=args.engine,
+                reconcile_fn=_handle_reconcile_locked,
+            )
+        )
     elif args.command == "release":
         from solomon_harness.release import run as release_run
         sys.exit(release_run(workspace_root, args.release_args))

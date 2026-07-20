@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from solomon_harness import workflows
 from solomon_harness import loop_lock
@@ -961,70 +961,79 @@ class TestLoopStage(unittest.TestCase):
         # mocked calls that do appear are the lock's own ps staleness probes.
         self.assertEqual(_engine_calls(mock_run), [])
 
-    def test_loop_runs_the_reconcile_pass_once_before_the_iterations(self):
+    def test_loop_runs_the_injected_reconcile_once_before_the_iterations(self):
         root = _workspace_with_command("workflow", "---\nx\n---\nScan $ARGUMENTS")
 
         class _Proc:
             returncode = 0
 
-        with (
-            patch.object(workflows, "_loop_reconcile") as mock_reconcile,
-            patch(
-                "subprocess.run",
-                side_effect=_answering_ps_probes([_Proc(), _Proc(), _Proc()]),
-            ),
+        reconcile_fn = Mock()
+        with patch(
+            "subprocess.run",
+            side_effect=_answering_ps_probes([_Proc(), _Proc(), _Proc()]),
         ):
             rc = workflows.run_stage(
-                root, "loop", ["--concurrency", "3"], engine="claude"
+                root, "loop", ["--concurrency", "3"], engine="claude",
+                reconcile_fn=reconcile_fn,
             )
         self.assertEqual(rc, 0)
-        mock_reconcile.assert_called_once_with(root)
+        reconcile_fn.assert_called_once_with(root, dry_run=False)
 
-    def test_non_loop_stages_never_run_the_reconcile_pass(self):
+    def test_non_loop_stages_never_run_the_injected_reconcile(self):
+        root = _workspace_with_command("workflow", "---\nx\n---\nScan $ARGUMENTS")
+
+        class _Proc:
+            returncode = 0
+
+        reconcile_fn = Mock()
+        with patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])):
+            rc = workflows.run_stage(
+                root, "workflow", [], engine="claude", reconcile_fn=reconcile_fn
+            )
+        self.assertEqual(rc, 0)
+        reconcile_fn.assert_not_called()
+
+    def test_loop_without_an_injected_reconcile_runs_none(self):
         root = _workspace_with_command("workflow", "---\nx\n---\nScan $ARGUMENTS")
 
         class _Proc:
             returncode = 0
 
         with (
-            patch.object(workflows, "_loop_reconcile") as mock_reconcile,
+            patch.object(workflows, "_loop_reconcile") as spy,
             patch("subprocess.run", side_effect=_answering_ps_probes([_Proc()])),
         ):
-            rc = workflows.run_stage(root, "workflow", [], engine="claude")
+            rc = workflows.run_stage(root, "loop", [], engine="claude")
         self.assertEqual(rc, 0)
-        mock_reconcile.assert_not_called()
+        spy.assert_not_called()
 
 
 class TestLoopReconcilePass(unittest.TestCase):
     """The pre-iteration reconcile gives the loop a standing cadence without a
-    new failure mode: it delegates to the locked reconcile core, never raises
-    into the loop, and short-circuits under a mocked subprocess runner so unit
-    tests can never touch the live store."""
+    new failure mode: the CLI dispatch injects the already-locked reconcile
+    core (keeping the dependency direction cli -> workflows), and a failure
+    never raises into the loop."""
 
-    def test_delegates_to_the_locked_reconcile_core(self):
-        from solomon_harness import cli
-
-        with patch.object(cli, "_handle_reconcile_locked") as mock_locked:
-            workflows._loop_reconcile("/some/root")
-        mock_locked.assert_called_once_with("/some/root", dry_run=False)
+    def test_delegates_to_the_injected_core(self):
+        reconcile_fn = Mock()
+        workflows._loop_reconcile("/some/root", reconcile_fn)
+        reconcile_fn.assert_called_once_with("/some/root", dry_run=False)
 
     def test_reconcile_failure_never_aborts_the_loop(self):
-        from solomon_harness import cli
-
         for boom in (SystemExit(1), RuntimeError("gh unavailable")):
             with self.subTest(boom=boom):
-                with patch.object(cli, "_handle_reconcile_locked", side_effect=boom):
-                    workflows._loop_reconcile("/some/root")
+                workflows._loop_reconcile("/some/root", Mock(side_effect=boom))
 
-    def test_skips_under_a_mocked_subprocess_runner(self):
+    def test_cli_dispatch_injects_the_locked_reconcile_core(self):
         from solomon_harness import cli
 
-        with (
-            patch("subprocess.run"),
-            patch.object(cli, "_handle_reconcile_locked") as mock_locked,
-        ):
-            workflows._loop_reconcile("/some/root")
-        mock_locked.assert_not_called()
+        with patch.object(workflows, "run_stage", return_value=0) as mock_stage:
+            with self.assertRaises(SystemExit):
+                cli.main(harness_dir=".", argv=["dev", "workflow"])
+        self.assertIs(
+            mock_stage.call_args.kwargs.get("reconcile_fn"),
+            cli._handle_reconcile_locked,
+        )
 
 
 class TestLoopInjectsAutonomousModeDirective(unittest.TestCase):

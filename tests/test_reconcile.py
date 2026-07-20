@@ -1568,10 +1568,21 @@ class TestHandleRunDoesNotReconcile(unittest.TestCase):
         return out.getvalue()
 
     def test_session_start_does_not_launch_mutating_reconcile_work(self):
-        """Board convergence belongs to the locked standing stage, not a daemon."""
-        with patch.object(cli, "_fetch_gh_issue_states") as spy:
+        """Board convergence belongs to the locked standing stage, not a daemon.
+
+        The pin covers the whole mutating surface: the bulk gh state fetch, the
+        open-issue import pass, and the board-move primitive. The session-start
+        drift line reads gh open-issue numbers, but converging stays with the
+        locked reconcile stage."""
+        with (
+            patch.object(cli, "_fetch_gh_issue_states") as fetch_spy,
+            patch.object(cli, "import_missing_issues") as import_spy,
+            patch("solomon_harness.github.set_issue_status") as board_spy,
+        ):
             self._run_handle_run_with()
-        spy.assert_not_called()
+        fetch_spy.assert_not_called()
+        import_spy.assert_not_called()
+        board_spy.assert_not_called()
 
     def test_codex_session_catalog_uses_skill_invocations_only(self):
         with patch.dict(os.environ, {"CODEX_THREAD_ID": "thread-123"}, clear=True):
